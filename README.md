@@ -4,3 +4,6 @@
 MCP-Hub and -Bride, Multi-Model Workflow and Chat Interface 
 
 Coming soon.
+
+
+UPDATE 03/04/25 - Feature complete for preview. Double checking all structures and documentations. Preparing final tests. We're almost there :)
