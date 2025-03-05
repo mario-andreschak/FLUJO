@@ -66,7 +66,8 @@ Currently, with FLUJO you can...
 
 •	Integrate FLUJO in other applications like CLine or Roo (FLUJO provides an **OpenAI compatible ChatCompletions Endpoint**) - still WIP
   Work-in-Progress
-  
+  ![image](https://github.com/user-attachments/assets/4e528d28-a317-4326-8da6-6c6dc4a6232b)
+
 ![image](https://github.com/user-attachments/assets/d8d8fe98-f08e-40eb-9ad8-a494aad32826)
 
 
