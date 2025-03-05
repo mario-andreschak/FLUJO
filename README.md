@@ -70,9 +70,6 @@ Currently, with FLUJO you can...
 ![image](https://github.com/user-attachments/assets/d8d8fe98-f08e-40eb-9ad8-a494aad32826)
 
 
-I am still refining the last things, and I will probably release this weekend on Github. Meanwhile, I'd appreciate your ideas or feature requests!
-Stay tuned - start flowing soon...!
-
-
 
 UPDATE 03/04/25 - Feature complete for preview. Double checking all structures and documentations. Preparing final tests. We're almost there :)
+UPDATE 03/05/25 - I am still refining the last things, and I will probably release this weekend 
