@@ -12,25 +12,32 @@ Currently, with FLUJO you can...
 
 •	**Store environment variables and API keys** (encrypted) globally in the app, so your API-Keys and passwords are not all over the place.
 
-![image](https://github.com/user-attachments/assets/20da1059-73e7-48cf-b6f2-27b11b5f7507)
-
+![Screenshot 2025-02-27 182327](https://github.com/user-attachments/assets/f5acd60f-129d-4e0c-8bc1-b5410d3c8d1d)
 
 •	Manage **different Models** with **pre-defined prompts**, **API-Keys** or (openAI compatible) **providers**: You want to use Claude for 10 different things, with different system-instructions? Or one Claude using OpenRouter and one using Anthrophic directly? Here you go!
 
-![image](https://github.com/user-attachments/assets/cf67d330-8025-474d-8ad4-6fc4cbef0c9f)
-![image](https://github.com/user-attachments/assets/a38eb2e3-7fa2-4250-a5fd-75d844d0f751)
-![image](https://github.com/user-attachments/assets/d448881c-d173-4ffa-a733-3c43082249d4)
+![Screenshot 2025-02-27 184857](https://github.com/user-attachments/assets/06036daa-c576-4483-b13e-47ef21a82395)
+
+![Screenshot 2025-02-27 184631](https://github.com/user-attachments/assets/4e6f8390-eaab-448a-9a38-bbbd64fd3de8)
+
+![image](https://github.com/user-attachments/assets/88f1a49f-2bb5-4d3c-aad3-7e8f61afd6b3)
+
 
 •	Can connect to **Ollama models** exposed with `ollama serve`: Orchestrate locally! **Use the big brains online for the heavy task - but let a local ollama model to the tedious file-writing or git-commit.** That keeps load off the online models and your wallet a bit fuller. Just put your ollama URL into the Model BaseUrl.
 
+![image](https://github.com/user-attachments/assets/8a04632a-4cc2-4738-ac9b-e856170a9e7c)
+
 •	**Install MCP servers from Github** or local filesystem (depends on the readme quality and MCP server): No struggling with servers that are not yet available through Smithery or OpenTools.
 
-![image](https://github.com/user-attachments/assets/426b8950-713d-411c-bcc7-fc546f831001)
+![image](https://github.com/user-attachments/assets/4c4055fd-c769-4155-b48f-1350b689545f)
+![image](https://github.com/user-attachments/assets/bd10b76f-aeb0-48c2-98e3-313e35ace50f)
+![image](https://github.com/user-attachments/assets/7ad857f1-ab7b-40ff-8bdb-b8c0ff8c8391)
+![image](https://github.com/user-attachments/assets/6967dd38-4fdf-4d11-b854-dda6d1c3ecc6)
 
 
 •	**Manage and Inspect MCP Servers** (only tools for now. Resources, Prompts and Sampling are coming soon)
 
- ![image](https://github.com/user-attachments/assets/2eaae63f-0a31-4ce7-80e8-bcc8ec8dd74f)
+![image](https://github.com/user-attachments/assets/a29effb6-07d4-42e2-886f-6cf7c96fe4a6)
 
 •	Bind MCP Servers' **.env-variables** (like api keys) to the **global encrypted storage**: You set your API-KEY once, and not a thousand times.
  
@@ -38,19 +45,22 @@ Currently, with FLUJO you can...
 
 •	**Create, design and execute Flows** by **connecting Models** (Processing Nodes) **with MCP servers and allowing/restricting individual tools**: Keep it simple for your model - no long system prompts, not thousand available tools that confuse your LLM - give your Model exactly what it needs in this step!
 
-![image](https://github.com/user-attachments/assets/b6696a44-d6e4-4b79-9755-202842f3db4c)
+![Screenshot 2025-02-27 205818](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
 
-![image](https://github.com/user-attachments/assets/09558f90-937a-4153-a8a4-e4088b381f6c)
+![Screenshot 2025-02-27 205856](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
 
 •	Mix & match **System-Prompts** configured in the Model, the Flow or the Processing Node: More power over your Prompt design - (almost) no hidden magic.
 
- ![image](https://github.com/user-attachments/assets/65446875-672d-4db0-9231-0b6454651110)
+![image](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
+
+![image](https://github.com/user-attachments/assets/fc97c613-714d-48bc-a43b-704d56cf0341)
+
 
 •	**Reference tools directly in prompts**: Instead of explaining a lot, just drag the tool into the prompt and it **auto-generates an instruction** for your LLM on how to use the Tool.
 
-![image](https://github.com/user-attachments/assets/3b3c1a01-90c4-47e8-a326-2e716e7c5ddd)
+![image](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
 
-![image](https://github.com/user-attachments/assets/c462585a-aebe-4314-a3a3-8fafa770bf77)
+![image](https://github.com/user-attachments/assets/f6edb3eb-1a2f-4cb4-838c-eddd4a107d98)
 
 •	**Interact with Flows** using a **Chat Interface**: Select a Flow an Talk to your Models. Let them do your work (whatever the MCP Servers allow them to do, however you designed the Flow) and report back to you!
 
@@ -72,5 +82,4 @@ Currently, with FLUJO you can...
 
 
 
-UPDATE 03/04/25 - Feature complete for preview. Double checking all structures and documentations. Preparing final tests. We're almost there :)
-UPDATE 03/05/25 - I am still refining the last things, and I will probably release this weekend 
+----- I am still refining the last things, and I will probably release this weekend as a alpha -----
