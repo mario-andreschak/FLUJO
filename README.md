@@ -60,11 +60,12 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **Model Integration**: Connect different models in your workflow
 - **Tool Management**: Allow or restrict specific tools for each model
 - **Prompt Design**: Configure system prompts at multiple levels (Model, Flow, Node)
-
+![image](https://github.com/user-attachments/assets/36d417ca-a0e6-4f87-90cb-b17a70641372)
 ![Flow Design](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
 ![Flow Configuration](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
 ![System Prompts](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
 ![Tool References](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
+![Screenshot 2025-03-08 223218](https://github.com/user-attachments/assets/922b9368-c0b6-4a06-b500-c8d71506173a)
 
 ### 💬 Chat Interface
 
@@ -171,6 +172,18 @@ FLUJO provides comprehensive support for the Model Context Protocol (MCP), allow
 ## 📄 License
 
 FLUJO is licensed under the [MIT License](LICENSE).
+## 🚀 Roadmap
+Here's a roadmap of upcoming features and improvements:
+
+- Real-time Voice Feature: Adding support for Whisper.js or OpenWhisper to enable real-time voice capabilities.
+- Visual Debugger: Introducing a visual tool to help debug and troubleshoot more effectively.
+- MCP Roots Support: Implementing Checkpoints and Restore features within MCP Roots for better control and recovery options.
+- MCP Prompts: Enabling users to build custom prompts that fully leverage the capabilities of the MCP server.
+- MCP Proxying STDIO<>SSE: Likely utilizing SuperGateway to proxy standard input/output with Server-Sent Events for enhanced communication: Use MCP Servers managed in FLUJo in any other MCP client.
+- Enhanced Integrations: Improving compatibility and functionality with tools like Windsurf, Cursor, and Cline.
+- Advanced Orchestration: Adding agent-driven orchestration, batch processing, and incorporating features inspired by Pocketflow.
+- Online Template Repository: Creating a platform for sharing models, flows, or complete "packages," making it easy to distribute FLUJO flows to others.
+- Edge Device Optimization: Enhancing performance and usability for edge devices.
 
 ## 🤝 Contributing
 
