@@ -1,7 +1,7 @@
 # DISCLAIMER
 ->->-> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <-<-<-
-This critical issue is currently impacting the CHAT feature and the OPENAI-COMPATIBLE ENDPOINT, fix will come asap:
-https://github.com/mario-andreschak/FLUJO/issues/9
+
+This [critical issue](https://github.com/mario-andreschak/FLUJO/issues/9) is currently impacting the CHAT feature and the OPENAI-COMPATIBLE ENDPOINT, fix will come asap!
 
 ![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
 
