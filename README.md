@@ -164,7 +164,7 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 FLUJO provides comprehensive support for the Model Context Protocol (MCP), allowing you to:
 
 - Install and manage MCP servers
-- Inspect server tools, resources, and prompts
+- Inspect server tools
 - Connect MCP servers to your workflows
 - Reference tools directly in prompts
 - Bind environment variables to your global encrypted storage
