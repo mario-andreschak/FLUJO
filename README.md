@@ -113,6 +113,12 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
    ```
    http://localhost:4200
    ```
+   
+5. FLUJO feels and works best if you run it compiled:
+   ```bash
+   npm run build
+   npm start
+   ```
 
 ## 📖 Usage
 
