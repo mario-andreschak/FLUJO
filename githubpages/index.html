@@ -17,33 +17,71 @@
         }
         .mindmap {
             position: relative;
-            width: 500px;
-            height: 500px;
+            width: 700px;
+            height: 700px;
         }
+        .connecting-circle {
+            position: absolute;
+            width: 400px;
+            height: 400px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            box-shadow: 0 0 20px rgba(52, 152, 219, 0.15);
+        }
+        
+        /* Connecting lines */
+        .connecting-line {
+            position: absolute;
+            height: 2px;
+            background: linear-gradient(to right, rgba(255, 255, 255, 0.05), rgba(52, 152, 219, 0.3), rgba(255, 255, 255, 0.05));
+            top: 50%;
+            left: 50%;
+            transform-origin: 0 0;
+            pointer-events: none;
+            z-index: 1;
+            box-shadow: 0 0 5px rgba(52, 152, 219, 0.2);
+            opacity: 0;
+            width: 0 !important; /* Override inline width initially */
+            transition: width 0.6s ease-out, opacity 0.6s ease-out;
+        }
+        
+        .connecting-line.animate {
+            opacity: 1;
+            width: 200px !important; /* Restore to full width when animated */
+        }
+        
         .node {
             position: absolute;
-            width: 100px;
-            height: 100px;
-            background-color: #4a4a4a;
+            width: 120px;
+            height: 120px;
+            background: linear-gradient(135deg, #555555, #444444);
             color: #fff;
             border-radius: 50%;
             display: flex;
             justify-content: center;
             align-items: center;
             text-align: center;
-            font-size: 12px; /* Adjusted for multiline text */
+            font-size: 14px;
             cursor: pointer;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            transition: transform 0.3s ease, box-shadow 0.3s ease, background 0.3s ease;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+            z-index: 2;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            opacity: 0;
         }
         .node:hover {
-            transform: scale(1.1);
             box-shadow: 0 0 20px rgba(52, 152, 219, 0.5);
+            background: linear-gradient(135deg, #5a5a5a, #4a4a4a);
+            transform: translate(-50%, -50%) scale(1.1);
         }
         .center-node {
-            width: 150px;
-            height: 150px;
-            background: linear-gradient(45deg, #3498db, #2980b9); /* River-like gradient */
+            width: 180px;
+            height: 180px;
+            background: linear-gradient(135deg, #1a5276, #2980b9);
             border-radius: 50%;
             top: 50%;
             left: 50%;
@@ -52,21 +90,100 @@
             justify-content: center;
             align-items: center;
             cursor: pointer;
-            transition: background 0.3s ease;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            z-index: 3;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 0 25px rgba(41, 128, 185, 0.5);
+            opacity: 1; /* Center node is visible */
+            animation: pulse 2.5s infinite ease-in-out;
         }
+        
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 25px rgba(41, 128, 185, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 40px rgba(41, 128, 185, 0.8);
+            }
+            100% {
+                box-shadow: 0 0 25px rgba(41, 128, 185, 0.5);
+            }
+        }
+        
         .center-node:hover {
-            background: linear-gradient(45deg, #2980b9, #3498db);
+            transform: translate(-50%, -50%) scale(1.05);
+            box-shadow: 0 0 30px rgba(41, 128, 185, 0.7);
         }
-        /* Positioning 8 nodes in a circle */
-        .node:nth-child(1) { top: 0; left: 50%; transform: translateX(-50%); } /* Central API-Key storage */
-        .node:nth-child(2) { top: 14.6%; left: 85.4%; transform: translate(-50%, -50%); } /* free & open source */
-        .node:nth-child(3) { top: 50%; left: 100%; transform: translate(-50%, -50%); } /* Environment Variables */
-        .node:nth-child(4) { top: 85.4%; left: 85.4%; transform: translate(-50%, -50%); } /* Manage & inspect High Servers */
-        .node:nth-child(5) { top: 100%; left: 50%; transform: translateX(-50%); } /* Multi-Agent Orchestration */
-        .node:nth-child(6) { top: 85.4%; left: 14.6%; transform: translate(-50%, -50%); } /* More control over prompts */
-        .node:nth-child(7) { top: 50%; left: 0; transform: translate(-50%, -50%); } /* Integration with Cline, Claude, etc. */
-        .node:nth-child(8) { top: 14.6%; left: 14.6%; transform: translate(-50%, -50%); } /* Local Models (ollama) */
+        .river-graphic {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(41, 128, 185, 0.8), rgba(26, 82, 118, 0.8));
+            overflow: hidden;
+        }
+        .river-graphic::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 30% 30%, rgba(135, 206, 235, 0.8) 0%, transparent 50%),
+                radial-gradient(circle at 70% 70%, rgba(135, 206, 235, 0.8) 0%, transparent 50%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'%3E%3Cpath d='M30,20 C50,40 30,60 10,80 C30,90 50,100 70,80 C90,60 70,40 50,20 C40,10 30,20 30,20 Z' fill='white'/%3E%3C/svg%3E");
+            mask-size: cover;
+            mask-repeat: no-repeat;
+            mask-position: center;
+            animation: flow 8s ease-in-out infinite alternate;
+            box-shadow: 0 0 30px rgba(135, 206, 235, 0.5) inset;
+        }
+        @keyframes flow {
+            0% {
+                mask-position: 45% 45%;
+            }
+            100% {
+                mask-position: 55% 55%;
+            }
+        }
+        
+        /* Individual node positioning */
+        #api-key-node { top: calc(50% - 200px); left: 50%; transform: translate(-50%, -50%); }
+        #free-open-source-node { top: calc(50% - 141.4px); left: calc(50% + 141.4px); transform: translate(-50%, -50%); }
+        #env-vars-node { top: 50%; left: calc(50% + 200px); transform: translate(-50%, -50%); }
+        #servers-node { top: calc(50% + 141.4px); left: calc(50% + 141.4px); transform: translate(-50%, -50%); }
+        #orchestration-node { top: calc(50% + 200px); left: 50%; transform: translate(-50%, -50%); }
+        #prompts-node { top: calc(50% + 141.4px); left: calc(50% - 141.4px); transform: translate(-50%, -50%); }
+        #integration-node { top: 50%; left: calc(50% - 200px); transform: translate(-50%, -50%); }
+        #local-models-node { top: calc(50% - 141.4px); left: calc(50% - 141.4px); transform: translate(-50%, -50%); }
 
+        /* Node animations */
+        @keyframes nodeAppear {
+            0% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.5);
+            }
+            70% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1.1);
+            }
+            100% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+        }
+
+        .node.animate {
+            animation: nodeAppear 0.8s forwards ease-out;
+        }
+
+        /* Node content styling */
+        .node-content {
+            padding: 10px;
+            font-weight: 500;
+        }
+        
         /* Modal Styles */
         .modal {
             display: none;
@@ -106,63 +223,77 @@
 </head>
 <body>
     <div class="mindmap">
-        <div class="node center-node" onclick="window.location.href='download.html'"></div>
-        <div class="node" onclick="openModal('modal1')">free & open<br>source</div>
-        <div class="node" onclick="openModal('modal2')">Environment<br>Variables</div>
-        <div class="node" onclick="openModal('modal3')">Manage & inspect<br>High Servers</div>
-        <div class="node" onclick="openModal('modal4')">Multi-Agent<br>Orchestration</div>
-        <div class="node" onclick="openModal('modal5')">More control<br>over prompts</div>
-        <div class="node" onclick="openModal('modal6')">Integration with<br>Cline, Claude, etc.</div>
-        <div class="node" onclick="openModal('modal7')">Local Models<br>(ollama)</div>
-        <div class="node" onclick="openModal('modal8')">Central<br>API-Key storage</div>
+        <div class="connecting-circle"></div>
+        <!-- Connecting lines -->
+        <div class="connecting-line" style="width: 200px; transform: rotate(270deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(315deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(0deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(45deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(90deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(135deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(180deg);"></div>
+        <div class="connecting-line" style="width: 200px; transform: rotate(225deg);"></div>
+        
+        <div class="node center-node" onclick="window.location.href='https://github.com/mario-andreschak/FLUJO/'">
+            <div class="river-graphic"></div>
+        </div>
+        <div id="api-key-node" class="node" onclick="openModal('modal8')"><div class="node-content">Central<br>API-Key<br>storage</div></div>
+        <div id="free-open-source-node" class="node" onclick="openModal('modal1')"><div class="node-content">free & open<br>source</div></div>
+        <div id="env-vars-node" class="node" onclick="openModal('modal2')"><div class="node-content">Environment<br>Variables</div></div>
+        <div id="servers-node" class="node" onclick="openModal('modal3')"><div class="node-content">Manage &<br>inspect MCP-<br>Servers</div></div>
+        <div id="orchestration-node" class="node" onclick="openModal('modal4')"><div class="node-content">Multi-Agent<br>Orchestration</div></div>
+        <div id="prompts-node" class="node" onclick="openModal('modal5')"><div class="node-content">More control<br>over prompts</div></div>
+        <div id="integration-node" class="node" onclick="openModal('modal6')"><div class="node-content">Integration with<br>Cline, Claude, etc.</div></div>
+        <div id="local-models-node" class="node" onclick="openModal('modal7')"><div class="node-content">Local Models<br>(ollama)</div></div>
 
         <!-- Modals for Screenshots -->
         <div id="modal1" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal1')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 1">
+                <img src="/img/api-keys.png" alt="Global secured storage for API-Keys or Environment variables">
             </div>
         </div>
         <div id="modal2" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal2')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 2">
+                <img src="/img/server-env.png" alt="Screenshot 2">
             </div>
         </div>
         <div id="modal3" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal3')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 3">
+                <img src="/img/mcp-manager-inspector.png" alt="Screenshot 3">
             </div>
         </div>
         <div id="modal4" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal4')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 4">
+                <img src="/img/flows.png" alt="Screenshot 4">
             </div>
         </div>
         <div id="modal5" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal5')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 5">
+                <img src="/img/processnode-prompt.png" alt="Screenshot 5">
             </div>
         </div>
         <div id="modal6" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal6')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 6">
+                <img src="/img/ollama-model.png" alt="Screenshot 6">
             </div>
         </div>
         <div id="modal7" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal7')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 7">
+                <img src="/img/cline-integration1.png" alt="Screenshot 7">
+                <img src="/img/cline-integration2.png" alt="Screenshot 7">
             </div>
         </div>
         <div id="modal8" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('modal8')">&times;</span>
-                <img src="https://via.placeholder.com/300" alt="Screenshot 8">
+                <img src="/img/api-keys.png" alt="Screenshot 8">
             </div>
         </div>
     </div>
@@ -182,6 +313,36 @@
                 event.target.style.display = "none";
             }
         }
+
+        // Animation for nodes and connecting lines to appear sequentially
+        document.addEventListener('DOMContentLoaded', function() {
+            const nodes = [
+                'api-key-node',
+                'free-open-source-node',
+                'env-vars-node',
+                'servers-node',
+                'orchestration-node',
+                'prompts-node',
+                'integration-node',
+                'local-models-node'
+            ];
+            
+            // Get all connecting lines
+            const lines = document.querySelectorAll('.connecting-line');
+            
+            // Animate nodes and their corresponding lines one by one with delay
+            nodes.forEach((nodeId, index) => {
+                setTimeout(() => {
+                    // Animate the node
+                    document.getElementById(nodeId).classList.add('animate');
+                    
+                    // Animate the corresponding line
+                    if (lines[index]) {
+                        lines[index].classList.add('animate');
+                    }
+                }, 300 * (index + 1)); // 300ms delay between each node
+            });
+        });
     </script>
 </body>
 </html>
