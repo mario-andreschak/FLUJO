@@ -13,6 +13,8 @@ FLUJO is an open-source platform that bridges the gap between **workflow orchest
 
 ![FLUJO Overview](https://github.com/user-attachments/assets/c745da69-1106-43d8-8fbd-49fe6eb64d9f)
 
+FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with [CLine](https://github.com/cline/cline) and a lot of LOVE.
+
 ## 🌟 Key Features
 
 ### 🔑 Environment & API Key Management
