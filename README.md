@@ -3,6 +3,11 @@
 
 This [critical issue](https://github.com/mario-andreschak/FLUJO/issues/9) is currently impacting the CHAT feature and the OPENAI-COMPATIBLE ENDPOINT, fix will come asap!
 
+You can still view the whole Flow execution in the terminal output! (after you started the server in a terminal with npm run dev or npm start)
+
+# IMPORTANT SECURITY NOTE
+FLUJO has currently EXTENSIVE logging enabled by default! This **will expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
+
 ![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
 
 # FLUJO
