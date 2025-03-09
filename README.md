@@ -1,3 +1,7 @@
+# DISCLAIMER
+>>> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <<<
+
+
 ![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
 
 # FLUJO
