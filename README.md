@@ -1,85 +1,173 @@
-![i6tPUEYtog0qXnrt-generated_image](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
+![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
 
 # FLUJO
-MCP-Hub and -Bride, Multi-Model Workflow and Chat Interface 
 
-Coming soon.
- ![image](https://github.com/user-attachments/assets/c745da69-1106-43d8-8fbd-49fe6eb64d9f)
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](package.json)
 
-FLUJO aims to close the gap between **workflow orchestration** (similar to n8n, ActivePieces, etc.), **Model-Context-Protocol** and **Integration** with other AI Tools like Cursor, Windsurf, CLine or Roo. All **locally** (if you want), all **open-source**.
+FLUJO is an open-source platform that bridges the gap between **workflow orchestration**, **Model-Context-Protocol (MCP)**, and **AI tool integration**. It provides a unified interface for managing AI models, MCP servers, and complex workflows - all locally and open-source.
 
-Currently, with FLUJO you can...
+![FLUJO Overview](https://github.com/user-attachments/assets/c745da69-1106-43d8-8fbd-49fe6eb64d9f)
 
-•	**Store environment variables and API keys** (encrypted) globally in the app, so your API-Keys and passwords are not all over the place.
+## 🌟 Key Features
 
-![Screenshot 2025-02-27 182327](https://github.com/user-attachments/assets/f5acd60f-129d-4e0c-8bc1-b5410d3c8d1d)
+### 🔑 Environment & API Key Management
 
-•	Manage **different Models** with **pre-defined prompts**, **API-Keys** or (openAI compatible) **providers**: You want to use Claude for 10 different things, with different system-instructions? Or one Claude using OpenRouter and one using Anthrophic directly? Here you go!
+- **Secure Storage**: Store environment variables and API keys with encryption
+- **Global Access**: Use your stored keys across the entire application
+- **Centralized Management**: Keep all your credentials in one secure place
 
-![Screenshot 2025-02-27 184857](https://github.com/user-attachments/assets/06036daa-c576-4483-b13e-47ef21a82395)
+![API Keys Management](https://github.com/user-attachments/assets/f5acd60f-129d-4e0c-8bc1-b5410d3c8d1d)
 
-![Screenshot 2025-02-27 184631](https://github.com/user-attachments/assets/4e6f8390-eaab-448a-9a38-bbbd64fd3de8)
+### 🤖 Model Management
 
-![image](https://github.com/user-attachments/assets/88f1a49f-2bb5-4d3c-aad3-7e8f61afd6b3)
+- **Multiple Models**: Configure and use different AI models simultaneously
+- **Pre-defined Prompts**: Create custom system instructions for each model
+- **Provider Flexibility**: Connect to various API providers (OpenAI, Anthropic, etc.)
+- **Local Models**: Integrate with Ollama for local model execution
 
+![Model Configuration](https://github.com/user-attachments/assets/06036daa-c576-4483-b13e-47ef21a82395)
+![Model Settings](https://github.com/user-attachments/assets/4e6f8390-eaab-448a-9a38-bbbd64fd3de8)
+![Ollama Integration](https://github.com/user-attachments/assets/8a04632a-4cc2-4738-ac9b-e856170a9e7c)
 
-•	Can connect to **Ollama models** exposed with `ollama serve`: Orchestrate locally! **Use the big brains online for the heavy task - but let a local ollama model to the tedious file-writing or git-commit.** That keeps load off the online models and your wallet a bit fuller. Just put your ollama URL into the Model BaseUrl.
+### 🔌 MCP Server Integration
 
-![image](https://github.com/user-attachments/assets/8a04632a-4cc2-4738-ac9b-e856170a9e7c)
+- **Easy Installation**: Install MCP servers from GitHub or local filesystem
+- **Server Management**: Comprehensive interface for managing MCP servers
+- **Tool Inspection**: View and manage available tools from MCP servers
+- **Environment Binding**: Connect server environment variables to global storage
 
-•	**Install MCP servers from Github** or local filesystem (depends on the readme quality and MCP server): No struggling with servers that are not yet available through Smithery or OpenTools.
+![MCP Server Installation](https://github.com/user-attachments/assets/4c4055fd-c769-4155-b48f-1350b689545f)
+![MCP Server Management](https://github.com/user-attachments/assets/bd10b76f-aeb0-48c2-98e3-313e35ace50f)
+![MCP Server Tools](https://github.com/user-attachments/assets/a29effb6-07d4-42e2-886f-6cf7c96fe4a6)
+![MCP Environment Variables](https://github.com/user-attachments/assets/27b257bf-a6ad-42bf-9ccf-4178c454c7ce)
 
-![image](https://github.com/user-attachments/assets/4c4055fd-c769-4155-b48f-1350b689545f)
-![image](https://github.com/user-attachments/assets/bd10b76f-aeb0-48c2-98e3-313e35ace50f)
-![image](https://github.com/user-attachments/assets/7ad857f1-ab7b-40ff-8bdb-b8c0ff8c8391)
-![image](https://github.com/user-attachments/assets/6967dd38-4fdf-4d11-b854-dda6d1c3ecc6)
+### 🔄 Workflow Orchestration
 
+- **Visual Flow Builder**: Create and design complex workflows
+- **Model Integration**: Connect different models in your workflow
+- **Tool Management**: Allow or restrict specific tools for each model
+- **Prompt Design**: Configure system prompts at multiple levels (Model, Flow, Node)
 
-•	**Manage and Inspect MCP Servers** (only tools for now. Resources, Prompts and Sampling are coming soon)
+![Flow Design](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
+![Flow Configuration](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
+![System Prompts](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
+![Tool References](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
 
-![image](https://github.com/user-attachments/assets/a29effb6-07d4-42e2-886f-6cf7c96fe4a6)
+### 💬 Chat Interface
 
-•	Bind MCP Servers' **.env-variables** (like api keys) to the **global encrypted storage**: You set your API-KEY once, and not a thousand times.
- 
-![image](https://github.com/user-attachments/assets/27b257bf-a6ad-42bf-9ccf-4178c454c7ce)
+- **Flow Interaction**: Interact with your flows through a chat interface
+- **Message Management**: Disable messages or split conversations to reduce context size
+- **File Attachments**: Attach documents or audio for LLM processing
+- **Transcription**: Process audio inputs with automatic transcription
 
-•	**Create, design and execute Flows** by **connecting Models** (Processing Nodes) **with MCP servers and allowing/restricting individual tools**: Keep it simple for your model - no long system prompts, not thousand available tools that confuse your LLM - give your Model exactly what it needs in this step!
+![Chat Interface](https://github.com/user-attachments/assets/ce6b5f15-c500-4129-a1f7-131517a65f14)
+![Message Management](https://github.com/user-attachments/assets/625b90d6-73e2-4afe-9ec4-5814b0bbf302)
+![File Attachments](https://github.com/user-attachments/assets/3f7f737a-170c-48e8-b9b1-3969da50d8e0)
 
-![Screenshot 2025-02-27 205818](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
+### 🔄 External Tool Integration
 
-![Screenshot 2025-02-27 205856](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
+- **OpenAI Compatible Endpoint**: Integrate with tools like CLine or Roo
+- **Seamless Connection**: Use FLUJO as a backend for other AI applications
 
-•	Mix & match **System-Prompts** configured in the Model, the Flow or the Processing Node: More power over your Prompt design - (almost) no hidden magic.
+![CLine Integration](https://github.com/user-attachments/assets/4e528d28-a317-4326-8da6-6c6dc4a6232b)
+![Roo Integration](https://github.com/user-attachments/assets/d8d8fe98-f08e-40eb-9ad8-a494aad32826)
 
-![image](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
+## 🚀 Getting Started
 
-![image](https://github.com/user-attachments/assets/fc97c613-714d-48bc-a43b-704d56cf0341)
+### Prerequisites
 
+- Node.js (v18 or higher)
+- npm or yarn
 
-•	**Reference tools directly in prompts**: Instead of explaining a lot, just drag the tool into the prompt and it **auto-generates an instruction** for your LLM on how to use the Tool.
+### Installation
 
-![image](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/mario-andreschak/FLUJO.git
+   cd FLUJO
+   ```
 
-![image](https://github.com/user-attachments/assets/f6edb3eb-1a2f-4cb4-838c-eddd4a107d98)
+2. Install dependencies:
+   ```bash
+   npm install
+   # or
+   yarn install
+   ```
 
-•	**Interact with Flows** using a **Chat Interface**: Select a Flow an Talk to your Models. Let them do your work (whatever the MCP Servers allow them to do, however you designed the Flow) and report back to you!
+3. Start the development server:
+   ```bash
+   npm run dev
+   # or
+   yarn dev
+   ```
 
- ![image](https://github.com/user-attachments/assets/ce6b5f15-c500-4129-a1f7-131517a65f14)
+4. Open your browser and navigate to:
+   ```
+   http://localhost:4200
+   ```
 
-•	With the option to manually **"disable" single messages** in the conversation or **split it into a new conversation**: Reduce Context Size however you want!
+## 📖 Usage
 
- ![image](https://github.com/user-attachments/assets/625b90d6-73e2-4afe-9ec4-5814b0bbf302)
+### Setting Up Models
 
-•	Attach Documents or Audio to your Chat messages for the LLM to process.
+1. Navigate to the Models page
+2. Click "Add Model" to create a new model configuration
+3. Configure your model with name, provider, API key, and system prompt
+4. Save your configuration
 
- ![image](https://github.com/user-attachments/assets/3f7f737a-170c-48e8-b9b1-3969da50d8e0)
+### Managing MCP Servers
 
-•	Integrate FLUJO in other applications like CLine or Roo (FLUJO provides an **OpenAI compatible ChatCompletions Endpoint**) - still WIP
-  Work-in-Progress
-  ![image](https://github.com/user-attachments/assets/4e528d28-a317-4326-8da6-6c6dc4a6232b)
+1. Go to the MCP page
+2. Click "Add Server" to install a new MCP server
+3. Choose from GitHub repository or local filesystem
+4. Configure server settings and environment variables
+5. Start and manage your server
 
-![image](https://github.com/user-attachments/assets/d8d8fe98-f08e-40eb-9ad8-a494aad32826)
+### Creating Workflows
 
+1. Visit the Flows page
+2. Click "Create Flow" to start a new workflow
+3. Add processing nodes and connect them
+4. Configure each node with models and tools
+5. Save your flow
 
+### Using the Chat Interface
 
------ I am still refining the last things, and I will probably release this weekend as a alpha -----
+1. Go to the Chat page
+2. Select a flow to interact with
+3. Start chatting with your configured workflow
+4. Attach files or audio as needed
+5. Manage conversation context by disabling messages or splitting conversations
+
+## 🔄 MCP Integration
+
+FLUJO provides comprehensive support for the Model Context Protocol (MCP), allowing you to:
+
+- Install and manage MCP servers
+- Inspect server tools, resources, and prompts
+- Connect MCP servers to your workflows
+- Reference tools directly in prompts
+- Bind environment variables to your global encrypted storage
+
+## 📄 License
+
+FLUJO is licensed under the [MIT License](LICENSE).
+
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to open issues or submit pull requests.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📬 Contact
+
+- GitHub: [mario-andreschak](https://github.com/mario-andreschak)
+
+---
+
+FLUJO - Empowering your AI workflows with open-source orchestration.

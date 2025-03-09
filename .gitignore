@@ -137,15 +137,21 @@ storage
 .vscode
 *.code-workspace
 
-*.html
-*.ts
-*.js
-*.mjs
-*.json
-*.md
-public
-src
+# *.html
+# *.ts
+# *.js
+# *.mjs
+# *.json
+# *.md
+# public
+# src
 
 ### all except documentation
 # *
 # **/*.md
+implementation-details.md
+implementation-plan.md
+files-without-logger.md
+src/testbridge.ps1
+summary.md
+update-logger.js
