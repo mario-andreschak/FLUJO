@@ -2,8 +2,8 @@
 ->->-> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <-<-<-
 
 This [critical issue](https://github.com/mario-andreschak/FLUJO/issues/9) is currently impacting the CHAT feature and the OPENAI-COMPATIBLE ENDPOINT, fix will come asap! (a hotfix was implemented to restore minimum functionality)
-
-You can still view the whole Flow execution in the terminal output! (after you started the server in a terminal with npm run dev or npm start)
+- You can still view the whole Flow execution in the terminal output! (after you started the server in a terminal with npm run dev or npm start)
+- You can add ~FLUJOEXPAND=1 or ~FLUJODEBUG=1 somewhere in your message to show more details
 
 # IMPORTANT SECURITY NOTE
 FLUJO has currently EXTENSIVE logging enabled by default! This **will expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
@@ -199,6 +199,11 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 - GitHub: [mario-andreschak](https://github.com/mario-andreschak)
 
+## Notes:
+- You can add ~FLUJO=HTML, ~FLUJO=MARKDOWN, ~FLUJO=JSON, ~FLUJO=TEXT in your message to format the response, this will give varying results in different tools where you integrate FLUJO.
+- You can add ~FLUJOEXPAND=1 or ~FLUJODEBUG=1 somewhere in your message to show more details
+- in config/features.ts you can change the Logging-level for the whole application
+- in config/features.ts you can enable SSE support which is currently disabled by default
 ---
 
 FLUJO - Empowering your AI workflows with open-source orchestration.
