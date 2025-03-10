@@ -5,6 +5,30 @@ import { FlowExecutionResponse } from '@/shared/types/flow/response';
 const log = createLogger('app/bridge/chat/completions/responseFormatter');
 
 /**
+ * Checks if a string is valid JSON and extracts the message property if it exists
+ */
+function extractMessageFromJson(content: string): string | null {
+  log.debug('Checking if content is JSON with message property', { contentLength: content.length });
+  try {
+    // Try to parse the content as JSON
+    const parsed = JSON.parse(content);
+    
+    // Check if the parsed object has a message property
+    if (parsed && typeof parsed === 'object' && 'message' in parsed && typeof parsed.message === 'string') {
+      log.debug('Found message property in JSON', { messageLength: parsed.message.length });
+      return parsed.message;
+    }
+    
+    log.debug('Content is valid JSON but has no message property');
+    return null;
+  } catch (e) {
+    // Not valid JSON
+    log.debug('Content is not valid JSON');
+    return null;
+  }
+}
+
+/**
  * Formats the response content based on specific requirements
  */
 export function formatResponseContent(request: ChatCompletionRequest, result: FlowExecutionResponse): string {
@@ -91,7 +115,17 @@ export function formatResponseContent(request: ChatCompletionRequest, result: Fl
     // Get the last message
     const lastMessage = Array.isArray(result.messages) && result.messages.length > 0 ? 
       result.messages[result.messages.length - 1] : null;
-    const lastMessageContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+    let lastMessageContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+    
+    // Check if the last message content is JSON with a message property
+    const extractedMessage = extractMessageFromJson(lastMessageContent);
+    if (extractedMessage !== null) {
+      log.info('Extracted message from JSON in last message for attempt_completion/final_response', { 
+        originalLength: lastMessageContent.length,
+        extractedLength: extractedMessage.length
+      });
+      lastMessageContent = extractedMessage;
+    }
     
     // Wrap in appropriate XML tag
     let tagName = hasAttemptCompletion ? 'attempt_completion' : '';
@@ -102,7 +136,17 @@ export function formatResponseContent(request: ChatCompletionRequest, result: Fl
     // Format based on the requested format type
     const messages = Array.isArray(result.messages) ? result.messages : [];
     const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-    const lastMessageContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+    let lastMessageContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+    
+    // Check if the last message content is JSON with a message property
+    const extractedMessage = extractMessageFromJson(lastMessageContent);
+    if (extractedMessage !== null) {
+      log.info('Extracted message from JSON in last message', { 
+        originalLength: lastMessageContent.length,
+        extractedLength: extractedMessage.length
+      });
+      lastMessageContent = extractedMessage;
+    }
     
     // // Add intermediate messages as JSON if they exist
     // const intermediateMessages = messages.length > 2 ? messages.slice(1, -1) : [];
@@ -202,7 +246,17 @@ function formatAsHtml(messages: Array<{role: string; content: string | null}>): 
   // Add each message
   messages.forEach(message => {
     const role = message.role.toLowerCase();
-    const content = message.content || '';
+    let content = message.content || '';
+    
+    // Check if the content is JSON with a message property
+    const extractedMessage = extractMessageFromJson(content);
+    if (extractedMessage !== null) {
+      log.debug('Extracted message from JSON in HTML formatting', { 
+        originalLength: content.length,
+        extractedLength: extractedMessage.length
+      });
+      content = extractedMessage;
+    }
     
     // Determine message class based on role
     const messageClass = role === 'user' ? 'user-message' : 
@@ -375,7 +429,17 @@ function formatAsMarkdown(messages: Array<{role: string; content: string | null}
   
   messages.forEach((message, index) => {
     const role = message.role.toUpperCase();
-    const content = message.content || '';
+    let content = message.content || '';
+    
+    // Check if the content is JSON with a message property
+    const extractedMessage = extractMessageFromJson(content);
+    if (extractedMessage !== null) {
+      log.debug('Extracted message from JSON in markdown formatting', { 
+        originalLength: content.length,
+        extractedLength: extractedMessage.length
+      });
+      content = extractedMessage;
+    }
     
     // Add separator between messages
     if (index > 0) {
@@ -405,7 +469,17 @@ function formatAsText(messages: Array<{role: string; content: string | null}>): 
   
   messages.forEach((message, index) => {
     const role = message.role.toUpperCase();
-    const content = message.content || '';
+    let content = message.content || '';
+    
+    // Check if the content is JSON with a message property
+    const extractedMessage = extractMessageFromJson(content);
+    if (extractedMessage !== null) {
+      log.debug('Extracted message from JSON in text formatting', { 
+        originalLength: content.length,
+        extractedLength: extractedMessage.length
+      });
+      content = extractedMessage;
+    }
     
     // Add separator between messages
     if (index > 0) {
