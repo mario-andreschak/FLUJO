@@ -17,7 +17,7 @@ FLUJO has currently EXTENSIVE logging enabled by default! This **will expose you
 
 FLUJO is an open-source platform that bridges the gap between **workflow orchestration**, **Model-Context-Protocol (MCP)**, and **AI tool integration**. It provides a unified interface for managing AI models, MCP servers, and complex workflows - all locally and open-source.
 
-![FLUJO Overview](https://github.com/user-attachments/assets/c745da69-1106-43d8-8fbd-49fe6eb64d9f)
+![FLUJO Overview](https://github.com/user-attachments/assets/397ef3a5-e4c1-4667-ac74-6fe96f854ff1)
 
 FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with [CLine](https://github.com/cline/cline) and a lot of LOVE.
 
