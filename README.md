@@ -1,7 +1,7 @@
 # DISCLAIMER
 ->->-> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <-<-<-
 
-This [critical issue](https://github.com/mario-andreschak/FLUJO/issues/9) is currently impacting the CHAT feature and the OPENAI-COMPATIBLE ENDPOINT, fix will come asap!
+This [critical issue](https://github.com/mario-andreschak/FLUJO/issues/9) is currently impacting the CHAT feature and the OPENAI-COMPATIBLE ENDPOINT, fix will come asap! (a hotfix was implemented to restore minimum functionality)
 
 You can still view the whole Flow execution in the terminal output! (after you started the server in a terminal with npm run dev or npm start)
 
