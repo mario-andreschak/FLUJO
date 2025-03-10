@@ -7,19 +7,109 @@
     <style>
         body {
             font-family: 'Arial', sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
             margin: 0;
             background-color: #1a1a1a;
             color: #fff;
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
+        
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        /* Header Styles */
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            width: 100%;
+        }
+        
+        .header h1 {
+            font-size: 3.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            display: inline-block;
+        }
+        
+        .badges {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            justify-content: center;
+        }
+        
+        .badge {
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+        }
+        
+        .badge-blue {
+            background-color: #3498db;
+            color: white;
+        }
+        
+        .badge-green {
+            background-color: #2ecc71;
+            color: white;
+        }
+        
+        .intro-text {
+            max-width: 800px;
+            margin: 0 auto 40px;
+            line-height: 1.6;
+            font-size: 1.2rem;
+            text-align: center;
+        }
+        
+        /* GitHub Link Text */
+        .github-link-text {
+            font-size: 1.5rem;
+            margin: 20px 0;
+            text-align: center;
+            color: #3498db;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.3s ease;
+            text-decoration: none;
+            display: block;
+        }
+        
+        .github-link-text:hover {
+            color: #2ecc71;
+            text-decoration: underline;
+        }
+        
+        /* Mindmap Styles */
+        .mindmap-container {
+            width: 100%;
+            height: 700px;
+            position: relative;
+            margin: 0 auto 60px;
+        }
+        
         .mindmap {
             position: relative;
             width: 700px;
             height: 700px;
+            margin: 0 auto;
         }
+        
         .connecting-circle {
             position: absolute;
             width: 400px;
@@ -73,11 +163,13 @@
             border: 1px solid rgba(255, 255, 255, 0.15);
             opacity: 0;
         }
+        
         .node:hover {
             box-shadow: 0 0 20px rgba(52, 152, 219, 0.5);
             background: linear-gradient(135deg, #5a5a5a, #4a4a4a);
             transform: translate(-50%, -50%) scale(1.1);
         }
+        
         .center-node {
             width: 180px;
             height: 180px;
@@ -115,6 +207,7 @@
             transform: translate(-50%, -50%) scale(1.05);
             box-shadow: 0 0 30px rgba(41, 128, 185, 0.7);
         }
+        
         .river-graphic {
             position: absolute;
             width: 100%;
@@ -122,6 +215,7 @@
             background: linear-gradient(135deg, rgba(41, 128, 185, 0.8), rgba(26, 82, 118, 0.8));
             overflow: hidden;
         }
+        
         .river-graphic::before {
             content: '';
             position: absolute;
@@ -139,6 +233,7 @@
             animation: flow 8s ease-in-out infinite alternate;
             box-shadow: 0 0 30px rgba(135, 206, 235, 0.5) inset;
         }
+        
         @keyframes flow {
             0% {
                 mask-position: 45% 45%;
@@ -184,6 +279,54 @@
             font-weight: 500;
         }
         
+        /* Key Features Section */
+        .key-features-section {
+            width: 100%;
+        }
+        
+        .key-features-title {
+            font-size: 2rem;
+            color: #3498db;
+            margin: 0 0 30px;
+            text-align: center;
+        }
+        
+        .key-features {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            width: 100%;
+        }
+        
+        .feature {
+            background: rgba(26, 32, 44, 0.7);
+            border-radius: 8px;
+            padding: 20px;
+            border-left: 3px solid #3498db;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            text-align: left;
+        }
+        
+        .feature:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.2);
+        }
+        
+        .feature h3 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: #3498db;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .feature p {
+            margin-bottom: 0;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+        
         /* Modal Styles */
         .modal {
             display: none;
@@ -197,6 +340,7 @@
             align-items: center;
             z-index: 1000;
         }
+        
         .modal-content {
             background-color: #fff;
             padding: 20px;
@@ -206,11 +350,13 @@
             max-width: 80%;
             max-height: 80%;
         }
+        
         .modal-content img {
             max-width: 100%;
             max-height: 60vh;
             border-radius: 5px;
         }
+        
         .close {
             position: absolute;
             top: 10px;
@@ -219,33 +365,111 @@
             cursor: pointer;
             color: #333;
         }
+        
+        /* Responsive styles */
+        @media (max-width: 1200px) {
+            .key-features {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .key-features {
+                grid-template-columns: 1fr;
+            }
+            
+            .mindmap {
+                transform: scale(0.7);
+            }
+            
+            .mindmap-container {
+                height: 500px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="mindmap">
-        <div class="connecting-circle"></div>
-        <!-- Connecting lines -->
-        <div class="connecting-line" style="width: 200px; transform: rotate(270deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(315deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(0deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(45deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(90deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(135deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(180deg);"></div>
-        <div class="connecting-line" style="width: 200px; transform: rotate(225deg);"></div>
-        
-        <div class="node center-node" onclick="window.location.href='https://github.com/mario-andreschak/FLUJO/'">
-            <div class="river-graphic"></div>
+    <div class="container">
+        <!-- Header Section -->
+        <div class="header">
+            <h1>FLUJO</h1>
+            <div class="badges">
+                <span class="badge badge-blue">MIT License</span>
+                <span class="badge badge-green">Version 0.1.0</span>
+            </div>
+            
+            <p class="intro-text">
+                FLUJO is an open-source platform that bridges the gap between <strong>workflow orchestration</strong>, <strong>Model-Context-Protocol (MCP)</strong>, and <strong>AI tool integration</strong>. It provides a unified interface for managing AI models, MCP servers, and complex workflows - all locally and open-source.
+            </p>
         </div>
-        <div id="free-open-source-node" class="node" onclick="openModal('modal1')"><div class="node-content">free & open<br>source</div></div>
-        <div id="env-vars-node" class="node" onclick="openModal('modal2')"><div class="node-content">Environment<br>Variables</div></div>
-        <div id="servers-node" class="node" onclick="openModal('modal3')"><div class="node-content">Manage &<br>inspect MCP-<br>Servers</div></div>
-        <div id="orchestration-node" class="node" onclick="openModal('modal4')"><div class="node-content">Multi-Agent<br>Orchestration</div></div>
-        <div id="prompts-node" class="node" onclick="openModal('modal5')"><div class="node-content">More control<br>over prompts</div></div>
-        <div id="integration-node" class="node" onclick="openModal('modal6')"><div class="node-content">Integration with<br>Cline, Claude, etc.</div></div>
-        <div id="local-models-node" class="node" onclick="openModal('modal7')"><div class="node-content">Local Models<br>(ollama)</div></div>
-        <div id="api-key-node" class="node" onclick="openModal('modal8')"><div class="node-content">Central<br>API-Key<br>storage</div></div>
-
+        
+        <!-- GitHub Link Text -->
+        <a href="https://github.com/mario-andreschak/FLUJO/" class="github-link-text">Click the blue circle to go to GitHub repository</a>
+        
+        <!-- Mindmap Visualization -->
+        <div class="mindmap-container">
+            <div class="mindmap">
+                <div class="connecting-circle"></div>
+                <!-- Connecting lines -->
+                <div class="connecting-line" style="width: 200px; transform: rotate(270deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(315deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(0deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(45deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(90deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(135deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(180deg);"></div>
+                <div class="connecting-line" style="width: 200px; transform: rotate(225deg);"></div>
+                
+                <div class="node center-node" onclick="window.location.href='https://github.com/mario-andreschak/FLUJO/'">
+                    <div class="river-graphic"></div>
+                </div>
+                <div id="free-open-source-node" class="node" onclick="openModal('modal1')"><div class="node-content">free & open<br>source</div></div>
+                <div id="env-vars-node" class="node" onclick="openModal('modal2')"><div class="node-content">Environment<br>Variables</div></div>
+                <div id="servers-node" class="node" onclick="openModal('modal3')"><div class="node-content">Manage &<br>inspect MCP-<br>Servers</div></div>
+                <div id="orchestration-node" class="node" onclick="openModal('modal4')"><div class="node-content">Multi-Agent<br>Orchestration</div></div>
+                <div id="prompts-node" class="node" onclick="openModal('modal5')"><div class="node-content">More control<br>over prompts</div></div>
+                <div id="integration-node" class="node" onclick="openModal('modal6')"><div class="node-content">Integration with<br>Cline, Claude, etc.</div></div>
+                <div id="local-models-node" class="node" onclick="openModal('modal7')"><div class="node-content">Local Models<br>(ollama)</div></div>
+                <div id="api-key-node" class="node" onclick="openModal('modal8')"><div class="node-content">Central<br>API-Key<br>storage</div></div>
+            </div>
+        </div>
+        
+        <!-- Key Features Section -->
+        <div class="key-features-section">
+            <h2 class="key-features-title">Key Features</h2>
+            <div class="key-features">
+                <div class="feature">
+                    <h3>🔑 API Key Management</h3>
+                    <p>Secure storage for environment variables and API keys with encryption. Use your stored keys across the entire application.</p>
+                </div>
+                
+                <div class="feature">
+                    <h3>🤖 Model Management</h3>
+                    <p>Configure and use different AI models simultaneously with custom system instructions. Connect to various API providers.</p>
+                </div>
+                
+                <div class="feature">
+                    <h3>🔌 MCP Server Integration</h3>
+                    <p>Comprehensive interface for managing MCP servers and their tools. Easy installation from GitHub or local filesystem.</p>
+                </div>
+                
+                <div class="feature">
+                    <h3>🔄 Workflow Orchestration</h3>
+                    <p>Create and design complex workflows with visual flow builder. Connect different models in your workflow.</p>
+                </div>
+                
+                <div class="feature">
+                    <h3>💬 Chat Interface</h3>
+                    <p>Interact with your flows through a chat interface with file attachments and message management.</p>
+                </div>
+                
+                <div class="feature">
+                    <h3>🔄 External Tool Integration</h3>
+                    <p>OpenAI Compatible Endpoint to integrate with tools like CLine or Roo. Use FLUJO as a backend for other AI applications.</p>
+                </div>
+            </div>
+        </div>
+        
         <!-- Modals for Screenshots -->
         <div id="modal1" class="modal">
             <div class="modal-content">
