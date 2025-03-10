@@ -87,6 +87,13 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 ![CLine Integration](https://github.com/user-attachments/assets/4e528d28-a317-4326-8da6-6c6dc4a6232b)
 ![Roo Integration](https://github.com/user-attachments/assets/d8d8fe98-f08e-40eb-9ad8-a494aad32826)
 
+### 🖥️ Desktop Application
+
+- **Electron Integration**: Run FLUJO as a native desktop application
+- **System Tray**: Minimize to system tray for quick access
+- **Network Mode**: Configure the application to be accessible from other devices
+- **Dual-Mode Operation**: Use as a desktop app or headless server on edge devices
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -127,6 +134,13 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
    npm start
    ```
 
+6. To run as a desktop application:
+   ```bash
+   npm run electron-dev    # Development mode
+   # or
+   npm run electron-dist   # Build and package for your platform
+   ```
+
 ## 📖 Usage
 
 ### Setting Up Models
@@ -159,6 +173,14 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 3. Start chatting with your configured workflow
 4. Attach files or audio as needed
 5. Manage conversation context by disabling messages or splitting conversations
+
+### Using the Desktop Application
+
+1. Run FLUJO as a desktop application using `npm run electron-dev` or `npm run electron-dist`
+2. Access all features through the desktop interface
+3. Configure network access in Settings > Desktop Application to make FLUJO accessible from other devices
+4. Minimize to system tray by closing the window (the application will continue running)
+5. Access the application from the system tray icon
 
 ## 🔄 MCP Integration
 
