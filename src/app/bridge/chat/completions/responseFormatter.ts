@@ -62,6 +62,12 @@ export function formatResponseContent(request: ChatCompletionRequest, result: Fl
     initialUserMessage.includes('~FLUJO=TEXT') ? 'text' : 
     initialUserMessage.includes('~FLUJO=MARKDOWN') ? 'markdown' : 'markdown'; // Default to text
   
+  // Check if expanded view is requested (show all messages)
+  const isExpandedView = typeof initialUserMessage === 'string' && initialUserMessage.includes('~FLUJOEXPAND=1');
+  if (isExpandedView) {
+    log.debug('Expanded view enabled - showing all messages');
+  }
+  
   log.info(`Using format type: ${formatType}`);
   
   let formattedContent = '';
@@ -160,13 +166,46 @@ export function formatResponseContent(request: ChatCompletionRequest, result: Fl
       formattedContent += lastMessageContent;
     } else if (formatType === 'html') {
       // HTML format - create a beautiful HTML conversation
-      formattedContent += formatAsHtml(messages);
+      if (isExpandedView) {
+        // Show all messages if expanded view is requested
+        formattedContent += formatAsHtml(messages);
+      } else {
+        // Show only the last message
+        // Create a modified message with the extracted content
+        const modifiedLastMessage = lastMessage ? {
+          ...lastMessage,
+          content: lastMessageContent
+        } : null;
+        formattedContent += formatAsHtml(modifiedLastMessage ? [modifiedLastMessage] : []);
+      }
     } else if (formatType === 'markdown') {
       // MARKDOWN format - format as markdown conversation
-      formattedContent += formatAsMarkdown(messages);
+      if (isExpandedView) {
+        // Show all messages if expanded view is requested
+        formattedContent += formatAsMarkdown(messages);
+      } else {
+        // Show only the last message
+        // Create a modified message with the extracted content
+        const modifiedLastMessage = lastMessage ? {
+          ...lastMessage,
+          content: lastMessageContent
+        } : null;
+        formattedContent += formatAsMarkdown(modifiedLastMessage ? [modifiedLastMessage] : []);
+      }
     } else {
       // TEXT format (default) - format as plain text conversation
-      formattedContent += formatAsText(messages);
+      if (isExpandedView) {
+        // Show all messages if expanded view is requested
+        formattedContent += formatAsText(messages);
+      } else {
+        // Show only the last message
+        // Create a modified message with the extracted content
+        const modifiedLastMessage = lastMessage ? {
+          ...lastMessage,
+          content: lastMessageContent
+        } : null;
+        formattedContent += formatAsText(modifiedLastMessage ? [modifiedLastMessage] : []);
+      }
     }
   }
   
@@ -179,6 +218,10 @@ export function formatResponseContent(request: ChatCompletionRequest, result: Fl
  */
 function formatAsHtml(messages: Array<{role: string; content: string | null}>): string {
   log.debug('Formatting messages as HTML', { messageCount: messages.length });
+  
+  // If we only have one message (last message only mode), don't include role headers
+  const isLastMessageOnly = messages.length === 1;
+  
   // Create HTML structure
   let html = `<!DOCTYPE html>
 <html>
@@ -264,7 +307,12 @@ function formatAsHtml(messages: Array<{role: string; content: string | null}>): 
     
     // Start message div
     html += `\n    <div class="message ${messageClass}">`;
-    html += `\n      <div class="message-header">${role.charAt(0).toUpperCase() + role.slice(1)}</div>`;
+    
+    // Only include role header if we're showing multiple messages
+    if (!isLastMessageOnly) {
+      html += `\n      <div class="message-header">${role.charAt(0).toUpperCase() + role.slice(1)}</div>`;
+    }
+    
     html += `\n      <div class="message-content">`;
     
     // Process content - handle code blocks and line breaks
@@ -427,6 +475,9 @@ function formatAsMarkdown(messages: Array<{role: string; content: string | null}
   log.debug('Formatting messages as markdown', { messageCount: messages.length });
   let markdown = '';
   
+  // If we only have one message (last message only mode), don't include role headers
+  const isLastMessageOnly = messages.length === 1;
+  
   messages.forEach((message, index) => {
     const role = message.role.toUpperCase();
     let content = message.content || '';
@@ -441,13 +492,15 @@ function formatAsMarkdown(messages: Array<{role: string; content: string | null}
       content = extractedMessage;
     }
     
-    // Add separator between messages
+    // Add separator between messages (only for multiple messages)
     if (index > 0) {
       markdown += '\n\n---\n\n';
     }
     
-    // Add role header as markdown heading
-    markdown += `## ${role}\n\n`;
+    // Add role header as markdown heading (only for multiple messages)
+    if (!isLastMessageOnly) {
+      markdown += `## ${role}\n\n`;
+    }
     
     // Process content to resolve any JSON and convert to markdown
     const processedContent = resolveJsonContent(content, 'markdown');
@@ -467,6 +520,9 @@ function formatAsText(messages: Array<{role: string; content: string | null}>): 
   log.debug('Formatting messages as plain text', { messageCount: messages.length });
   let text = '';
   
+  // If we only have one message (last message only mode), don't include role headers
+  const isLastMessageOnly = messages.length === 1;
+  
   messages.forEach((message, index) => {
     const role = message.role.toUpperCase();
     let content = message.content || '';
@@ -481,13 +537,15 @@ function formatAsText(messages: Array<{role: string; content: string | null}>): 
       content = extractedMessage;
     }
     
-    // Add separator between messages
+    // Add separator between messages (only for multiple messages)
     if (index > 0) {
       text += '\n\n' + '-'.repeat(50) + '\n\n';
     }
     
-    // Add role header
-    text += `${role}:\n\n`;
+    // Add role header (only for multiple messages)
+    if (!isLastMessageOnly) {
+      text += `${role}:\n\n`;
+    }
     
     // Process content to resolve any JSON
     const processedContent = resolveJsonContent(content, 'text');
