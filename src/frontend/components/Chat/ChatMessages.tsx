@@ -13,6 +13,8 @@ import {
   Tooltip,
   Chip
 } from '@mui/material';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import BlockIcon from '@mui/icons-material/Block';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
@@ -115,15 +117,71 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             sx={{
               p: 2,
               maxWidth: '80%',
+              width: 'fit-content',
               borderRadius: 2,
               bgcolor: message.role === 'user' ? 'primary.light' : 'background.paper',
               color: message.role === 'user' ? 'primary.contrastText' : 'text.primary',
               position: 'relative',
             }}
           >
-            <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
-              {message.content}
-            </Typography>
+            <Box sx={{ 
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflowWrap: 'break-word'
+            }}>
+              <ReactMarkdown 
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  p: (props) => <Typography variant="body1" sx={{ mb: 1 }}>{props.children}</Typography>,
+                  h1: (props) => <Typography variant="h5" sx={{ mt: 2, mb: 1 }}>{props.children}</Typography>,
+                  h2: (props) => <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>{props.children}</Typography>,
+                  h3: (props) => <Typography variant="subtitle1" sx={{ mt: 1.5, mb: 1 }}>{props.children}</Typography>,
+                  h4: (props) => <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 1 }}>{props.children}</Typography>,
+                  h5: (props) => <Typography variant="body1" sx={{ mt: 1, mb: 1, fontWeight: 'bold' }}>{props.children}</Typography>,
+                  h6: (props) => <Typography variant="body2" sx={{ mt: 1, mb: 1, fontWeight: 'bold' }}>{props.children}</Typography>,
+                  ul: (props) => <Box component="ul" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
+                  ol: (props) => <Box component="ol" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
+                  li: (props) => <Box component="li" sx={{ mb: 0.5 }}>{props.children}</Box>,
+                  a: (props) => <Typography component="a" sx={{ color: 'primary.main' }} href={props.href}>{props.children}</Typography>,
+                  blockquote: (props) => (
+                    <Box component="blockquote" sx={{ 
+                      borderLeft: '4px solid', 
+                      borderColor: 'divider',
+                      pl: 2,
+                      py: 0.5,
+                      my: 1,
+                      bgcolor: 'action.hover',
+                      borderRadius: '4px'
+                    }}>{props.children}</Box>
+                  ),
+                  code: ({ node, className, children, ...props }: any) => {
+                    // Check if this is an inline code block
+                    const match = /language-(\w+)/.exec(className || '');
+                    const isInline = !match && !className;
+                    
+                    return isInline ? 
+                      <Typography component="code" sx={{ 
+                        bgcolor: 'action.hover', 
+                        px: 0.5, 
+                        py: 0.25, 
+                        borderRadius: '4px',
+                        fontFamily: 'monospace'
+                      }}>{children}</Typography> :
+                      <Box component="pre" sx={{ 
+                        bgcolor: 'action.hover',
+                        p: 1.5,
+                        borderRadius: '4px',
+                        overflowX: 'auto',
+                        fontFamily: 'monospace',
+                        fontSize: '0.875rem',
+                        my: 1
+                      }}>{children}</Box>
+                  }
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+            </Box>
             
             {/* Display attachments if any */}
             {message.attachments && message.attachments.length > 0 && (

@@ -125,7 +125,7 @@ async function handleRequest(request: NextRequest) {
     log.info('Request processed successfully', {
       requestId,
       duration: `${duration}ms`,
-      status: response.status
+      status: response?.status || 'unknown'
     });
     
     return response;
@@ -170,7 +170,7 @@ export async function GET(request: NextRequest) {
   log.info('GET request completed', {
     requestId,
     duration: `${duration}ms`,
-    status: response.status
+    status: response?.status || 'unknown'
   });
   
   return response;
@@ -193,7 +193,7 @@ export async function POST(request: NextRequest) {
   log.info('POST request completed', {
     requestId,
     duration: `${duration}ms`,
-    status: response.status
+    status: response?.status || 'unknown'
   });
   
   return response;

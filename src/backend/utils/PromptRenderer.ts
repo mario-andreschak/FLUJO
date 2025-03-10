@@ -305,7 +305,10 @@ export class PromptRenderer {
         try {
           // Get the server status
           const serverStatus = await mcpService.getServerStatus(serverName);
-
+          if (serverStatus.status !== 'connected') {
+            await mcpService.connectServer(serverName);
+          }
+          
           if (serverStatus.status === 'connected') {
             // Get the tools for this server
             const toolsResult = await mcpService.listServerTools(serverName);

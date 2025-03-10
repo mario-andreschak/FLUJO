@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ChatCompletionRequest } from './requestParser';
+import { parseFlowResponse } from './FlowResponseParser';
+import { FlowExecutionResponse } from '@/shared/types/flow/response';
+import { formatResponseContent } from './responseFormatter';
 
 const log = createLogger('app/bridge/chat/completions/chatCompletionService');
 
@@ -66,6 +69,7 @@ export function isRetryableError(error: any): boolean {
   log.debug('Error is not retryable', { error });
   return false;
 }
+
 
 // Process chat completion request with the given data
 export async function processChatCompletion(data: ChatCompletionRequest) {
@@ -146,251 +150,53 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
       duration: `${flowDuration}ms`,
       hasResult: result?.result !== undefined && result?.result !== null
     });
-
-    // Initialize retryAttempts in sharedState if it doesn't exist
-    if (result.retryAttempts === undefined) {
-      result.retryAttempts = 0;
-    }
-
-    // Format tracking information
-    let trackingInfo = '';
-    if (JSON.stringify(messages).toUpperCase().includes('~FLUJODEBUG=1')) {
-      if (result.nodeExecutionTracker && Array.isArray(result.nodeExecutionTracker) && result.nodeExecutionTracker.length > 0) {
-        trackingInfo = '## Flow Execution Tracking\n\n';
-
-        result.nodeExecutionTracker.forEach((node: any) => {
-          trackingInfo += `### Node: ${node.nodeName || 'Unknown'} (Type: ${node.nodeType})\n`;
-
-          if (node.nodeType === 'ProcessNode') {
-            trackingInfo += `- Model: ${node.modelDisplayName}\n`;
-            trackingInfo += `- Technical Name: ${node.modelTechnicalName}\n`;
-            trackingInfo += `- Allowed Tools: ${node.allowedTools}\n`;
-          }
-          
-          if (node.nodeType === 'ModelError') {
-            trackingInfo += `- Error: ${node.error}\n`;
-            if (node.errorDetails) {
-              if (node.errorDetails.name) trackingInfo += `- Error Type: ${node.errorDetails.name}\n`;
-              if (node.errorDetails.message) trackingInfo += `- Message: ${node.errorDetails.message}\n`;
-              if (node.errorDetails.stack) trackingInfo += `- Stack: ${node.errorDetails.stack.split('\n')[0]}\n`;
-            }
-          }
-
-          trackingInfo += `- Timestamp: ${node.timestamp}\n\n`;
-        });
-
-        // Add model response information if available
-        if (result.modelResponse) {
-          trackingInfo += '### Model Response Details\n';
-          trackingInfo += `- Success: ${result.modelResponse.success}\n`;
-          if (!result.modelResponse.success) {
-            trackingInfo += `- Error: ${result.modelResponse.error || 'Unknown error'}\n`;
-            if (result.modelResponse.errorDetails) {
-              const details = result.modelResponse.errorDetails;
-              trackingInfo += `- Error Details: ${JSON.stringify(details, null, 2)}\n`;
-            }
-          }
-          trackingInfo += '\n';
-        }
-
-        trackingInfo += '---\n\n';
-      }
-    }
-
-    // Prepare the result content with tracking information
-    let resultContent = '';
-    let handlingInfo = '';
-
-    // Log the result content type for debugging
-    log.debug('Result content type:', {
-      type: typeof result.result,
-      isNull: result.result === null,
-      preview: result.result ? (typeof result.result === 'string' ?
-        result.result.substring(0, 100) :
-        JSON.stringify(result.result).substring(0, 100)) : 'empty'
-    });
-
-    // Handle different types of result.result properly
-    if (result.result === undefined || result.result === null) {
-      // Handle missing result
-      handlingInfo = '## Response Handling: Missing result\n\n';
-      
-      // Check if we have modelResponse with error information
-      if (result.modelResponse && !result.modelResponse.success) {
-        handlingInfo += `Error: ${result.modelResponse.error || 'Unknown error'}\n\n`;
-        if (result.modelResponse.errorDetails) {
-          handlingInfo += `Error Details: ${JSON.stringify(result.modelResponse.errorDetails, null, 2)}\n\n`;
-        }
-        resultContent = trackingInfo + handlingInfo + 'Model execution failed. See tracking information for details.';
-      } else {
-        resultContent = trackingInfo + handlingInfo + 'No result was returned from the flow execution.';
-      }
-    } else if (typeof result.result === 'object') {
-      // Handle object result
-      if (result.result.success === false && result.result.error) {
-        // Case 1: Error handling
-        handlingInfo = '## Response Handling: Error detected\n\n';
-        handlingInfo += `Error: ${result.result.error}\n\n`;
-        if (result.result.errorDetails) {
-          handlingInfo += `Error Details: ${JSON.stringify(result.result.errorDetails, null, 2)}\n\n`;
-        }
-        resultContent = trackingInfo + handlingInfo + JSON.stringify(result.result, null, 2);
-      } else {
-        // Other object handling
-        handlingInfo = '## Response Handling: Object response\n\n';
-        resultContent = trackingInfo + handlingInfo + JSON.stringify(result.result, null, 2);
-      }
-    } else if (typeof result.result === 'string') {
-      // ===================================================================================================
-      // Now handle string results
-      // Fix tool call detection - look for the correct pattern
-      const hasToolUse = result.result.includes('-_-_-');
-      const hasFinalResponse = result.result.includes('<final_response>');
-      
-      if (hasFinalResponse && hasToolUse) {
-        // Case 4: Final response and tool use
-        handlingInfo = '## Response Handling: Mixed final response and tool use\n\n';
-        // Add message to conversation
-        result.messages.push({
-          role: 'user',
-          content: 'Your last message contained a tool call and final_response, you can not mix this.'
-        });
-        // Return updated conversation to model by setting resultContent to the stringified messages
-        resultContent = trackingInfo + handlingInfo + JSON.stringify(result.messages, null, 2);
-      } else if (!hasFinalResponse && !hasToolUse) {
-        // Case 2: No final response, no tool use
-        // handlingInfo = '## Response Handling: No final response or tool use detected\n\n';
-        
-        // Don't enforce retry attempt logic here - allow the conversation to continue
-        // We'll handle retries only for specific error cases in the API calls
-        // resultContent = trackingInfo + handlingInfo + result.result;
-        resultContent = trackingInfo + result.result.message;
-        
-        log.debug('Response has no final_response tag or tool use, but continuing without retry', {
-          contentPreview: result.result.substring(0, 100) + (result.result.length > 100 ? '...' : '')
-        });
-      } else if (!hasFinalResponse && hasToolUse) {
-        // Case 3: No final response, but has tool use
-        handlingInfo = '## Response Handling: Tool use detected\n\n';
-        // Let the ProcessNode handle the tool execution
-        resultContent = trackingInfo + handlingInfo + result.result;
-        
-        log.info('Tool use detected in response', {
-          hasToolUse,
-          contentPreview: result.result.substring(0, 100) + (result.result.length > 100 ? '...' : '')
-        });
-      } else {
-        // Valid final response without tool use
-        handlingInfo = '## Response Handling: Valid final response\n\n';
-        resultContent = trackingInfo + handlingInfo + result.result;
-      }
-    } else {
-      // Handle other types (number, boolean, etc.)
-      handlingInfo = '## Response Handling: Non-string primitive\n\n';
-      resultContent = trackingInfo + handlingInfo + String(result.result);
-    }
-
+    log.debug('chatCompletionService - Full result : ', result);
     
-    log.debug('FINAL RESULT', JSON.stringify(resultContent));
-    log.debug('FINAL TRACKINGINFO', JSON.stringify(trackingInfo));
-
-
-    // Calculate completion tokens
-    log.debug('Calculating completion tokens', { requestId });
-    const completionTokens = countTokens(resultContent);
+    // Format the response according to OpenAI API format
+    const responseId = `chatcmpl-${Date.now()}`;
+    const timestamp = Math.floor(Date.now() / 1000);
     
-    // Calculate total tokens
-    const totalTokens = promptTokens + completionTokens;
-    log.info('Token usage calculated', {
-      requestId,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      ratio: `${Math.round((completionTokens / promptTokens) * 100)}%`
-    });
+    // Format the content based on the requirements
+    const formattedContent = formatResponseContent(data, result);
+    const completionTokens = countTokens(formattedContent);
     
-    // Create token usage object
-    const usage: TokenUsage = {
+    const usage = {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
-      total_tokens: totalTokens
+      total_tokens: promptTokens + completionTokens
+    };
+    
+    const responseData = {
+      id: responseId,
+      object: "chat.completion",
+      created: timestamp,
+      model: modelParam,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: formattedContent
+          },
+          finish_reason: "stop"
+        }
+      ],
+      usage
     };
     
     // Check if streaming is requested
-    const isStreamRequested = data.stream === true;
-    
-    if (isStreamRequested) {
+    if (data.stream === true) {
       log.info('Streaming response requested, sending SSE', { requestId });
-      // Log a truncated version of the content
-      const contentLength = resultContent.length;
-      const truncatedContent = contentLength > 100 ?
-        resultContent.substring(0, 100) + `... (${contentLength - 100} more characters)` : resultContent;
-      log.info(`Streaming content (truncated)`, {
-        requestId,
-        contentLength,
-        content: truncatedContent
-      });
-      
-      const totalDuration = Date.now() - startTime;
-      log.info('Processing completed, sending streaming response', {
-        requestId,
-        processingDuration: `${totalDuration}ms`,
-        tokenUsage: usage
-      });
-      
-      return createStreamingResponse(modelParam, resultContent, usage);
+      return createStreamingResponse(modelParam, formattedContent, usage);
     } else {
       // Return the complete response
-      const responseId = `chatcmpl-${Date.now()}`;
-      log.debug('Creating response object', {
+      log.info('Returning formatted OpenAI-compatible response', {
         requestId,
         responseId,
-        contentLength: resultContent.length
+        contentLength: formattedContent.length
       });
       
-      const responseData = {
-        id: responseId,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: modelParam,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: resultContent
-            },
-            finish_reason: "stop"
-          }
-        ],
-        usage
-      };
-
-      const my_response = NextResponse.json(responseData);
-      
-      // Log a truncated version of the response for debugging
-      const responseDataCopy = { ...responseData };
-      if (responseDataCopy.choices && responseDataCopy.choices.length > 0) {
-        for (let i = 0; i < responseDataCopy.choices.length; i++) {
-          const content = responseDataCopy.choices[i]?.message?.content;
-          if (content) {
-            const contentLength = content.length;
-            responseDataCopy.choices[i].message.content =
-              contentLength > 100 ? content.substring(0, 100) + `... (${contentLength - 100} more characters)` : content;
-          }
-        }
-      }
-      
-      const totalDuration = Date.now() - startTime;
-      log.info("Returning response with usage", {
-        requestId,
-        responseId,
-        processingDuration: `${totalDuration}ms`,
-        usage: responseDataCopy.usage,
-        contentLength: resultContent.length
-      });
-      
-      return my_response;
+      return NextResponse.json(responseData);
     }
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -454,7 +260,7 @@ export function createStreamingResponse(modelParam: string, content: string, usa
   // Split content into chunks for more natural streaming
   // For simplicity, we'll split by spaces to simulate word-by-word streaming
   // In a production environment, you might want a more sophisticated chunking strategy
-  const contentChunks = content.split(' ');
+  const contentChunks = typeof content === 'string' ? content.split(' ') : [''];
   log.debug('Content split into chunks', {
     streamId,
     chunkCount: contentChunks.length,

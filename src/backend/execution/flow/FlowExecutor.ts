@@ -3,6 +3,7 @@ import { Flow as PocketFlow } from './temp_pocket';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from './FlowConverter';
 import { createLogger } from '@/utils/logger';
+import { FlowExecutionResponse } from '@/shared/types/flow/response';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -11,7 +12,7 @@ export class FlowExecutor {
   /**
    * Execute a flow by name
    */
-  static async executeFlow(flowName: string, initialState: any = {}): Promise<any> {
+  static async executeFlow(flowName: string, initialState: any = {}): Promise<FlowExecutionResponse> {
     log.info(`Executing flow: ${flowName}`, {
       initialStateKeys: Object.keys(initialState)
     });
@@ -70,15 +71,16 @@ export class FlowExecutor {
     }
     
     // Return the final state
-    const result = {
+    const result: FlowExecutionResponse = {
+      success: true,
       result: sharedState.lastResponse,
-      messages: sharedState.messages,
+      messages: sharedState.messages || [],
       executionTime: Date.now() - sharedState.startTime,
-      nodeExecutionTracker: sharedState.nodeExecutionTracker // Include tracking information
+      nodeExecutionTracker: sharedState.nodeExecutionTracker || [] // Include tracking information
     };
     
     log.debug('Returning flow execution result', {
-      resultLength: result.result?.length || 0,
+      resultLength: typeof result.result === 'string' ? result.result.length : 0,
       messagesCount: result.messages.length,
       executionTime: result.executionTime
     });
