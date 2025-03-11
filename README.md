@@ -95,7 +95,10 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **Dual-Mode Operation**: Use as a desktop app or headless server on edge devices
 
 ## 🚀 Getting Started
+### Electron Bundle
+- Download the Setup.exe here: https://github.com/mario-andreschak/FLUJO/releases/tag/preview
 
+### Manual installation:
 ### Prerequisites
 
 - Node.js (v18 or higher)
