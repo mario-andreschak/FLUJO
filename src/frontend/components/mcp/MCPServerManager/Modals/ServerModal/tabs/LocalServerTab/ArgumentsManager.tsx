@@ -1,11 +1,21 @@
 'use client';
 
 import React from 'react';
+import { useThemeUtils } from '@/frontend/utils/theme';
 import FolderIcon from '@mui/icons-material/Folder';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import { MessageState } from '../../types';
+import {
+  Box,
+  Button,
+  IconButton,
+  Stack,
+  TextField,
+  Typography,
+  Tooltip
+} from '@mui/material';
 
 interface ArgumentsManagerProps {
   args: string[];
@@ -28,65 +38,76 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
   onParseClipboard,
   isParsingReadme
 }) => {
+  const { getThemeColor } = useThemeUtils();
+  
   return (
-    <div className="relative">
-      <div className="flex justify-between items-center mb-1">
-        <label className="block text-sm font-medium">Arguments</label>
-        <div className="flex gap-2">
-          <button
-            type="button"
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Typography variant="subtitle2">Arguments</Typography>
+        <Stack direction="row" spacing={1}>
+          <Button
+            size="small"
+            startIcon={<ContentPasteIcon />}
             onClick={onParseReadme}
             disabled={isParsingReadme}
-            className="flex items-center px-2 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+            color="inherit"
+            sx={{ color: 'text.secondary' }}
           >
-            <ContentPasteIcon sx={{ width: 16, height: 16, marginRight: 0.5 }} />
             Parse README
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            size="small"
+            startIcon={<ContentPasteIcon />}
             onClick={onParseClipboard}
-            className="flex items-center px-2 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+            color="inherit"
+            sx={{ color: 'text.secondary' }}
           >
-            <ContentPasteIcon sx={{ width: 16, height: 16, marginRight: 0.5 }} />
             Parse from Clipboard
-          </button>
-        </div>
-      </div>
-      <div className="space-y-2">
+          </Button>
+        </Stack>
+      </Box>
+      
+      <Stack spacing={1}>
         {args.map((arg, index) => (
-          <div key={index} className="flex gap-2">
-            <input
-              type="text"
+          <Stack key={index} direction="row" spacing={1}>
+            <TextField
+              fullWidth
+              size="small"
               value={arg}
               onChange={e => onArgChange(index, e.target.value)}
-              className="flex-1 px-3 py-2 border rounded-lg"
+              variant="outlined"
             />
-            <button
-              type="button"
-              onClick={() => onFolderSelect(index)}
-              className="px-3 py-2 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-            >
-              <FolderIcon sx={{ width: 20, height: 20 }} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onRemoveArg(index)}
-              className="px-3 py-2 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-            >
-              <DeleteIcon sx={{ width: 20, height: 20 }} />
-            </button>
-          </div>
+            <Tooltip title="Select folder">
+              <IconButton
+                onClick={() => onFolderSelect(index)}
+                size="small"
+                sx={{ border: 1, borderColor: 'divider' }}
+              >
+                <FolderIcon />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Remove argument">
+              <IconButton
+                onClick={() => onRemoveArg(index)}
+                size="small"
+                sx={{ border: 1, borderColor: 'divider' }}
+              >
+                <DeleteIcon />
+              </IconButton>
+            </Tooltip>
+          </Stack>
         ))}
-        <button
-          type="button"
+        
+        <Button
+          startIcon={<AddIcon />}
           onClick={onAddArg}
-          className="flex items-center px-3 py-2 text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+          color="primary"
+          sx={{ alignSelf: 'flex-start', mt: 1 }}
         >
-          <AddIcon sx={{ width: 16, height: 16, marginRight: 0.5 }} />
           Add Argument
-        </button>
-      </div>
-    </div>
+        </Button>
+      </Stack>
+    </Box>
   );
 };
 

@@ -36,6 +36,7 @@ import {
   applyNodeChanges,
   applyEdgeChanges
 } from '@xyflow/react';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -49,7 +50,6 @@ import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
-import HistoryIcon from '@mui/icons-material/History';
 
 const FlowBuilderContainer = styled(Box)({
   display: 'flex',
@@ -84,12 +84,13 @@ interface FlowBuilderProps {
   onSave: (flow: Flow) => void;
   onDelete: (flowId: string) => void;
   allFlows: Flow[];
+  onSelectFlow?: (flowId: string | null) => void;
 }
 
 // Dialog types for save/copy/rename
-type DialogType = 'none' | 'duplicate' | 'rename';
+type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
 
-export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBuilderProps) => {
+export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectFlow }: FlowBuilderProps) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
@@ -115,6 +116,8 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isHistoryAction, setIsHistoryAction] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [pendingFlowId, setPendingFlowId] = useState<string | null>(null);
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
@@ -192,8 +195,27 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
     ) {
       setHistory([...newHistory, newEntry]);
       setHistoryIndex(historyIndex + 1);
+      setHasUnsavedChanges(true);
     }
   }, [nodes, edges]);
+
+  // Add beforeunload event listener to warn when leaving with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        // Standard way to show a confirmation dialog when closing the browser
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [hasUnsavedChanges]);
 
   // Validate flow name
   const validateFlowName = (name: string): string | null => {
@@ -270,7 +292,37 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
       edges,
     };
     onSave(flow);
+    setHasUnsavedChanges(false);
   }, [flowName, nodes, edges, initialFlow, onSave, allFlows]);
+
+  // Handle flow selection with unsaved changes check
+  const handleFlowSelection = useCallback((flowId: string | null) => {
+    if (hasUnsavedChanges) {
+      setPendingFlowId(flowId);
+      setDialogType('unsaved');
+      setDialogOpen(true);
+    } else if (onSelectFlow) {
+      onSelectFlow(flowId);
+    }
+  }, [hasUnsavedChanges, onSelectFlow]);
+
+  // Export the handleFlowSelection function to be used by the parent component
+  useEffect(() => {
+    if (onSelectFlow) {
+      // This is a workaround to expose the handleFlowSelection function
+      // We're overriding the onSelectFlow prop with our wrapped version
+      const originalOnSelectFlow = onSelectFlow;
+      (onSelectFlow as any).__wrapped = true;
+      
+      if (!(originalOnSelectFlow as any).__wrapped) {
+        const wrappedOnSelectFlow = (flowId: string | null) => {
+          handleFlowSelection(flowId);
+        };
+        (wrappedOnSelectFlow as any).__wrapped = true;
+        onSelectFlow = wrappedOnSelectFlow;
+      }
+    }
+  }, [handleFlowSelection, onSelectFlow]);
 
   // Handle delete flow
   const handleDelete = useCallback(() => {
@@ -323,8 +375,33 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
         edges,
       };
       onSave(flow);
+      setHasUnsavedChanges(false);
+    } else if (dialogType === 'unsaved') {
+      // User confirmed to discard changes
+      if (onSelectFlow && pendingFlowId !== undefined) {
+        onSelectFlow(pendingFlowId);
+        setHasUnsavedChanges(false);
+      }
     }
     
+    handleDialogClose();
+  };
+
+  // Handle discard changes and continue
+  const handleDiscardAndContinue = () => {
+    if (onSelectFlow && pendingFlowId !== undefined) {
+      onSelectFlow(pendingFlowId);
+      setHasUnsavedChanges(false);
+    }
+    handleDialogClose();
+  };
+
+  // Handle save and continue
+  const handleSaveAndContinue = () => {
+    handleSave();
+    if (onSelectFlow && pendingFlowId !== undefined) {
+      onSelectFlow(pendingFlowId);
+    }
     handleDialogClose();
   };
   
@@ -474,26 +551,6 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
     setReactFlowInstance(instance as ReactFlowInstance<FlowNode, Edge>);
   }, []);
 
-  // Generate sample data for testing using flowService
-  const generateSampleData = useCallback(() => {
-    // Get sample flow from flowService
-    const sampleFlow = flowService.generateSampleFlow();
-    const sampleNodes = sampleFlow.nodes;
-    const sampleEdges = sampleFlow.edges;
-    
-    setNodes(sampleNodes);
-    setEdges(sampleEdges);
-    
-    // Add to history
-    const newEntry: HistoryEntry = {
-      nodes: sampleNodes,
-      edges: sampleEdges
-    };
-    
-    setHistory([...history, newEntry]);
-    setHistoryIndex(history.length);
-  }, [history]);
-
   return (
     <FlowBuilderContainer>
       <NodePalette />
@@ -505,7 +562,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
               label="Flow Name"
               value={flowName}
               onChange={handleFlowNameChange}
-              sx={{ minWidth: 200 }}
+              sx={{ minWidth: 500 }}
               error={!!flowNameError}
               helperText={flowNameError}
             />
@@ -560,54 +617,22 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
             </IconButton>
             
             <Box sx={{ flex: 1 }} />
-            
-            <Button 
-              variant="outlined"
-              size="small"
-              onClick={generateSampleData}
-              startIcon={<HistoryIcon />}
-            >
-              Sample Data
-            </Button>
           </ToolbarContainer>
           
-          {initialFlow ? (
-            <Box sx={{ flex: 1, position: 'relative' }}>
-              <Canvas
-                ref={reactFlowWrapper}
-                initialNodes={nodes}
-                initialEdges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onDrop={onDrop}
-                onDragOver={onDragOver}
-                onInit={onInit}
-                reactFlowWrapper={reactFlowWrapper}
-                onEditNode={openNodeProperties}
-              />
-            </Box>
-          ) : (
-            <Box 
-              sx={{ 
-                flex: 1, 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                flexDirection: 'column',
-                p: 4,
-                backgroundColor: 'background.paper',
-                borderRadius: 1,
-                m: 2
-              }}
-            >
-              <Typography variant="h6" gutterBottom>
-                Select a flow from the list above or create a new one
-              </Typography>
-              <Typography variant="body2" color="text.secondary" align="center">
-                The canvas will appear here once you select or create a flow.
-              </Typography>
-            </Box>
-          )}
+          <Box sx={{ flex: 1, position: 'relative' }}>
+            <Canvas
+              ref={reactFlowWrapper}
+              initialNodes={nodes}
+              initialEdges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onInit={onInit}
+              reactFlowWrapper={reactFlowWrapper}
+              onEditNode={openNodeProperties}
+            />
+          </Box>
         </MainContent>
       </ReactFlowProvider>
       
@@ -643,32 +668,63 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
         onSave={handleNodeUpdate}
       />
       
-      {/* Dialog for Copy/Rename */}
+      {/* Dialog for Copy/Rename/Unsaved Changes */}
       <Dialog open={dialogOpen} onClose={handleDialogClose}>
         <DialogTitle>
-          {dialogType === 'duplicate' ? 'Copy Flow' : 'Rename Flow'}
+          {dialogType === 'duplicate' 
+            ? 'Copy Flow' 
+            : dialogType === 'rename' 
+              ? 'Rename Flow' 
+              : 'Unsaved Changes'}
         </DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            {dialogType === 'duplicate' 
-              ? 'Enter a name for the copied flow:' 
-              : 'You are changing the name of this flow. Do you want to rename it or create a copy with the new name?'}
-          </DialogContentText>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="Flow Name"
-            type="text"
-            fullWidth
-            value={newFlowName}
-            onChange={handleNewFlowNameChange}
-            error={!!newFlowNameError}
-            helperText={newFlowNameError}
-            sx={{ mt: 2 }}
-          />
+          {dialogType === 'unsaved' ? (
+            <DialogContentText>
+              You have unsaved changes in the current flow. What would you like to do?
+            </DialogContentText>
+          ) : (
+            <>
+              <DialogContentText>
+                {dialogType === 'duplicate' 
+                  ? 'Enter a name for the copied flow:' 
+                  : 'You are changing the name of this flow. Do you want to rename it or create a copy with the new name?'}
+              </DialogContentText>
+              <TextField
+                autoFocus
+                margin="dense"
+                label="Flow Name"
+                type="text"
+                fullWidth
+                value={newFlowName}
+                onChange={handleNewFlowNameChange}
+                error={!!newFlowNameError}
+                helperText={newFlowNameError}
+                sx={{ mt: 2 }}
+              />
+            </>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={handleDialogClose}>Cancel</Button>
+          
+          {dialogType === 'unsaved' && (
+            <>
+              <Button 
+                onClick={handleDiscardAndContinue}
+                color="error"
+              >
+                Discard Changes
+              </Button>
+              <Button 
+                onClick={handleSaveAndContinue}
+                variant="contained" 
+                color="primary"
+              >
+                Save Changes
+              </Button>
+            </>
+          )}
+          
           {dialogType === 'rename' && (
             <>
               <Button 
@@ -700,6 +756,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows }: FlowBui
               </Button>
             </>
           )}
+          
           {dialogType === 'duplicate' && (
             <Button 
               onClick={handleDialogConfirm} 

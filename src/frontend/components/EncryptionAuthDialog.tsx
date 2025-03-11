@@ -141,7 +141,7 @@ export default function EncryptionAuthDialog() {
       disableEscapeKeyDown
       onClose={() => {}} // Empty onClose to prevent closing by backdrop click
     >
-      <DialogTitle>
+      <DialogTitle component="div">
         <Box display="flex" alignItems="center">
           <LockOutlined sx={{ mr: 1 }} />
           <Typography variant="h6">Encryption Password Required</Typography>

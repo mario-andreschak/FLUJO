@@ -1,9 +1,21 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { 
+  Box, 
+  Paper, 
+  Typography, 
+  TextField, 
+  Button, 
+  Select, 
+  MenuItem, 
+  Alert,
+  LinearProgress
+} from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { useServerEvents } from '@/frontend/hooks/useServerEvents';
+import { useThemeUtils } from '@/frontend/utils/theme';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
 
@@ -221,170 +233,262 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const selectedToolData = toolsArray.find((t) => t.name === selectedTool);
   log.debug('Selected tool data:', { name: selectedToolData?.name, hasSchema: !!selectedToolData?.inputSchema });
 
+  const { getThemeValue } = useThemeUtils();
+  
   return (
-    <div className="border rounded-lg p-4">
-      <h3 className="text-lg font-semibold mb-4">Tool Tester - {serverName}</h3>
+    <Paper
+      sx={{
+        p: 2,
+        bgcolor: (theme) => theme.palette.background.paper,
+        color: (theme) => theme.palette.text.primary,
+        borderRadius: 2,
+        border: 1,
+        borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+      }}
+    >
+      <Typography variant="h6" sx={{ mb: 2, fontWeight: 'semibold' }}>
+        Tool Tester - {serverName}
+      </Typography>
       
       {/* Error notification */}
       {errorNotification && (
-        <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded-md">
-          <p>{errorNotification}</p>
-        </div>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {errorNotification}
+        </Alert>
       )}
       
-      <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+      <Box sx={{ mb: 2 }}>
+        <Typography 
+          component="label" 
+          variant="body2" 
+          sx={{ 
+            display: 'block', 
+            mb: 1, 
+            fontWeight: 'medium',
+            color: (theme) => theme.palette.mode === 'dark' ? '#d1d5db' : '#4b5563'
+          }}
+        >
           Select Tool
-        </label>
-        <select
-          className="w-full p-2 border rounded-md"
+        </Typography>
+        <Select
+          fullWidth
           value={selectedTool}
           onChange={(e) => handleToolSelect(e.target.value)}
+          displayEmpty
+          sx={{
+            bgcolor: (theme) => theme.palette.background.paper,
+            '& .MuiOutlinedInput-notchedOutline': {
+              borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+            }
+          }}
         >
-          <option value="">Choose a tool...</option>
+          <MenuItem value="">Choose a tool...</MenuItem>
           {toolsArray.map((tool) => (
-            <option key={tool.name} value={tool.name}>
+            <MenuItem key={tool.name} value={tool.name}>
               {tool.name}
-            </option>
+            </MenuItem>
           ))}
-        </select>
-      </div>
+        </Select>
+      </Box>
 
       {selectedToolData ? (
         <>
-          <div className="mb-4">
-            <p className="text-sm text-gray-600">{selectedToolData.description}</p>
-          </div>
+          <Box sx={{ mb: 2 }}>
+            <Typography 
+              variant="body2" 
+              sx={{ 
+                color: (theme) => theme.palette.mode === 'dark' ? '#9ca3af' : '#6b7280'
+              }}
+            >
+              {selectedToolData.description}
+            </Typography>
+          </Box>
 
-          <div className="space-y-4 mb-4">
+          <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {Object.entries(selectedToolData.inputSchema.properties || {}).map(
               ([key, schema]: [string, any]) => (
-                <div key={key}>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                <Box key={key}>
+                  <Typography 
+                    component="label" 
+                    variant="body2" 
+                    sx={{ 
+                      display: 'block', 
+                      mb: 0.5, 
+                      fontWeight: 'medium',
+                      color: (theme) => theme.palette.mode === 'dark' ? '#d1d5db' : '#4b5563'
+                    }}
+                  >
                     {key}
                     {selectedToolData.inputSchema.required?.includes(key) && (
-                      <span className="text-red-500 ml-1">*</span>
+                      <Box component="span" sx={{ color: 'error.main', ml: 0.5 }}>*</Box>
                     )}
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full p-2 border rounded-md"
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    size="small"
                     value={params[key] !== undefined ? String(params[key]) : ''}
                     onChange={(e) => handleParamChange(key, e.target.value, schema)}
                     placeholder={schema.description || ''}
+                    sx={{
+                      bgcolor: (theme) => theme.palette.background.paper,
+                      '& .MuiOutlinedInput-notchedOutline': {
+                        borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+                      }
+                    }}
                   />
-                </div>
+                </Box>
               )
             )}
             
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+            <Box>
+              <Typography 
+                component="label" 
+                variant="body2" 
+                sx={{ 
+                  display: 'block', 
+                  mb: 0.5, 
+                  fontWeight: 'medium',
+                  color: (theme) => theme.palette.mode === 'dark' ? '#d1d5db' : '#4b5563'
+                }}
+              >
                 Timeout (seconds)
-              </label>
-              <input
+              </Typography>
+              <TextField
                 type="number"
-                className="w-full p-2 border rounded-md"
+                fullWidth
+                size="small"
                 value={timeoutValue === 60 ? '' : timeoutValue}
                 onChange={(e) => handleTimeoutChange(e.target.value)}
                 placeholder="Default: 60 seconds, -1 for no timeout"
+                sx={{
+                  bgcolor: (theme) => theme.palette.background.paper,
+                  '& .MuiOutlinedInput-notchedOutline': {
+                    borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+                  }
+                }}
               />
-              <p className="text-xs text-gray-500 mt-1">
+              <Typography 
+                variant="caption" 
+                sx={{ 
+                  display: 'block', 
+                  mt: 0.5,
+                  color: (theme) => theme.palette.mode === 'dark' ? '#9ca3af' : '#6b7280'
+                }}
+              >
                 Default: 60 seconds. Use -1 for no timeout. Value of 0 will be treated as 60.
-              </p>
-            </div>
-          </div>
+              </Typography>
+            </Box>
+          </Box>
 
-          <div className="flex items-center space-x-2">
-            <button
-              className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 disabled:opacity-50"
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              variant="contained"
+              color="primary"
               onClick={handleTest}
               disabled={isLoading}
+              startIcon={isLoading && <Spinner size="small" color="white" />}
             >
-              {isLoading ? (
-                <span className="flex items-center">
-                  <Spinner size="small" color="white" className="mr-2" />
-                  Testing...
-                </span>
-              ) : 'Test Tool'}
-            </button>
+              {isLoading ? 'Testing...' : 'Test Tool'}
+            </Button>
             
             {/* Show cancel button whenever a tool is being executed */}
             {isLoading && (
-              <button
-                className="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 disabled:opacity-50 flex items-center"
+              <Button
+                variant="contained"
+                color="error"
                 onClick={handleCancel}
                 disabled={isCancelling}
-              >
-                {isCancelling ? (
-                  <>
-                    <Spinner size="small" color="white" className="mr-2" />
-                    Cancelling...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                startIcon={isCancelling ? 
+                  <Spinner size="small" color="white" /> : 
+                  <Box component="span" sx={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    width: 16,
+                    height: 16
+                  }}>
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
                     </svg>
-                    Cancel
-                  </>
-                )}
-              </button>
+                  </Box>
+                }
+              >
+                {isCancelling ? 'Cancelling...' : 'Cancel'}
+              </Button>
             )}
-          </div>
+          </Box>
           
           {/* Progress indicator */}
           {isLoading && (
-            <div className="mt-4">
+            <Box sx={{ mt: 2 }}>
               {!progress && (
-                <div className="flex items-center space-x-2 mb-2">
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                   <Spinner size="small" color="primary" />
-                  <span className="text-sm text-gray-600">Processing request...</span>
-                </div>
+                  <Typography variant="body2" color="text.secondary">
+                    Processing request...
+                  </Typography>
+                </Box>
               )}
               {progress && (
                 <>
-                  <div className="flex justify-between text-sm text-gray-600 mb-1">
-                    <span>Progress:</span>
-                    <span>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                    <Typography variant="body2" color="text.secondary">Progress:</Typography>
+                    <Typography variant="body2" color="text.secondary">
                       {progress.total 
                         ? `${Math.round(progress.current)}/${Math.round(progress.total)} (${Math.round((progress.current / progress.total) * 100)}%)`
                         : `${Math.round(progress.current)}%`}
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2.5">
-                    <div 
-                      className="bg-blue-600 h-2.5 rounded-full" 
-                      style={{ 
-                        width: progress.total 
-                          ? `${Math.min(100, (progress.current / progress.total) * 100)}%`
-                          : `${Math.min(100, progress.current)}%`
-                      }}
-                    ></div>
-                  </div>
+                    </Typography>
+                  </Box>
+                  <LinearProgress 
+                    variant="determinate" 
+                    value={progress.total 
+                      ? Math.min(100, (progress.current / progress.total) * 100)
+                      : Math.min(100, progress.current)
+                    } 
+                  />
                 </>
               )}
-            </div>
+            </Box>
           )}
         </>
       ) : (
-        <div className="text-gray-500">No tool selected or tool details not found.</div>
+        <Typography color="text.secondary">No tool selected or tool details not found.</Typography>
       )}
 
       {result && (
-        <div className="mt-4 p-4 rounded-md bg-gray-50">
-          <h4 className="font-medium mb-2">Result:</h4>
+        <Paper 
+          sx={{ 
+            mt: 2, 
+            p: 2, 
+            bgcolor: (theme) => theme.palette.mode === 'dark' ? '#1a1a1a' : '#f9fafb'
+          }}
+        >
+          <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 'medium' }}>Result:</Typography>
           {result.success ? (
-            <pre className="whitespace-pre-wrap text-sm bg-white p-2 rounded border">
+            <Box 
+              component="pre" 
+              sx={{ 
+                whiteSpace: 'pre-wrap',
+                fontSize: '0.875rem',
+                p: 1,
+                borderRadius: 1,
+                border: 1,
+                borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
+                bgcolor: (theme) => theme.palette.background.paper,
+                color: (theme) => theme.palette.text.primary,
+                overflow: 'auto'
+              }}
+            >
               {result.output}
-            </pre>
+            </Box>
           ) : (
-            <div className="text-red-500">
-              <p>Error: {result.error}</p>
-            </div>
+            <Typography color="error.main">
+              Error: {result.error}
+            </Typography>
           )}
-        </div>
+        </Paper>
       )}
-    </div>
+    </Paper>
   );
 };
 

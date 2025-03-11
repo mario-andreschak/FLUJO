@@ -97,7 +97,7 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
         }
       }}
     >
-      <DialogTitle>
+      <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
             {nodeData.label || 'Start Node'} Properties

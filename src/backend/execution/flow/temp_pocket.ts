@@ -1,4 +1,4 @@
-import { cloneDeep } from "lodash";
+import cloneDeep from "lodash/cloneDeep";
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/execution/flow/temp_pocket');
@@ -182,7 +182,7 @@ export class Flow extends BaseNode {
       log.debug("Orchestrate -- currentNode", { currentNode });
 
       // Use nodeParams if available, otherwise fallback to flowParams or this.flow_params
-      let paramsToSet = nodeParams && nodeParams[currentNode.flow_params.id]
+      const paramsToSet = nodeParams && nodeParams[currentNode.flow_params.id]
         ? nodeParams[currentNode.flow_params.id]
         : (flowParams ? flowParams : this.flow_params);
 

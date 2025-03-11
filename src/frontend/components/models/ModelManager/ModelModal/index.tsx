@@ -23,6 +23,7 @@ import {
 import { Link as LinkIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Model } from '@/shared/types';
 import { modelService } from '@/frontend/services/model';
@@ -721,3 +722,4 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 };
 
 export default ModelModal;
+

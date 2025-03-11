@@ -2,6 +2,14 @@
 
 import React from 'react';
 import FolderIcon from '@mui/icons-material/Folder';
+import {
+  Box,
+  IconButton,
+  InputAdornment,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material';
 
 interface LocalServerFormProps {
   name: string;
@@ -19,43 +27,48 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
   onRootPathSelect
 }) => {
   return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium mb-1">
+    <Stack spacing={3}>
+      <Box>
+        <Typography variant="subtitle2" gutterBottom>
           Server Name
-        </label>
-        <input
-          type="text"
+        </Typography>
+        <TextField
+          fullWidth
+          size="small"
           value={name}
           onChange={e => setName(e.target.value)}
-          className="w-full px-3 py-2 border rounded-lg"
           placeholder="my-mcp-server"
+          variant="outlined"
           required
         />
-      </div>
+      </Box>
 
-      <div>
-        <label className="block text-sm font-medium mb-1">
+      <Box>
+        <Typography variant="subtitle2" gutterBottom>
           MCP Server Root Path
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={rootPath}
-            onChange={e => setRootPath(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg"
-            placeholder="/path/to/server/root"
-          />
-          <button
-            type="button"
-            onClick={onRootPathSelect}
-            className="px-3 py-2 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-          >
-            <FolderIcon sx={{ width: 20, height: 20 }} />
-          </button>
-        </div>
-      </div>
-    </div>
+        </Typography>
+        <TextField
+          fullWidth
+          size="small"
+          value={rootPath}
+          onChange={e => setRootPath(e.target.value)}
+          placeholder="/path/to/server/root"
+          variant="outlined"
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton
+                  onClick={onRootPathSelect}
+                  edge="end"
+                >
+                  <FolderIcon />
+                </IconButton>
+              </InputAdornment>
+            ),
+          }}
+        />
+      </Box>
+    </Stack>
   );
 };
 

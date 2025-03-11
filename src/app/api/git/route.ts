@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { execSync, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
 
@@ -437,3 +438,4 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+

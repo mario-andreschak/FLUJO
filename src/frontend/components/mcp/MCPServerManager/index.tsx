@@ -3,9 +3,13 @@
 import React, { useState, useMemo } from 'react';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
-import { MCPServerConfig } from '@/backend/types/mcp';
+import { MCPServerConfig } from '@/shared/types/mcp';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { createLogger } from '@/utils/logger';
+import { useThemeUtils } from '@/frontend/utils/theme';
+import { Button, useTheme, Box, Typography } from '@mui/material';
+import DownloadIcon from '@mui/icons-material/Download';
+import AddIcon from '@mui/icons-material/Add';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
@@ -118,62 +122,70 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     URL.revokeObjectURL(url);
   };
 
+  const { getThemeValue } = useThemeUtils();
+  const muiTheme = useTheme();
+  
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">MCP Server Management</h2>
-        <div className="flex space-x-2">
-          <button
+    <Box sx={{ color: 'text.primary' }}>
+      <Box
+        sx={{
+          p: 2,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          borderBottom: 1,
+          borderColor: 'divider',
+        }}
+      >
+        <Typography variant="h5">MCP</Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="contained"
+            color="primary"
             onClick={handleExportConfig}
-            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg flex items-center gap-2"
+            startIcon={<DownloadIcon />}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 500,
+              boxShadow: 1,
+            }}
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-            >
-              <path
-                fillRule="evenodd"
-                d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z"
-                clipRule="evenodd"
-              />
-            </svg>
             Export
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
             onClick={() => {
               setShowAddModal(true);
               onServerModalToggle(true);
             }}
-            className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg flex items-center gap-2"
+            startIcon={<AddIcon />}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 500,
+              boxShadow: 1,
+            }}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path
-                fillRule="evenodd"
-                d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
-                clipRule="evenodd"
-              />
-            </svg>
             Add Server
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Box>
+      </Box>
 
-      {/* Add empty tools array to each server to match the ServerList interface */}
-      <ServerList
-        servers={servers.map((server: any) => ({
-          ...server,
-          tools: [] // Add empty tools array to match the ServerList interface
-        }))}
-        isLoading={isLoading}
-        loadError={loadError}
-        onServerSelect={onServerSelect}
-        onServerToggle={handleServerToggle}
-        onServerRetry={handleServerRetry}
-        onServerDelete={handleServerDelete}
-        onServerEdit={handleEditServer}
-      />
+      <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+        <ServerList
+          servers={servers.map((server: any) => ({
+            ...server,
+            tools: [] // Add empty tools array to match the ServerList interface
+          }))}
+          isLoading={isLoading}
+          loadError={loadError}
+          onServerSelect={onServerSelect}
+          onServerToggle={handleServerToggle}
+          onServerRetry={handleServerRetry}
+          onServerDelete={handleServerDelete}
+          onServerEdit={handleEditServer}
+        />
+      </Box>
 
       <ServerModal
         isOpen={showAddModal}
@@ -187,7 +199,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
         onUpdate={handleUpdateServer}
         onRestartAfterUpdate={handleServerRetry}
       />
-    </div>
+    </Box>
   );
 };
 

@@ -24,6 +24,7 @@ import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import MicIcon from '@mui/icons-material/Mic';
 import CloseIcon from '@mui/icons-material/Close';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
 
@@ -192,7 +193,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled = false }
             
             if (result.success) {
               // Set transcription result
-              let resultText = result.text;
+              const resultText = result.text;
               
               // Add a note that it was transcribed using Web Speech API
               // resultText += '\n\n(Transcribed using browser speech recognition)';

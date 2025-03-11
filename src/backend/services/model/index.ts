@@ -23,7 +23,6 @@ import {
   fetchModelsFromProvider,
   getProviderFromBaseUrl
 } from './provider';
-import { mode } from 'crypto-js';
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/index');

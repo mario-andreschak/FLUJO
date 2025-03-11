@@ -7,6 +7,7 @@ import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { useServerEvents } from '@/frontend/hooks/useServerEvents';
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
+import { useThemeUtils } from '@/frontend/utils/theme';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager');
 
@@ -49,11 +50,19 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName }) => {
     }
   }, [lastEvent, loadTools, serverName]);
 
+  const { getThemeValue } = useThemeUtils();
+  
   // If there's an error and no tools, show a message
   if (error && (!tools || tools.length === 0)) {
     return (
-      <div className="mt-8 border rounded-lg p-4 bg-red-50">
-        <h3 className="text-lg font-semibold mb-4">Tool Manager - {serverName || 'No Server Selected'}</h3>
+      <div className="mt-8 border rounded-lg p-4" style={{
+        backgroundColor: getThemeValue('#fef2f2', '#3a2222'),
+        borderColor: getThemeValue('#fecaca', '#5a3333'),
+        color: getThemeValue('#333', '#f0f0f0')
+      }}>
+        <h3 className="text-lg font-semibold mb-4" style={{ color: getThemeValue('#111', '#f8f8f8') }}>
+          Tool Manager - {serverName || 'No Server Selected'}
+        </h3>
         <div className="text-red-500">
           <p>Error loading tools: {error}</p>
           <button
@@ -87,15 +96,23 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName }) => {
   // If no server is selected, show a message
   if (!serverName) {
     return (
-      <div className="mt-8 border rounded-lg p-4">
-        <h3 className="text-lg font-semibold mb-4">Tool Manager</h3>
-        <p className="text-gray-500">Please select a server to view and test tools.</p>
+      <div className="mt-8 border rounded-lg p-4" style={{
+        backgroundColor: getThemeValue('white', '#2a2a2a'),
+        borderColor: getThemeValue('#e5e7eb', '#3a3a3a'),
+        color: getThemeValue('#333', '#f0f0f0')
+      }}>
+        <h3 className="text-lg font-semibold mb-4" style={{ color: getThemeValue('#111', '#f8f8f8') }}>
+          Tool Manager
+        </h3>
+        <p style={{ color: getThemeValue('#6b7280', '#9ca3af') }}>
+          Please select a server to view and test tools.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="mt-8">
+    <div className="mt-8" style={{ color: getThemeValue('#333', '#f0f0f0') }}>
       <ToolTester
         serverName={serverName}
         tools={tools}

@@ -1,3 +1,4 @@
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -161,3 +162,4 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
   // This is a placeholder for future implementation
   return false;
 }
+

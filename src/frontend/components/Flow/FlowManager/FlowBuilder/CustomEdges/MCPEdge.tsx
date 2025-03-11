@@ -9,11 +9,11 @@ import {
   Position,
   MarkerType
 } from '@xyflow/react';
-import { styled } from '@mui/material/styles';
+import { styled, useTheme } from '@mui/material/styles';
 
-const EdgeButton = styled('button')({
-  background: 'white',
-  border: '1px solid #ddd',
+const EdgeButton = styled('button')(({ theme }) => ({
+  background: theme.palette.background.paper,
+  border: `1px solid ${theme.palette.divider}`,
   cursor: 'pointer',
   borderRadius: '50%',
   fontSize: '10px',
@@ -22,11 +22,19 @@ const EdgeButton = styled('button')({
   display: 'flex',
   justifyContent: 'center',
   alignItems: 'center',
-  boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  color: theme.palette.text.primary,
+  boxShadow: theme.palette.mode === 'dark' 
+    ? '0 2px 4px rgba(0,0,0,0.3)' 
+    : '0 2px 4px rgba(0,0,0,0.1)',
   '&:hover': {
-    boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+    boxShadow: theme.palette.mode === 'dark' 
+      ? '0 2px 6px rgba(0,0,0,0.4)' 
+      : '0 2px 6px rgba(0,0,0,0.2)',
+    background: theme.palette.mode === 'dark' 
+      ? theme.palette.action.hover 
+      : theme.palette.background.paper,
   }
-});
+}));
 
 const EdgePath = styled(BaseEdge)(({ theme }) => ({
   '&.animated': {
@@ -67,11 +75,15 @@ const MCPEdge: FC<EdgeProps> = ({
     borderRadius: 16
   });
 
-  // MCP edge style - blue color
+  const theme = useTheme();
+  
+  // MCP edge style - using theme colors
   const edgeStyle = {
     ...style,
     strokeWidth: selected ? 3 : 2,
-    stroke: selected ? '#2196f3' : '#1976d2', // Blue color for MCP connections
+    stroke: selected 
+      ? theme.palette.info.light 
+      : theme.palette.info.main, // Use theme info color for MCP connections
   };
 
   return (

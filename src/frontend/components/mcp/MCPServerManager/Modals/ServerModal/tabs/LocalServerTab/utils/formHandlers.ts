@@ -384,14 +384,14 @@ export const handleInstall = async (
   localConfig: MCPServerConfig,
   installCommand: string,
   setIsInstalling: (isInstalling: boolean) => void,
-  setMessage: (message: MessageState | null) => void,
+  setBuildMessage: (message: MessageState | null) => void,
   setConsoleTitle: (title: string) => void,
   setIsConsoleVisible: (isVisible: boolean) => void,
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
   setInstallCompleted: (completed: boolean) => void
 ) => {
   if (!localConfig.name) {
-    setMessage({
+    setBuildMessage({
       type: 'error',
       text: 'Please specify a server name first'
     });
@@ -399,7 +399,7 @@ export const handleInstall = async (
   }
   
   setIsInstalling(true);
-  setMessage({
+  setBuildMessage({
     type: 'success',
     text: 'Installing dependencies...'
   });
@@ -423,12 +423,12 @@ export const handleInstall = async (
   // Set a brief message with instructions to check the console
   if (result.success) {
     setInstallCompleted(true);
-    setMessage({
+    setBuildMessage({
       type: 'success',
       text: 'Dependencies installed successfully. Check the console for more information.'
     });
   } else {
-    setMessage({
+    setBuildMessage({
       type: 'error',
       text: `Failed to install dependencies. Check the console for more information.`
     });
@@ -441,14 +441,14 @@ export const handleBuild = async (
   localConfig: MCPServerConfig,
   buildCommand: string,
   setIsBuilding: (isBuilding: boolean) => void,
-  setMessage: (message: MessageState | null) => void,
+  setBuildMessage: (message: MessageState | null) => void,
   setConsoleTitle: (title: string) => void,
   setIsConsoleVisible: (isVisible: boolean) => void,
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
   setBuildCompleted: (completed: boolean) => void
 ) => {
   if (!localConfig.name) {
-    setMessage({
+    setBuildMessage({
       type: 'error',
       text: 'Please specify a server name first'
     });
@@ -456,7 +456,7 @@ export const handleBuild = async (
   }
   
   setIsBuilding(true);
-  setMessage({
+  setBuildMessage({
     type: 'success',
     text: 'Building server...'
   });
@@ -481,12 +481,12 @@ export const handleBuild = async (
   // Set a brief message with instructions to check the console
   if (result.success) {
     setBuildCompleted(true);
-    setMessage({
+    setBuildMessage({
       type: 'success',
       text: 'Server built successfully. Check the console for more information.'
     });
   } else {
-    setMessage({
+    setBuildMessage({
       type: 'error',
       text: `Failed to build server. Check the console for more information.`
     });

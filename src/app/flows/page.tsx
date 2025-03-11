@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Button, Divider, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, TextField } from '@mui/material';
-import FlowList from '@/frontend/components/Flow/FlowManager/FlowBuilder/FlowList';
+import { Box, Typography, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, TextField } from '@mui/material';
 import FlowBuilder from '@/frontend/components/Flow/FlowManager/FlowBuilder';
+import FlowLayout from '@/frontend/components/Flow/FlowManager/FlowLayout';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 
@@ -197,33 +198,55 @@ const FlowsPage = () => {
             variant="contained"
             color="primary"
             onClick={() => {
-              setSelectedFlow(null);
+              // Generate a unique name for the new flow
+              let baseName = "NewFlow";
+              let newName = baseName;
+              let counter = 1;
+              
+              // Check if a flow with this name already exists
+              while (flows.some(flow => flow.name === newName)) {
+                newName = `${baseName}${counter}`;
+                counter++;
+              }
+              
+              // Create a new flow with the unique name
+              const newFlow = flowService.createNewFlow(newName);
+              
+              // Add a Start node
+              const startNode = flowService.createNode('start', { x: 250, y: 150 });
+              if (!startNode.data.properties) {
+                startNode.data.properties = {};
+              }
+              startNode.data.properties.promptTemplate = '';
+              
+              newFlow.nodes = [startNode];
+              newFlow.edges = [];
+              
+              // Save the new flow
+              handleSaveFlow(newFlow);
             }}
           >
             New Flow
           </Button>
         </Box>
       </Box>
-      <Box sx={{ p: 2 }}>
-        <FlowList
-          flows={flows}
-          selectedFlow={selectedFlow}
-          onSelectFlow={setSelectedFlow}
-          onDeleteFlow={handleDeleteFlow}
-          onCopyFlow={handleCopyFlow}
-          isLoading={isLoading}
-        />
-      </Box>
-      <Divider />
-      <Box sx={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <FlowLayout
+        flows={flows}
+        selectedFlow={selectedFlow}
+        onSelectFlow={setSelectedFlow}
+        onDeleteFlow={handleDeleteFlow}
+        onCopyFlow={handleCopyFlow}
+        isLoading={isLoading}
+      >
         <FlowBuilder
           key={selectedFlow || 'new'}
           initialFlow={selectedFlow ? flows.find((f: Flow) => f.id === selectedFlow) : undefined}
           onSave={handleSaveFlow}
           onDelete={handleDeleteFlow}
           allFlows={flows}
+          onSelectFlow={setSelectedFlow}
         />
-      </Box>
+      </FlowLayout>
       
       {/* Copy Flow Dialog */}
       <Dialog open={copyDialogOpen} onClose={handleCopyDialogClose}>

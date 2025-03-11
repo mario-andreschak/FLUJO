@@ -6,11 +6,15 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import FitScreenIcon from '@mui/icons-material/FitScreen';
 
-const ToolbarButton = styled(Button)({
+const ToolbarButton = styled(Button)(({ theme }) => ({
   minWidth: '36px',
   padding: '6px',
   margin: '0 4px',
-});
+  backgroundColor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.02)',
+  '&:hover': {
+    backgroundColor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
+  }
+}));
 
 interface CanvasToolbarProps {
   flowContainerRef: React.RefObject<HTMLDivElement>;

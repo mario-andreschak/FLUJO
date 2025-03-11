@@ -45,6 +45,7 @@ export const useLocalServerState = ({ initialConfig }: UseLocalServerStateProps)
   const [buildCommand, setBuildCommand] = useState<string>('');
   const [installCommand, setInstallCommand] = useState<string>('');
   const [message, setMessage] = useState<MessageState | null>(null);
+  const [buildMessage, setBuildMessage] = useState<MessageState | null>(null);
   const [isBuilding, setIsBuilding] = useState<boolean>(false);
   const [isInstalling, setIsInstalling] = useState<boolean>(false);
   const [buildCompleted, setBuildCompleted] = useState<boolean>(false);
@@ -59,11 +60,11 @@ export const useLocalServerState = ({ initialConfig }: UseLocalServerStateProps)
   const [runCompleted, setRunCompleted] = useState<boolean>(false);
   const [consoleTitle, setConsoleTitle] = useState<string>('Command Output');
 
-  // Toggle section expansion
-  const toggleSection = (section: 'define' | 'build' | 'run') => {
+  // Update expanded sections
+  const setExpandedSection = (section: 'define' | 'build' | 'run', isExpanded: boolean) => {
     setExpandedSections(prev => ({
       ...prev,
-      [section]: !prev[section]
+      [section]: isExpanded
     }));
   };
 
@@ -201,6 +202,8 @@ export const useLocalServerState = ({ initialConfig }: UseLocalServerStateProps)
     setInstallCommand,
     message,
     setMessage,
+    buildMessage,
+    setBuildMessage,
     isBuilding,
     setIsBuilding,
     isInstalling,
@@ -224,9 +227,9 @@ export const useLocalServerState = ({ initialConfig }: UseLocalServerStateProps)
     consoleTitle,
     setConsoleTitle,
     expandedSections,
+    setExpandedSections,
     
     // Methods
-    toggleSection,
     handleTransportChange,
     handleArgChange,
     addArgField,

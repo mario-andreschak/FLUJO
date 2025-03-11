@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, forwardRef, useRef, useEffect } from 'react';
+import React, { useCallback, forwardRef, useRef, useEffect, useMemo } from 'react';
 import {
   ReactFlow,
   ConnectionLineType,
@@ -11,7 +11,7 @@ import {
   OnInit
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { styled } from '@mui/material/styles';
+import { styled, useTheme } from '@mui/material/styles';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { StartNode, ProcessNode, FinishNode, MCPNode } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
@@ -25,14 +25,14 @@ import { findNodeById } from './utils/nodeUtils';
 import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
 
-const FlowContainer = styled('div')({
+const FlowContainer = styled('div')(({ theme }) => ({
   width: '100%',
   height: '80vh',
-  border: '1px solid rgba(0, 0, 0, 0.12)',
+  border: `1px solid ${theme.palette.divider}`,
   borderRadius: '4px',
-  background: 'white',
+  background: theme.palette.background.paper,
   position: 'relative',
-});
+}));
 
 // Define types outside of the component to avoid recreation on each render
 const nodeTypes = {
@@ -48,6 +48,7 @@ const edgeTypes = {
 };
 
 export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
+  const theme = useTheme();
   const {
     initialNodes = [],
     initialEdges = [],
@@ -76,7 +77,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   );
   
   const {
-    getClosestEdge, onNodeDrag, onNodeDragStop
+    onNodeDrag, onNodeDragStop
   } = useProximityConnect(nodes, setEdges, setLastAddedEdge, onEdgesChangeCallback);
 
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
@@ -197,17 +198,17 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        defaultEdgeOptions={{
+        defaultEdgeOptions={useMemo(() => ({
           type: 'custom',
           animated: true,
-          style: { stroke: '#555', strokeWidth: 2 },
+          style: { stroke: theme.palette.text.secondary, strokeWidth: 2 },
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 20,
             height: 20,
-            color: '#555',
+            color: theme.palette.text.secondary,
           },
-        }}
+        }), [theme.palette.text.secondary])}
         connectionLineType={ConnectionLineType.SmoothStep}
         onNodesChange={handleNodesChange as any}
         onEdgesChange={handleEdgesChange}

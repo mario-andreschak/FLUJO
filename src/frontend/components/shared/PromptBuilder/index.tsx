@@ -9,6 +9,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { mcpService } from '@/frontend/services/mcp';
 import './promptBuilder.css';
+import { toolBindingRegex } from '@/utils/shared';
 
 export interface PromptBuilderRef {
   insertText: (text: string) => void;
@@ -50,8 +51,8 @@ declare module 'slate' {
   }
 }
 
-// Tool reference regex pattern
-const toolBindingRegex = /\$\{tool:([^:]+):([^}]+)\}/g;
+// // Tool reference regex pattern
+// const toolBindingRegex = /\$\{-_-_-([\w^}]+)-_-_-([\w^}]+)\}/g;
 
 // Convert markdown string to Slate value
 const deserialize = (markdown: string): Descendant[] => {

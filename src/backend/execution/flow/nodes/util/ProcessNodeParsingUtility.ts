@@ -1,3 +1,4 @@
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { modelService } from '@/backend/services/model';
@@ -173,3 +174,4 @@ function extractJsonObjects(text: string): any[] {
   
   return results;
 }
+

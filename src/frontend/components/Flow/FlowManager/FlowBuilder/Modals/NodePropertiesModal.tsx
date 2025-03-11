@@ -193,7 +193,7 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
         }
       }}
     >
-      <DialogTitle>
+      <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
             {nodeData.label || `${nodeTypeLabel} Node`} Properties

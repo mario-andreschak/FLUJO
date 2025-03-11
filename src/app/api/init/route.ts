@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyStorage } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/init/route');
@@ -29,3 +30,4 @@ export async function GET(req: NextRequest) {
     }, { status: 500 });
   }
 }
+

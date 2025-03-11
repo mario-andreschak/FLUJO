@@ -86,7 +86,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     const toolDescription = tool?.description || '';
     
     // Create the binding in the format that will be visually displayed as a pill
-    const binding = `\${tool:${serverName}:${toolName}}`;
+    const binding = `\${-_-_-${serverName}-_-_-${toolName}}`;
     
     // Create the preview text that will be shown when clicking preview
     // This will be handled by the PromptBuilder component which converts the binding to a formatted text
@@ -160,7 +160,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         }
       }}
     >
-      <DialogTitle>
+      <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
             {nodeData.label || 'Process Node'} Properties

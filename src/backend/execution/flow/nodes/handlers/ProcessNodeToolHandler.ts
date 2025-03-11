@@ -89,7 +89,7 @@ export class ProcessNodeToolHandler {
     log.info(`Found ${mcpNodes.length} associated MCP nodes`);
     
     // Array to collect all available tools
-    let allAvailableTools: any[] = [];
+    const allAvailableTools: any[] = [];
     
     // Process each MCP node
     for (const mcpNode of mcpNodes) {

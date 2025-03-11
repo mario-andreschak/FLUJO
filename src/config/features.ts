@@ -14,7 +14,8 @@ export const FEATURES = {
   /**
    * Controls the application's logging level
    * Possible values:
-   * - 0: DEBUG (most verbose)
+   * - -1: VERBOSE (most verbose)
+   * - 0: DEBUG
    * - 1: INFO
    * - 2: WARN
    * - 3: ERROR (least verbose)

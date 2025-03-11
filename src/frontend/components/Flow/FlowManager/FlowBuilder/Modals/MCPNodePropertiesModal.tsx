@@ -35,7 +35,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import Tooltip from '@mui/material/Tooltip';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import  EnvEditor  from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
-import { logger } from '@/utils/logger/logger';
+import { createLogger } from '@/utils/logger/index';
+
+const logger = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal');
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
 
@@ -99,7 +101,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
     const enabledToolsFromProps = nodeData.properties.enabledTools || [];
     if (enabledToolsFromProps.length === 0 && tools.length > 0) {
       // If no tools were previously enabled, enable all by default
-      logger.debug('MCPNodePropertiesModal', 'Enabling all tools by default');
+      logger.debug('Enabling all tools by default');
       setNodeData(prev => {
         if (!prev) return null;
         return {
@@ -146,7 +148,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
       event.stopPropagation();
     }
     
-    logger.debug('MCPNodePropertiesModal', `Retrying server: ${serverName}`);
+    logger.debug(`Retrying server: ${serverName}`);
     
     // Set retrying state for this server
     setRetryingServers(prev => ({
@@ -165,7 +167,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
       
       return true;
     } catch (error) {
-      logger.warn('MCPNodePropertiesModal', `Failed to retry server ${serverName}:`, error);
+      logger.warn(`Failed to retry server ${serverName}: ${error}`);
       return false;
     } finally {
       // Reset retrying state after a short delay
@@ -179,7 +181,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
   };
 
   const handleServerSelect = (serverName: string) => {
-    logger.debug('MCPNodePropertiesModal', `Server selected: ${serverName}`);
+    logger.debug(`Server selected: ${serverName}`);
     setSelectedServer(serverName);
     
     setNodeData((prev) => {
@@ -201,7 +203,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
   };
   
   const handleToolToggle = (toolName: string) => {
-    logger.debug('MCPNodePropertiesModal', `Tool toggled: ${toolName}`);
+    logger.debug(`Tool toggled: ${toolName}`);
     setNodeData((prev) => {
       if (!prev) return null;
       
@@ -226,8 +228,8 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
     });
   };
   
-  const handleSaveEnv = async (env: Record<string, string>) => {
-    logger.debug('MCPNodePropertiesModal', 'Environment variables saved');
+  const handleSaveEnv = async (env: Record<string, string | { value: string; metadata: { isSecret: boolean } }>) => {
+    logger.debug('Environment variables saved');
     setNodeData((prev) => {
       if (!prev) return null;
       return {
@@ -260,7 +262,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
         }
       }}
     >
-      <DialogTitle>
+      <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
             {nodeData.label || 'MCP Node'} Properties

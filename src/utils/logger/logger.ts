@@ -2,6 +2,7 @@
 import { FEATURES } from '@/config/features';
 
 export const LOG_LEVEL = {
+  VERBOSE: -1, // Most verbose level for extremely detailed logging
   DEBUG: 0,
   INFO: 1,
   WARN: 2,
@@ -12,8 +13,11 @@ export const LOG_LEVEL = {
 export const CURRENT_LOG_LEVEL = 
   typeof FEATURES.LOG_LEVEL === 'number' ? FEATURES.LOG_LEVEL : LOG_LEVEL.ERROR;
 
-function logWithLevel(level: number, filepath: string, message: string, data?: any) {
-  if (level >= CURRENT_LOG_LEVEL) {
+function logWithLevel(level: number, filepath: string, message: string, data?: any, overrideLogLevel?: number) {
+  // Use the override log level if provided, otherwise use the global setting
+  const effectiveLogLevel = typeof overrideLogLevel === 'number' ? overrideLogLevel : CURRENT_LOG_LEVEL;
+  
+  if (level >= effectiveLogLevel) {
     const timestamp = new Date().toISOString();
     const logPrefix = `[${timestamp}] [${filepath}]`;
     
@@ -32,6 +36,9 @@ function logWithLevel(level: number, filepath: string, message: string, data?: a
     }
 
     switch (level) {
+      case LOG_LEVEL.VERBOSE:
+        console.debug(`[VERBOSE] ${output}`);
+        break;
       case LOG_LEVEL.DEBUG:
         console.debug(output);
         break;
@@ -69,40 +76,28 @@ export function normalizeFilePath(filepath: string): string {
 /**
  * Creates a logger instance with a pre-configured file path
  * This makes it easier to use the logger consistently across the application
+ * 
+ * @param filepath - The file path to use for logging
+ * @param overrideLogLevel - Optional parameter to override the global log level for this logger instance
  */
-export function createLogger(filepath: string) {
+export function createLogger(filepath: string, overrideLogLevel?: number) {
   const normalizedPath = normalizeFilePath(filepath);
   
   return {
+    verbose: (message: string, data?: any) => {
+      logWithLevel(LOG_LEVEL.VERBOSE, normalizedPath, message, data, overrideLogLevel);
+    },
     debug: (message: string, data?: any) => {
-      logWithLevel(LOG_LEVEL.DEBUG, normalizedPath, message, data);
+      logWithLevel(LOG_LEVEL.DEBUG, normalizedPath, message, data, overrideLogLevel);
     },
     info: (message: string, data?: any) => {
-      logWithLevel(LOG_LEVEL.INFO, normalizedPath, message, data);
+      logWithLevel(LOG_LEVEL.INFO, normalizedPath, message, data, overrideLogLevel);
     },
     warn: (message: string, data?: any) => {
-      logWithLevel(LOG_LEVEL.WARN, normalizedPath, message, data);
+      logWithLevel(LOG_LEVEL.WARN, normalizedPath, message, data, overrideLogLevel);
     },
     error: (message: string, data?: any) => {
-      logWithLevel(LOG_LEVEL.ERROR, normalizedPath, message, data);
+      logWithLevel(LOG_LEVEL.ERROR, normalizedPath, message, data, overrideLogLevel);
     }
   };
 }
-
-// Legacy logger interface for backward compatibility
-export const logger = {
-  debug: (prefix: string, message: string, data?: any) => {
-    // Use the prefix as the filepath
-    logWithLevel(LOG_LEVEL.DEBUG, normalizeFilePath(prefix), message, data);
-  },
-  info: (prefix: string, message: string, data?: any) => {
-    logWithLevel(LOG_LEVEL.INFO, normalizeFilePath(prefix), message, data);
-  },
-  warn: (prefix: string, message: string, data?: any) => {
-    logWithLevel(LOG_LEVEL.WARN, normalizeFilePath(prefix), message, data);
-  },
-  error: (prefix: string, message: string, data?: any) => {
-    // Use the prefix as the filepath
-    logWithLevel(LOG_LEVEL.ERROR, normalizeFilePath(prefix), message, data);
-  },
-};

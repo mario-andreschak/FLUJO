@@ -8,6 +8,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { mcpService } from '@/backend/services/mcp';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { FEATURES } from '@/config/features'; // Import the feature flags
@@ -412,3 +413,4 @@ export async function POST(request: NextRequest) {
     return new NextResponse(`Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}`, { status: 500 });
   }
 }
+

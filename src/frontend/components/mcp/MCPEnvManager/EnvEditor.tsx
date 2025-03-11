@@ -1,13 +1,35 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { 
+  Box, 
+  Paper, 
+  Typography, 
+  TextField, 
+  Button, 
+  IconButton,
+  Checkbox,
+  FormControlLabel,
+  Modal,
+  Chip,
+  InputAdornment,
+  FormHelperText,
+  Stack,
+  Grid,
+  Divider
+} from '@mui/material';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/mcp/MCPEnvManager/EnvEditor');
 import { useStorage } from '@/frontend/contexts/StorageContext';
-import { Link as LinkIcon, Cancel as CancelIcon, LockOutlined as LockIcon } from '@mui/icons-material';
+import { 
+  Link as LinkIcon, 
+  Cancel as CancelIcon, 
+  LockOutlined as LockIcon,
+  Delete as DeleteIcon,
+  Add as AddIcon
+} from '@mui/icons-material';
 import { isSecretEnvVar } from '@/utils/shared';
-import { mcpService } from '@/frontend/services/mcp';
 import { MASKED_STRING } from '@/shared/types/constants';
 
 interface EnvVariable {
@@ -265,178 +287,202 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
   };
 
   return (
-    <div className="border rounded-lg p-4">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">
+    <Paper
+      sx={{
+        p: 3,
+        borderRadius: 2,
+        border: 1,
+        borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+      }}
+    >
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h6" sx={{ fontWeight: 'semibold' }}>
           Environment Variables - {serverName}
-        </h3>
-        <button
-          type="button"
+        </Typography>
+        <Button
+          variant="contained"
+          color="primary"
+          size="small"
+          startIcon={<AddIcon />}
           onClick={handleAddVariable}
-          className="px-3 py-1 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600"
         >
           Add Variable
-        </button>
-      </div>
+        </Button>
+      </Box>
 
-      <div className="space-y-4">
+      <Stack spacing={3}>
         {variables.map((variable, index) => (
-          <div key={index} className="flex gap-4 items-start">
-            <div className="flex-1 flex gap-2">
-              <div className="w-2/5 relative">
-                <input
-                  type="text"
-                  placeholder="Variable name"
-                  className={`w-full p-2 border rounded-md ${variable.isValidKey === false ? 'border-red-500' : ''}`}
-                  value={variable.key}
-                  onChange={(e) =>
-                    handleVariableChange(index, 'key', e.target.value)
+          <Grid container key={index} spacing={2} alignItems="flex-start">
+            <Grid item xs={12} sm={5}>
+              <TextField
+                fullWidth
+                placeholder="Variable name"
+                value={variable.key}
+                onChange={(e) => handleVariableChange(index, 'key', e.target.value)}
+                error={variable.isValidKey === false}
+                helperText={variable.isValidKey === false ? "Only alphanumeric characters and underscores allowed" : ""}
+                size="small"
+              />
+            </Grid>
+            <Grid item xs={12} sm={5}>
+              <TextField
+                fullWidth
+                type={variable.isSecret ? 'password' : 'text'}
+                placeholder={variable.showWarning ? "Re-enter value" : "Value"}
+                value={variable.value}
+                onChange={(e) => handleVariableChange(index, 'value', e.target.value)}
+                InputProps={{
+                  readOnly: variable.isBound,
+                  startAdornment: variable.isEncrypted ? (
+                    <InputAdornment position="start">
+                      <LockIcon fontSize="small" titleAccess="This value is stored encrypted" />
+                    </InputAdornment>
+                  ) : null,
+                  endAdornment: variable.isBound ? (
+                    <InputAdornment position="end">
+                      <Chip
+                        size="small"
+                        label={`Bound to global: ${variable.boundTo}`}
+                        color="primary"
+                        variant="outlined"
+                        onDelete={() => handleUnbindVariable(index)}
+                        deleteIcon={<CancelIcon fontSize="small" />}
+                      />
+                    </InputAdornment>
+                  ) : null
+                }}
+                error={variable.showWarning}
+                helperText={variable.showWarning ? "You must re-enter the value after switching from secret to normal mode" : ""}
+                size="small"
+                sx={{
+                  bgcolor: (theme) => variable.isBound ? 
+                    (theme.palette.mode === 'dark' ? '#1a1a1a' : '#f9fafb') : 
+                    theme.palette.background.paper
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={2}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={variable.isSecret}
+                      onChange={(e) => handleVariableChange(index, 'isSecret', e.target.checked)}
+                      size="small"
+                    />
                   }
+                  label="Secret"
+                  sx={{ mr: 1 }}
                 />
-                {variable.isValidKey === false && (
-                  <div className="text-xs text-red-500 mt-1">
-                    Only alphanumeric characters and underscores allowed
-                  </div>
+                {!variable.isBound && (
+                  <IconButton
+                    size="small"
+                    color="primary"
+                    onClick={() => handleBindVariable(index)}
+                    title="Bind to global variable"
+                    sx={{ mr: 1 }}
+                  >
+                    <LinkIcon fontSize="small" />
+                  </IconButton>
                 )}
-              </div>
-              <div className="relative w-3/5">
-                <div className="relative">
-                  <input
-                    type={variable.isSecret ? 'password' : 'text'}
-                    placeholder={variable.showWarning ? "Re-enter value" : "Value"}
-                    className={`w-full p-2 border rounded-md 
-                      ${variable.isBound ? 'bg-gray-100' : ''} 
-                      ${variable.isEncrypted ? 'pl-8' : ''} 
-                      ${variable.showWarning ? 'border-yellow-500' : ''}`}
-                    value={variable.value}
-                    onChange={(e) =>
-                      handleVariableChange(index, 'value', e.target.value)
-                    }
-                    readOnly={variable.isBound}
-                  />
-                  {variable.isEncrypted && (
-                    <div className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-500" title="This value is stored encrypted">
-                      <LockIcon fontSize="small" />
-                    </div>
-                  )}
-                  {variable.showWarning && (
-                    <div className="text-xs text-yellow-600 mt-1">
-                      You must re-enter the value after switching from secret to normal mode
-                    </div>
-                  )}
-                </div>
-                {variable.isBound && (
-                  <div className="absolute right-2 top-2 flex items-center">
-                    <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded mr-1">
-                      Bound to global: {variable.boundTo}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleUnbindVariable(index)}
-                      className="text-red-500"
-                      title="Unbind variable"
-                    >
-                      <CancelIcon fontSize="small" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center mt-2">
-              <label className="flex items-center mr-4 text-sm">
-                <input
-                  type="checkbox"
-                  className="mr-2"
-                  checked={variable.isSecret}
-                  onChange={(e) =>
-                    handleVariableChange(index, 'isSecret', e.target.checked)
-                  }
-                />
-                Secret
-              </label>
-              {!variable.isBound && (
-                <button
-                  type="button"
-                  onClick={() => handleBindVariable(index)}
-                  className="text-blue-500 hover:text-blue-700 mr-2"
-                  title="Bind to global variable"
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={() => handleRemoveVariable(index)}
+                  title="Remove variable"
                 >
-                  <LinkIcon fontSize="small" />
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => handleRemoveVariable(index)}
-                className="text-red-500 hover:text-red-700"
-              >
-                Remove
-              </button>
-            </div>
-          </div>
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Box>
+            </Grid>
+          </Grid>
         ))}
-      </div>
+      </Stack>
 
       {/* Bind Modal */}
-      {showBindModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">Bind to Global Variable</h3>
-            
-            {Object.keys(globalEnvVars).length === 0 ? (
-              <p className="text-gray-500 mb-4">
-                No global variables available. Add some in Settings first.
-              </p>
-            ) : (
-              <div className="max-h-60 overflow-y-auto mb-4">
-                {Object.entries(globalEnvVars).map(([key, value]) => (
-                  <button
-                    type="button"
-                    key={key}
-                    onClick={() => handleSelectGlobalVar(key)}
-                    className="w-full text-left p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded mb-1 flex justify-between items-center"
-                  >
-                    <span>{key}</span>
-                    <span className="text-xs text-gray-500">
-                      {value && typeof value === 'object' && value.metadata && value.metadata.isSecret
-                        ? MASKED_STRING
-                        : value && typeof value === 'object'
-                          ? value.value
-                          : value}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowBindModal(false);
-                  setSelectedVarIndex(null);
-                }}
-                className="px-4 py-2 border rounded-lg"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        open={showBindModal}
+        onClose={() => {
+          setShowBindModal(false);
+          setSelectedVarIndex(null);
+        }}
+      >
+        <Box sx={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 400,
+          maxWidth: '90%',
+          bgcolor: 'background.paper',
+          boxShadow: 24,
+          p: 4,
+          borderRadius: 2
+        }}>
+          <Typography variant="h6" sx={{ mb: 2 }}>
+            Bind to Global Variable
+          </Typography>
+          
+          {Object.keys(globalEnvVars).length === 0 ? (
+            <Typography color="text.secondary" sx={{ mb: 2 }}>
+              No global variables available. Add some in Settings first.
+            </Typography>
+          ) : (
+            <Box sx={{ maxHeight: 300, overflow: 'auto', mb: 2 }}>
+              {Object.entries(globalEnvVars).map(([key, value]) => (
+                <Button
+                  key={key}
+                  fullWidth
+                  variant="text"
+                  onClick={() => handleSelectGlobalVar(key)}
+                  sx={{
+                    justifyContent: 'space-between',
+                    textAlign: 'left',
+                    mb: 1,
+                    p: 1,
+                    borderRadius: 1
+                  }}
+                >
+                  <Typography variant="body2">{key}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {value && typeof value === 'object' && value.metadata && value.metadata.isSecret
+                      ? MASKED_STRING
+                      : value && typeof value === 'object'
+                        ? value.value
+                        : value}
+                  </Typography>
+                </Button>
+              ))}
+            </Box>
+          )}
+          
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setShowBindModal(false);
+                setSelectedVarIndex(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </Box>
+        </Box>
+      </Modal>
 
       {isEditing && (
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 3 }}>
+          <Button
+            variant="contained"
+            color="success"
             onClick={handleSave}
             disabled={isSaving || variables.some(v => v.key !== '' && v.isValidKey === false)}
-            className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
           >
             {isSaving ? 'Saving...' : 'Save Changes'}
-          </button>
-        </div>
+          </Button>
+        </Box>
       )}
-    </div>
+    </Paper>
   );
 };
 

@@ -89,7 +89,7 @@ const PropertyRow = styled(Box)(({ theme }) => ({
   display: 'flex',
   justifyContent: 'space-between',
   padding: theme.spacing(0.5, 0),
-  borderBottom: '1px dashed rgba(0,0,0,0.1)',
+  borderBottom: `1px dashed ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
 }));
 
 interface CustomNodeProps extends NodeProps {
@@ -129,17 +129,17 @@ const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme: any) 
 // Custom handle styles for different connection types
 const getMCPHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.info.main,
-  borderColor: 'white'
+  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
 });
 
 const getProcessHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.secondary.main,
-  borderColor: 'white'
+  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
 });
 
 const getMCPConnectionHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.primary.main,
-  borderColor: 'white',
+  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   borderWidth: 2
 });
 
@@ -232,7 +232,7 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
           position={Position.Bottom} 
           style={{ 
             backgroundColor: getNodeColor(nodeType, theme),
-            borderColor: 'white'
+            borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
           }} 
         />
       );
@@ -245,7 +245,7 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
           position={Position.Top} 
           style={{ 
             backgroundColor: getNodeColor(nodeType, theme),
-            borderColor: 'white'
+            borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
           }} 
         />
       );

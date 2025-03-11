@@ -6,6 +6,20 @@ import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
 import SmitheryTab from './tabs/SmitheryTab';
+import { useThemeUtils } from '@/frontend/utils/theme';
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  IconButton,
+  Tabs,
+  Tab,
+  Box,
+  Typography
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 
 const ServerModal: React.FC<ServerModalProps> = ({
   isOpen,
@@ -39,91 +53,100 @@ const ServerModal: React.FC<ServerModalProps> = ({
     }
   }, [activeTab, initialConfig, initializedTabs]);
 
-  if (!isOpen) return null;
+  const { getThemeValue } = useThemeUtils();
+  
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery') => {
+    setActiveTab(newValue);
+  };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-screen-xl max-h-[80vh] overflow-y-auto">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">{initialConfig ? `Edit MCP Server: ${initialConfig.name}` : 'Add MCP Server'}</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-          >
-            ✕
-          </button>
-        </div>
+    <Dialog 
+      open={isOpen} 
+      onClose={onClose}
+      maxWidth="xl"
+      fullWidth
+      PaperProps={{
+        sx: {
+          width: '95vw',
+          maxWidth: '95vw',
+          maxHeight: '95vh',
+          height: 'auto',
+        }
+      }}
+    >
+      <DialogTitle 
+        component="div"
+        sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          borderBottom: 1,
+          borderColor: 'divider',
+          pb: 1
+        }}
+      >
+        <Typography variant="h6">
+          {initialConfig ? `Edit MCP Server: ${initialConfig.name}` : 'Add MCP Server'}
+        </Typography>
+        <IconButton
+          edge="end"
+          color="inherit"
+          onClick={onClose}
+          aria-label="close"
+        >
+          <CloseIcon />
+        </IconButton>
+      </DialogTitle>
 
+      <DialogContent sx={{ p: 0 }}>
         {/* Only show tabs in creation mode, not in edit mode */}
         {!initialConfig ? (
-          <div className="flex border-b mb-4">
-            <button
-              className={`px-4 py-2 ${
-                activeTab === 'github'
-                  ? 'border-b-2 border-blue-500'
-                  : 'text-gray-500'
-              }`}
-              onClick={() => setActiveTab('github')}
+          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs 
+              value={activeTab} 
+              onChange={handleTabChange}
+              aria-label="server configuration tabs"
+              sx={{ px: 2 }}
             >
-              GitHub
-            </button>
-            <button
-              className={`px-4 py-2 ${
-                activeTab === 'local'
-                  ? 'border-b-2 border-blue-500'
-                  : 'text-gray-500'
-              }`}
-              onClick={() => setActiveTab('local')}
-            >
-              Local Server
-            </button>
-            <button
-              className={`px-4 py-2 ${
-                activeTab === 'smithery'
-                  ? 'border-b-2 border-blue-500'
-                  : 'text-gray-500'
-              }`}
-              onClick={() => setActiveTab('smithery')}
-            >
-              Install from Registry
-            </button>
-          </div>
-        ) : (
-          <div className="mb-4">
-            {/* No tabs in edit mode */}
-          </div>
-        )}
+              <Tab label="GitHub" value="github" />
+              <Tab label="Local Server" value="local" />
+              <Tab label="Install from Registry" value="smithery" />
+            </Tabs>
+          </Box>
+        ) : null}
 
-        {/* Render the active tab or the edit form */}
-        {initialConfig ? (
-          <LocalServerTab
-            initialConfig={initialConfig}
-            onAdd={onAdd}
-            onUpdate={onUpdate}
-            onClose={onClose}
-            onRestartAfterUpdate={onRestartAfterUpdate}
-          />
-        ) : activeTab === 'github' ? (
-          <GitHubTab
-            onAdd={onAdd}
-            onClose={onClose}
-            setActiveTab={setActiveTab}
-            onUpdate={(config) => setParsedConfig(config)}
-          />
-        ) : activeTab === 'local' ? (
-          <LocalServerTab
-            initialConfig={parsedConfig}
-            onAdd={onAdd}
-            onClose={onClose}
-          />
-        ) : (
-          <SmitheryTab
-            onAdd={onAdd}
-            onClose={onClose}
-          />
-        )}
-      </div>
-    </div>
+        <Box sx={{ p: 3 }}>
+          {/* Render the active tab or the edit form */}
+          {initialConfig ? (
+            <LocalServerTab
+              initialConfig={initialConfig}
+              onAdd={onAdd}
+              onUpdate={onUpdate}
+              onClose={onClose}
+              onRestartAfterUpdate={onRestartAfterUpdate}
+            />
+          ) : activeTab === 'github' ? (
+            <GitHubTab
+              onAdd={onAdd}
+              onClose={onClose}
+              setActiveTab={setActiveTab}
+              onUpdate={(config) => setParsedConfig(config)}
+            />
+          ) : activeTab === 'local' ? (
+            <LocalServerTab
+              initialConfig={parsedConfig}
+              onAdd={onAdd}
+              onClose={onClose}
+            />
+          ) : (
+            <SmitheryTab
+              onAdd={onAdd}
+              onClose={onClose}
+            />
+          )}
+        </Box>
+      </DialogContent>
+    </Dialog>
   );
 };
 

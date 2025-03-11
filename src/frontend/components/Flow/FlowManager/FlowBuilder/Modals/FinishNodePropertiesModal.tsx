@@ -67,7 +67,7 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
         }
       }}
     >
-      <DialogTitle>
+      <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
             {nodeData.label || 'Finish Node'} Properties

@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/backup/route');
@@ -163,3 +164,4 @@ async function addFolderToZip(zip: JSZip, folderPath: string, zipPath: string) {
     }
   }
 }
+

@@ -92,3 +92,24 @@ When running in network mode, the application is accessible from other devices o
 - Make sure network mode is enabled
 - Check your firewall settings
 - Verify that you're using the correct IP address and port
+
+### System tray icon not showing
+
+- Ensure that the favicon.ico file exists in the public directory
+- If missing, copy it from src/app/favicon.ico to public/favicon.ico using:
+  ```powershell
+  Copy-Item -Path "src/app/favicon.ico" -Destination "public/favicon.ico"
+  ```
+
+## UI Customization
+
+### Window Menu
+
+The default window menu (File, Edit, etc.) is hidden by default. This is configured in `electron/main.js` with:
+
+```javascript
+// Hide the default menu
+Menu.setApplicationMenu(null);
+```
+
+If you want to restore the default menu or create a custom menu, modify this section in the main.js file.

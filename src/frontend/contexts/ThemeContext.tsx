@@ -3,11 +3,27 @@ import React, { createContext, useState, useContext, ReactNode, useEffect, useMe
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/contexts/ThemeContext');
-import { ThemeProvider as MuiThemeProvider, createTheme } from '@mui/material/styles';
+import { ThemeProvider as MuiThemeProvider } from '@mui/material/styles';
+import { getThemeOptions } from '@/frontend/utils/muiTheme';
 import CssBaseline from '@mui/material/CssBaseline';
 import { loadItem, saveItem, StorageKey } from '../../utils/storage';
 import ClientOnly from '@/frontend/components/ClientOnly';
 
+/**
+ * Theme Context Props Interface
+ * 
+ * This interface defines the shape of the theme context value.
+ * - toggleTheme: Function to toggle between light and dark mode
+ * - isDarkMode: Boolean indicating if dark mode is currently active
+ * 
+ * Usage:
+ * 1. Import the useTheme hook: import { useTheme } from '@/frontend/contexts/ThemeContext'
+ * 2. Use the hook in your component: const { isDarkMode, toggleTheme } = useTheme()
+ * 3. Access the current theme state with isDarkMode
+ * 4. Toggle the theme with toggleTheme()
+ * 
+ * For custom theme-aware styling, consider using the utility functions in @/frontend/utils/theme
+ */
 interface ThemeContextProps {
   toggleTheme: () => void;
   isDarkMode: boolean;
@@ -27,7 +43,16 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       log.debug('Loading theme preference from storage');
       const storedTheme = await loadItem<'light' | 'dark'>(StorageKey.THEME, 'light');
       log.info(`Theme loaded from storage: ${storedTheme}`);
-      setIsDarkMode(storedTheme === 'dark');
+      const newDarkMode = storedTheme === 'dark';
+      setIsDarkMode(newDarkMode);
+      
+      // Apply dark theme class to root element
+      if (newDarkMode) {
+        document.documentElement.classList.add('dark-theme');
+      } else {
+        document.documentElement.classList.remove('dark-theme');
+      }
+      
       setIsHydrated(true);
     }
     void loadTheme();
@@ -38,63 +63,22 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const newMode = !prev;
       const themeToSave = newMode ? 'dark' : 'light';
       log.info(`Toggling theme to: ${themeToSave}`);
+      
+      // Update root element class
+      if (newMode) {
+        document.documentElement.classList.add('dark-theme');
+      } else {
+        document.documentElement.classList.remove('dark-theme');
+      }
+      
       void saveItem<'light' | 'dark'>(StorageKey.THEME, themeToSave);
       return newMode;
     });
   };
 
-  // Create the theme based on the current mode
+  // Use the theme from our muiTheme utility
   const theme = useMemo(
-    () =>
-      createTheme({
-        palette: {
-          mode: isDarkMode ? 'dark' : 'light',
-          primary: {
-            main: '#3498DB',
-          },
-          secondary: {
-            main: '#95A5A6',
-          },
-          background: {
-            default: isDarkMode ? '#2C3E50' : '#FFFFFF',
-            paper: isDarkMode ? '#34495E' : '#F5F6FA',
-          },
-          text: {
-            primary: isDarkMode ? '#ECF0F1' : '#2C3E50',
-            secondary: isDarkMode ? '#BDC3C7' : '#7F8C8D',
-          },
-        },
-        typography: {
-          fontFamily: 'var(--font-geist-sans)',
-          h1: {
-            fontWeight: 600,
-          },
-          h2: {
-            fontWeight: 600,
-          },
-          h3: {
-            fontWeight: 600,
-          },
-          h4: {
-            fontWeight: 500,
-          },
-          h5: {
-            fontWeight: 500,
-          },
-          h6: {
-            fontWeight: 500,
-          },
-        },
-        components: {
-          MuiCssBaseline: {
-            styleOverrides: {
-              body: {
-                minHeight: '100vh',
-              },
-            },
-          },
-        },
-      }),
+    () => getThemeOptions(isDarkMode ? 'dark' : 'light'),
     [isDarkMode]
   );
 

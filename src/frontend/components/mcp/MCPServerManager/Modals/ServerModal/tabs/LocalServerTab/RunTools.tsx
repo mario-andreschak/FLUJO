@@ -2,8 +2,21 @@
 
 import React, { useEffect } from 'react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
-import Alert from '@mui/material/Alert';
 import { MessageState } from '../../types';
+import {
+  Alert,
+  Box,
+  Button,
+  FormHelperText,
+  Stack,
+  Tab,
+  Tabs,
+  TextField,
+  Typography
+} from '@mui/material';
+
+// Define the complex env value type
+type EnvValue = string | { value: string; metadata: { isSecret: boolean } };
 
 interface RunToolsProps {
   command: string;
@@ -49,6 +62,7 @@ const RunTools: React.FC<RunToolsProps> = ({
       });
     }
   }, [consoleOutput, setMessage]);
+  
   // Basic URL validation
   const isValidWebsocketUrl = (url: string): boolean => {
     if (!url) return false;
@@ -63,92 +77,97 @@ const RunTools: React.FC<RunToolsProps> = ({
   const isWebsocketUrlValid = transport !== 'websocket' || isValidWebsocketUrl(websocketUrl);
 
   return (
-    <div className="space-y-6">
+    <Stack spacing={3}>
       {/* Error message display */}
       {message && message.type === 'error' && (
-        <div className="mb-4">
-          <Alert severity="error">
-            {message.text}
-          </Alert>
-        </div>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {message.text}
+        </Alert>
       )}
+      
       {/* Transport selection tabs */}
-      <div className="mb-4">
-        <label className="block text-sm font-medium mb-2">Transport Type</label>
-        <div className="flex border-b">
-          <button
-            type="button"
-            className={`py-2 px-4 ${transport === 'stdio' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
-            onClick={() => setTransport('stdio')}
-          >
-            Standard IO
-          </button>
-          <button
-            type="button"
-            className={`py-2 px-4 ${transport === 'websocket' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
-            onClick={() => setTransport('websocket')}
-          >
-            WebSocket
-          </button>
-        </div>
-      </div>
+      <Box>
+        <Typography variant="subtitle2" gutterBottom>
+          Transport Type
+        </Typography>
+        <Tabs 
+          value={transport} 
+          onChange={(e, newValue) => setTransport(newValue)}
+          sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
+        >
+          <Tab label="Standard IO" value="stdio" />
+          <Tab label="WebSocket" value="websocket" />
+        </Tabs>
+      </Box>
 
       {/* WebSocket URL input (only shown when websocket transport is selected) */}
       {transport === 'websocket' && (
-        <div>
-          <label className="block text-sm font-medium mb-1">
+        <Box>
+          <Typography variant="subtitle2" gutterBottom>
             WebSocket URL
-          </label>
-          <input
-            type="text"
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
             value={websocketUrl}
             onChange={e => setWebsocketUrl(e.target.value)}
-            className={`w-full px-3 py-2 border rounded-lg ${!isWebsocketUrlValid ? 'border-red-500' : ''}`}
             placeholder="ws://localhost:3000"
+            variant="outlined"
             required
+            error={!isWebsocketUrlValid}
+            helperText={!isWebsocketUrlValid && "Please enter a valid WebSocket URL (starting with ws:// or wss://)"}
           />
-          {!isWebsocketUrlValid && (
-            <p className="text-red-500 text-sm mt-1">
-              Please enter a valid WebSocket URL (starting with ws:// or wss://)
-            </p>
-          )}
-        </div>
+        </Box>
       )}
 
-      <div>
-        <label className="block text-sm font-medium mb-1">
+      <Box>
+        <Typography variant="subtitle2" gutterBottom>
           Run Command
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={command}
-            onChange={e => setCommand(e.target.value)}
-            className="flex-1 px-3 py-2 border rounded-lg"
-            placeholder="npm start"
-            required
-          />
-          <button
-            type="button"
+        </Typography>
+        <TextField
+          fullWidth
+          size="small"
+          value={command}
+          onChange={e => setCommand(e.target.value)}
+          placeholder="npm start"
+          variant="outlined"
+          required
+        />
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+          <Button
+            variant="contained"
+            color={runCompleted ? "success" : "primary"}
             onClick={onRun}
             disabled={isRunning || !command.trim() || (transport === 'websocket' && !isWebsocketUrlValid)}
-            className={`px-4 py-2 ${runCompleted ? 'bg-green-500' : !command.trim() || (transport === 'websocket' && !isWebsocketUrlValid) ? 'bg-gray-400' : 'bg-blue-500'} text-white rounded-lg`}
             title={!command.trim() ? 'Please enter a run command first' : (transport === 'websocket' && !isWebsocketUrlValid) ? 'Please enter a valid WebSocket URL' : 'Test the run command'}
           >
-            {isRunning ? 'Running...' : 'Test Run'}
-          </button>
-        </div>
-      </div>
+            {isRunning ? 'Running...' : '3) Test Run'}
+          </Button>
+        </Box>
+      </Box>
       
-      <EnvEditor
-        serverName={serverName}
-        initialEnv={env}
-        onSave={async (updatedEnv) => {
-          onEnvChange(updatedEnv);
-          return Promise.resolve();
-        }}
-      />
-    </div>
+      <Box>
+        <EnvEditor
+          serverName={serverName}
+          initialEnv={env}
+          onSave={async (updatedEnv) => {
+            // Convert complex env values to simple string values if needed
+            const simpleEnv: Record<string, string> = {};
+            
+            Object.entries(updatedEnv).forEach(([key, value]) => {
+              if (typeof value === 'string') {
+                simpleEnv[key] = value;
+              } else if (value && typeof value === 'object' && 'value' in value) {
+                simpleEnv[key] = value.value;
+              }
+            });
+            
+            onEnvChange(simpleEnv);
+            return Promise.resolve();
+          }}
+        />
+      </Box>
+    </Stack>
   );
 };
 

@@ -10,7 +10,7 @@ import { parseConfigFromReadme, parseEnvVariables } from '../../utils/configUtil
 import { MCPServerState } from '@/shared/types';
 import { MCPServerConfig } from '@/utils/mcp';
 import path from 'path';
-
+import { Box, Paper, Stack } from '@mui/material';
 
 const GitHubTab: React.FC<TabProps> = ({
   initialConfig,
@@ -197,19 +197,6 @@ const GitHubTab: React.FC<TabProps> = ({
             console.log('Parsed environment variables from .env.example:', envFromExample);
           }
           
-          // Use the default config without adding specific build/install commands
-          // const configWithCommands: MCPServerConfig = {
-          //   ...{ }
-          // };
-          
-          // // Store the config in state
-          // setParsedConfig(configWithCommands);
-          
-          // Pass the config to the parent component
-          // if (onUpdate) {
-          //   onUpdate(configWithCommands as any);
-          // }
-          
           // Switch to local tab with default config
           if (setActiveTab) {
             setActiveTab('local');
@@ -224,34 +211,36 @@ const GitHubTab: React.FC<TabProps> = ({
   };
 
   return (
-    <div className="space-y-4">
-      <GitHubForm
-        githubUrl={githubUrl}
-        setGithubUrl={setGithubUrl}
-        savePath={savePath}
-        setSavePath={setSavePath}
-        repoInfo={repoInfo}
-        isValidating={isValidating}
-        parseCompleted={parseCompleted}
-        onValidate={handleValidate}
-      />
-      
-      <GitHubActions
-        showCloneButton={showCloneButton}
-        isCloning={isCloning}
-        cloneCompleted={cloneCompleted}
-        repoInfo={repoInfo}
-        onClone={handleClone}
-      />
+    <Paper elevation={0} sx={{ p: 0 }}>
+      <Stack spacing={3}>
+        <GitHubForm
+          githubUrl={githubUrl}
+          setGithubUrl={setGithubUrl}
+          savePath={savePath}
+          setSavePath={setSavePath}
+          repoInfo={repoInfo}
+          isValidating={isValidating}
+          parseCompleted={parseCompleted}
+          onValidate={handleValidate}
+        />
+        
+        <GitHubActions
+          showCloneButton={showCloneButton}
+          isCloning={isCloning}
+          cloneCompleted={cloneCompleted}
+          repoInfo={repoInfo}
+          onClone={handleClone}
+        />
 
-      {message && (
-        <div className="mb-4">
-          <Alert severity={message.type}>
-            {message.text}
-          </Alert>
-        </div>
-      )}
-    </div>
+        {message && (
+          <Box>
+            <Alert severity={message.type}>
+              {message.text}
+            </Alert>
+          </Box>
+        )}
+      </Stack>
+    </Paper>
   );
 };
 

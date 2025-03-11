@@ -23,7 +23,7 @@ function extractMessageFromJson(content: string): string | null {
     return null;
   } catch (e) {
     // Not valid JSON
-    log.debug('Content is not valid JSON');
+    log.debug('Content is not valid JSON', content);
     return null;
   }
 }

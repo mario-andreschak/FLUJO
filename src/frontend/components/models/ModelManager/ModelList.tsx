@@ -3,7 +3,7 @@
 import React from 'react';
 import { Grid, CircularProgress, Box } from '@mui/material';
 import ModelCard from './ModelCard';
-import { Model } from '@/frontend/contexts';
+import { Model } from '@/shared/types';
 
 interface ModelListProps {
   models: Model[];

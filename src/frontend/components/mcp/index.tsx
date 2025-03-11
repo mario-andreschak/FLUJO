@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { Box, Container } from '@mui/material';
 import ServerManager from './MCPServerManager';
 import ToolManager from './MCPToolManager';
 import EnvManager from './MCPEnvManager';
@@ -23,7 +24,7 @@ const MCPManager: React.FC = () => {
   };
 
   return (
-    <div className="p-6">
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Server Management Section */}
       <ServerManager 
         onServerSelect={handleServerSelect} 
@@ -32,14 +33,18 @@ const MCPManager: React.FC = () => {
       
       {/* Tool Testing Section - Hide when server modal is open */}
       {selectedServer && !isServerModalOpen && (
-        <ToolManager serverName={selectedServer} />
+        <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+          <ToolManager serverName={selectedServer} />
+        </Box>
       )}
       
       {/* Environment Variables Section - Hide when server modal is open */}
       {selectedServer && !isServerModalOpen && (
-        <EnvManager serverName={selectedServer} />
+        <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+          <EnvManager serverName={selectedServer} />
+        </Box>
       )}
-    </div>
+    </Box>
   );
 };
 

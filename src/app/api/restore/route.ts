@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/restore/route');
@@ -173,3 +174,4 @@ async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: str
     await fs.writeFile(filePath, content);
   }
 }
+

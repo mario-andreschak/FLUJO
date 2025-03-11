@@ -2,7 +2,7 @@ import { Model } from '@/shared/types';
 import { Box } from '@mui/material'
 import { useCallback, useState, useEffect } from 'react'
 import ModelList from './ModelList'
-import { modelService } from '@/shared/services/model/model.frontend'
+import { modelService } from '@/frontend/services/model'
 
 export default function ModelManager() {
   const [models, setModels] = useState<Model[]>([])

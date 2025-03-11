@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { RepoInfo } from '../../types';
+import { Box, Button } from '@mui/material';
 
 interface GitHubActionsProps {
   showCloneButton: boolean;
@@ -21,16 +22,16 @@ const GitHubActions: React.FC<GitHubActionsProps> = ({
   if (!showCloneButton) return null;
 
   return (
-    <div className="flex justify-end">
-      <button
-        type="button"
+    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <Button
+        variant="contained"
+        color={cloneCompleted ? "success" : "primary"}
         onClick={onClone}
         disabled={isCloning || !repoInfo}
-        className={`px-4 py-2 ${cloneCompleted ? 'bg-green-500' : 'bg-blue-500'} text-white rounded-lg`}
       >
         {isCloning ? 'Processing...' : '2) Clone Repository'}
-      </button>
-    </div>
+      </Button>
+    </Box>
   );
 };
 

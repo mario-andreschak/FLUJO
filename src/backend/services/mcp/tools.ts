@@ -3,6 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPToolResponse as ToolResponse, MCPServiceResponse } from '@/shared/types/mcp';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('backend/services/mcp/tools');
@@ -239,3 +240,4 @@ export async function cancelToolExecution(client: Client, requestId: string, rea
     throw error;
   }
 }
+

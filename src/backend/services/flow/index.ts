@@ -1,3 +1,4 @@
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { 
@@ -292,3 +293,4 @@ class FlowService {
 
 // Export a singleton instance of the service
 export const flowService = new FlowService();
+

@@ -8,6 +8,7 @@ import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
 import FlowSelector from './FlowSelector';
 import Spinner from '@/frontend/components/shared/Spinner';
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 import { flowService } from '@/frontend/services/flow';
@@ -478,3 +479,4 @@ const Chat: React.FC = () => {
 };
 
 export default Chat;
+

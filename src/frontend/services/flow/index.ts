@@ -1,5 +1,6 @@
 'use client';
 
+// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { Edge } from '@xyflow/react';
@@ -358,3 +359,4 @@ class FlowService {
 }
 
 export const flowService = new FlowService();
+

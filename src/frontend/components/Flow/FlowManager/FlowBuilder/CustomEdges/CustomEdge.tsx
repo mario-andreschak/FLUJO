@@ -8,11 +8,11 @@ import {
   EdgeLabelRenderer,
   Position
 } from '@xyflow/react';
-import { styled } from '@mui/material/styles';
+import { styled, useTheme } from '@mui/material/styles';
 
-const EdgeButton = styled('button')({
-  background: 'white',
-  border: '1px solid #ddd',
+const EdgeButton = styled('button')(({ theme }) => ({
+  background: theme.palette.background.paper,
+  border: `1px solid ${theme.palette.divider}`,
   cursor: 'pointer',
   borderRadius: '50%',
   fontSize: '10px',
@@ -21,11 +21,19 @@ const EdgeButton = styled('button')({
   display: 'flex',
   justifyContent: 'center',
   alignItems: 'center',
-  boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  color: theme.palette.text.primary,
+  boxShadow: theme.palette.mode === 'dark' 
+    ? '0 2px 4px rgba(0,0,0,0.3)' 
+    : '0 2px 4px rgba(0,0,0,0.1)',
   '&:hover': {
-    boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+    boxShadow: theme.palette.mode === 'dark' 
+      ? '0 2px 6px rgba(0,0,0,0.4)' 
+      : '0 2px 6px rgba(0,0,0,0.2)',
+    background: theme.palette.mode === 'dark' 
+      ? theme.palette.action.hover 
+      : theme.palette.background.paper,
   }
-});
+}));
 
 const EdgePath = styled(BaseEdge)(({ theme }) => ({
   '&.animated': {
@@ -70,11 +78,15 @@ const CustomEdge: FC<EdgeProps> = ({
     borderRadius: 16
   });
 
+  const theme = useTheme();
+  
   // Default edge style
   const edgeStyle = {
     ...style,
     strokeWidth: selected ? 3 : 2,
-    stroke: selected ? '#1976d2' : '#555',
+    stroke: selected 
+      ? theme.palette.primary.main 
+      : theme.palette.text.secondary,
   };
 
   return (

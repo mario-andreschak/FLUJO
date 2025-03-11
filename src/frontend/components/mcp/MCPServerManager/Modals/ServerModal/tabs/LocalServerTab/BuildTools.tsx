@@ -1,6 +1,15 @@
 'use client';
 
 import React from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material';
+import { MessageState } from '../../types';
 
 interface BuildToolsProps {
   installCommand: string;
@@ -13,6 +22,7 @@ interface BuildToolsProps {
   isBuilding: boolean;
   installCompleted: boolean;
   buildCompleted: boolean;
+  buildMessage: MessageState | null;
 }
 
 const BuildTools: React.FC<BuildToolsProps> = ({
@@ -25,54 +35,63 @@ const BuildTools: React.FC<BuildToolsProps> = ({
   isInstalling,
   isBuilding,
   installCompleted,
-  buildCompleted
+  buildCompleted,
+  buildMessage
 }) => {
   return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium mb-1">
+    <Stack spacing={3}>
+      {/* Error message display */}
+      {buildMessage && buildMessage.type === 'error' && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {buildMessage.text}
+        </Alert>
+      )}
+      <Box>
+        <Typography variant="subtitle2" gutterBottom>
           Install Script
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={installCommand}
-            onChange={e => setinstallCommand(e.target.value)}
-            className="flex-1 px-3 py-2 border rounded-lg"
-          />
-          <button
-            type="button"
+        </Typography>
+        <TextField
+          fullWidth
+          size="small"
+          value={installCommand}
+          onChange={e => setinstallCommand(e.target.value)}
+          variant="outlined"
+        />
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+          <Button
+            variant="contained"
+            color={installCompleted ? "success" : "primary"}
             onClick={onInstall}
             disabled={isInstalling}
-            className={`px-4 py-2 ${installCompleted ? 'bg-green-500' : 'bg-blue-500'} text-white rounded-lg`}
           >
             {isInstalling ? 'Installing...' : '1) Install Dependencies'}
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Box>
+      </Box>
       
-      <div>
-        <label className="block text-sm font-medium mb-1">
+      <Box>
+        <Typography variant="subtitle2" gutterBottom>
           Build Command
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={buildCommand}
-            onChange={e => setBuildCommand(e.target.value)}
-            className="flex-1 px-3 py-2 border rounded-lg"
-          />
-          <button
-            type="button"
+        </Typography>
+        <TextField
+          fullWidth
+          size="small"
+          value={buildCommand}
+          onChange={e => setBuildCommand(e.target.value)}
+          variant="outlined"
+        />
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1 }}>
+          <Button
+            variant="contained"
+            color={buildCompleted ? "success" : "primary"}
             onClick={onBuild}
             disabled={isBuilding}
-            className={`px-4 py-2 ${buildCompleted ? 'bg-green-500' : 'bg-blue-500'} text-white rounded-lg`}
           >
             {isBuilding ? 'Building...' : '2) Build Server'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </Box>
+      </Box>
+    </Stack>
   );
 };
 

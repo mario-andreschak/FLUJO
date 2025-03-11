@@ -2,12 +2,16 @@
 
 import React, { useState, useEffect } from 'react';
 import { createLogger } from '@/utils/logger';
+import { useThemeUtils } from '@/frontend/utils/theme';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerCard');
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import ErrorIcon from '@mui/icons-material/Error';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import Spinner from '@/frontend/components/shared/Spinner';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -16,6 +20,22 @@ import DialogActions from '@mui/material/DialogActions';
 import Button from '@mui/material/Button';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
+import { 
+  Switch, 
+  Typography, 
+  IconButton, 
+  Tooltip, 
+  useTheme, 
+  Card, 
+  CardContent, 
+  CardActions,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  Divider,
+  Box
+} from '@mui/material';
 
 interface ServerCardProps {
   name: string;
@@ -47,13 +67,15 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
+  const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
+  const muiTheme = useTheme();
   
   const statusColor = {
-    connected: 'text-green-500',
-    disconnected: 'text-gray-500',
-    error: 'text-red-500',
-    connecting: 'text-blue-500',
-    initialization: 'text-blue-500', // Same color as connecting
+    connected: 'success.main',
+    disconnected: 'text.secondary',
+    error: 'error.main',
+    connecting: 'info.main',
+    initialization: 'info.main', // Same color as connecting
   }[status];
   
   // Poll for status updates when server is connecting or initializing
@@ -74,15 +96,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
     }
   }, [status, enabled, name, onRetry]);
   
-  // Stop propagation for buttons to prevent card click
-  const handleButtonClick = (e: React.MouseEvent, callback: () => void, action: string) => {
-    log.debug(`${action} button clicked for server: ${name}`);
-    e.stopPropagation();
-    callback();
-  };
-  
-  // Reference to store the timeout ID - using any to accommodate different TS environments
-  const [retryTimeoutId, setRetryTimeoutId] = useState<any>(null);
+  // Reference to store the timeout ID
+  const [retryTimeoutId, setRetryTimeoutId] = useState<ReturnType<typeof setTimeout> | null>(null);
   
   // Clear the timeout when component unmounts or when status changes
   useEffect(() => {
@@ -117,53 +132,216 @@ const ServerCard: React.FC<ServerCardProps> = ({
       setRetryTimeoutId(null);
     }, 10000);
     
-    // Store the timeout ID - cast to any to avoid type issues
-    setRetryTimeoutId(timeoutId as any);
+    // Store the timeout ID
+    setRetryTimeoutId(timeoutId);
   };
 
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    setMenuAnchorEl(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setMenuAnchorEl(null);
+  };
+
+  const handleMenuAction = (action: () => void) => (event: React.MouseEvent) => {
+    event.stopPropagation();
+    action();
+    handleMenuClose();
+  };
+
+  const { getThemeValue, colors } = useThemeUtils();
+  
   return (
-    <div 
-      className="border rounded-lg p-4 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+    <Card 
+      sx={{ 
+        cursor: 'pointer',
+        transition: 'box-shadow 0.3s ease',
+        '&:hover': {
+          boxShadow: 3
+        }
+      }}
       onClick={() => {
         log.debug(`Server card clicked: ${name}`);
         onClick();
       }}
     >
-      <div className="flex justify-between items-center mb-2">
-        <h3 className="text-lg font-semibold">{name}</h3>
-        <div className="flex items-center">
-          {status === 'connected' && <CheckCircleIcon className="text-green-500 mr-1" fontSize="small" />}
-          {status === 'disconnected' && <CancelIcon className="text-gray-500 mr-1" fontSize="small" />}
-          {status === 'error' && <ErrorIcon className="text-red-500 mr-1" fontSize="small" />}
-          {(status === 'connecting' || status === 'initialization') && <Spinner size="small" color="primary" className="mr-1" />}
-          <span className={`${statusColor} text-sm`}>{status}</span>
-        </div>
-      </div>
-      
-      <p className="text-sm text-gray-600 mb-2 truncate" title={path}>
-        {path}
-      </p>
+      <CardContent sx={{ pb: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+          <Typography variant="h6" component="h3">
+            {name}
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
+            {status === 'disconnected' && <CancelIcon color="action" sx={{ mr: 0.5 }} fontSize="small" />}
+            {status === 'error' && <ErrorIcon color="error" sx={{ mr: 0.5 }} fontSize="small" />}
+            {(status === 'connecting' || status === 'initialization') && <Spinner size="small" color="primary" sx={{ mr: 0.5 }} />}
+            <Typography variant="body2" color={statusColor}>
+              {status}
+            </Typography>
+          </Box>
+        </Box>
+        
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.875rem' }} noWrap title={path}>
+          {path}
+        </Typography>
 
-      {status === 'error' && (
-        <div className="text-sm text-red-600 mb-2">
-          <div className="flex justify-between items-center">
-            <p className="font-semibold">Error:</p>
-            <button 
+        {status === 'error' && (
+          <Box sx={{ mt: 1, mb: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+              <Typography variant="body2" fontWeight="medium" color="error">
+                Error:
+              </Typography>
+              <Button 
+                size="small"
+                color="primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  log.debug(`View full error clicked for server: ${name}`);
+                  setShowErrorModal(true);
+                }}
+              >
+                View Full Error
+              </Button>
+            </Box>
+            <Box sx={{ 
+              maxHeight: '80px', 
+              overflow: 'auto', 
+              p: 1, 
+              borderRadius: 1, 
+              bgcolor: 'error.light',
+              color: 'error.contrastText',
+              fontSize: '0.75rem',
+              whiteSpace: 'pre-wrap'
+            }}>
+              {error || 'Unknown error'}
+            </Box>
+          </Box>
+        )}
+      </CardContent>
+      
+      <CardActions sx={{ justifyContent: 'space-between', px: 2, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <Switch
+            checked={enabled}
+            onChange={(e) => {
+              e.stopPropagation();
+              log.debug(`Server ${name} toggle changed to: ${e.target.checked}`);
+              onToggle(e.target.checked);
+            }}
+            color="primary"
+            size="small"
+          />
+          <Typography 
+            variant="body2" 
+            sx={{ 
+              ml: 0.5, 
+              fontWeight: 500,
+              color: enabled ? 'primary.main' : 'text.secondary'
+            }}
+          >
+            {enabled ? 'Enabled' : 'Disabled'}
+          </Typography>
+          
+          {enabled && (
+            <Tooltip title="Restart server">
+              <IconButton
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  log.debug(`Restart button clicked for server: ${name}`);
+                  
+                  // Disable the server
+                  onToggle(false);
+                  
+                  // Wait a short time for the disconnect to complete
+                  setTimeout(() => {
+                    // Enable the server
+                    onToggle(true);
+                    log.info(`Server ${name} restarted`);
+                  }, 1000);
+                }}
+                sx={{ ml: 1 }}
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+        
+        <Box>
+          <Tooltip title="Retry connection">
+            <IconButton 
+              color="primary" 
+              onClick={handleRetryClick}
+              disabled={isPolling}
+              size="small"
+            >
+              {isPolling ? <Spinner size="small" color="primary" /> : <RefreshIcon />}
+            </IconButton>
+          </Tooltip>
+          
+          <Tooltip title="Edit server">
+            <IconButton 
+              color="primary" 
               onClick={(e) => {
                 e.stopPropagation();
-                log.debug(`View full error clicked for server: ${name}`);
-                setShowErrorModal(true);
+                onEdit();
               }}
-              className="text-xs text-blue-600 hover:text-blue-800"
+              size="small"
             >
-              View Full Error
-            </button>
-          </div>
-          <div className="max-h-24 overflow-y-auto bg-red-50 p-2 rounded border border-red-200 whitespace-pre-wrap">
-            {error || 'Unknown error'}
-          </div>
-        </div>
-      )}
+              <EditIcon />
+            </IconButton>
+          </Tooltip>
+          
+          <Tooltip title="More options">
+            <IconButton
+              onClick={handleMenuOpen}
+              size="small"
+            >
+              <MoreVertIcon />
+            </IconButton>
+          </Tooltip>
+          
+          <Menu
+            anchorEl={menuAnchorEl}
+            open={Boolean(menuAnchorEl)}
+            onClose={handleMenuClose}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MenuItem onClick={handleMenuAction(onEdit)}>
+              <ListItemIcon>
+                <EditIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Edit Server</ListItemText>
+            </MenuItem>
+            <MenuItem onClick={handleMenuAction(() => {
+              // Disable the server
+              onToggle(false);
+              
+              // Wait a short time for the disconnect to complete
+              setTimeout(() => {
+                // Enable the server
+                onToggle(true);
+                log.info(`Server ${name} restarted`);
+              }, 1000);
+            })}>
+              <ListItemIcon>
+                <RefreshIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Restart Server</ListItemText>
+            </MenuItem>
+            <Divider />
+            <MenuItem onClick={handleMenuAction(onDelete)} sx={{ color: 'error.main' }}>
+              <ListItemIcon sx={{ color: 'error.main' }}>
+                <DeleteIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Delete Server</ListItemText>
+            </MenuItem>
+          </Menu>
+        </Box>
+      </CardActions>
       
       {/* Error Modal */}
       <Dialog 
@@ -176,21 +354,45 @@ const ServerCard: React.FC<ServerCardProps> = ({
         fullWidth
         onClick={(e) => e.stopPropagation()}
       >
-        <DialogTitle>
+        <DialogTitle component="div">
           Error Details for {name}
         </DialogTitle>
         <DialogContent>
-          <div className="bg-red-50 p-4 rounded border border-red-200 whitespace-pre-wrap font-mono text-sm overflow-auto max-h-96">
+          <Box sx={{ 
+            p: 2, 
+            borderRadius: 1, 
+            bgcolor: 'error.light', 
+            color: 'error.contrastText',
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            whiteSpace: 'pre-wrap',
+            overflow: 'auto',
+            maxHeight: '300px',
+            mb: 2
+          }}>
             {error || 'Unknown error'}
-          </div>
+          </Box>
           
           {stderrOutput && (
-            <div className="mt-4">
-              <h3 className="text-lg font-semibold mb-2">Stderr Output:</h3>
-              <div className="bg-gray-100 p-4 rounded border border-gray-300 whitespace-pre-wrap font-mono text-sm overflow-auto max-h-96">
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                Stderr Output:
+              </Typography>
+              <Box sx={{ 
+                p: 2, 
+                borderRadius: 1, 
+                bgcolor: 'background.paper',
+                border: '1px solid',
+                borderColor: 'divider',
+                fontFamily: 'monospace',
+                fontSize: '0.875rem',
+                whiteSpace: 'pre-wrap',
+                overflow: 'auto',
+                maxHeight: '300px'
+              }}>
                 {stderrOutput}
-              </div>
-            </div>
+              </Box>
+            </Box>
           )}
         </DialogContent>
         <DialogActions>
@@ -205,6 +407,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
               log.debug(`Error copied to clipboard for server: ${name}`);
               setShowToast(true);
             }}
+            color="primary"
           >
             Copy to Clipboard
           </Button>
@@ -222,73 +425,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           Error message copied to clipboard
         </Alert>
       </Snackbar>
-      
-      <div className="flex items-center justify-between">
-        <div className="flex items-center">
-          <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={enabled}
-              onChange={(e) => {
-                log.debug(`Server ${name} toggle changed to: ${e.target.checked}`);
-                onToggle(e.target.checked);
-              }}
-            />
-            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-            <span className="ml-2 text-sm font-medium text-gray-900 dark:text-gray-300">
-              {enabled ? 'Enabled' : 'Disabled'}
-            </span>
-          </label>
-          
-          {/* Add restart button */}
-          {enabled && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                log.debug(`Restart button clicked for server: ${name}`);
-                
-                // Disable the server
-                onToggle(false);
-                
-                // Wait a short time for the disconnect to complete
-                setTimeout(() => {
-                  // Enable the server
-                  onToggle(true);
-                  log.info(`Server ${name} restarted`);
-                }, 1000);
-              }}
-              className="ml-2 p-1 text-gray-500 hover:text-gray-700"
-              title="Restart server"
-            >
-              <RefreshIcon fontSize="small" />
-            </button>
-          )}
-        </div>
-        
-        <div className="flex space-x-2">
-          <button
-            onClick={handleRetryClick}
-            className="px-3 py-1 text-sm text-blue-600 hover:text-blue-800 flex items-center"
-          >
-            {isPolling ? <Spinner size="small" color="primary" className="mr-1" /> : null}
-            Retry
-          </button>
-          <button
-            onClick={(e) => handleButtonClick(e, onEdit, 'Edit')}
-            className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
-          >
-            Edit
-          </button>
-          <button
-            onClick={(e) => handleButtonClick(e, onDelete, 'Delete')}
-            className="px-3 py-1 text-sm text-red-600 hover:text-red-800"
-          >
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
+    </Card>
   );
 };
 

@@ -4,7 +4,9 @@ import { StorageKey } from '@/shared/types/storage';
 import { encryptWithPassword, decryptWithPassword } from '@/utils/encryption/secure';
 import { isSecretEnvVar } from '@/utils/shared';
 import { createLogger } from '@/utils/logger';
-import { v4 as uuidv4 } from 'uuid';
+// eslint-disable-next-line import/named
+import { v4 } from 'uuid';
+const uuidv4 = v4;
 
 const log = createLogger('app/api/env/route');
 
@@ -388,3 +390,4 @@ export async function POST(req: NextRequest) {
     }, { status: 500 });
   }
 }
+

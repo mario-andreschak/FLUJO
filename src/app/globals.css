@@ -1,21 +1,36 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Light theme variables (default) */
+  --background: #FFFFFF;
+  --foreground: #2C3E50;
+  --paper-background: #F5F6FA;
+  --text-secondary: #7F8C8D;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root.dark-theme {
+  /* Dark theme variables */
+  --background: #1a1a1a;
+  --foreground: #f0f0f0;
+  --paper-background: #2a2a2a;
+  --text-secondary: #aaaaaa;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
   font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* Global styles that were previously provided by Tailwind */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }

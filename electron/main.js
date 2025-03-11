@@ -4,6 +4,9 @@ const isDev = require('electron-is-dev');
 const { spawn } = require('child_process');
 const fs = require('fs');
 
+// Hide the default menu
+Menu.setApplicationMenu(null);
+
 // Keep a global reference of the window object to avoid garbage collection
 let mainWindow;
 let tray;

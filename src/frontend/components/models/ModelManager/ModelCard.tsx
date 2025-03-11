@@ -13,7 +13,7 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import KeyIcon from '@mui/icons-material/Key';
-import { Model } from '@/frontend/contexts';
+import { Model } from '@/shared/types';
 
 export interface ModelCardProps {
   model: Model;
