@@ -6,6 +6,8 @@ This [issue](https://github.com/mario-andreschak/FLUJO/issues/9) is currently im
 - You can still view the whole Flow execution in the terminal output! (after you started the server in a terminal with npm run dev or npm start)
 - You can add ~FLUJOEXPAND=1 or ~FLUJODEBUG=1 somewhere in your message to show more details
 
+For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): Create a Github Issue and I will look into it! 
+
 # IMPORTANT SECURITY NOTE
 FLUJO has currently EXTENSIVE logging enabled by default! This **will expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
 
