@@ -154,3 +154,11 @@ files-without-logger.md
 src/testbridge.ps1
 summary.md
 update-logger.js
+/db
+check-deprecated.js
+check-deprecated.ps1
+check-deps.js
+check-punycode.js
+deprecated-packages-report.md
+deprecated-packages.txt
+deprecation-report.md
