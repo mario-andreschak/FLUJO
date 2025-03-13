@@ -1,6 +1,17 @@
 "use client";
 
 import React, { useState, useCallback, useMemo, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { createLogger } from '@/utils/logger';
+
+// Create a logger instance for this component
+const log = createLogger('frontend/components/shared/PromptBuilder');
+
+// Log levels:
+// log.verbose - Extremely detailed information for in-depth debugging
+// log.debug - Detailed information for debugging purposes
+// log.info - General information about application operation
+// log.warn - Warning messages that don't prevent the application from working
+// log.error - Error messages that may prevent the application from working correctly
 import { createEditor, Descendant, Element as SlateElement, Text, Node, BaseEditor, Transforms, Editor, Range, Point } from 'slate';
 import { Slate, Editable, withReact, ReactEditor, useSlate } from 'slate-react';
 import { withHistory } from 'slate-history';
@@ -64,6 +75,8 @@ declare module 'slate' {
 
 // Convert markdown string to Slate value
 const deserialize = (markdown: string): Descendant[] => {
+  log.debug('Deserializing markdown to Slate value');
+  
   // Split the markdown into lines
   const lines = markdown.split('\n');
   
@@ -71,39 +84,66 @@ const deserialize = (markdown: string): Descendant[] => {
   const nodes: Descendant[] = [];
   
   for (const line of lines) {
-  // Find tool references in the line
-    const toolMatches = [...line.matchAll(toolBindingRegex)];
+    // Find tool references in the line using a simpler approach
+    // Look for ${-_-_- pattern
+    let currentIndex = 0;
+    let startIndex = line.indexOf('${-_-_-', currentIndex);
+    const children: CustomElement['children'] = [];
     
-    if (toolMatches.length > 0) {
-      let lastIndex = 0;
-      const children: CustomElement['children'] = [];
+    if (startIndex !== -1) {
+      log.debug(`Found tool reference pattern in line`);
       
-      for (const match of toolMatches) {
-        const matchIndex = match.index as number;
-        
+      while (startIndex !== -1) {
         // Add text before the tool reference
-        if (matchIndex > lastIndex) {
-          const textBefore = line.slice(lastIndex, matchIndex);
+        if (startIndex > currentIndex) {
+          const textBefore = line.slice(currentIndex, startIndex);
           children.push({ text: textBefore });
         }
         
-        // Add the tool reference as a special element
-        const serverName = match[1];
-        const toolName = match[2];
+        // Find the end of the tool reference
+        const endIndex = line.indexOf('}', startIndex);
+        if (endIndex === -1) {
+          // No closing brace, treat as regular text
+          children.push({ text: line.slice(startIndex) });
+          break;
+        }
         
-        children.push({
-          type: 'tool-reference',
-          serverName,
-          toolName,
-          children: [{ text: '' }]
-        });
+        // Extract the full tool reference
+        const fullRef = line.slice(startIndex, endIndex + 1);
         
-        lastIndex = matchIndex + match[0].length;
+        // Parse the tool reference using the same approach as insertText
+        if (fullRef.startsWith('${-_-_-') && fullRef.endsWith('}')) {
+          const parts = fullRef.substring(2, fullRef.length - 1).split('-_-_-');
+          
+          if (parts.length >= 3) {
+            const serverName = parts[1];
+            const toolName = parts[2];
+            
+            log.debug(`Parsed tool reference: ${serverName}:${toolName}`);
+            
+            children.push({
+              type: 'tool-reference',
+              serverName,
+              toolName,
+              children: [{ text: '' }]
+            });
+          } else {
+            // Invalid format, treat as regular text
+            children.push({ text: fullRef });
+          }
+        } else {
+          // Not a valid tool reference, treat as regular text
+          children.push({ text: fullRef });
+        }
+        
+        // Move to the next position
+        currentIndex = endIndex + 1;
+        startIndex = line.indexOf('${-_-_-', currentIndex);
       }
       
       // Add any remaining text after the last tool reference
-      if (lastIndex < line.length) {
-        children.push({ text: line.slice(lastIndex) });
+      if (currentIndex < line.length) {
+        children.push({ text: line.slice(currentIndex) });
       }
       
       nodes.push({ type: 'paragraph', children });
@@ -121,7 +161,11 @@ const deserialize = (markdown: string): Descendant[] => {
 
 // Convert Slate value back to markdown string
 const serialize = (nodes: Descendant[]): string => {
-  return nodes.map(node => {
+  log.debug('Serializing Slate value to markdown');
+  
+  let toolReferenceCount = 0;
+  
+  const result = nodes.map(node => {
     const element = node as CustomElement;
     if (!element.children) return '';
     
@@ -131,11 +175,18 @@ const serialize = (nodes: Descendant[]): string => {
       } else if (child.type === 'tool-reference') {
         // Format tool reference
         const toolRef = child as ToolReferenceElement;
+        toolReferenceCount++;
         return `\${-_-_-${toolRef.serverName}-_-_-${toolRef.toolName}}`;
       }
       return '';
     }).join('');
   }).join('\n');
+  
+  if (toolReferenceCount > 0) {
+    log.debug(`Serialized ${toolReferenceCount} tool references`);
+  }
+  
+  return result;
 };
 
 // Custom element renderer
@@ -167,6 +218,7 @@ const Element = (props: {
       e.preventDefault();
       e.stopPropagation();
       const path = ReactEditor.findPath(editor, element);
+      log.debug(`Removing tool reference: ${toolRef.serverName}:${toolRef.toolName}`);
       Transforms.removeNodes(editor, { at: path });
     }}
     onKeyDown={(e) => {
@@ -174,6 +226,7 @@ const Element = (props: {
         e.preventDefault();
         e.stopPropagation();
         const path = ReactEditor.findPath(editor, element);
+        log.debug(`Removing tool reference via keyboard: ${toolRef.serverName}:${toolRef.toolName}`);
         Transforms.removeNodes(editor, { at: path });
       }
     }}
@@ -229,17 +282,23 @@ const ToolReferencePreview = ({ serverName, toolName }: { serverName: string, to
   
   useEffect(() => {
     const fetchToolInfo = async () => {
+      log.debug(`Fetching tool info for ${serverName}:${toolName}`);
       try {
         setIsLoading(true);
         const result = await mcpService.listServerTools(serverName);
         if (result.tools) {
           const tool = result.tools.find((t: any) => t.name === toolName);
           if (tool) {
+            log.debug(`Found tool info for ${serverName}:${toolName}`, tool);
             setToolInfo(tool);
+          } else {
+            log.warn(`Tool not found: ${serverName}:${toolName}`);
           }
+        } else {
+          log.warn(`No tools found for server: ${serverName}`);
         }
       } catch (error) {
-        console.error(`Failed to fetch tool info for ${serverName}:${toolName}`, error);
+        log.error(`Failed to fetch tool info for ${serverName}:${toolName}`, error);
       } finally {
         setIsLoading(false);
       }
@@ -270,38 +329,70 @@ const ToolReferencePreview = ({ serverName, toolName }: { serverName: string, to
 
 // Preview renderer for the entire document
 const PreviewRenderer = ({ value }: { value: string }) => {
+  log.debug('Rendering preview');
+  
   // Split the content into segments based on tool references
   const segments: React.ReactNode[] = [];
-  let lastIndex = 0;
+  let currentIndex = 0;
   
-  // Find all tool references in the content
-  const matches = [...value.matchAll(toolBindingRegex)];
+  // Look for tool references using the same approach as deserialize
+  let startIndex = value.indexOf('${-_-_-', currentIndex);
   
-  for (const match of matches) {
-    const matchIndex = match.index as number;
-    
+  if (startIndex !== -1) {
+    log.debug(`Found tool reference pattern in preview content`);
+  }
+  
+  while (startIndex !== -1) {
     // Add text before the tool reference
-    if (matchIndex > lastIndex) {
-      segments.push(<span key={`text-${lastIndex}`}>{value.slice(lastIndex, matchIndex)}</span>);
+    if (startIndex > currentIndex) {
+      segments.push(<span key={`text-${currentIndex}`}>{value.slice(currentIndex, startIndex)}</span>);
     }
     
-    // Add the tool reference preview
-    const serverName = match[1];
-    const toolName = match[2];
-    segments.push(
-      <ToolReferencePreview 
-        key={`tool-${matchIndex}`} 
-        serverName={serverName} 
-        toolName={toolName} 
-      />
-    );
+    // Find the end of the tool reference
+    const endIndex = value.indexOf('}', startIndex);
+    if (endIndex === -1) {
+      // No closing brace, treat as regular text
+      segments.push(<span key={`text-${startIndex}`}>{value.slice(startIndex)}</span>);
+      break;
+    }
     
-    lastIndex = matchIndex + match[0].length;
+    // Extract the full tool reference
+    const fullRef = value.slice(startIndex, endIndex + 1);
+    
+    // Parse the tool reference using the same approach as insertText
+    if (fullRef.startsWith('${-_-_-') && fullRef.endsWith('}')) {
+      const parts = fullRef.substring(2, fullRef.length - 1).split('-_-_-');
+      
+      if (parts.length >= 3) {
+        const serverName = parts[1];
+        const toolName = parts[2];
+        
+        log.debug(`Parsed tool reference for preview: ${serverName}:${toolName}`);
+        
+        segments.push(
+          <ToolReferencePreview 
+            key={`tool-${startIndex}`} 
+            serverName={serverName} 
+            toolName={toolName} 
+          />
+        );
+      } else {
+        // Invalid format, treat as regular text
+        segments.push(<span key={`text-${startIndex}`}>{fullRef}</span>);
+      }
+    } else {
+      // Not a valid tool reference, treat as regular text
+      segments.push(<span key={`text-${startIndex}`}>{fullRef}</span>);
+    }
+    
+    // Move to the next position
+    currentIndex = endIndex + 1;
+    startIndex = value.indexOf('${-_-_-', currentIndex);
   }
   
   // Add any remaining text after the last tool reference
-  if (lastIndex < value.length) {
-    segments.push(<span key={`text-${lastIndex}`}>{value.slice(lastIndex)}</span>);
+  if (currentIndex < value.length) {
+    segments.push(<span key={`text-${currentIndex}`}>{value.slice(currentIndex)}</span>);
   }
   
   // Split by newlines and create paragraphs
@@ -344,6 +435,14 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   onModeChange,
   customPreviewRenderer
 }, ref) => {
+  // Log component initialization
+  log.info('PromptBuilder initialized');
+  log.verbose('PromptBuilder props', JSON.stringify({
+    value: value ? `${value.substring(0, 100)}${value.length > 100 ? '...' : ''}` : '',
+    label,
+    height,
+    hasCustomPreviewRenderer: !!customPreviewRenderer
+  }));
   // Create a Slate editor object with custom plugins
   const editor = useMemo(() => {
     const e = withHistory(withReact(createEditor()));
@@ -378,56 +477,88 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
-      // Check if the text is a tool reference
-      const match = text.match(toolBindingRegex);
+      log.info(`insertText called with text length: ${text.length}`);
+      log.verbose('insertText input', JSON.stringify({ text }));
       
-      if (match && match[0] === text) {
+      // Check if the text is a tool reference
+      const isToolReference = text.startsWith('${-_-_-') && text.endsWith('}');
+      log.debug("Checking if text is a tool reference", { isToolReference, text });
+      
+      if (isToolReference) {
         // It's a complete tool reference, insert it as a tool reference element
-        const serverName = match[1];
-        const toolName = match[2];
+        // Extract server and tool names by splitting the string
+        const parts = text.substring(2, text.length - 1).split('-_-_-');
         
-        const toolReference: ToolReferenceElement = {
-          type: 'tool-reference',
-          serverName,
-          toolName,
-          children: [{ text: '' }]
-        };
-        
-        if (editor.selection) {
-          // If there's a selection, replace it with the tool reference
-          Transforms.insertNodes(editor, toolReference);
+        if (parts.length >= 3) {
+          const serverName = parts[1];
+          const toolName = parts[2];
+          
+          log.info(`Inserting tool reference: ${serverName}:${toolName}`);
+          
+          const toolReference: ToolReferenceElement = {
+            type: 'tool-reference',
+            serverName,
+            toolName,
+            children: [{ text: '' }]
+          };
+          
+          if (editor.selection) {
+            // If there's a selection, replace it with the tool reference
+            log.debug(`Replacing selection with tool reference`);
+            Transforms.insertNodes(editor, toolReference);
+          } else {
+            // If there's no selection, insert at the end of the document
+            log.debug(`No selection, inserting tool reference at end of document`);
+            Transforms.select(editor, Editor.end(editor, []));
+            Transforms.insertNodes(editor, toolReference);
+          }
+          
+          // Move selection after the inserted node
+          log.debug(`Moving selection after inserted tool reference`);
+          Transforms.move(editor);
+          
+          // Force a re-render to ensure the tool reference is displayed immediately
+          log.debug(`Forcing re-render after tool reference insertion`);
+          setForceUpdate(prev => prev + 1);
+          
+          // Also directly update the slateValue state to ensure consistency
+          const updatedValue = [...editor.children] as Descendant[];
+          setSlateValue(updatedValue);
         } else {
-          // If there's no selection, insert at the end of the document
-          Transforms.select(editor, Editor.end(editor, []));
-          Transforms.insertNodes(editor, toolReference);
+          log.warn(`Invalid tool reference format: ${text}`);
+          // Insert as regular text if the format is invalid
+          if (editor.selection) {
+            Transforms.insertText(editor, text);
+          } else {
+            Transforms.select(editor, Editor.end(editor, []));
+            Transforms.insertText(editor, text);
+          }
         }
-        
-        // Move selection after the inserted node
-        Transforms.move(editor);
-        
-        // Force a re-render to ensure the tool reference is displayed immediately
-        setForceUpdate(prev => prev + 1);
-        
-        // Also directly update the slateValue state to ensure consistency
-        const updatedValue = [...editor.children] as Descendant[];
-        setSlateValue(updatedValue);
       } else {
         // Regular text, insert normally
+        log.debug(`Inserting regular text (not a tool reference)`);
+        
         if (editor.selection) {
           // If there's a selection, replace it with the text
+          log.debug(`Replacing selection with text`);
           Transforms.insertText(editor, text);
         } else {
           // If there's no selection, insert at the end of the document
+          log.debug(`No selection, inserting text at end of document`);
           Transforms.select(editor, Editor.end(editor, []));
           Transforms.insertText(editor, text);
         }
       }
       
       // Get the updated content as a string
+      log.debug(`Serializing updated content after text insertion`);
       const newValue = serialize(editor.children as Descendant[]);
       
       // Update the value
+      log.debug(`Calling onChange with new value`);
       onChange(newValue);
+      
+      log.info(`insertText completed successfully`);
     },
     getMode: () => mode
   }));
@@ -437,6 +568,12 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
     // Only update if the value is different from what we already have
     const currentText = serialize(slateValue);
     if (value !== currentText) {
+      log.debug('External value change detected');
+      log.verbose('External value update', JSON.stringify({ 
+        currentValue: currentText, 
+        newValue: value 
+      }));
+      
       isExternalUpdate.current = true;
       setSlateValue(deserialize(value || ''));
     }
@@ -450,6 +587,7 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
       return;
     }
     
+    log.debug('Internal content change');
     setSlateValue(newValue);
     const markdown = serialize(newValue);
     onChange(markdown);
@@ -458,6 +596,7 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   // Handle mode change
   const handleModeChange = (_event: React.MouseEvent<HTMLElement>, newMode: 'raw' | 'preview' | null) => {
     if (newMode !== null) {
+      log.info(`Mode changed from ${mode} to ${newMode}`);
       setMode(newMode);
       
       // Call the onModeChange prop if provided

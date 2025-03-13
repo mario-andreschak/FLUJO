@@ -426,14 +426,27 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                       onClick={() => {
                         // First ensure the server is selected
                         if (server.name !== selectedToolServer) {
+                          log.debug('Server not selected, selecting server first', { 
+                            serverName: server.name, 
+                            toolName: tool.name 
+                          });
                           handleSelectToolServer(server.name);
-                          // Use setTimeout to ensure the server selection is processed before inserting the tool
-                          setTimeout(() => {
-                            handleInsertToolBinding(server.name, tool.name);
-                          }, 0);
+                          // Don't insert the tool on first click, let the user click again
+                          // This prevents the "undefined undefined" issue
                         } else {
-                          // Server is already selected, just insert the tool
-                          handleInsertToolBinding(server.name, tool.name);
+                          // Server is already selected, check if tool name is defined before inserting
+                          if (server.name && tool.name) {
+                            log.debug('Inserting tool binding', { 
+                              serverName: server.name, 
+                              toolName: tool.name 
+                            });
+                            handleInsertToolBinding(server.name, tool.name);
+                          } else {
+                            log.warn('Cannot insert tool binding, server or tool name is undefined', {
+                              serverName: server.name,
+                              toolName: tool.name
+                            });
+                          }
                         }
                       }}
                       sx={{ 

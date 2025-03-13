@@ -25,6 +25,9 @@ import ServerTools from './ProcessNodePropertiesModal/ServerTools';
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor';
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties';
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
 export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEdges = [], flowNodes = [], flowId }: ProcessNodePropertiesModalProps) => {
     const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
@@ -55,26 +58,65 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     const promptBuilderRef = useRef<PromptBuilderRef>(null);
 
     const handleInsertToolBinding = (serverName: string, toolName: string) => {
+        // Log the parameters and state before processing
+        log.debug('handleInsertToolBinding called with parameters', JSON.stringify({
+            serverName,
+            toolName,
+            selectedToolServer,
+            promptTemplateLength: promptTemplate.length,
+            promptBuilderRefExists: !!promptBuilderRef.current
+        }));
+        
         // Get the tool description if available
         const tool = serverToolsMap[serverName]?.find(t => t.name === toolName);
         const toolDescription = tool?.description || '';
         
+        log.debug("serverToolsMap", serverToolsMap)
+        
         // Create the binding in the format that will be visually displayed as a pill
         const binding = `\${-_-_-${serverName}-_-_-${toolName}}`;
+        log.debug("serverToolsMap -> servername / toolname", [serverName, toolName])
+        log.debug("serverToolsMap -> binding", binding)
         
         // Add a space before the binding if needed
         const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
         const textToInsert = (needsSpace ? ' ' : '') + binding;
 
+        log.debug('Preparing to insert tool binding', JSON.stringify({
+            serverName,
+            toolName,
+            toolDescription,
+            binding,
+            needsSpace,
+            textToInsert,
+            currentPromptTemplate: promptTemplate
+        }));
+
         // Use the ref to insert text at the current cursor position
         if (promptBuilderRef.current) {
+            log.debug('Inserting text into PromptBuilder', JSON.stringify({
+                textToInsert,
+                promptBuilderMode: promptBuilderRef.current.getMode?.() || 'unknown'
+            }));
+            
             promptBuilderRef.current.insertText(textToInsert);
             
             // The PromptBuilder's onChange handler will be triggered when we insert text,
             // which will update the promptTemplate state. However, we can also manually
             // update it here to ensure consistency.
             const updatedTemplate = promptTemplate + textToInsert;
+            log.debug('Updating prompt template after insertion', JSON.stringify({
+                originalLength: promptTemplate.length,
+                insertedTextLength: textToInsert.length,
+                newLength: updatedTemplate.length
+            }));
+            
             handlePromptChange(updatedTemplate);
+        } else {
+            log.error('Failed to insert tool binding: promptBuilderRef.current is null', JSON.stringify({
+                serverName,
+                toolName
+            }));
         }
     };
 
