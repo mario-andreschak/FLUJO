@@ -152,7 +152,7 @@ export class ProcessNodeToolHandler {
                   // Store original name for reference
                   originalName: tool.name,
                   // Format: tool:server_name:tool_name
-                  name: `-_-_-${boundServer}-_-_-${tool.name}`
+                  name: `_-_-_${boundServer}_-_-_${tool.name}`
                 };
               });
             

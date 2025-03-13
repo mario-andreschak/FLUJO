@@ -604,8 +604,8 @@ export class ProcessNodeUtility {
         const args = JSON.parse(argsString);
         
         // Extract server and tool names from the formatted name
-        // Format is "-_-_-serverName-_-_-toolName"
-        const parts = name.split('-_-_-');
+        // Format is "_-_-_serverName_-_-_toolName"
+        const parts = name.split('_-_-_');
         if (parts.length !== 3) {
           throw new Error(`Invalid tool name format: ${name}`);
         }
@@ -642,6 +642,11 @@ export class ProcessNodeUtility {
           tool_call_id: id,
           content: resultContent
         });
+        // Add tool result message
+        newMessages.push({
+          role: "user",
+          content: "This is the result of the tool call. If you want to call any further tools, let me know"
+        });        
       } catch (error) {
         log.error(`Error processing tool call ${name}:`, error);
         

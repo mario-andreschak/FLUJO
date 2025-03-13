@@ -106,7 +106,7 @@ export interface NodeExecutionTrackerEntry {
  */
 export interface FlowExecutionResponse extends FlowServiceResponse {
   result?: string | ErrorResult | SuccessResult | MessageResult;
-  messages: OpenAI.ChatCompletionMessage[];
+  messages: OpenAI.ChatCompletionMessageParam[];
   executionTime: number;
   nodeExecutionTracker: NodeExecutionTrackerEntry[];
   // Additional properties used in chatCompletionService

@@ -97,7 +97,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     const toolDescription = tool?.description || '';
     
     // Create the binding in the format that will be visually displayed as a pill
-    const binding = `\${-_-_-${serverName}-_-_-${toolName}}`;
+    const binding = `\${_-_-_${serverName}_-_-_${toolName}}`;
     
     // Add a space before the binding if needed
     const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');

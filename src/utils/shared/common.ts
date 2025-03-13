@@ -12,4 +12,4 @@ export const isSecretEnvVar = (key: string): boolean =>
   SECRET_ENV_KEYWORDS.some(keyword => key.toLowerCase().includes(keyword));
 
 
-export const toolBindingRegex = /\$\{-_-_-([\w-^}]+)-_-_-([\w-^}]+)\}/g;
+export const toolBindingRegex = /\$\{_-_-_([\w-^}]+)_-_-_([\w-^}]+)\}/g;

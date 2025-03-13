@@ -74,7 +74,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         log.debug("serverToolsMap", serverToolsMap)
         
         // Create the binding in the format that will be visually displayed as a pill
-        const binding = `\${-_-_-${serverName}-_-_-${toolName}}`;
+        const binding = `\${_-_-_${serverName}_-_-_${toolName}}`;
         log.debug("serverToolsMap -> servername / toolname", [serverName, toolName])
         log.debug("serverToolsMap -> binding", binding)
         

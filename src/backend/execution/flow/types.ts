@@ -1,6 +1,6 @@
 import { NodeType } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
-import { ChatCompletionMessageParam, ChatCompletion } from 'openai/resources/chat/completions/completions';
+import OpenAI from 'openai';
 
 // Base node params interface with generic properties
 export interface BaseNodeParams<T = Record<string, unknown>> {
@@ -86,7 +86,7 @@ export interface SharedState {
         nodeExecutionTracker: NodeExecutionTrackerEntry[];
     };
     // Messages as the single source of truth
-    messages: ChatCompletionMessageParam[];
+    messages: OpenAI.ChatCompletionMessageParam[];
     // Flow ID needed by some nodes
     flowId: string;
     // Last response from the model
@@ -148,14 +148,14 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     modelDisplayName?: string;
     availableTools?: ToolDefinition[];
     mcpContext?: MCPContext;
-    messages: ChatCompletionMessageParam[];
+    messages: OpenAI.ChatCompletionMessageParam[];
     toolCalls?: ToolCallInfo[];
 }
 
 // FinishNode prep result
 export interface FinishNodePrepResult extends BasePrepResult {
     nodeType: 'finish';
-    messages: ChatCompletionMessageParam[];
+    messages: OpenAI.ChatCompletionMessageParam[];
 }
 
 // MCPNode prep result
@@ -184,9 +184,9 @@ export interface ProcessNodeExecResult extends BaseExecResult {
     content?: string;
     error?: string;
     errorDetails?: ErrorDetails;
-    fullResponse?: ChatCompletion;
+    fullResponse?: OpenAI.ChatCompletion;
     toolCalls?: ToolCallInfo[];
-    messages?: ChatCompletionMessageParam[];
+    messages?: OpenAI.ChatCompletionMessageParam[];
 }
 
 // FinishNode exec result

@@ -5,7 +5,6 @@ import { FlowConverter } from './FlowConverter';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutionResponse, SuccessResult } from '@/shared/types/flow/response';
 import { SharedState, FlowParams } from './types';
-import { ChatCompletionUserMessageParam } from 'openai/resources/chat/completions/completions';
 import OpenAI from 'openai';
 
 // Create a logger instance for this file
@@ -15,7 +14,7 @@ export class FlowExecutor {
   /**
    * Execute a flow by name
    */
-  static async executeFlow(flowName: string, options?: { messages?: ChatCompletionUserMessageParam[] }): Promise<FlowExecutionResponse> {
+  static async executeFlow(flowName: string, options?: { messages?: OpenAI.ChatCompletionMessageParam[] }): Promise<FlowExecutionResponse> {
     log.info(`Executing flow: ${flowName}`, {
       hasInitialInput: !!options?.messages?.length
     });
@@ -60,8 +59,10 @@ export class FlowExecutor {
       flowId: reactFlow.id // Add flowId to shared state for use by ProcessNode
     };
     
+
     // If messages are provided, add them directly to shared state
     if (options?.messages && Array.isArray(options.messages)) {
+      log.debug("NOW WE'RE ADDING THE FUCKING MESSAGE", options?.messages);
       sharedState.messages = [...options.messages];
     }
     
@@ -97,7 +98,7 @@ export class FlowExecutor {
       result: typeof sharedState.lastResponse === 'string' 
         ? sharedState.lastResponse 
         : { success: true, ...sharedState.lastResponse } as SuccessResult,
-      messages: sharedState.messages as OpenAI.ChatCompletionMessage[], // Type cast to match FlowExecutionResponse
+      messages: sharedState.messages, // Already using OpenAI.ChatCompletionMessageParam
       executionTime: Date.now() - sharedState.trackingInfo.startTime,
       nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker,
       // Include any tool calls from the last message if it's an assistant message with tool calls

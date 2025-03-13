@@ -11,7 +11,7 @@ import {
   ProcessNodeExecResult,
   ToolDefinition
 } from '../types';
-import { ChatCompletionMessageParam } from 'openai/resources/chat/completions/completions';
+import OpenAI from 'openai';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
@@ -83,8 +83,8 @@ export class ProcessNode extends BaseNode {
     
     // Reorder messages to ensure system messages are at the top
     // First, extract all system messages and non-system messages
-    const systemMessages: ChatCompletionMessageParam[] = [];
-    const nonSystemMessages: ChatCompletionMessageParam[] = [];
+    const systemMessages: OpenAI.ChatCompletionMessageParam[] = [];
+    const nonSystemMessages: OpenAI.ChatCompletionMessageParam[] = [];
     
     // Copy and categorize messages
     sharedState.messages.forEach(msg => {
@@ -100,7 +100,7 @@ export class ProcessNode extends BaseNode {
       systemMessages.push({
         role: 'system',
         content: completePrompt
-      });
+      } as OpenAI.ChatCompletionMessageParam);
       
       log.info('Added system message from prompt template', {
         contentLength: completePrompt.length,
@@ -137,7 +137,7 @@ export class ProcessNode extends BaseNode {
     });
     
     // Add verbose logging of the entire prepResult
-    log.verbose('execCore() prepResult', JSON.stringify(prepResult));
+    log.debug('execCore() prepResult', JSON.stringify(prepResult));
     
     try {
       // Prepare tools if available
@@ -168,7 +168,27 @@ export class ProcessNode extends BaseNode {
       
       if (!modelResult.success) {
         log.error('Model execution error', { error: modelResult.error });
-        throw new Error(`Model execution error: ${modelResult.error.message}`);
+        
+        // Instead of throwing a new Error, return a properly structured error result
+        // that preserves all the original error details
+        const errorResult: ProcessNodeExecResult = {
+          success: false,
+          error: modelResult.error.message,
+          errorDetails: {
+            message: modelResult.error.message,
+            name: modelResult.error.type,
+            code: modelResult.error.code,
+            type: modelResult.error.type,
+            param: typeof modelResult.error.details?.param === 'string' ? modelResult.error.details.param : undefined,
+            status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
+            // Include all other details from the original error
+            ...modelResult.error.details
+          }
+        };
+        
+        log.verbose('Preserving original error details from ModelHandler', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
       const result = modelResult.value;
@@ -328,7 +348,7 @@ export class ProcessNode extends BaseNode {
   ): void {
     // Check if we already have a message with this role
     const existingMessage = prepResult.messages?.find(
-      (msg: ChatCompletionMessageParam) => msg.role === role
+      (msg: OpenAI.ChatCompletionMessageParam) => msg.role === role
     );
     
     if (!existingMessage) {
@@ -338,7 +358,7 @@ export class ProcessNode extends BaseNode {
       }
       
       // Create a properly typed message based on role
-      let message: ChatCompletionMessageParam;
+      let message: OpenAI.ChatCompletionMessageParam;
       
       switch (role) {
         case 'system':

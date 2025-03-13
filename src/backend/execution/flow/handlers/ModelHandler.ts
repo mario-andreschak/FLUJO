@@ -7,11 +7,6 @@ import {
 } from '../types/modelHandler';
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
-import { 
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-  ChatCompletionMessageToolCall
-} from 'openai/resources/chat/completions/completions';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
@@ -57,7 +52,11 @@ export class ModelHandler {
       // Add verbose logging of the error response
       log.verbose('callModel error response', JSON.stringify(response));
       
-      return response;
+      // Ensure we're returning the complete error response with all details
+      return {
+        success: false,
+        error: response.error
+      };
     }
     
     const modelResponse = response.value;
@@ -74,11 +73,16 @@ export class ModelHandler {
       });
       
       if (!toolCallsResult.success) {
-        return toolCallsResult;
+        // Ensure we're returning the complete error response with all details
+        log.verbose('Tool calls processing failed', JSON.stringify(toolCallsResult));
+        return {
+          success: false,
+          error: toolCallsResult.error
+        };
       }
       
       // Add assistant message with tool calls
-      const assistantMessage: ChatCompletionMessageParam = {
+      const assistantMessage: OpenAI.ChatCompletionMessageParam = {
         role: 'assistant',
         content,
         tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls
@@ -100,7 +104,7 @@ export class ModelHandler {
       });
     } else {
       // No tool calls, just add the assistant message
-      const assistantMessage: ChatCompletionMessageParam = {
+      const assistantMessage: OpenAI.ChatCompletionMessageParam = {
         role: 'assistant',
         content
       };
@@ -149,8 +153,8 @@ export class ModelHandler {
   private static async generateCompletion(
     modelId: string,
     prompt: string,
-    messages: ChatCompletionMessageParam[],
-    tools?: ChatCompletionTool[]
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools?: OpenAI.ChatCompletionTool[]
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
     log.verbose('generateCompletion input', JSON.stringify({
@@ -188,7 +192,8 @@ export class ModelHandler {
           )
         };
       }
-
+      log.verbose(`decrypted api key ${decryptedApiKey}`)
+      log.verbose(` baseurl ${model.baseUrl}`)
       // Initialize the OpenAI client
       const openai = new OpenAI({
         apiKey: decryptedApiKey,
@@ -198,23 +203,24 @@ export class ModelHandler {
       // Create the request parameters
       const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
         model: model.name,
-        messages: [
-          {
-            role: "system",
-            content: prompt
-          },
-          ...messages
-        ],
+        messages: messages,
         temperature
       };
       
       // Add tools if available
       if (tools && tools.length > 0) {
         requestParams.tools = tools;
-      }
+      } 
       
+
+      log.verbose(`calling chatcompletion now with MODEL ${ JSON.stringify(requestParams.model)}`)
+      log.verbose(`calling chatcompletion now with TEMP ${ JSON.stringify(requestParams.temperature)}`)
+      log.verbose(`calling chatcompletion now with MESSAGES ${ JSON.stringify(requestParams.messages)}`)
+      log.verbose(`calling chatcompletion now with TOOLS ${ JSON.stringify(requestParams.tools)}`)
       // Make the API request using the OpenAI client
       const chatCompletion = await openai.chat.completions.create(requestParams);
+      log.verbose(`chatcompletion returned`)
+      log.verbose(`chatcompletion returned ${ JSON.stringify(chatCompletion)}`)
 
       // Create a standardized response with OpenAI-compatible structure
       const result: Result<ModelCallResult> = {
@@ -231,6 +237,7 @@ export class ModelHandler {
       
       return result;
     } catch (error) {
+      log.debug(`chatcompletion raised exception ${JSON.stringify(error)}`)
       // Handle API errors
       if (error instanceof OpenAI.APIError) {
         const errorResult: Result<ModelCallResult> = {
@@ -300,7 +307,7 @@ export class ModelHandler {
     
     try {
       // Array to collect new messages with tool results
-      const toolCallMessages: ChatCompletionMessageParam[] = [];
+      const toolCallMessages: OpenAI.ChatCompletionMessageParam[] = [];
       const processedToolCalls: Array<{
         name: string;
         args: Record<string, unknown>;
@@ -317,8 +324,8 @@ export class ModelHandler {
           const args = JSON.parse(argsString);
           
           // Extract server and tool names from the formatted name
-          // Format is "-_-_-serverName-_-_-toolName"
-          const parts = name.split('-_-_-');
+          // Format is "_-_-_serverName_-_-_toolName"
+          const parts = name.split('_-_-_');
           if (parts.length !== 3) {
             throw new Error(`Invalid tool name format: ${name}`);
           }

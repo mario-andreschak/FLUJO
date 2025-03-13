@@ -6,7 +6,7 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('backend/utils/PromptRenderer');
 
 export interface PromptRenderOptions {
-  renderMode?: 'raw' | 'rendered'; // For tool pills: raw shows ${-_-_-server-_-_-name}, rendered shows descriptions
+  renderMode?: 'raw' | 'rendered'; // For tool pills: raw shows ${_-_-_server_-_-_name}, rendered shows descriptions
   includeConversationHistory?: boolean;
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
@@ -266,8 +266,8 @@ export class PromptRenderer {
       return prompt; // Return the raw prompt with tool pills
     }
 
-    // Regular expression to find tool pills: ${-_-_-serverName-_-_-toolName}
-    const toolPillRegex = /\${-_-_-([\w-^}]+)-_-_-([\w-^}]+)}/g;
+    // Regular expression to find tool pills: ${_-_-_serverName_-_-_toolName}
+    const toolPillRegex = /\${_-_-_([\w-^}]+)_-_-_([\w-^}]+)}/g;
 
     // Replace each tool pill with its description
     let resolvedPrompt = prompt;

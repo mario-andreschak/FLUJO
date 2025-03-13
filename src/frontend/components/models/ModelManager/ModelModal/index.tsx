@@ -29,6 +29,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Model } from '@/shared/types';
 import { ModelProvider } from '@/shared/types/model/provider';
 import { modelService } from '@/frontend/services/model';
+import { ReasoningDefaultPattern, ToolCallDefaultPattern } from '@/shared/types/constants';
 
 export interface ModelModalProps {
   open: boolean;
@@ -49,9 +50,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [promptTemplate, setPromptTemplate] = useState('');
-  const [reasoningSchema, setReasoningSchema] = useState('{"reasoning": "$REASONING", "message": "$MESSAGE"}');
+  const [reasoningSchema, setReasoningSchema] = useState(ReasoningDefaultPattern);
   const [temperature, setTemperature] = useState('0.0');
-  const [functionCallingSchema, setFunctionCallingSchema] = useState('{\n  "tool": "$TOOL_NAME",\n  "parameters": {\n    "$PARAM_NAME1": "$PARAM_VALUE1$",\n    "$PARAM_NAME2": "$PARAM_VALUE2$",\n    "...": "..."\n  }\n}');
+  const [functionCallingSchema, setFunctionCallingSchema] = useState(ToolCallDefaultPattern);
   const [isApiKeyBound, setIsApiKeyBound] = useState(false);
   const [boundToGlobalVar, setBoundToGlobalVar] = useState<string | null>(null);
   const [showBindModal, setShowBindModal] = useState(false);
@@ -158,7 +159,7 @@ const fetchModels = async (baseUrl: string) => {
         setPromptTemplate(model.promptTemplate || '');
         setReasoningSchema(model.reasoningSchema || '');
         setTemperature(model.temperature || '0.0');
-        setFunctionCallingSchema(model.functionCallingSchema || '{\n  "tool": "$TOOL_NAME",\n  "parameters": {\n    "$PARAM_NAME1": "$PARAM_VALUE1$",\n    "$PARAM_NAME2": "$PARAM_VALUE2$",\n    "...": "..."\n  }\n}');
+        setFunctionCallingSchema(model.functionCallingSchema || '');
         
         // Set provider from model if available, otherwise determine from baseUrl
         if (model.provider) {
@@ -247,9 +248,9 @@ const fetchModels = async (baseUrl: string) => {
         setApiKey('');
         setBaseUrl('');
         setPromptTemplate('');
-        setReasoningSchema('{"reasoning": "$REASONING", "message": "$MESSAGE"}');
+        setReasoningSchema(ReasoningDefaultPattern);
         setTemperature('0.0');
-        setFunctionCallingSchema('{\n  "tool": "$TOOL_NAME",\n  "parameters": {\n    "$PARAM_NAME1": "$PARAM_VALUE1$",\n    "$PARAM_NAME2": "$PARAM_VALUE2$",\n    "...": "..."\n  }\n}');
+        setFunctionCallingSchema(ToolCallDefaultPattern);
         setIsApiKeyBound(false);
         setBoundToGlobalVar(null);
         setError(null);

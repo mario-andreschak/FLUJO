@@ -114,7 +114,7 @@
 //   } else if (typeof result.result === 'string') {
 //     // Handle string results
 //     // Fix tool call detection - look for the correct pattern
-//     const hasToolUse = result.result.includes('-_-_-');
+//     const hasToolUse = result.result.includes('_-_-_');
 //     const hasFinalResponse = result.result.includes('<final_response>'); // for now: this is only for cline / roo integration.
     
 //     if (hasFinalResponse && hasToolUse) {

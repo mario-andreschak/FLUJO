@@ -1,16 +1,13 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
+import OpenAI from 'openai';
 
 const log = createLogger('app/bridge/chat/completions/requestParser');
 
-// Types for better TypeScript support
+// Types for better TypeScript support using OpenAI SDK types directly
 export interface ChatCompletionRequest {
   model: string;
-  messages: Array<{
-    role: string;
-    content: string;
-    name?: string;
-  }>;
+  messages: Array<OpenAI.ChatCompletionMessageParam>;
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
@@ -57,7 +54,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Chat
         {
           role: 'user',
           content: messageContent
-        }
+        } as OpenAI.ChatCompletionMessageParam
       ],
       stream,
       temperature: isNaN(temperature) ? undefined : temperature,
@@ -132,11 +129,8 @@ export async function _logRequestDetails(request: NextRequest) {
         // Truncate messages content if present
         if (body && body.messages && Array.isArray(body.messages)) {
           const truncatedBody = { ...body };
-          interface Message {
-            role: string;
-            content: string;
-            name?: string;
-          }
+          // Use OpenAI type instead of custom interface
+          type Message = OpenAI.ChatCompletionMessageParam;
           
           truncatedBody.messages = body.messages.map((msg: Message) => {
             if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {

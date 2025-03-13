@@ -1,9 +1,4 @@
-import { 
-  ChatCompletionMessageParam, 
-  ChatCompletion,
-  ChatCompletionTool,
-  ChatCompletionMessageToolCall
-} from 'openai/resources/chat/completions/completions';
+import OpenAI from 'openai';
 import { 
   ToolDefinition, 
   ToolCallInfo 
@@ -13,8 +8,8 @@ import {
 export interface ModelCallInput {
   modelId: string;
   prompt: string;
-  messages: ChatCompletionMessageParam[];
-  tools?: ChatCompletionTool[];
+  messages: OpenAI.ChatCompletionMessageParam[];
+  tools?: OpenAI.ChatCompletionTool[];
   iteration: number;
   maxIterations: number;
 }
@@ -22,19 +17,19 @@ export interface ModelCallInput {
 // Result of model call
 export interface ModelCallResult {
   content?: string;
-  messages: ChatCompletionMessageParam[];
+  messages: OpenAI.ChatCompletionMessageParam[];
   toolCalls?: ToolCallInfo[];
-  fullResponse?: ChatCompletion;
+  fullResponse?: OpenAI.ChatCompletion;
 }
 
 // Tool call processing input
 export interface ToolCallProcessingInput {
-  toolCalls: ChatCompletionMessageToolCall[];
+  toolCalls: OpenAI.ChatCompletionMessageToolCall[];
   content?: string;
 }
 
 // Tool call processing result
 export interface ToolCallProcessingResult {
-  toolCallMessages: ChatCompletionMessageParam[];
+  toolCallMessages: OpenAI.ChatCompletionMessageParam[];
   processedToolCalls: ToolCallInfo[];
 }

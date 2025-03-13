@@ -9,7 +9,7 @@ import { Result } from '../errors';
 import { createToolError, createMCPError } from '../errorFactory';
 import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
-import { ChatCompletionTool } from 'openai/resources/chat/completions/completions';
+import OpenAI from 'openai';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
 
@@ -62,7 +62,7 @@ export class ToolHandler {
       }
       
       // Map tools to OpenAI format
-      const tools: ChatCompletionTool[] = availableTools.map(tool => ({
+      const tools: OpenAI.ChatCompletionTool[] = availableTools.map(tool => ({
         type: "function",
         function: {
           name: tool.name,
@@ -156,7 +156,7 @@ export class ToolHandler {
             .filter(tool => enabledTools.includes(tool.name))
             .map(tool => ({
               originalName: tool.name,
-              name: `-_-_-${boundServer}-_-_-${tool.name}`,
+              name: `_-_-_${boundServer}_-_-_${tool.name}`,
               description: tool.description,
               inputSchema: tool.inputSchema
             }));

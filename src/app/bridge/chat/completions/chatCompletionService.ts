@@ -4,7 +4,8 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ChatCompletionRequest } from './requestParser';
 // import { parseFlowResponse } from './FlowResponseParser';
 // import { FlowExecutionResponse } from '@/shared/types/flow/response';
-import { formatResponseContent } from './responseFormatter';
+// Removed formatResponseContent import
+import OpenAI from 'openai';
 
 const log = createLogger('app/bridge/chat/completions/chatCompletionService');
 
@@ -24,11 +25,8 @@ export function countTokens(text: string): number {
   return tokenCount;
 }
 
-export interface TokenUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-}
+// Using OpenAI's type for token usage
+export type TokenUsage = OpenAI.CompletionUsage;
 
 /**
  * Determines if an error is retryable based on OpenAI's error codes documentation
@@ -142,16 +140,10 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
       }
     });
     
-    // Filter and convert messages to the expected format
-    const userMessages = messages
-      .filter(msg => msg.role === 'user')
-      .map(msg => ({
-        role: 'user' as const,
-        content: msg.content,
-        name: msg.name
-      }));
     
-    const result = await FlowExecutor.executeFlow(flowName, { messages: userMessages });
+    const inputMessages = messages.filter(msg => msg.role !== 'system');
+    
+    const result = await FlowExecutor.executeFlow(flowName, { messages: inputMessages });
     
     const flowDuration = Date.now() - flowStartTime;
     log.info('Flow execution completed successfully', {
@@ -165,9 +157,13 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
     const responseId = `chatcmpl-${Date.now()}`;
     const timestamp = Math.floor(Date.now() / 1000);
     
-    // Format the content based on the requirements
-    const formattedContent = formatResponseContent(data, result);
-    const completionTokens = countTokens(formattedContent);
+    // Get all messages from the flow execution result
+    const resultMessages = result.messages;
+    
+    // Get the last assistant message for token counting and response formatting
+    const lastAssistantMessage = [...resultMessages].reverse().find(msg => msg.role === 'assistant');
+    const lastMessageContent = typeof lastAssistantMessage?.content === 'string' ? lastAssistantMessage?.content : '';
+    const completionTokens = countTokens(lastMessageContent);
     
     const usage = {
       prompt_tokens: promptTokens,
@@ -176,9 +172,10 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
     };
     
     // Create the response message with tool calls if present
-    const responseMessage: any = {
+    // We'll use the last assistant message from the flow execution result
+    const responseMessage: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
-      content: formattedContent
+      content: lastMessageContent
     };
     
     // Add tool calls if they exist in the result
@@ -193,9 +190,16 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
           name: tc.name,
           arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
         }
-      }));
+      } as OpenAI.ChatCompletionMessageToolCall));
     }
     
+    // Log all messages from the flow execution
+    log.debug('All messages from flow execution:', { 
+      messageCount: resultMessages.length,
+      messageRoles: resultMessages.map(m => m.role)
+    });
+    
+    // Include all messages from the flow execution in the response
     const responseData = {
       id: responseId,
       object: "chat.completion",
@@ -208,19 +212,21 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
           finish_reason: "stop"
         }
       ],
-      usage
+      usage,
+      // Add the messages array from the flow execution result
+      messages: result.messages
     };
     
     // Check if streaming is requested
     if (data.stream === true) {
       log.info('Streaming response requested, sending SSE', { requestId });
-      return createStreamingResponse(modelParam, formattedContent, usage);
+      return createStreamingResponse(modelParam, lastMessageContent, usage, result.messages);
     } else {
       // Return the complete response
-      log.info('Returning formatted OpenAI-compatible response', {
+      log.info('Returning OpenAI-compatible response', {
         requestId,
         responseId,
-        contentLength: formattedContent.length
+        contentLength: lastMessageContent.length
       });
       
       return NextResponse.json(responseData);
@@ -273,7 +279,7 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
 }
 
 // Create a streaming response using Server-Sent Events (SSE)
-export function createStreamingResponse(modelParam: string, content: string, usage: TokenUsage) {
+export function createStreamingResponse(modelParam: string, content: string, usage: TokenUsage, messages?: OpenAI.ChatCompletionMessageParam[]) {
   const startTime = Date.now();
   const streamId = `stream-${Date.now()}`;
   log.info('Creating streaming response', {
@@ -367,9 +373,14 @@ export function createStreamingResponse(modelParam: string, content: string, usa
           }
         }
         
-        // Send the final chunk with usage information
-        log.debug('Sending final chunk with usage information', { streamId, usage });
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+        // Send the final chunk with usage information and messages if available
+        log.debug('Sending final chunk with usage information', { 
+          streamId, 
+          usage,
+          hasMessages: !!messages && messages.length > 0
+        });
+        
+        const finalChunk = {
           id: responseId,
           object: "chat.completion.chunk",
           created: timestamp,
@@ -380,7 +391,14 @@ export function createStreamingResponse(modelParam: string, content: string, usa
             finish_reason: "stop"
           }],
           usage
-        })}\n\n`));
+        };
+        
+        // Add messages to the final chunk if they exist
+        if (messages && messages.length > 0) {
+          (finalChunk as any).messages = messages;
+        }
+        
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
         
         // Send the [DONE] marker
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));

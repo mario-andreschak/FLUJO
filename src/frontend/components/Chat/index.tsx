@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Box, Paper, Typography, Divider, CircularProgress, Alert } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button } from '@mui/material';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
@@ -325,41 +326,85 @@ const Chat: React.FC = () => {
         stream: false,
       });
       
-      // Get the assistant message from the response
+      // Get the response message from the completion
       const responseMessage = completion.choices[0].message;
       
-      // Create assistant message with tool calls if present
-      const assistantMessage: ChatMessage = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: responseMessage.content || '',
-        timestamp: Date.now(),
-        tool_calls: responseMessage.tool_calls
-      };
+      // Log the full response for debugging
+      log.debug('Chat completion response:', { 
+        responseMessage,
+        hasToolCalls: responseMessage.tool_calls && responseMessage.tool_calls.length > 0
+      });
       
-      let updatedMessages = [...conversation.messages, assistantMessage];
+      // Start with the existing conversation messages
+      let updatedMessages = [...conversation.messages];
       
-      // If there are tool calls in the response, add tool result messages
-      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-        log.info('Tool calls found in response', { 
-          toolCallsCount: responseMessage.tool_calls.length,
-          toolCalls: JSON.stringify(responseMessage.tool_calls)
+      // Check if the response contains a custom property with all messages from the flow execution
+      // This would be available if we've modified our backend to include it
+      const responseData = completion as any;
+      
+      if (responseData && responseData.messages && Array.isArray(responseData.messages)) {
+        // We have messages from the flow execution in the response
+        log.info('Found flow execution messages in response', { 
+          messageCount: responseData.messages.length 
         });
         
-        // For each tool call, add a tool message with the result
-        // In a real implementation, you would process the tool calls and get actual results
-        // For now, we'll add placeholder tool result messages
-        responseMessage.tool_calls.forEach(toolCall => {
-          const toolResultMessage: ChatMessage = {
-            id: uuidv4(),
-            role: 'tool',
-            content: `Result for tool call: ${toolCall.function.name}`,
-            timestamp: Date.now(),
-            tool_call_id: toolCall.id
-          };
+        // Get the last user message index to know where to insert new messages
+        const lastUserMsgIndex = updatedMessages.findLastIndex(msg => msg.role === 'user');
+        
+        if (lastUserMsgIndex !== -1) {
+          // Keep messages up to and including the last user message
+          updatedMessages = updatedMessages.slice(0, lastUserMsgIndex + 1);
           
-          updatedMessages.push(toolResultMessage);
-        });
+          // Add all messages from the flow execution after the last user message
+          responseData.messages.forEach((msg: any) => {
+            if (msg.role !== 'user') { // Skip user messages as we already have them
+              const newMessage: ChatMessage = {
+                id: uuidv4(),
+                role: msg.role as 'assistant' | 'system' | 'tool',
+                content: typeof msg.content === 'string' ? msg.content : '',
+                timestamp: Date.now(),
+                tool_calls: msg.tool_calls,
+                tool_call_id: msg.tool_call_id
+              };
+              updatedMessages.push(newMessage);
+            }
+          });
+        }
+      } else {
+        // No flow execution messages, just use the standard OpenAI response
+        // Create a new assistant message from the response
+        const assistantMessage: ChatMessage = {
+          id: uuidv4(),
+          role: 'assistant',
+          content: responseMessage.content || '',
+          timestamp: Date.now(),
+          tool_calls: responseMessage.tool_calls
+        };
+        
+        // Add the assistant message to our conversation
+        updatedMessages.push(assistantMessage);
+        
+        // If there are tool calls in the response, add tool result messages
+        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+          log.info('Tool calls found in response', { 
+            toolCallsCount: responseMessage.tool_calls.length,
+            toolCalls: JSON.stringify(responseMessage.tool_calls)
+          });
+          
+          // For each tool call, add a tool message with the result
+          // In a real implementation, you would process the tool calls and get actual results
+          responseMessage.tool_calls.forEach(toolCall => {
+            const toolResultMessage: ChatMessage = {
+              id: uuidv4(),
+              role: 'tool',
+              content: `Result for tool call: ${toolCall.function.name}`,
+              timestamp: Date.now(),
+              tool_call_id: toolCall.id
+            };
+            
+            updatedMessages.push(toolResultMessage);
+          });
+        }
       }
       
       const updatedConversation = {
@@ -440,6 +485,46 @@ const Chat: React.FC = () => {
     });
   };
   
+  // Edit a message and re-send the conversation
+  const handleEditMessage = async (messageId: string, newContent: string) => {
+    if (!currentConversation) return;
+    
+    log.debug('Editing message', { messageId, contentLength: newContent.length });
+    
+    // Find the index of the message to edit
+    const messageIndex = currentConversation.messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) return;
+    
+    // Get the message to edit
+    const messageToEdit = currentConversation.messages[messageIndex];
+    
+    // Create updated message with new content
+    const updatedMessage: ChatMessage = {
+      ...messageToEdit,
+      content: newContent,
+      timestamp: Date.now() // Update timestamp to show it was edited
+    };
+    
+    // Get messages up to and including the edited message
+    const messagesUpToEdit = [
+      ...currentConversation.messages.slice(0, messageIndex),
+      updatedMessage
+    ];
+    
+    // Update conversation with truncated messages
+    const updatedConversation = {
+      ...currentConversation,
+      messages: messagesUpToEdit
+    };
+    
+    updateConversation(updatedConversation);
+    
+    // Re-send the conversation if a flow is selected
+    if (updatedConversation.flowId) {
+      await sendToChatCompletions(updatedConversation);
+    }
+  };
+  
   // Split conversation at a message
   const splitConversationAtMessage = (messageId: string) => {
     if (!currentConversation) return;
@@ -512,6 +597,7 @@ const Chat: React.FC = () => {
                 messages={currentConversation.messages}
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
+                onEditMessage={handleEditMessage}
               />
               
               {isLoading && (
@@ -521,7 +607,24 @@ const Chat: React.FC = () => {
               )}
               
               {error && (
-                <Alert severity="error" sx={{ mt: 2 }}>
+                <Alert 
+                  severity="error" 
+                  sx={{ mt: 2 }}
+                  action={
+                    <Button 
+                      color="inherit" 
+                      size="small"
+                      startIcon={<RefreshIcon />}
+                      onClick={() => {
+                        if (currentConversation) {
+                          sendToChatCompletions(currentConversation);
+                        }
+                      }}
+                    >
+                      Retry
+                    </Button>
+                  }
+                >
                   {error}
                 </Alert>
               )}

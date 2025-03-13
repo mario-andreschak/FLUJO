@@ -136,7 +136,7 @@ export class MCPNode extends BaseNode {
           return {
             ...tool,
             originalName: tool.name,
-            name: `-_-_-${execResult.server}-_-_-${tool.name}`
+            name: `_-_-_${execResult.server}_-_-_${tool.name}`
           };
         });
       

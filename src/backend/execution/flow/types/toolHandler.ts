@@ -1,5 +1,5 @@
 import { ToolDefinition, MCPNodeReference } from '../types';
-import { ChatCompletionTool } from 'openai/resources/chat/completions/completions';
+import OpenAI from 'openai';
 
 // Input for tool preparation
 export interface ToolPreparationInput {
@@ -8,7 +8,7 @@ export interface ToolPreparationInput {
 
 // Result of tool preparation
 export interface ToolPreparationResult {
-  tools: ChatCompletionTool[];
+  tools: OpenAI.ChatCompletionTool[];
 }
 
 // Input for MCP node processing

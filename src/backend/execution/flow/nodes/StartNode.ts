@@ -2,7 +2,7 @@
 import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
 import { SharedState, StartNodeParams, StartNodePrepResult, StartNodeExecResult } from '../types';
-import { ChatCompletionSystemMessageParam } from 'openai/resources/chat/completions/completions';
+import OpenAI from 'openai';
 
 // Create a logger instance for this file
 const log = createLogger('execution/nodes/StartNode.ts');
@@ -77,7 +77,7 @@ export class StartNode extends BaseNode {
     
     // Add system message to messages array if it doesn't exist
     if (prepResult.systemPrompt) {
-      const systemMessage: ChatCompletionSystemMessageParam = {
+      const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
         role: 'system',
         content: prepResult.systemPrompt
       };

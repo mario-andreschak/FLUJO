@@ -22,5 +22,12 @@ export const FEATURES = {
    * 
    * Only log messages with a level greater than or equal to this value will be displayed
    */
-  LOG_LEVEL: 0, // Default to ERROR level
+  LOG_LEVEL: -1, // VERBOSE level for debugging
+  
+  /**
+   * Controls whether tool calls are included in the response
+   * When set to true, tool calls will be included in the response
+   * When set to false, tool calls will be processed but not included in the response
+   */
+  INCLUDE_TOOL_CALLS_IN_RESPONSE: true,
 };

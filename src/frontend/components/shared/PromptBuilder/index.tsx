@@ -71,7 +71,7 @@ declare module 'slate' {
 }
 
 // // Tool reference regex pattern
-// const toolBindingRegex = /\$\{-_-_-([\w^}]+)-_-_-([\w^}]+)\}/g;
+// const toolBindingRegex = /\$\{_-_-_([\w^}]+)_-_-_([\w^}]+)\}/g;
 
 // Convert markdown string to Slate value
 const deserialize = (markdown: string): Descendant[] => {
@@ -85,9 +85,9 @@ const deserialize = (markdown: string): Descendant[] => {
   
   for (const line of lines) {
     // Find tool references in the line using a simpler approach
-    // Look for ${-_-_- pattern
+    // Look for ${_-_-_ pattern
     let currentIndex = 0;
-    let startIndex = line.indexOf('${-_-_-', currentIndex);
+    let startIndex = line.indexOf('${_-_-_', currentIndex);
     const children: CustomElement['children'] = [];
     
     if (startIndex !== -1) {
@@ -112,8 +112,8 @@ const deserialize = (markdown: string): Descendant[] => {
         const fullRef = line.slice(startIndex, endIndex + 1);
         
         // Parse the tool reference using the same approach as insertText
-        if (fullRef.startsWith('${-_-_-') && fullRef.endsWith('}')) {
-          const parts = fullRef.substring(2, fullRef.length - 1).split('-_-_-');
+        if (fullRef.startsWith('${_-_-_') && fullRef.endsWith('}')) {
+          const parts = fullRef.substring(2, fullRef.length - 1).split('_-_-_');
           
           if (parts.length >= 3) {
             const serverName = parts[1];
@@ -138,7 +138,7 @@ const deserialize = (markdown: string): Descendant[] => {
         
         // Move to the next position
         currentIndex = endIndex + 1;
-        startIndex = line.indexOf('${-_-_-', currentIndex);
+        startIndex = line.indexOf('${_-_-_', currentIndex);
       }
       
       // Add any remaining text after the last tool reference
@@ -176,7 +176,7 @@ const serialize = (nodes: Descendant[]): string => {
         // Format tool reference
         const toolRef = child as ToolReferenceElement;
         toolReferenceCount++;
-        return `\${-_-_-${toolRef.serverName}-_-_-${toolRef.toolName}}`;
+        return `\${_-_-_${toolRef.serverName}_-_-_${toolRef.toolName}}`;
       }
       return '';
     }).join('');
@@ -208,7 +208,7 @@ const Element = (props: {
         className="tool-reference-container"
       >
   <span className="tool-reference">
-    {`${'{-_-_-' + toolRef.serverName + '-_-_-' + toolRef.toolName + '}'}`}
+    {`${'{_-_-_' + toolRef.serverName + '_-_-_' + toolRef.toolName + '}'}`}
   </span>
   <span
     className="tool-reference-delete"
@@ -336,7 +336,7 @@ const PreviewRenderer = ({ value }: { value: string }) => {
   let currentIndex = 0;
   
   // Look for tool references using the same approach as deserialize
-  let startIndex = value.indexOf('${-_-_-', currentIndex);
+  let startIndex = value.indexOf('${_-_-_', currentIndex);
   
   if (startIndex !== -1) {
     log.debug(`Found tool reference pattern in preview content`);
@@ -360,8 +360,8 @@ const PreviewRenderer = ({ value }: { value: string }) => {
     const fullRef = value.slice(startIndex, endIndex + 1);
     
     // Parse the tool reference using the same approach as insertText
-    if (fullRef.startsWith('${-_-_-') && fullRef.endsWith('}')) {
-      const parts = fullRef.substring(2, fullRef.length - 1).split('-_-_-');
+    if (fullRef.startsWith('${_-_-_') && fullRef.endsWith('}')) {
+      const parts = fullRef.substring(2, fullRef.length - 1).split('_-_-_');
       
       if (parts.length >= 3) {
         const serverName = parts[1];
@@ -387,7 +387,7 @@ const PreviewRenderer = ({ value }: { value: string }) => {
     
     // Move to the next position
     currentIndex = endIndex + 1;
-    startIndex = value.indexOf('${-_-_-', currentIndex);
+    startIndex = value.indexOf('${_-_-_', currentIndex);
   }
   
   // Add any remaining text after the last tool reference
@@ -481,13 +481,13 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
       log.verbose('insertText input', JSON.stringify({ text }));
       
       // Check if the text is a tool reference
-      const isToolReference = text.startsWith('${-_-_-') && text.endsWith('}');
+      const isToolReference = text.startsWith('${_-_-_') && text.endsWith('}');
       log.debug("Checking if text is a tool reference", { isToolReference, text });
       
       if (isToolReference) {
         // It's a complete tool reference, insert it as a tool reference element
         // Extract server and tool names by splitting the string
-        const parts = text.substring(2, text.length - 1).split('-_-_-');
+        const parts = text.substring(2, text.length - 1).split('_-_-_');
         
         if (parts.length >= 3) {
           const serverName = parts[1];

@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
           const encryptedValue = value.substring(10); // Remove 'encrypted:' prefix
           const decryptedValue = await decryptWithPassword(encryptedValue);
           return NextResponse.json({ 
-            value: decryptedValue || '********',
+            value: decryptedValue,
             metadata: { isSecret }
           });
         } else {
@@ -151,7 +151,7 @@ export async function GET(req: NextRequest) {
             const encryptedValue = value.substring(10); // Remove 'encrypted:' prefix
             const decryptedValue = await decryptWithPassword(encryptedValue);
             processedEnvVars[varKey] = {
-              value: decryptedValue || '********',
+              value: decryptedValue || '',
               metadata: { isSecret }
             };
           } else {
