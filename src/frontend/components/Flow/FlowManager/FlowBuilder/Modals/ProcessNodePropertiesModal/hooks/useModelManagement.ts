@@ -16,6 +16,8 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
   useEffect(() => {
     log.debug('useModelManagement useEffect: Checking if modal is open', { open });
     if (open) {
+      // Clear the cache to force a fresh load of models
+      modelService.clearCache();
       loadModels();
     }
   }, [open]);

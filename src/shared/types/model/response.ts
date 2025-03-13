@@ -1,4 +1,5 @@
 import { Model } from './model';
+import OpenAI from 'openai';
 
 /**
  * Base response interface for model service operations
@@ -24,22 +25,26 @@ export interface ModelOperationResponse extends ModelServiceResponse {
 
 /**
  * Response for completion generation operations
+ * Aligned with OpenAI's response format
  */
 export interface CompletionResponse extends ModelServiceResponse {
   content?: string;
-  fullResponse?: any;
+  fullResponse?: OpenAI.ChatCompletion;  // Use OpenAI type instead of any
   toolCalls?: Array<{
     name: string;
-    args: any;
+    args: Record<string, unknown>;  // More specific type than any
     id: string;
     result: string;
   }>;
-  newMessages?: any[];
+  newMessages?: OpenAI.ChatCompletionMessageParam[];  // Use OpenAI type
   errorDetails?: {
     message: string;
     name?: string;
+    type?: string;  // Added to match OpenAI error format
+    code?: string;  // Added to match OpenAI error format
+    param?: string; // Added to match OpenAI error format
+    status?: number; // HTTP status code
     stack?: string;
-    [key: string]: any;
   };
 }
 

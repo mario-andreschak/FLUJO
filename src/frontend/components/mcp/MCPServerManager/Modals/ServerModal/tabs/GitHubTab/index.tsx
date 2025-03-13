@@ -5,12 +5,14 @@ import Alert from '@mui/material/Alert';
 import { TabProps, RepoInfo, MessageState } from '../../types';
 import GitHubForm from './GitHubForm';
 import GitHubActions from './GitHubActions';
-import { validateGitHubUrl, cloneRepository, fetchReadmeContent } from '../../utils/gitHubUtils';
-import { parseConfigFromReadme, parseEnvVariables } from '../../utils/configUtils';
+import { validateGitHubUrl, cloneRepository } from '../../utils/gitHubUtils';
+import { parseEnvVariables } from '../../utils/configUtils';
+import { detectRepositoryConfig } from '../../utils/configDetection';
+import { createEmptyConfigWarningMessage } from '../../utils/errorHandling';
 import { MCPServerState } from '@/shared/types';
 import { MCPServerConfig } from '@/utils/mcp';
 import path from 'path';
-import { Box, Paper, Stack } from '@mui/material';
+import { Box, Paper, Stack, Typography } from '@mui/material';
 
 const GitHubTab: React.FC<TabProps> = ({
   initialConfig,
@@ -105,114 +107,100 @@ const GitHubTab: React.FC<TabProps> = ({
       text: 'Cloning repository...'
     });
     
-    const result = await cloneRepository(githubUrl, repoInfo, savePath);
-    
-    setMessage(result.message);
-    
-    if (result.success && result.clonedRepoPath) {
-      // Store the .env.example content if it exists
-      const envExampleContent = result.envExample;
-      // Ensure we have an absolute path
-      setClonedRepoPath(result.clonedRepoPath);
+    try {
+      // Clone the repository
+      const cloneResult = await cloneRepository(githubUrl, repoInfo, savePath);
       
-      // Try to fetch and parse README content
-      if (repoInfo) {
-        const readmeContent = await fetchReadmeContent(
-          repoInfo.owner,
-          repoInfo.repo,
-          result.clonedRepoPath // Use the processed absolute path
-        );
+      if (!cloneResult.success || !cloneResult.clonedRepoPath) {
+        setMessage(cloneResult.message);
+        setIsCloning(false);
+        return;
+      }
+      
+      // Store the cloned repository path
+      const repoPath = cloneResult.clonedRepoPath;
+      setClonedRepoPath(repoPath);
+      
+      // Parse .env.example if it exists
+      let envFromExample = {};
+      if (cloneResult.envExample && typeof cloneResult.envExample === 'string') {
+        envFromExample = parseEnvVariables(cloneResult.envExample);
+        console.log('Parsed environment variables from .env.example:', envFromExample);
+      }
+      
+      // Detect repository configuration
+      const detectionResult = await detectRepositoryConfig(
+        repoPath,
+        repoInfo.repo,
+        repoInfo.owner
+      );
+      
+      // Update message with detection result
+      setMessage(detectionResult.message);
+      
+      if (detectionResult.success && detectionResult.config) {
+        // Merge env variables from detection and .env.example (with .env.example taking precedence)
+        const configWithEnv = {
+          ...detectionResult.config,
+          rootPath: repoPath, // Ensure rootPath is set
+          env: {
+            ...(detectionResult.config.env || {}),
+            ...envFromExample // .env.example values override detected values
+          }
+        };
         
-        if (readmeContent) {
-          // Default config to use if README parsing fails
-          const defaultConfig: MCPServerConfig = {
-            name: repoInfo.repo,
-            transport: 'stdio', // default to stdio. TODO : figure out if websocket or stdio server
-            command: '',
-            args: [],
-            env: {},
-            disabled: false,
-            autoApprove: [],
-            rootPath: result.clonedRepoPath,
-            _buildCommand: '',
-            _installCommand: '',
-          };
-          
-          const parseResult = await parseConfigFromReadme(
-            readmeContent,
-            defaultConfig,
-            repoInfo.repo // Pass the repository name for path processing
-          );
-          
-          // Parse .env.example if it exists
-          let envFromExample = {};
-          if (envExampleContent && typeof envExampleContent === 'string') {
-            envFromExample = parseEnvVariables(envExampleContent);
-            console.log('Parsed environment variables from .env.example:', envFromExample);
-          }
-          
-          // Store the parsed config in state for the parent component to access
-          if (parseResult.config) {
-
-            if(parseResult.config.transport == 'stdio'){
-
-          // Merge env variables from README and .env.example (with .env.example taking precedence)
-          const configWithCommands = {
-            ...parseResult.config,
-            rootPath: result.clonedRepoPath, // Ensure rootPath is set
-            env: {
-              ...(parseResult.config.env || {}),
-              ...envFromExample // .env.example values override README values
-            }
-          };
-            
-            setParsedConfig(configWithCommands);
-            
-            
-            // Pass the config to the parent component before switching tabs
-            if (onUpdate && parseResult.config.name && parseResult.config.command && parseResult.config.args) {
-              // Cast to any to avoid type errors since we've verified required fields exist
-              onUpdate(configWithCommands as any);
-            }
-          }
-
-            // Always switch to the local tab with the parsed config
-            // so the user can install and build the repository first
-            if (setActiveTab) {
-              // Switch to local tab without adding the server yet
-              // This allows the user to manually install dependencies and build before adding
-              setActiveTab('local');
-            }
-          } else {
-            // If no config was parsed, still switch to local tab
-            if (setActiveTab) {
-              setActiveTab('local');
-            }
-          }
-        } else {
-          // Parse .env.example if it exists
-          let envFromExample = {};
-          if (envExampleContent && typeof envExampleContent === 'string') {
-            envFromExample = parseEnvVariables(envExampleContent);
-            console.log('Parsed environment variables from .env.example:', envFromExample);
-          }
-          
-          // Switch to local tab with default config
-          if (setActiveTab) {
-            setActiveTab('local');
-          }
+        // Store the parsed config in state
+        setParsedConfig(configWithEnv);
+        
+        // Pass the config to the parent component before switching tabs
+        if (onUpdate) {
+          onUpdate(configWithEnv as MCPServerConfig);
         }
+      } else {
+        // Create a default config if detection failed
+        const defaultConfig: MCPServerConfig = {
+          name: repoInfo.repo,
+          transport: 'stdio',
+          command: '',
+          args: [],
+          env: envFromExample,
+          disabled: false,
+          autoApprove: [],
+          rootPath: repoPath,
+          _buildCommand: '',
+          _installCommand: '',
+        };
+        
+        // Store the default config in state
+        setParsedConfig(defaultConfig);
+        
+        // Set a warning message
+        setMessage(createEmptyConfigWarningMessage(detectionResult.language));
+      }
+      
+      // Always switch to the local tab so the user can install and build the repository
+      if (setActiveTab) {
+        setActiveTab('local');
       }
       
       setCloneCompleted(true);
+    } catch (error) {
+      console.error('Error during repository cloning or configuration detection:', error);
+      setMessage({
+        type: 'error',
+        text: `Error processing repository: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
+    } finally {
+      setIsCloning(false);
     }
-    
-    setIsCloning(false);
   };
 
   return (
     <Paper elevation={0} sx={{ p: 0 }}>
       <Stack spacing={3}>
+        <Typography variant="h6" gutterBottom>
+          Import from GitHub or MCP Platform
+        </Typography>
         <GitHubForm
           githubUrl={githubUrl}
           setGithubUrl={setGithubUrl}

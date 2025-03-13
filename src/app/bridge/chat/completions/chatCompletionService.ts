@@ -142,7 +142,16 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
       }
     });
     
-    const result = await FlowExecutor.executeFlow(flowName, { messages });
+    // Filter and convert messages to the expected format
+    const userMessages = messages
+      .filter(msg => msg.role === 'user')
+      .map(msg => ({
+        role: 'user' as const,
+        content: msg.content,
+        name: msg.name
+      }));
+    
+    const result = await FlowExecutor.executeFlow(flowName, { messages: userMessages });
     
     const flowDuration = Date.now() - flowStartTime;
     log.info('Flow execution completed successfully', {
@@ -166,6 +175,27 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
       total_tokens: promptTokens + completionTokens
     };
     
+    // Create the response message with tool calls if present
+    const responseMessage: any = {
+      role: "assistant",
+      content: formattedContent
+    };
+    
+    // Add tool calls if they exist in the result
+    if (result.toolCalls && result.toolCalls.length > 0) {
+      log.info('Adding tool calls to response', { toolCallsCount: result.toolCalls.length });
+      
+      // Convert to OpenAI format
+      responseMessage.tool_calls = result.toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: {
+          name: tc.name,
+          arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
+        }
+      }));
+    }
+    
     const responseData = {
       id: responseId,
       object: "chat.completion",
@@ -174,10 +204,7 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
       choices: [
         {
           index: 0,
-          message: {
-            role: "assistant",
-            content: formattedContent
-          },
+          message: responseMessage,
           finish_reason: "stop"
         }
       ],
@@ -225,14 +252,17 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
       messageCount: data.messages?.length || 0
     });
     
-    // Create a more detailed error response
+    // Create a more detailed error response following OpenAI error format
+    // https://platform.openai.com/docs/guides/error-codes
     const errorResponse = NextResponse.json(
       {
         error: {
           message: error instanceof Error ? error.message : 'Failed to process chat completion',
-          type: errorType,
-          code: errorCode,
+          type: errorType || 'api_error',
+          code: errorCode || 'internal_error',
           param: errorParam,
+          // Note: OpenAI doesn't include 'details' in their standard error format
+          // but we'll keep it for internal debugging purposes
           details: errorDetails
         }
       },

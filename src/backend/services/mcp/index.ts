@@ -527,15 +527,18 @@ export class MCPService {
    * Get the connection status of an MCP server
    */
   async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
-    // If backend is starting up, return a special status
-    if (this.isBackendStartingUp) {
-      log.debug(`getServerStatus: Backend is starting up, returning 'starting' status for ${serverName}`);
-      return { 
-        status: 'initialization', 
-        message: 'Backend is currently initializing. Please wait...' 
-      };
-    }
-    
+    // // If backend is starting up, return a special status
+    // if (this.isBackendStartingUp) {
+    //   log.debug(`getServerStatus: Backend is starting up, returning 'starting' status for ${serverName}`);
+    //   return { 
+    //     status: 'initialization', 
+    //     message: 'Backend is currently initializing. Please wait...' 
+    //   };
+    // }
+
+    // force recovery
+    this.getClient(serverName);
+
     // Get the config directly from storage
     const config = await this.getServerConfig(serverName);
     if (!config) {

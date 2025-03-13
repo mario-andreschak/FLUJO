@@ -1,4 +1,4 @@
-import { FlowNode } from '@/frontend/types/flow/flow';
+import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { 
   Edge, 
   NodeChange, 
@@ -21,6 +21,15 @@ export interface CanvasProps {
 
 export interface EditNodeEventDetail {
   nodeId: string;
+}
+
+export interface NodeSelectionModalProps {
+  open: boolean;
+  position: { x: number; y: number } | null;
+  onClose: () => void;
+  onSelectNodeType: (nodeType: NodeType, position: { x: number; y: number }) => void;
+  sourceNodeType?: NodeType;
+  sourceHandleId?: string;
 }
 
 export interface ContextMenuState {

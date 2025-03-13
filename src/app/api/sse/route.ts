@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
     client = new Client(
       {
         name: serverName || `flujo-mcp-client-${requestId}`,
-        version: '0.1.0',
+        version: '0.1.1',
       },
       {
         capabilities: {

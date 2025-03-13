@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { Flow } from '@/frontend/types/flow/flow';
@@ -11,8 +11,7 @@ const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNod
 /**
  * Custom hook for managing MCP server connections in the Process Node Properties Modal
  * 
- * This simplified version focuses on providing a clean interface for the component
- * without complex state management.
+ * This version fetches tools from the servers and filters them based on what's enabled in the MCP nodes.
  */
 const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, flowEdges: Flow['edges'], flowNodes: Flow['nodes']) => {
   // Get all server status using the hook
@@ -20,9 +19,11 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
   const allServers = serverStatus.servers || [];
   const isLoadingServers = serverStatus.isLoading || false;
   
-  const [serverToolsMap, setServerToolsMap] = useState<Record<string, any[]>>({});
   const [serverStatuses, setServerStatuses] = useState<Record<string, string>>({});
+  const [serverToolsMap, setServerToolsMap] = useState<Record<string, any[]>>({});
   const [isLoadingTools, setIsLoadingTools] = useState<Record<string, boolean>>({});
+  const [selectedToolServer, setSelectedToolServer] = useState<string | null>(null);
+  const [isLoadingSelectedServerTools, setIsLoadingSelectedServerTools] = useState(false);
   
   // Find connected MCP nodes
   const connectedNodeIds = useMemo(() => {
@@ -32,22 +33,33 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
   // Filter servers to only show those connected to this Process node
   const connectedServers = useMemo(() => {
     if (!node || connectedNodeIds.length === 0) return [];
+    
+    // Ensure flowNodes is defined and is an array
+    if (!flowNodes || !Array.isArray(flowNodes)) {
+      log.warn('flowNodes is not available or not an array when filtering connected servers');
+      return [];
+    }
 
-    return allServers.filter((server: MCPServerConfig & { status: string }) =>
-      connectedNodeIds.some(nodeId => {
-        const mcpNode = flowNodes.find(n => n.id === nodeId);
-        return mcpNode?.data?.properties?.boundServer === server.name;
-      })
-    );
+    try {
+      return allServers.filter((server: MCPServerConfig & { status: string }) =>
+        connectedNodeIds.some(nodeId => {
+          try {
+            const mcpNode = flowNodes.find(n => n && n.id === nodeId);
+            return mcpNode && 
+                   mcpNode.data && 
+                   mcpNode.data.properties && 
+                   mcpNode.data.properties.boundServer === server.name;
+          } catch (error) {
+            log.error(`Error finding MCP node with ID ${nodeId}:`, error);
+            return false;
+          }
+        })
+      );
+    } catch (error) {
+      log.error('Error filtering connected servers:', error);
+      return [];
+    }
   }, [node, connectedNodeIds, allServers, flowNodes]);
-
-  // State for selected server for tool insertion
-  const [selectedToolServer, setSelectedToolServer] = useState<string | null>(null);
-
-  // Get tools for the selected server using the hook
-  const serverToolsResult = useServerTools(selectedToolServer);
-  const serverTools = serverToolsResult.tools || [];
-  const isLoadingSelectedServerTools = serverToolsResult.isLoading || false;
 
   // Update server statuses when servers change
   useEffect(() => {
@@ -60,59 +72,91 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }
   }, [connectedServers]);
 
-  // Load tools for all connected servers when the modal opens
+  // Load tools for all connected servers when the modal is opened
   useEffect(() => {
     if (open && connectedServers.length > 0) {
-      // Initialize loading state for all servers
-      const loadingState: Record<string, boolean> = {};
-      connectedServers.forEach((server: MCPServerConfig) => {
-        loadingState[server.name] = true;
-      });
-      setIsLoadingTools(loadingState);
+      loadAllServerTools();
     }
   }, [open, connectedServers]);
 
-  // Set the first server as selected by default when modal opens or connected servers change
-  useEffect(() => {
-    if (open && connectedServers.length > 0 && !selectedToolServer) {
-      setSelectedToolServer(connectedServers[0].name);
+  // Load tools for all connected servers
+  const loadAllServerTools = useCallback(async () => {
+    if (!connectedServers || connectedServers.length === 0) return;
+    
+    const newIsLoadingTools: Record<string, boolean> = {};
+    const newServerToolsMap: Record<string, any[]> = { ...serverToolsMap };
+    
+    // Set loading state for all servers
+    connectedServers.forEach((server: MCPServerConfig & { status: string }) => {
+      if (server.status === 'connected') {
+        newIsLoadingTools[server.name] = true;
+      }
+    });
+    
+    setIsLoadingTools(newIsLoadingTools);
+    
+    // Load tools for each connected server
+    for (const server of connectedServers) {
+      if (server.status === 'connected') {
+        try {
+          log.debug(`Loading tools for server: ${server.name}`);
+          const result = await mcpService.listServerTools(server.name);
+          
+          if (result.error) {
+            log.warn(`Error loading tools for ${server.name}:`, result.error);
+          } else {
+            // Ensure tools is always an array
+            const toolsArray = result.tools || [];
+            log.debug(`Loaded ${toolsArray.length} tools for ${server.name}`);
+            newServerToolsMap[server.name] = toolsArray;
+          }
+        } catch (error) {
+          log.warn(`Failed to load tools for server ${server.name}:`, error);
+        } finally {
+          // Update loading state for this server
+          newIsLoadingTools[server.name] = false;
+        }
+      }
     }
-  }, [open, connectedServers, selectedToolServer]);
+    
+    setServerToolsMap(newServerToolsMap);
+    setIsLoadingTools(newIsLoadingTools);
+  }, [connectedServers, serverToolsMap]);
 
-  // Handle selecting a server for tool loading
+  // Handle selecting a tool server
   const handleSelectToolServer = useCallback((serverName: string) => {
-    // Only update if it's a different server
-    if (serverName !== selectedToolServer) {
-      setSelectedToolServer(serverName);
-
-      // Mark this server as loading
-      setIsLoadingTools(prev => ({
-        ...prev,
-        [serverName]: true
-      }));
+    setSelectedToolServer(serverName);
+    
+    // If we haven't loaded tools for this server yet, load them now
+    if (serverName && !serverToolsMap[serverName]) {
+      setIsLoadingSelectedServerTools(true);
+      
+      mcpService.listServerTools(serverName)
+        .then(result => {
+          if (result.error) {
+            log.warn(`Error loading tools for ${serverName}:`, result.error);
+          } else {
+            // Ensure tools is always an array
+            const toolsArray = result.tools || [];
+            log.debug(`Loaded ${toolsArray.length} tools for ${serverName}`);
+            setServerToolsMap(prev => ({
+              ...prev,
+              [serverName]: toolsArray
+            }));
+          }
+        })
+        .catch(error => {
+          log.warn(`Failed to load tools for server ${serverName}:`, error);
+        })
+        .finally(() => {
+          setIsLoadingSelectedServerTools(false);
+        });
     }
-  }, [selectedToolServer]);
-
-  // Update server tools when serverTools changes
-  useEffect(() => {
-    if (selectedToolServer && serverTools.length > 0) {
-      // Update the tools map
-      setServerToolsMap(prev => ({
-        ...prev,
-        [selectedToolServer]: serverTools
-      }));
-
-      // Set loading to false
-      setIsLoadingTools(prev => ({
-        ...prev,
-        [selectedToolServer]: false
-      }));
-    }
-  }, [serverTools, selectedToolServer]);
+  }, [serverToolsMap]);
 
   // Handle retrying a server connection
   const handleRetryServer = useCallback(async (serverName: string) => {
-    log.debug(`Retrying server status for: ${serverName}`);
+    log.debug(`Retrying server: ${serverName}`);
     
     // Set loading state for this server
     setIsLoadingTools(prev => ({
@@ -121,41 +165,36 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }));
     
     try {
-      // Call the service method
-      const result = await mcpService.retryServer(serverName);
+      // Retry the server connection
+      await serverStatus.retryServer(serverName);
       
-      // Update the server status
-      if (typeof result === 'string') {
-        setServerStatuses(prev => ({
+      // Load tools for this server
+      const result = await mcpService.listServerTools(serverName);
+      
+      if (result.error) {
+        log.warn(`Error loading tools for ${serverName} after retry:`, result.error);
+        return false;
+      } else {
+        // Ensure tools is always an array
+        const toolsArray = result.tools || [];
+        log.debug(`Loaded ${toolsArray.length} tools for ${serverName} after retry`);
+        setServerToolsMap(prev => ({
           ...prev,
-          [serverName]: result
+          [serverName]: toolsArray
         }));
-      } else if (result.status) {
-        setServerStatuses(prev => ({
-          ...prev,
-          [serverName]: result.status
-        }));
+        return true;
       }
-      
-      // If the server is now connected, refresh its tools
-      if (result.status === 'connected' && serverName === selectedToolServer) {
-        // This will trigger the useEffect that loads tools
-      }
-      
-      return true;
     } catch (error) {
       log.warn(`Failed to retry server ${serverName}:`, error);
       return false;
     } finally {
-      // Reset loading state after a short delay
-      setTimeout(() => {
-        setIsLoadingTools(prev => ({
-          ...prev,
-          [serverName]: false
-        }));
-      }, 500);
+      // Update loading state for this server
+      setIsLoadingTools(prev => ({
+        ...prev,
+        [serverName]: false
+      }));
     }
-  }, [selectedToolServer]);
+  }, [serverStatus]);
 
   // Handle restarting a server
   const handleRestartServer = useCallback(async (serverName: string) => {
@@ -168,21 +207,38 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }));
     
     try {
-      // Call the service method
-      const result = await mcpService.restartServer(serverName);
+      // Restart the server
+      await mcpService.restartServer(serverName);
+      
+      // Wait a bit for the server to restart
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Load tools for this server
+      const result = await mcpService.listServerTools(serverName);
       
       if (result.error) {
-        log.warn(`Failed to restart server ${serverName}:`, result.error);
+        log.warn(`Error loading tools for ${serverName} after restart:`, result.error);
         return false;
+      } else {
+        // Ensure tools is always an array
+        const toolsArray = result.tools || [];
+        log.debug(`Loaded ${toolsArray.length} tools for ${serverName} after restart`);
+        setServerToolsMap(prev => ({
+          ...prev,
+          [serverName]: toolsArray
+        }));
+        return true;
       }
-      
-      // The server status will be updated through the normal status polling
-      return true;
     } catch (error) {
       log.warn(`Failed to restart server ${serverName}:`, error);
       return false;
+    } finally {
+      // Update loading state for this server
+      setIsLoadingTools(prev => ({
+        ...prev,
+        [serverName]: false
+      }));
     }
-    // Don't reset loading state here, as we want it to show until the server is connected again
   }, []);
 
   // Find MCP nodes connected to this Process node

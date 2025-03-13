@@ -24,13 +24,29 @@ export class ProcessNodeModelHandler {
       messagesCount: messages.length
     });
     
+    // Add verbose logging of the input parameters
+    log.verbose('callModelWithToolSupport input', JSON.stringify({
+      modelId,
+      prompt,
+      messages,
+      prepResult,
+      tools,
+      currentIteration,
+      maxIterations
+    }));
+    
     if (maxIterations > 0) {
       if (currentIteration > maxIterations) {
         log.warn(`Reached maximum iterations (${maxIterations}), stopping tool call processing`);
-        return {
+        const maxIterationsResult = {
           success: true,
           content: "Maximum tool call iterations reached. Some tool calls may not have been processed."
         };
+        
+        // Add verbose logging of the max iterations result
+        log.verbose('callModelWithToolSupport max iterations reached', JSON.stringify(maxIterationsResult));
+        
+        return maxIterationsResult;
       }
     }
     
@@ -65,6 +81,9 @@ export class ProcessNodeModelHandler {
       prepResult.mcpContext
     );
     
+    // Add verbose logging of the model response
+    log.verbose('callModelWithToolSupport model response', JSON.stringify(response));
+    
     // Store the full response in prepResult for debugging
     prepResult.modelResponse = response;
     
@@ -78,6 +97,12 @@ export class ProcessNodeModelHandler {
         errorDetails: response.errorDetails || {}
       });
       
+      // Add verbose logging of the error details
+      log.verbose('callModelWithToolSupport error details', JSON.stringify({
+        error: response.error,
+        errorDetails: response.errorDetails || {}
+      }));
+      
       // Add to tracking info
       if (Array.isArray(prepResult.nodeExecutionTracker)) {
         prepResult.nodeExecutionTracker.push({
@@ -90,8 +115,9 @@ export class ProcessNodeModelHandler {
       
       // Add error message to prepResult.messages
       const errorMessage = {
-        role: "system",
-        content: `Error: ${response.error}`
+        role: "user",
+        content: `Error: ${response.error}`,
+        refusal: null
       };
       prepResult.messages.push(errorMessage);
       
@@ -130,29 +156,36 @@ export class ProcessNodeModelHandler {
         log.info(`Successfully parsed tool calls from text: ${parseResult.toolCalls.length}`);
         
         // Initialize the message object if it doesn't exist
-        if (!response.fullResponse.choices[0].message) {
-          response.fullResponse.choices[0].message = { content: content };
+        if (response.fullResponse && response.fullResponse.choices && 
+            response.fullResponse.choices[0] && !response.fullResponse.choices[0].message) {
+          response.fullResponse.choices[0].message = { 
+            content: content,
+            role: "assistant",
+            refusal: null
+          };
         }
         
-        // Add the parsed tool calls to the response
-        response.fullResponse.choices[0].message.tool_calls = parseResult.toolCalls;
-        
-        // Update hasToolCalls flag
-        hasToolCalls = true;
-        
-        log.debug('Updated response with parsed tool calls', {
-          toolCallsCount: parseResult.toolCalls.length,
-          toolCalls: parseResult.toolCalls.map(tc => ({
-            id: tc.id,
-            name: tc.function.name
-          }))
-        });
+        // Add the parsed tool calls to the response if fullResponse exists
+        if (response.fullResponse?.choices?.[0]?.message) {
+          response.fullResponse.choices[0].message.tool_calls = parseResult.toolCalls;
+          
+          // Update hasToolCalls flag
+          hasToolCalls = true;
+          
+          log.debug('Updated response with parsed tool calls', {
+            toolCallsCount: parseResult.toolCalls.length,
+            toolCalls: parseResult.toolCalls.map(tc => ({
+              id: tc.id,
+              name: tc.function.name
+            }))
+          });
+        }
       } else if (parseResult.error) {
         log.warn(`Failed to parse tool calls from text response: ${parseResult.error}`);
       }
     }
     
-    if (hasToolCalls) {
+    if (hasToolCalls && response.fullResponse?.choices?.[0]?.message?.tool_calls) {
       log.info(`Response contains tool calls - Iteration ${currentIteration}`, {
         toolCallsCount: response.fullResponse.choices[0].message.tool_calls.length
       });
@@ -172,7 +205,7 @@ export class ProcessNodeModelHandler {
       });
       
       // Add to tracking info
-      if (Array.isArray(prepResult.nodeExecutionTracker)) {
+      if (Array.isArray(prepResult.nodeExecutionTracker) && response.fullResponse?.choices?.[0]?.message?.tool_calls) {
         prepResult.nodeExecutionTracker.push({
           nodeType: 'AssistantMessageWithToolCalls',
           content: typeof content === 'string' ?
@@ -190,43 +223,45 @@ export class ProcessNodeModelHandler {
         toolCallMessagesCount: toolCallMessages.length
       });
       
-      // Store tool calls in prepResult for use in post()
-      const toolCalls = response.fullResponse.choices[0].message.tool_calls;
-      prepResult.toolCalls = toolCalls.map((tc: any, index: number) => {
-        // Find the corresponding tool result message
-        const toolResultMessage = toolCallMessages.find(
-          (m: any) => m.role === 'tool' && m.tool_call_id === tc.id
-        );
-        
-        const toolCallInfo = {
-          name: tc.function.name,
-          args: JSON.parse(tc.function.arguments),
-          id: tc.id,
-          result: toolResultMessage && typeof toolResultMessage.content === 'string' ?
-            toolResultMessage.content : 'No result available'
-        };
-        
-        // Add to tracking info
-        if (Array.isArray(prepResult.nodeExecutionTracker)) {
-          prepResult.nodeExecutionTracker.push({
-            nodeType: 'ToolCall',
-            toolName: toolCallInfo.name,
-            toolArgs: toolCallInfo.args,
-            timestamp: new Date().toISOString()
-          });
+      // Store tool calls in prepResult for use in post() if they exist
+      if (response.fullResponse?.choices?.[0]?.message?.tool_calls) {
+        const toolCalls = response.fullResponse.choices[0].message.tool_calls;
+        prepResult.toolCalls = toolCalls.map((tc: any, index: number) => {
+          // Find the corresponding tool result message
+          const toolResultMessage = toolCallMessages.find(
+            (m: any) => m.role === 'tool' && m.tool_call_id === tc.id
+          );
           
-          prepResult.nodeExecutionTracker.push({
-            nodeType: 'ToolResult',
-            toolName: toolCallInfo.name,
-            result: typeof toolCallInfo.result === 'string' ?
-              (toolCallInfo.result.substring(0, 100) + (toolCallInfo.result.length > 100 ? '...' : '')) :
-              String(toolCallInfo.result).substring(0, 100),
-            timestamp: new Date().toISOString()
-          });
-        }
-        
-        return toolCallInfo;
-      });
+          const toolCallInfo = {
+            name: tc.function.name,
+            args: JSON.parse(tc.function.arguments),
+            id: tc.id,
+            result: toolResultMessage && typeof toolResultMessage.content === 'string' ?
+              toolResultMessage.content : 'No result available'
+          };
+          
+          // Add to tracking info
+          if (Array.isArray(prepResult.nodeExecutionTracker)) {
+            prepResult.nodeExecutionTracker.push({
+              nodeType: 'ToolCall',
+              toolName: toolCallInfo.name,
+              toolArgs: toolCallInfo.args,
+              timestamp: new Date().toISOString()
+            });
+            
+            prepResult.nodeExecutionTracker.push({
+              nodeType: 'ToolResult',
+              toolName: toolCallInfo.name,
+              result: typeof toolCallInfo.result === 'string' ?
+                (toolCallInfo.result.substring(0, 100) + (toolCallInfo.result.length > 100 ? '...' : '')) :
+                String(toolCallInfo.result).substring(0, 100),
+              timestamp: new Date().toISOString()
+            });
+          }
+          
+          return toolCallInfo;
+        });
+      }
       
       // Add tool call messages to prepResult.messages
       for (const message of toolCallMessages) {
@@ -258,7 +293,8 @@ export class ProcessNodeModelHandler {
       // No tool calls, just add the assistant message and return
       const assistantMessage = {
         role: "assistant",
-        content: content
+        content: content,
+        refusal: null
       };
       prepResult.messages.push(assistantMessage);
       
@@ -280,6 +316,9 @@ export class ProcessNodeModelHandler {
         });
       }
       
+      // Add verbose logging of the final response (no tool calls)
+      log.verbose('callModelWithToolSupport final response (no tool calls)', JSON.stringify(response));
+      
       return response;
     }
   }
@@ -293,6 +332,12 @@ export class ProcessNodeModelHandler {
     content: string, 
     nodeType: string
   ): void {
+    // Add verbose logging of the input parameters
+    log.verbose('addMessageToState input', JSON.stringify({
+      role,
+      content,
+      nodeType
+    }));
     // Check if we already have a message with this role
     const existingMessage = sharedState.messages?.find(
       (msg: { role: string; content: string }) => msg.role === role
@@ -306,7 +351,8 @@ export class ProcessNodeModelHandler {
       
       sharedState.messages.push({
         role: role,
-        content: content
+        content: content,
+        refusal: null
       });
       
       log.info(`Added ${role} message`, {
@@ -336,6 +382,10 @@ export class ProcessNodeModelHandler {
     sharedState: any,
     nodeParams: any
   ): void {
+    // Add verbose logging of the input parameters
+    log.verbose('addNodeExecutionTracking input', JSON.stringify({
+      nodeParams
+    }));
     if (!Array.isArray(sharedState.nodeExecutionTracker)) {
       return;
     }

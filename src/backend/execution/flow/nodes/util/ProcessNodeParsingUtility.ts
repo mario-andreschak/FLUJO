@@ -26,19 +26,35 @@ interface ParseResult {
  */
 export async function parseToolCalls(responseContent: string, modelId: string): Promise<ParseResult> {
   log.debug(`parseToolCalls: Parsing tool calls for modelId: ${modelId}`);
+  
+  // Add verbose logging of the input parameters
+  log.verbose('parseToolCalls input', JSON.stringify({
+    responseContent,
+    modelId
+  }));
 
   try {
     // Get the model to retrieve the function calling schema
     const model = await modelService.getModel(modelId);
     if (!model) {
       log.warn(`parseToolCalls: Model not found: ${modelId}`);
-      return { success: false, error: `Model not found: ${modelId}` };
+      const errorResult = { success: false, error: `Model not found: ${modelId}` };
+      
+      // Add verbose logging of the error result
+      log.verbose('parseToolCalls model not found error', JSON.stringify(errorResult));
+      
+      return errorResult;
     }
 
     const pattern = model.functionCallingSchema;
     if (!pattern) {
       log.warn(`parseToolCalls: No functionCallingSchema found for model: ${modelId}`);
-      return { success: false, error: `No function calling schema found for model: ${modelId}` };
+      const errorResult = { success: false, error: `No function calling schema found for model: ${modelId}` };
+      
+      // Add verbose logging of the error result
+      log.verbose('parseToolCalls no schema error', JSON.stringify(errorResult));
+      
+      return errorResult;
     }
 
     // Try JSON parsing first
@@ -78,7 +94,12 @@ export async function parseToolCalls(responseContent: string, modelId: string): 
       
       if (toolCalls.length > 0) {
         log.info(`parseToolCalls: Successfully parsed ${toolCalls.length} tool calls from JSON`);
-        return { success: true, toolCalls };
+        const successResult = { success: true, toolCalls };
+        
+        // Add verbose logging of the successful result
+        log.verbose('parseToolCalls JSON success result', JSON.stringify(successResult));
+        
+        return successResult;
       } else {
         log.debug('parseToolCalls: No valid tool calls found in JSON objects');
       }
@@ -120,18 +141,36 @@ export async function parseToolCalls(responseContent: string, modelId: string): 
     
     if (toolCalls.length > 0) {
       log.info(`parseToolCalls: Successfully parsed ${toolCalls.length} tool calls from XML`);
-      return { success: true, toolCalls };
+      
+      const successResult = { success: true, toolCalls };
+      
+      // Add verbose logging of the successful result
+      log.verbose('parseToolCalls XML success result', JSON.stringify(successResult));
+      
+      return successResult;
     }
 
     log.warn('parseToolCalls: Could not parse tool calls from response content');
-    return { success: false, error: 'Could not parse tool calls from response content' };
+    
+    const errorResult = { success: false, error: 'Could not parse tool calls from response content' };
+    
+    // Add verbose logging of the error result
+    log.verbose('parseToolCalls parsing failed error', JSON.stringify(errorResult));
+    
+    return errorResult;
 
   } catch (error) {
     log.error('parseToolCalls: Error parsing tool calls:', error);
-    return {
+    
+    const errorResult = {
       success: false,
       error: `Error parsing tool calls: ${error instanceof Error ? error.message : 'Unknown error'}`,
     };
+    
+    // Add verbose logging of the error result
+    log.verbose('parseToolCalls exception error', JSON.stringify(errorResult));
+    
+    return errorResult;
   }
 }
 
@@ -174,4 +213,3 @@ function extractJsonObjects(text: string): any[] {
   
   return results;
 }
-

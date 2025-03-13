@@ -29,7 +29,7 @@ export async function listServerTools(client: Client | undefined, serverName: st
       inputSchema: tool.inputSchema || {}
     }));
 
-    log.debug('Processed tools:', tools);
+    log.verbose('Processed tools:', tools);
     return { tools };
   } catch (error) {
     log.warn(`Failed to list tools for server ${serverName}:`, error);

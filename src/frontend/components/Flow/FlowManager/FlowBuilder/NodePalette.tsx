@@ -1,21 +1,22 @@
 "use client";
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { styled, useTheme } from '@mui/material/styles';
 import { Paper, Typography, Box } from '@mui/material';
 import { createLogger } from '@/utils/logger';
+import { NodeType } from '@/frontend/types/flow/flow';
+import SettingsIcon from '@mui/icons-material/Settings';
+import OutputIcon from '@mui/icons-material/Output';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
-import { NodeType } from '@/frontend/types/flow/flow';
-import ChatIcon from '@mui/icons-material/Chat';
-import SettingsIcon from '@mui/icons-material/Settings';
-import OutputIcon from '@mui/icons-material/Output';
+// Constants for logging
+const COMPONENT_NAME = 'NodePalette';
 
 const PaletteContainer = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(2),
   width: '200px',
-  height: '100%',
+  height: '80vh', // Match Canvas height
   display: 'flex',
   flexDirection: 'column',
   gap: theme.spacing(2),
@@ -112,12 +113,26 @@ const getNodeIcon = (type: NodeType) => {
   }
 };
 
-export const NodePalette = () => {
-  log.debug('NodePalette: Entering component');
+export const NodePalette: React.FC = () => {
+  log.debug(`${COMPONENT_NAME}: Entering component`);
   const theme = useTheme();
   
+  // Handle double-click on a node in the palette
+  const onNodeDoubleClick = useCallback((nodeType: NodeType) => {
+    log.debug(`${COMPONENT_NAME}.onNodeDoubleClick: Double-clicked on ${nodeType} node`);
+    
+    // Create and dispatch a custom event to notify the Canvas component
+    const event = new CustomEvent('addNodeFromPalette', {
+      detail: { nodeType, position: { x: 250, y: 150 } }
+    });
+    document.dispatchEvent(event);
+    
+    log.info(`${COMPONENT_NAME}.onNodeDoubleClick: Dispatched addNodeFromPalette event for ${nodeType} node`);
+  }, []);
+  
   const onDragStart = (event: React.DragEvent, nodeType: NodeType) => {
-    log.debug('onDragStart: Entering method', { nodeType });
+    log.debug(`${COMPONENT_NAME}.onDragStart: Entering method with nodeType=${nodeType}`);
+    
     // Keep using the same data transfer type for compatibility with the drop handler
     event.dataTransfer.setData('application/reactflow', nodeType);
     event.dataTransfer.effectAllowed = 'move';
@@ -127,19 +142,31 @@ export const NodePalette = () => {
     dragPreview.innerHTML = `<div style="padding: 10px; background: white; border: 1px solid #ccc; border-radius: 4px;">${nodeType} Node</div>`;
     document.body.appendChild(dragPreview);
     
+    log.debug(`${COMPONENT_NAME}.onDragStart: Created drag preview element`);
+    
     // Set the drag image (with offset)
     try {
       event.dataTransfer.setDragImage(dragPreview, 75, 25);
+      log.debug(`${COMPONENT_NAME}.onDragStart: Set drag image with offset (75, 25)`);
     } catch (err) {
-      log.error('onDragStart: Error setting drag image:', err);
+      log.error(`${COMPONENT_NAME}.onDragStart: Error setting drag image:`, err);
     }
     
     // Clean up the temporary element after a short delay
     setTimeout(() => {
       document.body.removeChild(dragPreview);
+      log.debug(`${COMPONENT_NAME}.onDragStart: Removed drag preview element`);
     }, 0);
+    
+    log.debug(`${COMPONENT_NAME}.onDragStart: Drag operation initialized`);
+  };
+  
+  // Add handler for drag end events
+  const onDragEnd = (event: React.DragEvent, nodeType: NodeType) => {
+    log.debug(`${COMPONENT_NAME}.onDragEnd: Drag operation ended for nodeType=${nodeType}`);
   };
 
+  log.debug(`${COMPONENT_NAME}: Rendering component`);
   return (
     <PaletteContainer elevation={2}>
       <Typography variant="h6" gutterBottom>
@@ -153,6 +180,8 @@ export const NodePalette = () => {
             elevation={1}
             draggable
             onDragStart={(e) => onDragStart(e, node.type)}
+            onDragEnd={(e) => onDragEnd(e, node.type)}
+            onDoubleClick={() => onNodeDoubleClick(node.type)}
           >
             <NodeHeader nodeType={node.type}>
               <NodeContent>

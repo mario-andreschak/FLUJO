@@ -1,15 +1,17 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
+import { SharedState, StartNodeParams, StartNodePrepResult, StartNodeExecResult } from '../types';
+import { ChatCompletionSystemMessageParam } from 'openai/resources/chat/completions/completions';
 
 // Create a logger instance for this file
 const log = createLogger('execution/nodes/StartNode.ts');
 
 export class StartNode extends BaseNode {
-  async prep(sharedState: any, node_params?: any): Promise<any> {
+  async prep(sharedState: SharedState, node_params?: StartNodeParams): Promise<StartNodePrepResult> {
     log.info('prep() started');
 
-    // Extract prompt template from node properties using node_params
+    // Extract prompt template from node properties
     const promptTemplate = node_params?.properties?.promptTemplate || '';
     log.info('Extracted promptTemplate', { 
       promptTemplateLength: promptTemplate.length,
@@ -17,36 +19,80 @@ export class StartNode extends BaseNode {
         promptTemplate.substring(0, 100) + '...' : promptTemplate
     });
     
-    log.info('node params', { node_params });
-    // Add the prompt to the shared state
-    sharedState.systemPrompt = promptTemplate;
-    sharedState.messages = sharedState.messages || [];
+    // Create a properly typed PrepResult
+    const prepResult: StartNodePrepResult = {
+      nodeId: node_params?.id || '',
+      nodeType: 'start',
+      systemPrompt: promptTemplate
+    };
     
-    // log.info('prep() completed', { sharedState });
-    return sharedState;
-  }
-
-  async execCore(prepResult: any, node_params?: any): Promise<any> {
-    // Start nodes don't typically perform operations
-    // log.info('execCore() started', { prepResult });
-    // log.info('execCore() completed', { result: prepResult });
-    log.info('execCore() started');
-    log.info('execCore() completed');
+    log.info('prep() completed');
     return prepResult;
   }
 
-  async post(prepResult: any, execResult: any, sharedState: any, node_params?: any): Promise<string> {
+  async execCore(prepResult: StartNodePrepResult, node_params?: StartNodeParams): Promise<StartNodeExecResult> {
+    // Start nodes don't typically perform operations
+    log.info('execCore() started');
+    
+    // Add verbose logging of the entire prepResult
+    log.verbose('execCore() prepResult', JSON.stringify(prepResult));
+    
+    // Return a properly typed ExecResult
+    const execResult: StartNodeExecResult = {
+      success: true
+    };
+    
+    // Add verbose logging of the entire execResult
+    log.verbose('execCore() execResult', JSON.stringify(execResult));
+    
+    log.info('execCore() completed');
+    return execResult;
+  }
+
+  async post(
+    prepResult: StartNodePrepResult, 
+    execResult: StartNodeExecResult, 
+    sharedState: SharedState, 
+    node_params?: StartNodeParams
+  ): Promise<string> {
     log.info('post() started');
     
+    // Add verbose logging of the inputs
+    log.verbose('post() inputs', JSON.stringify({
+      prepResult,
+      execResult,
+      nodeParams: node_params
+    }));
+    
     // Add tracking information
-    if (Array.isArray(sharedState.nodeExecutionTracker)) {
-      sharedState.nodeExecutionTracker.push({
+    if (Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
+      sharedState.trackingInfo.nodeExecutionTracker.push({
         nodeType: 'StartNode',
         nodeId: node_params?.id || 'unknown',
         nodeName: node_params?.properties?.name || 'Start Node',
         timestamp: new Date().toISOString()
       });
       log.info('Added StartNode tracking information');
+    }
+    
+    // Add system message to messages array if it doesn't exist
+    if (prepResult.systemPrompt) {
+      const systemMessage: ChatCompletionSystemMessageParam = {
+        role: 'system',
+        content: prepResult.systemPrompt
+      };
+      
+      // Check if we already have a system message
+      const hasSystemMessage = sharedState.messages.some(msg => msg.role === 'system');
+      
+      if (!hasSystemMessage) {
+        sharedState.messages.push(systemMessage);
+        log.debug('Added system message', {
+          contentLength: typeof systemMessage.content === 'string' ? systemMessage.content.length : 'non-string content',
+          contentPreview: typeof systemMessage.content === 'string' && systemMessage.content.length > 50 ? 
+            systemMessage.content.substring(0, 50) + '...' : systemMessage.content
+        });
+      }
     }
     
     // In pocketflowframework, we need to check the available actions

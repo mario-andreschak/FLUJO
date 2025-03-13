@@ -379,11 +379,11 @@ export async function POST(request: NextRequest) {
         try {
           // Check if file exists
           log.debug(`Checking if file exists [${requestId}]`);
-          await fs.access(savePath);
+          await fs.access(fullFilePath || savePath);
           log.debug(`File exists, reading content [${requestId}]`);
           
           // Read the file content
-          const content = await fs.readFile(savePath, 'utf-8');
+          const content = await fs.readFile(fullFilePath || savePath, 'utf-8');
           log.debug(`File content read successfully [${requestId}]`, {
             contentLength: content.length,
             contentPreview: content.substring(0, 200) + (content.length > 200 ? '...' : '')
@@ -427,6 +427,90 @@ export async function POST(request: NextRequest) {
         }
       }
       
+      case 'extractGitHubUrl': {
+        log.info(`Starting extractGitHubUrl action [${requestId}]`);
+        const platformUrl = requestBody.platformUrl;
+        
+        if (!platformUrl) {
+          log.error(`Missing platform URL [${requestId}]`);
+          return NextResponse.json({ error: 'Missing platform URL' }, { status: 400 });
+        }
+        
+        try {
+          log.debug(`Extracting GitHub URL from platform: ${platformUrl} [${requestId}]`);
+          
+          // Determine the platform type
+          const isGlamaUrl = platformUrl.includes('glama.ai/mcp/servers/');
+          const isSmitheryUrl = platformUrl.includes('smithery.ai/server/');
+          const isMcpSoUrl = platformUrl.includes('mcp.so/server/');
+          
+          let githubUrl = null;
+          
+          // Fetch the HTML content of the platform page
+          log.debug(`Fetching HTML content from platform [${requestId}]`);
+          const response = await fetch(platformUrl);
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch platform page: ${response.statusText}`);
+          }
+          
+          const html = await response.text();
+          log.debug(`HTML content fetched successfully [${requestId}]`, {
+            contentLength: html.length
+          });
+          
+          // Extract the GitHub URL based on the platform
+          if (isGlamaUrl) {
+            log.debug(`Extracting GitHub URL from Glama [${requestId}]`);
+            // Look for "view source code" button
+            const viewSourceMatch = html.match(/href="(https:\/\/github\.com\/[^"]+)"/);
+            if (viewSourceMatch && viewSourceMatch[1]) {
+              githubUrl = viewSourceMatch[1];
+              log.debug(`Found GitHub URL in Glama: ${githubUrl} [${requestId}]`);
+            }
+          } else if (isSmitheryUrl) {
+            log.debug(`Extracting GitHub URL from Smithery [${requestId}]`);
+            // Look for "homepage" button (orange icon)
+            const homepageMatch = html.match(/href="(https:\/\/github\.com\/[^"]+)"\s+title="Homepage"/);
+            if (homepageMatch && homepageMatch[1]) {
+              githubUrl = homepageMatch[1];
+              log.debug(`Found GitHub URL in Smithery: ${githubUrl} [${requestId}]`);
+            }
+          } else if (isMcpSoUrl) {
+            log.debug(`Extracting GitHub URL from MCP.so [${requestId}]`);
+            // Look for "visit server" button
+            const visitServerMatch = html.match(/href="(https:\/\/github\.com\/[^"]+)"\s+.*>Visit Server</);
+            if (visitServerMatch && visitServerMatch[1]) {
+              githubUrl = visitServerMatch[1];
+              log.debug(`Found GitHub URL in MCP.so: ${githubUrl} [${requestId}]`);
+            }
+          }
+          
+          if (!githubUrl) {
+            // Try a more generic approach if specific patterns didn't work
+            log.debug(`Trying generic GitHub URL extraction [${requestId}]`);
+            const genericMatch = html.match(/href="(https:\/\/github\.com\/[^"]+)"/);
+            if (genericMatch && genericMatch[1]) {
+              githubUrl = genericMatch[1];
+              log.debug(`Found GitHub URL with generic pattern: ${githubUrl} [${requestId}]`);
+            } else {
+              throw new Error('Could not find GitHub URL in platform page');
+            }
+          }
+          
+          log.info(`Returning successful response with GitHub URL [${requestId}]`);
+          return NextResponse.json({
+            success: true,
+            githubUrl
+          });
+        } catch (error) {
+          log.error(`Failed to extract GitHub URL [${requestId}]`, error);
+          return NextResponse.json({ 
+            error: `Failed to extract GitHub URL: ${error instanceof Error ? error.message : 'Unknown error'}` 
+          }, { status: 500 });
+        }
+      }
+      
       default:
         log.error(`Invalid action: ${action} [${requestId}]`);
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
@@ -438,4 +522,3 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
-

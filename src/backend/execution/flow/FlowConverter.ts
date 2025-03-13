@@ -3,6 +3,18 @@ import { Flow, BaseNode } from './temp_pocket';
 import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';
 import { StartNode, ProcessNode, MCPNode, FinishNode } from './nodes';
 import { createLogger } from '@/utils/logger';
+import { 
+  NodeParams, 
+  StartNodeParams, 
+  ProcessNodeParams, 
+  MCPNodeParams, 
+  FinishNodeParams,
+  MCPNodeReference,
+  StartNodeProperties,
+  ProcessNodeProperties,
+  MCPNodeProperties,
+  FinishNodeProperties
+} from './types';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/FlowConverter');
@@ -17,6 +29,13 @@ export class FlowConverter {
       nodeCount: reactFlow.nodes.length,
       edgeCount: reactFlow.edges.length
     });
+    
+    // Add verbose logging of the input
+    log.verbose('convert input', JSON.stringify({
+      flowName: reactFlow.name,
+      nodeCount: reactFlow.nodes.length,
+      edgeCount: reactFlow.edges.length
+    }));
     
     // Create a map to store nodes by ID
     const nodesMap = new Map<string, BaseNode>();
@@ -131,6 +150,12 @@ export class FlowConverter {
     log.info('Flow conversion completed successfully', {
       nodeCount: nodesMap.size
     });
+    
+    // Add verbose logging of the result
+    log.verbose('convert result', JSON.stringify({
+      flowStartNodeId: flow.node_params?.id || 'unknown',
+      nodesCount: nodesMap.size
+    }));
 
     return flow;
   }
@@ -138,47 +163,82 @@ export class FlowConverter {
   /**
    * Create a Pocket Flow node from a React Flow node
    */
-    private static createNode(node: FlowNode): BaseNode {
+  private static createNode(node: FlowNode): BaseNode {
     log.debug(`Creating node of type: ${node.type}`, {
       nodeId: node.id,
       label: node.data.label
     });
     
-    let pocketNode: BaseNode;
+    // Add verbose logging of the input
+    log.verbose('createNode input', JSON.stringify({
+      nodeId: node.id,
+      nodeType: node.type,
+      label: node.data.label,
+      properties: node.data.properties
+    }));
     
+    let pocketNode: BaseNode;
+    let nodeParams: NodeParams;
+    
+    // Create the appropriate node type with properly typed parameters
     switch (node.type) {
       case 'start':
         pocketNode = new StartNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'start',
+          properties: node.data.properties as StartNodeProperties || { name: node.data.label }
+        };
         break;
       case 'process':
         pocketNode = new ProcessNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'process',
+          properties: node.data.properties as ProcessNodeProperties || { name: node.data.label }
+        };
         break;
       case 'mcp':
         pocketNode = new MCPNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'mcp',
+          properties: node.data.properties as MCPNodeProperties || { name: node.data.label }
+        };
         break;
       case 'finish':
         pocketNode = new FinishNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'finish',
+          properties: node.data.properties as FinishNodeProperties || { name: node.data.label }
+        };
         break;
       default:
         log.error(`Unknown node type: ${node.type}`, { nodeId: node.id });
         throw new Error(`Unknown node type: ${node.type}`);
     }
 
-    // Set node parameters, and also pass the node-specific params
-      const flow_params = {}; // general flow params (currently unused)
-    const node_params = {
-      id: node.id,
-      label: node.data.label,
-      type: node.type,
-      properties: node.data.properties || {}
-    };
-
-    pocketNode.setParams(flow_params, node_params);
+    // Set node parameters with proper typing
+    const flow_params = {}; // general flow params (currently unused)
+    pocketNode.setParams(flow_params, nodeParams);
+    
     log.debug(`Node created and parameters set`, {
       nodeId: node.id,
       type: node.type,
-      propertiesKeys: Object.keys(node.data.properties || {})
+      propertiesKeys: Object.keys(nodeParams.properties || {})
     });
+    
+    // Add verbose logging of the result
+    log.verbose('createNode result', JSON.stringify({
+      nodeId: node.id,
+      nodeType: node.type,
+      nodeParams: nodeParams
+    }));
 
     return pocketNode;
   }

@@ -60,6 +60,12 @@ export async function initializeDefaultEncryption(): Promise<boolean> {
 export async function encryptApiKey(apiKey: string): Promise<string | null> {
   log.debug('encryptApiKey: Entering method');
   try {
+    // Check if the apiKey is empty or undefined
+    if (!apiKey || apiKey.trim() === '') {
+      log.warn('encryptApiKey: Empty API key provided');
+      return '';
+    }
+    
     // First check if encryption is initialized
     const isEncrypted = await isEncryptionConfigured();
     
@@ -68,11 +74,20 @@ export async function encryptApiKey(apiKey: string): Promise<string | null> {
       log.warn('encryptApiKey: Encryption is not configured, initializing default encryption');
       
       // Initialize default encryption
-      await initializeDefaultEncryption();
+      const initialized = await initializeDefaultEncryption();
+      if (!initialized) {
+        log.error('encryptApiKey: Failed to initialize default encryption');
+        return `encrypted_failed:${apiKey}`;
+      }
     }
     
     // Use the encryption utility
     const encryptedKey = await encryptWithPassword(apiKey);
+    if (!encryptedKey) {
+      log.error('encryptApiKey: encryptWithPassword returned null');
+      return `encrypted_failed:${apiKey}`;
+    }
+    
     return encryptedKey;
   } catch (error) {
     log.error('encryptApiKey: Failed to encrypt API key:', error);
@@ -162,4 +177,3 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
   // This is a placeholder for future implementation
   return false;
 }
-

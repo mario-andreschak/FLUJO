@@ -11,6 +11,11 @@ export class MCPNodeUtility {
   static async prepNode(sharedState: any, node_params?: any): Promise<any> {
     log.info('prepNode() started');
     
+    // Add verbose logging of the input parameters
+    log.verbose('prepNode input', JSON.stringify({
+      nodeParams: node_params
+    }));
+    
     // Extract properties
     const boundServer = node_params?.properties?.boundServer;
     const enabledTools = node_params?.properties?.enabledTools || [];
@@ -40,6 +45,13 @@ export class MCPNodeUtility {
       enabledToolsCount: sharedState.enabledTools.length
     });
     
+    // Add verbose logging of the result
+    log.verbose('prepNode result', JSON.stringify({
+      mcpServer: sharedState.mcpServer,
+      enabledTools: sharedState.enabledTools,
+      mcpEnv: sharedState.mcpEnv
+    }));
+    
     return sharedState;
   }
 
@@ -50,6 +62,12 @@ export class MCPNodeUtility {
     log.info('executeNode() started', { 
       mcpServer: prepResult.mcpServer
     });
+    
+    // Add verbose logging of the input parameters
+    log.verbose('executeNode input', JSON.stringify({
+      prepResult,
+      nodeParams: node_params
+    }));
     
     const serverName = prepResult.mcpServer;
     
@@ -92,6 +110,9 @@ export class MCPNodeUtility {
       enabledToolsCount: result.enabledTools.length
     });
     
+    // Add verbose logging of the result
+    log.verbose('executeNode result', JSON.stringify(result));
+    
     return result;
   }
 
@@ -110,6 +131,15 @@ export class MCPNodeUtility {
       toolsCount: execResult.tools?.length || 0,
       enabledToolsCount: execResult.enabledTools?.length || 0
     });
+    
+    // Add verbose logging of the input parameters
+    log.verbose('postProcess input', JSON.stringify({
+      prepResult,
+      execResult,
+      nodeParams: node_params,
+      hasSuccessors: !!successors,
+      successorsType: typeof successors
+    }));
     
     // // Store MCP context in shared state
     // const availableTools = execResult.tools.filter(
@@ -140,6 +170,11 @@ export class MCPNodeUtility {
         toolNames.slice(0, 10).join(', ') + '...' : toolNames.join(', ')
     });
     
+    // Add verbose logging of the updated shared state
+    log.verbose('postProcess updated sharedState', JSON.stringify({
+      mcpContext: sharedState.mcpContext
+    }));
+    
     // Get the successors for this node
     
     // Log the successors object for debugging
@@ -163,8 +198,19 @@ export class MCPNodeUtility {
       // Return the first available action
       const action = actions[0];
       log.info(`Returning action: ${action}`);
+      
+      // Add verbose logging of the action result
+      log.verbose('postProcess action result', JSON.stringify({
+        action
+      }));
+      
       return action;
     }
+    
+    // Add verbose logging of the default action result
+    log.verbose('postProcess default action result', JSON.stringify({
+      action: "default"
+    }));
     
     return "default"; // Default fallback
   }

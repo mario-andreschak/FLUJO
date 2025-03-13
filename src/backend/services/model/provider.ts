@@ -7,26 +7,25 @@ const log = createLogger('backend/services/model/provider');
 
 /**
  * Determine the provider from the base URL
+ * Maps each URL pattern to its corresponding provider
  */
 export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
   if (baseUrl.includes('openrouter.ai')) {
     return 'openrouter';
-  } else if (baseUrl.includes('api.openai.com')) {
-    return 'openai';
   } else if (baseUrl.includes('api.x.ai')) {
     return 'xai';
   } else if (baseUrl.includes('generativelanguage.googleapis.com')) {
     return 'gemini';
   } else if (baseUrl.includes('api.anthropic.com')) {
     return 'anthropic';
+  } else if (baseUrl.includes('localhost:11434') || baseUrl.includes('127.0.0.1:11434')) {
+    return 'ollama';
   } else if (baseUrl.includes('api.mistral.ai')) {
     return 'mistral';
-  } else if (baseUrl.toLowerCase().includes('/v1') && !baseUrl.includes('api.openai.com')) {
-    // Check if the URL follows the pattern used by Ollama (ends with /v1)
-    // But ensure it's not just the OpenAI API with a custom domain
-    return 'ollama';
+  } else if (baseUrl.includes('api.openai.com')) {
+    return 'openai';
   } else {
-    // Default to openai if unknown
+    // Default to openai for all other providers since they're OpenAI-compatible
     return 'openai';
   }
 }
@@ -137,114 +136,11 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   }
 }
 
-/**
- * Fetch models from X.AI
- */
-export async function fetchXAIModels(apiKey: string | null): Promise<NormalizedModel[]> {
-  log.debug('fetchXAIModels: Entering method');
-  if (!apiKey) {
-    throw new Error('API key is required for X.AI');
-  }
-  
-  // X.AI doesn't have a models endpoint, so we return a static list
-  return [
-    {
-      id: 'grok-1',
-      name: 'Grok-1',
-      description: 'X.AI Grok-1 model'
-    }
-  ];
-}
-
-/**
- * Fetch models from Gemini
- */
-export async function fetchGeminiModels(apiKey: string | null): Promise<NormalizedModel[]> {
-  log.debug('fetchGeminiModels: Entering method');
-  if (!apiKey) {
-    throw new Error('API key is required for Gemini');
-  }
-  
-  // Gemini doesn't have a simple models endpoint, so we return a static list
-  return [
-    {
-      id: 'gemini-pro',
-      name: 'Gemini Pro',
-      description: 'Google Gemini Pro model'
-    },
-    {
-      id: 'gemini-ultra',
-      name: 'Gemini Ultra',
-      description: 'Google Gemini Ultra model'
-    }
-  ];
-}
-
-/**
- * Fetch models from Anthropic
- */
-export async function fetchAnthropicModels(apiKey: string | null): Promise<NormalizedModel[]> {
-  log.debug('fetchAnthropicModels: Entering method');
-  if (!apiKey) {
-    throw new Error('API key is required for Anthropic');
-  }
-  
-  // Anthropic doesn't have a models endpoint, so we return a static list
-  return [
-    {
-      id: 'claude-3-opus-20240229',
-      name: 'Claude 3 Opus',
-      description: 'Anthropic Claude 3 Opus - Most powerful model'
-    },
-    {
-      id: 'claude-3-sonnet-20240229',
-      name: 'Claude 3 Sonnet',
-      description: 'Anthropic Claude 3 Sonnet - Balanced model'
-    },
-    {
-      id: 'claude-3-haiku-20240307',
-      name: 'Claude 3 Haiku',
-      description: 'Anthropic Claude 3 Haiku - Fast and efficient model'
-    }
-  ];
-}
-
-/**
- * Fetch models from Mistral
- */
-export async function fetchMistralModels(apiKey: string | null): Promise<NormalizedModel[]> {
-  log.debug('fetchMistralModels: Entering method');
-  if (!apiKey) {
-    throw new Error('API key is required for Mistral');
-  }
-  
-  // Mistral models
-  return [
-    {
-      id: 'mistral-tiny',
-      name: 'Mistral Tiny',
-      description: 'Mistral Tiny model'
-    },
-    {
-      id: 'mistral-small',
-      name: 'Mistral Small',
-      description: 'Mistral Small model'
-    },
-    {
-      id: 'mistral-medium',
-      name: 'Mistral Medium',
-      description: 'Mistral Medium model'
-    },
-    {
-      id: 'mistral-large-latest',
-      name: 'Mistral Large',
-      description: 'Mistral Large model'
-    }
-  ];
-}
 
 /**
  * Fetch models from the specified provider
+ * Since most providers are now OpenAI-compatible, we only need special handling
+ * for OpenRouter, and use the OpenAI-compatible API for everything else
  */
 export async function fetchModelsFromProvider(
   provider: ModelProvider, 
@@ -254,33 +150,16 @@ export async function fetchModelsFromProvider(
   log.debug(`fetchModelsFromProvider: Fetching models for provider: ${provider}`);
   
   try {
-    switch (provider) {
-      case 'openrouter':
-        return await fetchOpenRouterModels();
-      
-      case 'openai':
-      case 'ollama':
-        return await fetchOpenAIModels(apiKey, baseUrl);
-      
-      case 'xai':
-        return await fetchXAIModels(apiKey);
-      
-      case 'gemini':
-        return await fetchGeminiModels(apiKey);
-      
-      case 'anthropic':
-        return await fetchAnthropicModels(apiKey);
-        
-      case 'mistral':
-        return await fetchMistralModels(apiKey);
-      
-      default:
-        // Try using OpenAI-compatible API as a fallback for unknown providers
-        log.info(`Unknown provider "${provider}", attempting to use OpenAI-compatible API`);
-        return await fetchOpenAIModels(apiKey, baseUrl);
+    // Only OpenRouter has a special endpoint for fetching models
+    if (provider === 'openrouter') {
+      return await fetchOpenRouterModels();
     }
+    
+    // For all other providers (including Ollama), use the OpenAI-compatible API
+    return await fetchOpenAIModels(apiKey, baseUrl);
   } catch (error) {
     log.error(`fetchModelsFromProvider: Error fetching models for provider ${provider}:`, error);
-    throw error;
+    // Return empty array instead of throwing to avoid UI errors
+    return [];
   }
 }

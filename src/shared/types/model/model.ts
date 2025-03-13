@@ -1,3 +1,5 @@
+import { ModelProvider } from './provider';
+
 export interface Model {
     id: string;
     name: string;
@@ -5,6 +7,7 @@ export interface Model {
     description?: string;
     encryptedApiKey: string;
     baseUrl?: string;
+    provider?: ModelProvider;
     promptTemplate?: string;
     // New fields
     reasoningSchema?: string;

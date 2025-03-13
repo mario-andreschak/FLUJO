@@ -11,7 +11,6 @@ import ErrorIcon from '@mui/icons-material/Error';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import Spinner from '@/frontend/components/shared/Spinner';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -29,11 +28,6 @@ import {
   Card, 
   CardContent, 
   CardActions,
-  Menu,
-  MenuItem,
-  ListItemIcon,
-  ListItemText,
-  Divider,
   Box
 } from '@mui/material';
 
@@ -67,7 +61,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
-  const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
   const muiTheme = useTheme();
   
   const statusColor = {
@@ -134,21 +127,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
     
     // Store the timeout ID
     setRetryTimeoutId(timeoutId);
-  };
-
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    event.stopPropagation();
-    setMenuAnchorEl(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setMenuAnchorEl(null);
-  };
-
-  const handleMenuAction = (action: () => void) => (event: React.MouseEvent) => {
-    event.stopPropagation();
-    action();
-    handleMenuClose();
   };
 
   const { getThemeValue, colors } = useThemeUtils();
@@ -295,51 +273,18 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </IconButton>
           </Tooltip>
           
-          <Tooltip title="More options">
-            <IconButton
-              onClick={handleMenuOpen}
+          <Tooltip title="Delete server">
+            <IconButton 
+              color="error" 
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
               size="small"
             >
-              <MoreVertIcon />
+              <DeleteIcon />
             </IconButton>
           </Tooltip>
-          
-          <Menu
-            anchorEl={menuAnchorEl}
-            open={Boolean(menuAnchorEl)}
-            onClose={handleMenuClose}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <MenuItem onClick={handleMenuAction(onEdit)}>
-              <ListItemIcon>
-                <EditIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Edit Server</ListItemText>
-            </MenuItem>
-            <MenuItem onClick={handleMenuAction(() => {
-              // Disable the server
-              onToggle(false);
-              
-              // Wait a short time for the disconnect to complete
-              setTimeout(() => {
-                // Enable the server
-                onToggle(true);
-                log.info(`Server ${name} restarted`);
-              }, 1000);
-            })}>
-              <ListItemIcon>
-                <RefreshIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Restart Server</ListItemText>
-            </MenuItem>
-            <Divider />
-            <MenuItem onClick={handleMenuAction(onDelete)} sx={{ color: 'error.main' }}>
-              <ListItemIcon sx={{ color: 'error.main' }}>
-                <DeleteIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Delete Server</ListItemText>
-            </MenuItem>
-          </Menu>
         </Box>
       </CardActions>
       

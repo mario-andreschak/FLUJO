@@ -304,16 +304,23 @@ export class PromptRenderer {
       while (!resolved && retryCount < 3) {
         try {
           // Get the server status
-          const serverStatus = await mcpService.getServerStatus(serverName);
+          let serverStatus = await mcpService.getServerStatus(serverName);
+          log.debug(`Server in status ${serverStatus}`);
+
           if (serverStatus.status !== 'connected') {
+            log.debug(`force connect ${serverName}`);            
             await mcpService.connectServer(serverName);
+            serverStatus = await mcpService.getServerStatus(serverName);
+            log.debug(`Server in status ${serverStatus.status} after force connecting`);
+            log.debug(`Server in status ${serverStatus.message?.toString()} after force connecting`);
           }
           
           if (serverStatus.status === 'connected') {
             // Get the tools for this server
             const toolsResult = await mcpService.listServerTools(serverName);
-
+            log.debug(`toolResult.status is ${toolsResult.error?.toString()}`)
             if (toolsResult.tools && toolsResult.tools.length > 0) {
+            log.debug(`listed ${toolsResult.tools.length} tools from ${serverName} for tool render`);
               // Find the specific tool
               const tool = toolsResult.tools.find(t => t.name === toolName);
 

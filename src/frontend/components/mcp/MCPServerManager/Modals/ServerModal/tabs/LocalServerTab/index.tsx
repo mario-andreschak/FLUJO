@@ -1,7 +1,7 @@
 'use client';
 
-import React from 'react';
-import { TabProps } from '../../types';
+import React, { useEffect, useState } from 'react';
+import { TabProps, MessageState } from '../../types';
 import { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp/mcp';
 import ConsoleOutput from './ConsoleOutput';
 import { useLocalServerState } from './hooks/useLocalServerState';
@@ -42,7 +42,7 @@ const LocalServerTab: React.FC<TabProps> = ({
   onUpdate,
   onClose
 }) => {
-  // Use custom hooks for state management
+  // Use custom hooks for state management first
   const {
     localConfig,
     setLocalConfig,
@@ -79,76 +79,36 @@ const LocalServerTab: React.FC<TabProps> = ({
     addArgField,
     removeArgField,
     handleEnvChange
-  } = useLocalServerState({ initialConfig });
+  } = useLocalServerState({ 
+    initialConfig,
+    isOpen: true // Always pass true here since we're already in the component
+  });
   
-  // Handle accordion expansion
-  const handleAccordionChange = (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
-    setExpandedSections({
-      ...expandedSections,
-      [panel]: isExpanded
-    });
-  };
-
-  // Use custom hook for console output
-  const {
-    consoleOutput,
-    isConsoleVisible,
-    consoleTitle,
-    setConsoleTitle,
-    toggleConsoleVisibility,
-    setIsConsoleVisible,
-    appendToConsole,
-    clearConsole,
-    updateConsole: setConsoleOutput
-  } = useConsoleOutput();
-  
-  // Helper function to get accordion status color
-  const getAccordionStatusColor = (status: 'default' | 'error' | 'success' | 'warning' | 'loading') => {
-    switch (status) {
-      case 'error':
-        return 'error.main';
-      case 'success':
-        return 'success.main';
-      case 'warning':
-        return 'warning.main';
-      case 'loading':
-        return 'info.main';
-      default:
-        return 'text.primary';
+  // Check if we're coming from GitHub tab with empty fields
+  useEffect(() => {
+    // If we have a name but no command or build/install commands, show a warning
+    if (
+      initialConfig && 
+      initialConfig.name && 
+      initialConfig.rootPath && 
+      initialConfig.transport === 'stdio' &&
+      (!initialConfig.command || initialConfig.command === '') &&
+      (!initialConfig._buildCommand || initialConfig._buildCommand === '') &&
+      (!initialConfig._installCommand || initialConfig._installCommand === '')
+    ) {
+      setMessage({
+        type: 'warning',
+        text: 'Configuration detection was not successful. Please configure the server manually.'
+      });
+      
+      // Expand all sections to make it easier for the user to configure
+      setExpandedSections({
+        define: true,
+        build: true,
+        run: true
+      });
     }
-  };
-  
-  // Determine section statuses
-  const getDefineStatus = () => {
-    if (!localConfig.name || !localConfig.rootPath) {
-      return 'error';
-    }
-    return 'default';
-  };
-  
-  const getBuildStatus = () => {
-    if (buildMessage?.type === 'error') {
-      return 'error';
-    } else if (installCompleted && buildCompleted) {
-      return 'success';
-    } else if (installCompleted || buildCompleted) {
-      return 'warning';
-    } else if (isInstalling || isBuilding) {
-      return 'loading';
-    }
-    return 'default';
-  };
-  
-  const getRunStatus = () => {
-    if (message?.type === 'error' && !isRunning) {
-      return 'error';
-    } else if (runCompleted) {
-      return 'success';
-    } else if (isRunning) {
-      return 'loading';
-    }
-    return 'default';
-  };
+  }, [initialConfig]);
 
   // Event handlers that use the form handlers utility functions
   const onSubmit = (e: React.FormEvent) => {
@@ -254,6 +214,75 @@ const LocalServerTab: React.FC<TabProps> = ({
       setMessage,
       setRunCompleted
     );
+  };
+
+  // Use custom hook for console output
+  const {
+    consoleOutput,
+    isConsoleVisible,
+    consoleTitle,
+    setConsoleTitle,
+    toggleConsoleVisibility,
+    setIsConsoleVisible,
+    appendToConsole,
+    clearConsole,
+    updateConsole: setConsoleOutput
+  } = useConsoleOutput();
+  
+  // Handle accordion expansion
+  const handleAccordionChange = (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
+    setExpandedSections({
+      ...expandedSections,
+      [panel]: isExpanded
+    });
+  };
+  
+  // Helper function to get accordion status color
+  const getAccordionStatusColor = (status: 'default' | 'error' | 'success' | 'warning' | 'loading') => {
+    switch (status) {
+      case 'error':
+        return 'error.main';
+      case 'success':
+        return 'success.main';
+      case 'warning':
+        return 'warning.main';
+      case 'loading':
+        return 'info.main';
+      default:
+        return 'text.primary';
+    }
+  };
+  
+  // Determine section statuses
+  const getDefineStatus = () => {
+    if (!localConfig.name || !localConfig.rootPath) {
+      return 'error';
+    }
+    return 'default';
+  };
+  
+  const getBuildStatus = () => {
+    if (buildMessage?.type === 'error') {
+      return 'error';
+    } else if (installCompleted && buildCompleted) {
+      return 'success';
+    } else if (installCompleted || buildCompleted) {
+      return 'warning';
+    } else if (isInstalling || isBuilding) {
+      return 'loading';
+    }
+    return 'default';
+  };
+  
+  const getRunStatus = () => {
+    if (message?.type === 'error' && !isRunning) {
+      return 'error';
+    } else if (runCompleted) {
+      return 'success';
+    } else if (isRunning) {
+      return 'loading';
+    }
+    return 'default';
   };
   
   return (

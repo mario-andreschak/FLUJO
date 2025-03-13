@@ -31,7 +31,7 @@ const NodeContainer = styled(Paper, {
   backgroundColor: theme.palette.background.paper,
   border: `2px solid ${
     nodeType === 'start'
-      ? theme.palette.primary.main
+      ? '#795548' // Brown color hex value
       : nodeType === 'process'
       ? theme.palette.secondary.main
       : nodeType === 'finish'
@@ -45,7 +45,7 @@ const NodeContainer = styled(Paper, {
   '&:hover': {
     boxShadow: `0 0 0 1px ${
       nodeType === 'start'
-        ? theme.palette.primary.main
+        ? '#795548' // Brown color hex value
         : nodeType === 'process'
         ? theme.palette.secondary.main
         : nodeType === 'finish'
@@ -63,7 +63,7 @@ const NodeHeader = styled(Box, {
   justifyContent: 'space-between',
   borderBottom: `1px solid ${
     nodeType === 'start'
-      ? theme.palette.primary.light
+      ? '#A1887F' // Lighter brown color for header border
       : nodeType === 'process'
       ? theme.palette.secondary.light
       : nodeType === 'finish'
@@ -99,7 +99,7 @@ interface CustomNodeProps extends NodeProps {
 const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp') => {
   switch (type) {
     case 'start':
-      return <ChatIcon color="primary" />;
+      return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
     case 'process':
       return <SettingsIcon color="secondary" />;
     case 'finish':
@@ -107,14 +107,14 @@ const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp') => {
     case 'mcp':
       return <SettingsIcon color="info" />;
     default:
-      return <ChatIcon color="primary" />;
+      return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
   }
 };
 
 const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme: any) => {
   switch (type) {
     case 'start':
-      return theme.palette.primary.main;
+      return '#795548'; // Brown color hex value
     case 'process':
       return theme.palette.secondary.main;
     case 'finish':
@@ -122,24 +122,35 @@ const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme: any) 
     case 'mcp':
       return theme.palette.info.main;
     default:
-      return theme.palette.primary.main;
+      return '#795548'; // Brown color hex value
   }
 };
 
 // Custom handle styles for different connection types
 const getMCPHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.info.main,
-  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
+  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
+  width: 16,
+  height: 16,
+  borderRadius: 8,
+  borderWidth: 2
 });
 
 const getProcessHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.secondary.main,
-  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
+  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
+  width: 16,
+  height: 16,
+  borderRadius: 8,
+  borderWidth: 2
 });
 
 const getMCPConnectionHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.primary.main,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
+  width: 16,
+  height: 16,
+  borderRadius: 8,
   borderWidth: 2
 });
 
@@ -230,10 +241,7 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
           id="start-bottom"
           type="source" 
           position={Position.Bottom} 
-          style={{ 
-            backgroundColor: getNodeColor(nodeType, theme),
-            borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
-          }} 
+          style={getProcessHandleStyle(theme)} 
         />
       );
     } else if (nodeType === 'finish') {
@@ -243,10 +251,7 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
           id="finish-top"
           type="target" 
           position={Position.Top} 
-          style={{ 
-            backgroundColor: getNodeColor(nodeType, theme),
-            borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white'
-          }} 
+          style={getProcessHandleStyle(theme)} 
         />
       );
     }

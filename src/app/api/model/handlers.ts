@@ -29,10 +29,10 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'Base URL is required' }, { status: 400 });
       }
       
-      log.debug(`GET: Fetching models for baseUrl: ${baseUrl}`);
+      log.debug(`GET: Fetching models for baseUrl: ${baseUrl} and modelId: ${modelId}`);
       
       try {
-        // Fetch models based on provider
+        // For regular GET requests, use the modelId to look up the API key
         const models = await providerAdapter.fetchProviderModels(baseUrl, modelId || undefined);
         
         // Return normalized response
@@ -40,10 +40,11 @@ export async function GET(req: NextRequest) {
           data: models
         });
       } catch (error) {
-        log.error(`GET: Error fetching models for ${baseUrl}:`, error);
-        return NextResponse.json({ 
-          error: `Error fetching models: ${error instanceof Error ? error.message : 'Unknown error'}` 
-        }, { status: 500 });
+        log.warn(`GET: Error fetching models for ${baseUrl}:`, error);
+        // Return empty array instead of error to avoid UI errors
+        return NextResponse.json({
+          data: []
+        });
       }
     } 
     // Keep backward compatibility with fetchOpenRouterModels
@@ -56,10 +57,11 @@ export async function GET(req: NextRequest) {
           data: models
         });
       } catch (error) {
-        log.error('GET: Error fetching OpenRouter models:', error);
-        return NextResponse.json({ 
-          error: `Error fetching OpenRouter models: ${error instanceof Error ? error.message : 'Unknown error'}` 
-        }, { status: 500 });
+        log.warn('GET: Error fetching OpenRouter models:', error);
+        // Return empty array instead of error to avoid UI errors
+        return NextResponse.json({
+          data: []
+        });
       }
     }
     // New endpoint to list all models
@@ -149,12 +151,38 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { action } = body;
 
-    if (!action) {
-      return NextResponse.json({ error: 'Action is required' }, { status: 400 });
-    }
+    // Special case for fetching models with a temporary API key
+    if (body.tempApiKey && !action) {
+      // Extract the URL parameters from the request URL
+      const { searchParams } = new URL(req.url);
+      const baseUrl = searchParams.get('baseUrl');
+      const modelId = searchParams.get('modelId');
+      
+      if (!baseUrl) {
+        return NextResponse.json({ error: 'Base URL is required' }, { status: 400 });
+      }
+      
+      log.debug(`POST: Fetching models for baseUrl: ${baseUrl} with temporary API key`);
+      
+      try {
+        log.debug(`POST: Using temporary API key for baseUrl: ${baseUrl}`);
+        // Fetch models with the temporary API key
+        const models = await providerAdapter.fetchProviderModels(baseUrl, modelId || undefined, body.tempApiKey);
+        log.debug(JSON.stringify(models));
 
-    // Handle different actions
-    if (action === 'generateCompletion') {
+        // Return normalized response
+        return NextResponse.json({
+          data: models
+        });
+      } catch (error) {
+        log.warn(`POST: Error fetching models for ${baseUrl}:`, error);
+        // Return empty array instead of error to avoid UI errors
+        return NextResponse.json({
+          data: []
+        });
+      }
+    }
+    else if (action === 'generateCompletion') {
       const { modelId, prompt, messages = [] } = body;
       
       if (!modelId || !prompt) {
@@ -295,8 +323,9 @@ export async function POST(req: NextRequest) {
     else if (action === 'encryptApiKey') {
       const { apiKey } = body;
       
-      if (!apiKey) {
-        return NextResponse.json({ error: 'API key is required' }, { status: 400 });
+      // Allow empty API keys (convert to empty string)
+      if (apiKey === undefined || apiKey === null) {
+        return NextResponse.json({ error: 'API key parameter is required' }, { status: 400 });
       }
       
       log.debug('POST: Encrypting API key');

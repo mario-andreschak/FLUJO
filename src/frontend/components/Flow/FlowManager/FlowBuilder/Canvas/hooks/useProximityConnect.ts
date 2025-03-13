@@ -3,6 +3,10 @@ import { useStoreApi, useReactFlow, Node, Edge, Position } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { MIN_DISTANCE, defaultEdgeOptions, mcpEdgeOptions } from '../types';
 import { validateConnection, createEdgeFromConnection } from '../utils/edgeUtils';
+import { createLogger } from '@/utils/logger';
+
+// Create a logger instance for this file
+const log = createLogger('components/flow/FlowBuilder/Canvas/hooks/useProximityConnect.ts');
 
 /**
  * Custom hook to handle proximity connections between nodes
@@ -23,10 +27,14 @@ export function useProximityConnect(
 
   // Function to find the closest valid connection between nodes
   const getClosestEdge = useCallback((node: Node) => {
+    log.debug(`getClosestEdge: Finding closest edge for node ${node.id}`);
     const { nodeLookup } = store.getState();
     const internalNode = getInternalNode(node.id);
     
-    if (!internalNode) return null;
+    if (!internalNode) {
+      log.debug(`getClosestEdge: No internal node found for ${node.id}`);
+      return null;
+    }
     
     // Get the dragged node's data
     const draggedNodeData = nodes.find(n => n.id === node.id) as FlowNode | undefined;
@@ -224,6 +232,7 @@ export function useProximityConnect(
   // Handle node drag to show temporary connections
   const onNodeDrag = useCallback(
     (_: React.MouseEvent, node: Node) => {
+      log.debug(`onNodeDrag: Dragging node ${node.id}`);
       const closeEdge = getClosestEdge(node);
       
       setEdges((es) => {
@@ -290,6 +299,7 @@ export function useProximityConnect(
   // Handle node drag stop to create permanent connections
   const onNodeDragStop = useCallback(
     (_: React.MouseEvent, node: Node) => {
+      log.debug(`onNodeDragStop: Drag stopped for node ${node.id}`);
       const closeEdge = getClosestEdge(node);
       
       setEdges((es) => {
@@ -305,9 +315,12 @@ export function useProximityConnect(
           const newEdge = createEdgeFromConnection(closeEdge, nodes);
           nextEdges.push(newEdge);
           
+          log.info(`onNodeDragStop: Created new edge from ${newEdge.source} to ${newEdge.target}`);
+          
           // Notify parent about the new edge
           if (onEdgesChangeCallback) {
             setLastAddedEdge(newEdge);
+            log.debug(`onNodeDragStop: Notified parent about new edge ${newEdge.id}`);
           }
           
           // Apply a subtle snap-to-connect adjustment if needed
@@ -369,11 +382,14 @@ export function useProximityConnect(
     targetHandle: string,
     draggedIsSource: boolean
   ) {
+    log.debug(`calculateSnapAdjustment: Calculating snap adjustment for handles ${sourceHandle} to ${targetHandle}`);
+    
     // Default: no adjustment
     const adjustment = { x: 0, y: 0 };
     
     // Skip adjustment if we don't have position data
     if (!draggedNode.internals?.positionAbsolute || !otherNode.internals?.positionAbsolute) {
+      log.debug(`calculateSnapAdjustment: Missing position data, no adjustment applied`);
       return adjustment;
     }
     

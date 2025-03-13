@@ -41,7 +41,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
 import { Canvas } from './Canvas/index';
-import NodePalette from './NodePalette';
+import { NodePalette } from './NodePalette';
 import PropertiesPanel from './PropertiesPanel';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
@@ -253,9 +253,12 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
 
   // Handle save flow
   const handleSave = useCallback(() => {
+    log.debug(`handleSave: Attempting to save flow "${flowName}"`);
+    
     // Validate flow name
     const error = validateFlowName(flowName);
     if (error) {
+      log.warn(`handleSave: Invalid flow name - ${error}`);
       setFlowNameError(error);
       return;
     }
@@ -265,6 +268,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     
     // If there are no nodes, add a Start node
     if (flowNodes.length === 0) {
+      log.debug(`handleSave: No nodes found, adding a default Start node`);
       const startNode = flowService.createNode('start', { x: 250, y: 150 });
       // Ensure properties object exists and set promptTemplate
       if (!startNode.data.properties) {
@@ -278,6 +282,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     
     // Check if we're trying to save with a new name for an existing flow
     if (initialFlow && initialFlow.name !== flowName) {
+      log.debug(`handleSave: Flow name changed from "${initialFlow.name}" to "${flowName}", opening rename dialog`);
       // Ask if user wants to rename or copy
       setDialogType('rename');
       setNewFlowName(flowName);
@@ -291,6 +296,8 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       nodes: flowNodes,
       edges,
     };
+    
+    log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
     onSave(flow);
     setHasUnsavedChanges(false);
   }, [flowName, nodes, edges, initialFlow, onSave, allFlows]);
@@ -327,12 +334,17 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   // Handle delete flow
   const handleDelete = useCallback(() => {
     if (initialFlow) {
+      log.info(`handleDelete: Deleting flow "${initialFlow.name}" (ID: ${initialFlow.id})`);
       onDelete(initialFlow.id);
+    } else {
+      log.warn('handleDelete: Attempted to delete flow but no initialFlow is available');
     }
   }, [initialFlow, onDelete]);
   
   // Handle copy flow
   const handleCopyFlow = useCallback((flowToCopy: Flow, newName: string) => {
+    log.debug(`handleCopyFlow: Copying flow "${flowToCopy.name}" to "${newName}"`);
+    
     // Create a new flow with the same nodes and edges but a new ID and name
     const newFlow: Flow = {
       id: uuidv4(), // Generate a new ID
@@ -341,6 +353,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       edges: flowToCopy.edges,
     };
     
+    log.info(`handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`);
     onSave(newFlow);
   }, [onSave]);
   
@@ -417,35 +430,46 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   
   const handleUndo = useCallback(() => {
     if (canUndo) {
+      log.debug(`handleUndo: Performing undo operation, moving from history index ${historyIndex} to ${historyIndex - 1}`);
       setIsHistoryAction(true);
       const newIndex = historyIndex - 1;
       const prevState = history[newIndex];
       setNodes(prevState.nodes);
       setEdges(prevState.edges);
       setHistoryIndex(newIndex);
+      log.info(`handleUndo: Restored flow state to previous version (${prevState.nodes.length} nodes, ${prevState.edges.length} edges)`);
     }
   }, [history, historyIndex, canUndo]);
   
   const handleRedo = useCallback(() => {
     if (canRedo) {
+      log.debug(`handleRedo: Performing redo operation, moving from history index ${historyIndex} to ${historyIndex + 1}`);
       setIsHistoryAction(true);
       const newIndex = historyIndex + 1;
       const nextState = history[newIndex];
       setNodes(nextState.nodes);
       setEdges(nextState.edges);
       setHistoryIndex(newIndex);
+      log.info(`handleRedo: Restored flow state to next version (${nextState.nodes.length} nodes, ${nextState.edges.length} edges)`);
     }
   }, [history, historyIndex, canRedo]);
 
   // Memoized handlers for better performance
   const onNodesChange = useCallback((changes: NodeChange[]) => {
+    log.debug(`onNodesChange: Processing ${changes.length} node changes`);
+    
     // Handle node selection separately
     changes.forEach((change) => {
       if (change.type === 'select' && change.id) {
         const node = nodes.find((n: FlowNode) => n.id === change.id);
         if (node) {
+          log.debug(`onNodesChange: Node ${node.id} selection changed to ${change.selected}`);
           setSelectedNode(change.selected ? node : null);
         }
+      } else if (change.type === 'position' && change.id) {
+        log.debug(`onNodesChange: Node ${change.id} position changed`);
+      } else if (change.type === 'remove' && change.id) {
+        log.info(`onNodesChange: Node ${change.id} removed`);
       }
     });
     
@@ -454,6 +478,17 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   }, [nodes]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    log.debug(`onEdgesChange: Processing ${changes.length} edge changes`);
+    
+    // Log specific change types
+    changes.forEach(change => {
+      if (change.type === 'remove') {
+        log.info(`onEdgesChange: Edge ${change.id} removed`);
+      } else if (change.type === 'select') {
+        log.debug(`onEdgesChange: Edge ${change.id} selection changed to ${change.selected}`);
+      }
+    });
+    
     setEdges((eds) => applyEdgeChanges(changes, eds));
   }, []);
 
@@ -461,9 +496,12 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
 
   const handleNodeUpdate = useCallback((nodeId: string, data: any) => {
+    log.debug(`handleNodeUpdate: Updating node ${nodeId} properties`);
+    
     setNodes((nds) =>
       nds.map((node) => {
         if (node.id === nodeId) {
+          log.info(`handleNodeUpdate: Node ${nodeId} properties updated`);
           return { ...node, data };
         }
         return node;
@@ -476,6 +514,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     setStartModalOpen(false);
     setFinishModalOpen(false);
     setNodeToEdit(null);
+    log.debug(`handleNodeUpdate: Closed property modals`);
   }, []);
   
   // Open the appropriate properties modal based on node type
@@ -496,13 +535,16 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
 
   const onDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
+      log.debug('onDrop: Node dropped on canvas');
       event.preventDefault();
       
       // Get the node type from the data transfer
       const type = event.dataTransfer.getData('application/reactflow');
+      log.debug(`onDrop: Node type from data transfer: ${type}`);
       
       // Check if we have all the required data to create a node
       if (!type || !reactFlowInstance) {
+        log.debug(`onDrop: Missing required data - type: ${!!type}, reactFlowInstance: ${!!reactFlowInstance}`);
         return;
       }
       
@@ -511,9 +553,11 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
         x: event.clientX,
         y: event.clientY,
       });
+      log.debug(`onDrop: Calculated position: (${position.x}, ${position.y})`);
       
       // Create the new node using flowService
       const newNode = flowService.createNode(type, position);
+      log.info(`onDrop: Created new ${type} node with ID: ${newNode.id}`);
       
       // Add the new node to the existing nodes
       setNodes((nds) => {
@@ -535,9 +579,11 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       
       // Select the newly created node in the properties panel
       setSelectedNode(newNode);
+      log.debug(`onDrop: Selected new node in properties panel: ${newNode.id}`);
       
       // Automatically open the edit properties modal for the new node
       openNodeProperties(newNode);
+      log.debug(`onDrop: Opened properties modal for new node: ${newNode.id}`);
     },
     [reactFlowInstance, openNodeProperties]
   );
@@ -545,9 +591,11 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
+    // We don't need to log every dragover event as it would be too verbose
   }, []);
 
   const onInit = useCallback((instance: any) => {
+    log.debug('onInit: ReactFlow instance initialized');
     setReactFlowInstance(instance as ReactFlowInstance<FlowNode, Edge>);
   }, []);
 

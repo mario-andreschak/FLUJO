@@ -182,7 +182,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 handleUnbindModel={handleUnbindModel}
               />
             </Box>
-            <Box sx={{ mb: 3 }}>
+            <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
               <ServerTools
                 isLoadingServers={isLoadingServers}
                 connectedServers={connectedServers}
@@ -194,6 +194,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 selectedToolServer={selectedToolServer}
                 isLoadingSelectedServerTools={isLoadingSelectedServerTools}
                 promptBuilderRef={promptBuilderRef}
+                flowNodes={flowNodes}
               />
             </Box>
             <Box>

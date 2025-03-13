@@ -15,9 +15,10 @@ export const isWebSocketConfig = (config: MCPServerConfig): config is MCPWebSock
 
 interface UseLocalServerStateProps {
   initialConfig?: MCPServerConfig | null;
+  isOpen?: boolean;
 }
 
-export const useLocalServerState = ({ initialConfig }: UseLocalServerStateProps) => {
+export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalServerStateProps) => {
   // Track which sections are expanded
   const [expandedSections, setExpandedSections] = useState({
     define: true,
@@ -161,34 +162,73 @@ export const useLocalServerState = ({ initialConfig }: UseLocalServerStateProps)
     });
   };
 
-  // Initialize state from initialConfig
+  // Reset state when modal is opened or initialConfig changes
   useEffect(() => {
-    if (initialConfig) {
-      // Extract rootPath if it exists
-      const rootPath = initialConfig.rootPath || '';
-            
-      // Create a new config with the extracted rootPath
-      const configWithRootPath = {
-        ...initialConfig,
-        rootPath
-      };
-      
-      setLocalConfig(configWithRootPath);
-      
-      // Set build and install commands from config if available
-      if (initialConfig._buildCommand) {
-        setBuildCommand(initialConfig._buildCommand);
-      }
-      if (initialConfig._installCommand) {
-        setInstallCommand(initialConfig._installCommand);
-      }
-      
-      // Set websocketUrl if the transport is 'websocket'
-      if (initialConfig.transport === 'websocket') {
-        setWebsocketUrl((initialConfig as MCPWebSocketConfig).websocketUrl || '');
+    // Default state for a new server
+    const defaultConfig: MCPStdioConfig = {
+      name: '',
+      command: '',
+      args: [],
+      env: {},
+      disabled: false,
+      autoApprove: [],
+      rootPath: '',
+      transport: 'stdio',
+      _buildCommand: '',
+      _installCommand: ''
+    };
+    
+    // Reset all state values when modal is opened
+    if (isOpen) {
+      if (initialConfig) {
+        // Extract rootPath if it exists
+        const rootPath = initialConfig.rootPath || '';
+              
+        // Create a new config with the extracted rootPath
+        const configWithRootPath = {
+          ...initialConfig,
+          rootPath
+        };
+        
+        setLocalConfig(configWithRootPath);
+        
+        // Set build and install commands from config if available
+        setBuildCommand(initialConfig._buildCommand || '');
+        setInstallCommand(initialConfig._installCommand || '');
+        
+        // Set websocketUrl if the transport is 'websocket'
+        if (initialConfig.transport === 'websocket') {
+          setWebsocketUrl((initialConfig as MCPWebSocketConfig).websocketUrl || '');
+        } else {
+          setWebsocketUrl('');
+        }
+      } else {
+        // Reset to default values if no initialConfig
+        setLocalConfig(defaultConfig);
+        setBuildCommand('');
+        setInstallCommand('');
+        setWebsocketUrl('');
+        setMessage(null);
+        setBuildMessage(null);
+        setIsBuilding(false);
+        setIsInstalling(false);
+        setBuildCompleted(false);
+        setInstallCompleted(false);
+        setIsParsingReadme(false);
+        setIsParsingEnv(false);
+        setConsoleOutput('');
+        setIsConsoleVisible(false);
+        setIsRunning(false);
+        setRunCompleted(false);
+        setConsoleTitle('Command Output');
+        setExpandedSections({
+          define: true,
+          build: true,
+          run: true
+        });
       }
     }
-  }, [initialConfig]);
+  }, [isOpen, initialConfig]);
 
   return {
     // State

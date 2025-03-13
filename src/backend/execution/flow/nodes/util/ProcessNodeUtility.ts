@@ -148,11 +148,25 @@ export class ProcessNodeUtility {
     mcpContext?: any
   ): Promise<CompletionResponse> {
     log.debug(`generateCompletion: Generating completion with model: ${modelId}`);
+    
+    // Add verbose logging of the input parameters
+    log.verbose('generateCompletion input', JSON.stringify({
+      modelId,
+      prompt,
+      messages,
+      tools,
+      mcpContext
+    }));
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
       if (!model) {
-        return { success: false, error: `Model not found: ${modelId}` };
+        const errorResult = { success: false, error: `Model not found: ${modelId}` };
+        
+        // Add verbose logging of the error result
+        log.verbose('generateCompletion model not found error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
 
       // Extract model settings
@@ -161,7 +175,12 @@ export class ProcessNodeUtility {
       // Resolve and decrypt the API key
       const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
       if (!decryptedApiKey) {
-        return { success: false, error: 'Failed to resolve or decrypt API key' };
+        const errorResult = { success: false, error: 'Failed to resolve or decrypt API key' };
+        
+        // Add verbose logging of the error result
+        log.verbose('generateCompletion API key error', JSON.stringify(errorResult));
+        
+        return errorResult;
       } else {
         log.debug('API key successfully resolved and decrypted');
         log.debug('Request configuration', {
@@ -198,57 +217,73 @@ export class ProcessNodeUtility {
       
       log.info('generateCompletion - Calling model API');
 
-      log.debug('generateCompletion - Calling model API - Info', {
-        modelId: model.name,
-        baseURL: model.baseUrl,
-        temperature: model.temperature,
-        hasTools: tools && tools.length > 0,
-        toolsCount: tools?.length || 0,
-        tools: tools,
-        messages: messages
-      });
+      log.debug('generateCompletion - Calling model API - Info', JSON.stringify(requestParams));
 
       // Make the API request using the OpenAI client
       const chatCompletion = await openai.chat.completions.create(requestParams);
 
       log.debug('generateCompletion - Result from API', chatCompletion);
+      
+      // Add verbose logging of the API response
+      log.verbose('generateCompletion API response', JSON.stringify(chatCompletion));
       // return chatCompletion;
 
-      // Check if the response contains an error
+      // Check if the response contains an error (standardized OpenAI error format)
       if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion) {
-        const errorResponse = chatCompletion as { error: { message?: string, code?: number, metadata?: any } };
+        const errorResponse = chatCompletion as { error: { message?: string, code?: string | number | null, type?: string, param?: string } };
         log.warn('generateCompletion: API returned an error response', errorResponse.error);
-        return {
+        const errorResult = {
           success: false,
-          error: `Provider returned error: ${errorResponse.error.message || 'Unknown error'}`,
+          error: errorResponse.error.message || 'Unknown provider error',
           errorDetails: {
             message: errorResponse.error.message || 'Unknown provider error',
-            name: 'ProviderError',
-            code: errorResponse.error.code,
-            metadata: errorResponse.error.metadata
+            type: errorResponse.error.type || 'api_error',
+            code: errorResponse.error.code !== null && errorResponse.error.code !== undefined ? String(errorResponse.error.code) : undefined,
+            param: errorResponse.error.param || undefined,
+            name: 'ProviderError'
           }
         };
+        
+        // Add verbose logging of the error result
+        log.verbose('generateCompletion provider error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }      
 
       // Return the successful response
       // Add additional null checks to prevent "Cannot read properties of undefined" errors
       if (!chatCompletion || !chatCompletion.choices || chatCompletion.choices.length === 0) {
         log.warn('generateCompletion: Received empty or invalid response from API');
-        return {
+        
+        // Format error in OpenAI-compatible format
+        const errorResult = {
           success: false,
           error: 'Received empty or invalid response from API',
           errorDetails: {
             message: 'API returned empty or invalid response',
+            type: 'api_error',
+            code: 'empty_response',
             name: 'EmptyResponseError'
           }
         };
+        
+        // Add verbose logging of the error result
+        log.verbose('generateCompletion empty response error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
-      return {
+      // Create a standardized response with OpenAI-compatible structure
+      const successResult = {
         success: true,
         content: chatCompletion.choices[0]?.message?.content || '',
         fullResponse: chatCompletion
       };
+      
+      // Add verbose logging of the success result
+      log.verbose('generateCompletion success result', JSON.stringify(successResult));
+      
+      return successResult;
     } catch (error) {
       // Handle API errors
       if (error instanceof OpenAI.APIError) {
@@ -256,8 +291,9 @@ export class ProcessNodeUtility {
           status: error.status,
           message: error.message,
           type: error.type,
-          code: error.code,
-          name: error.name
+          code: error.code ? String(error.code) : undefined, // Convert to string to match our type
+          name: error.name,
+          param: error.param
         };
         
         log.error('generateCompletion: OpenAI API error:', errorDetails);
@@ -265,14 +301,37 @@ export class ProcessNodeUtility {
         // Special handling for models that don't support tools
         if (error.status === 400 && error.message.includes("does not support tools") && tools && tools.length > 0) {
           log.warn('Model does not support tools. Retrying without tools parameter...');
-          return ProcessNodeUtility.retryWithoutTools(modelId, prompt, messages, tools);
+        log.info('Model does not support tools. Retrying without tools parameter...');
+        
+        // Add verbose logging of the retry attempt
+        log.verbose('generateCompletion retrying without tools', JSON.stringify({
+          modelId,
+          prompt,
+          messagesCount: messages.length,
+          toolsCount: tools?.length || 0
+        }));
+        
+        return ProcessNodeUtility.retryWithoutTools(modelId, prompt, messages, tools);
         }
         
-        return {
+        // Return error in OpenAI-compatible format
+        const errorResult = {
           success: false,
           error: `Model API error: ${error.message}`,
-          errorDetails: errorDetails
+          errorDetails: {
+            message: error.message,
+            type: error.type || 'api_error',
+            code: error.code !== null && error.code !== undefined ? String(error.code) : undefined,
+            param: error.param || undefined,
+            status: error.status,
+            name: error.name
+          }
         };
+        
+        // Add verbose logging of the API error result
+        log.verbose('generateCompletion API error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
       // Handle other errors
@@ -286,11 +345,16 @@ export class ProcessNodeUtility {
       
       log.error('generateCompletion: Error generating completion:', errorDetails);
       
-      return {
+      const errorResult = {
         success: false,
         error: `Failed to generate completion: ${errorDetails.message}`,
         errorDetails: errorDetails
       };
+      
+      // Add verbose logging of the general error result
+      log.verbose('generateCompletion general error', JSON.stringify(errorResult));
+      
+      return errorResult;
     }
   }
 
@@ -328,17 +392,35 @@ export class ProcessNodeUtility {
     tools?: any[]
   ): Promise<CompletionResponse> {
     log.info('retryWithoutTools: Retrying completion without tools parameter');
+    
+    // Add verbose logging of the input parameters
+    log.verbose('retryWithoutTools input', JSON.stringify({
+      modelId,
+      prompt,
+      messages,
+      tools
+    }));
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
       if (!model) {
-        return { success: false, error: `Model not found: ${modelId}` };
+        const errorResult = { success: false, error: `Model not found: ${modelId}` };
+        
+        // Add verbose logging of the error result
+        log.verbose('retryWithoutTools model not found error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
       // Resolve and decrypt the API key
       const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
       if (!decryptedApiKey) {
-        return { success: false, error: 'Failed to resolve or decrypt API key' };
+        const errorResult = { success: false, error: 'Failed to resolve or decrypt API key' };
+        
+        // Add verbose logging of the error result
+        log.verbose('retryWithoutTools API key error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
       // Initialize the OpenAI client
@@ -394,26 +476,35 @@ export class ProcessNodeUtility {
       
       log.debug('retryWithoutTools: Result from API', chatCompletion);
       
-      // Check if the response contains an error
+      // Add verbose logging of the API response
+      log.verbose('retryWithoutTools API response', JSON.stringify(chatCompletion));
+      
+      // Check if the response contains an error (standardized OpenAI error format)
       if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion) {
-        const errorResponse = chatCompletion as { error: { message?: string, code?: number, metadata?: any } };
+        const errorResponse = chatCompletion as { error: { message?: string, code?: string | number, type?: string, param?: string } };
         log.warn('retryWithoutTools: API returned an error response', errorResponse.error);
-        return {
+        const errorResult = {
           success: false,
-          error: `Provider returned error: ${errorResponse.error.message || 'Unknown error'}`,
+          error: errorResponse.error.message || 'Unknown provider error',
           errorDetails: {
             message: errorResponse.error.message || 'Unknown provider error',
-            name: 'ProviderError',
-            code: errorResponse.error.code,
-            metadata: errorResponse.error.metadata
+            type: errorResponse.error.type || 'api_error',
+            code: errorResponse.error.code ? String(errorResponse.error.code) : undefined,
+            param: errorResponse.error.param,
+            name: 'ProviderError'
           }
         };
+        
+        // Add verbose logging of the error result
+        log.verbose('retryWithoutTools provider error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
       // Return the successful response from retry
       if (!chatCompletion || !chatCompletion.choices || chatCompletion.choices.length === 0) {
         log.warn('retryWithoutTools: Received empty or invalid response from API');
-        return {
+        const errorResult = {
           success: false,
           error: 'Received empty or invalid response from API retry',
           errorDetails: {
@@ -421,13 +512,23 @@ export class ProcessNodeUtility {
             name: 'EmptyResponseError'
           }
         };
+        
+        // Add verbose logging of the error result
+        log.verbose('retryWithoutTools empty response error', JSON.stringify(errorResult));
+        
+        return errorResult;
       }
       
-      return {
+      const successResult = {
         success: true,
         content: chatCompletion.choices[0]?.message?.content || '',
         fullResponse: chatCompletion
       };
+      
+      // Add verbose logging of the success result
+      log.verbose('retryWithoutTools success result', JSON.stringify(successResult));
+      
+      return successResult;
       
     } catch (error) {
       log.error('retryWithoutTools: Error during retry without tools:', error);
@@ -441,11 +542,16 @@ export class ProcessNodeUtility {
           }
         : { message: 'Unknown error' };
       
-      return {
+      const errorResult = {
         success: false,
         error: `Failed to generate completion without tools: ${errorDetails.message}`,
         errorDetails: errorDetails
       };
+      
+      // Add verbose logging of the error result
+      log.verbose('retryWithoutTools general error', JSON.stringify(errorResult));
+      
+      return errorResult;
     }
   }
 
@@ -458,8 +564,22 @@ export class ProcessNodeUtility {
     response: CompletionResponse
   ): Promise<OpenAI.Chat.ChatCompletionMessageParam[]> {
     const toolCalls = response.fullResponse?.choices?.[0]?.message?.tool_calls;
+    
+    // Add verbose logging of the input
+    log.verbose('processToolCalls input', JSON.stringify({
+      response: {
+        success: response.success,
+        content: response.content,
+        toolCalls: toolCalls
+      }
+    }));
+    
     if (!toolCalls || toolCalls.length === 0) {
       log.info('No tool calls to process');
+      
+      // Add verbose logging of the empty result
+      log.verbose('processToolCalls empty result', JSON.stringify([]));
+      
       return [];
     }
     
@@ -535,6 +655,10 @@ export class ProcessNodeUtility {
     }
     
     log.info(`processToolCalls: Completed processing ${toolCalls.length} tool calls, returning ${newMessages.length} messages`);
+    
+    // Add verbose logging of the result
+    log.verbose('processToolCalls result', JSON.stringify(newMessages));
+    
     return newMessages;
   }
 }

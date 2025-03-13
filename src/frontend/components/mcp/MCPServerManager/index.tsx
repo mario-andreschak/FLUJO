@@ -60,6 +60,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     log.debug(`Adding server: ${config.name}`);
     await addServer(config);
     setShowAddModal(false);
+    setEditingServer(null); // Ensure editing server is reset
     onServerModalToggle(false);
   };
 
@@ -156,6 +157,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
             variant="contained"
             color="primary"
             onClick={() => {
+              // Ensure editing server is null when adding a new server
+              setEditingServer(null);
               setShowAddModal(true);
               onServerModalToggle(true);
             }}

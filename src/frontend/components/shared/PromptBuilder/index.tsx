@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { createEditor, Descendant, Element as SlateElement, Text, Node, BaseEditor, Transforms, Editor, Range, Point } from 'slate';
-import { Slate, Editable, withReact, ReactEditor } from 'slate-react';
+import { Slate, Editable, withReact, ReactEditor, useSlate } from 'slate-react';
 import { withHistory } from 'slate-history';
 import { Box, Typography, Paper, ToggleButtonGroup, ToggleButton } from '@mui/material';
 import CodeIcon from '@mui/icons-material/Code';
@@ -28,9 +28,17 @@ interface PromptBuilderProps {
 // Custom types for TypeScript
 interface CustomElement {
   type: 'paragraph' | 'tool-reference';
-  children: CustomText[];
+  children: (CustomText | ToolReferenceElement)[];
   serverName?: string;
   toolName?: string;
+}
+
+// Tool reference specific element
+interface ToolReferenceElement {
+  type: 'tool-reference';
+  serverName: string;
+  toolName: string;
+  children: CustomText[];
 }
 
 interface CustomText {
@@ -46,7 +54,7 @@ interface CustomText {
 declare module 'slate' {
   interface CustomTypes {
     Editor: BaseEditor & ReactEditor;
-    Element: CustomElement;
+    Element: CustomElement | ToolReferenceElement;
     Text: CustomText;
   }
 }
@@ -63,14 +71,12 @@ const deserialize = (markdown: string): Descendant[] => {
   const nodes: Descendant[] = [];
   
   for (const line of lines) {
-    const remainingLine = line;
-    const children: CustomText[] = [];
-    
-    // Find tool references in the line
+  // Find tool references in the line
     const toolMatches = [...line.matchAll(toolBindingRegex)];
     
     if (toolMatches.length > 0) {
       let lastIndex = 0;
+      const children: CustomElement['children'] = [];
       
       for (const match of toolMatches) {
         const matchIndex = match.index as number;
@@ -86,11 +92,10 @@ const deserialize = (markdown: string): Descendant[] => {
         const toolName = match[2];
         
         children.push({
-          text: match[0],
-          code: true,
-          'tool-reference': true,
-          'server-name': serverName,
-          'tool-name': toolName,
+          type: 'tool-reference',
+          serverName,
+          toolName,
+          children: [{ text: '' }]
         });
         
         lastIndex = matchIndex + match[0].length;
@@ -100,12 +105,15 @@ const deserialize = (markdown: string): Descendant[] => {
       if (lastIndex < line.length) {
         children.push({ text: line.slice(lastIndex) });
       }
+      
+      nodes.push({ type: 'paragraph', children });
     } else {
       // No tool references, just add the line as plain text
-      children.push({ text: line });
+      nodes.push({ 
+        type: 'paragraph', 
+        children: [{ text: line }] 
+      });
     }
-    
-    nodes.push({ type: 'paragraph', children });
   }
   
   return nodes.length > 0 ? nodes : [{ type: 'paragraph', children: [{ text: '' }] }];
@@ -117,9 +125,13 @@ const serialize = (nodes: Descendant[]): string => {
     const element = node as CustomElement;
     if (!element.children) return '';
     
-    return element.children.map((child: CustomText) => {
+    return element.children.map((child: any) => {
       if (Text.isText(child)) {
         return child.text;
+      } else if (child.type === 'tool-reference') {
+        // Format tool reference
+        const toolRef = child as ToolReferenceElement;
+        return `\${-_-_-${toolRef.serverName}-_-_-${toolRef.toolName}}`;
       }
       return '';
     }).join('');
@@ -130,18 +142,54 @@ const serialize = (nodes: Descendant[]): string => {
 const Element = (props: {
   attributes: any;
   children: React.ReactNode;
-  element: CustomElement;
+  element: CustomElement | ToolReferenceElement;
 }) => {
   const { attributes, children, element } = props;
+  
+  // We need to use useSlate inside a component that's rendered within a Slate context
+  const ToolReferenceComponent = () => {
+    const editor = useSlate();
+    const toolRef = element as ToolReferenceElement;
+    
+    return (
+      <span 
+        contentEditable={false}
+        className="tool-reference-container"
+      >
+  <span className="tool-reference">
+    {`${'{-_-_-' + toolRef.serverName + '-_-_-' + toolRef.toolName + '}'}`}
+  </span>
+  <span
+    className="tool-reference-delete"
+    role="button"
+    tabIndex={0}
+    onClick={(e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const path = ReactEditor.findPath(editor, element);
+      Transforms.removeNodes(editor, { at: path });
+    }}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        const path = ReactEditor.findPath(editor, element);
+        Transforms.removeNodes(editor, { at: path });
+      }
+    }}
+  >
+    ×
+  </span>
+      </span>
+    );
+  };
   
   switch (element.type) {
     case 'tool-reference':
       return (
-        <span 
-          {...attributes} 
-          className="tool-binding"
-        >
-          {children}
+        <span {...attributes} className="tool-reference-wrapper">
+          <ToolReferenceComponent />
+          {children} {/* Required by Slate */}
         </span>
       );
     default:
@@ -296,8 +344,25 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   onModeChange,
   customPreviewRenderer
 }, ref) => {
-  // Create a Slate editor object that won't change across renders
-  const editor = useMemo(() => withHistory(withReact(createEditor())), []);
+  // Create a Slate editor object with custom plugins
+  const editor = useMemo(() => {
+    const e = withHistory(withReact(createEditor()));
+    
+    // Add custom handling for tool references
+    const { isInline, isVoid } = e;
+    
+    // Mark tool references as inline elements
+    e.isInline = element => {
+      return element.type === 'tool-reference' ? true : isInline(element);
+    };
+    
+    // Mark tool references as void (non-editable)
+    e.isVoid = element => {
+      return element.type === 'tool-reference' ? true : isVoid(element);
+    };
+    
+    return e;
+  }, []);
   
   // State for editor mode (raw or preview)
   const [mode, setMode] = useState<'raw' | 'preview'>('raw');
@@ -307,34 +372,59 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   
   // Track if we're handling an external update
   const isExternalUpdate = useRef(false);
+  // Force re-render after tool insertion
+  const [forceUpdate, setForceUpdate] = useState(0);
   
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
-      // Insert text at the current selection
-      if (editor.selection) {
-        // If there's a selection, replace it with the text
-        Transforms.insertText(editor, text);
+      // Check if the text is a tool reference
+      const match = text.match(toolBindingRegex);
+      
+      if (match && match[0] === text) {
+        // It's a complete tool reference, insert it as a tool reference element
+        const serverName = match[1];
+        const toolName = match[2];
+        
+        const toolReference: ToolReferenceElement = {
+          type: 'tool-reference',
+          serverName,
+          toolName,
+          children: [{ text: '' }]
+        };
+        
+        if (editor.selection) {
+          // If there's a selection, replace it with the tool reference
+          Transforms.insertNodes(editor, toolReference);
+        } else {
+          // If there's no selection, insert at the end of the document
+          Transforms.select(editor, Editor.end(editor, []));
+          Transforms.insertNodes(editor, toolReference);
+        }
+        
+        // Move selection after the inserted node
+        Transforms.move(editor);
+        
+        // Force a re-render to ensure the tool reference is displayed immediately
+        setForceUpdate(prev => prev + 1);
+        
+        // Also directly update the slateValue state to ensure consistency
+        const updatedValue = [...editor.children] as Descendant[];
+        setSlateValue(updatedValue);
       } else {
-        // If there's no selection, insert at the end of the document
-        Transforms.select(editor, Editor.end(editor, []));
-        Transforms.insertText(editor, text);
+        // Regular text, insert normally
+        if (editor.selection) {
+          // If there's a selection, replace it with the text
+          Transforms.insertText(editor, text);
+        } else {
+          // If there's no selection, insert at the end of the document
+          Transforms.select(editor, Editor.end(editor, []));
+          Transforms.insertText(editor, text);
+        }
       }
       
       // Get the updated content as a string
       const newValue = serialize(editor.children as Descendant[]);
-      
-      // Force a re-processing of the content to properly format tool bindings
-      const formattedNodes = deserialize(newValue);
-      
-      // Replace the entire editor content with the formatted nodes
-      Transforms.delete(editor, {
-        at: {
-          anchor: Editor.start(editor, []),
-          focus: Editor.end(editor, []),
-        },
-      });
-      Transforms.insertNodes(editor, formattedNodes);
       
       // Update the value
       onChange(newValue);

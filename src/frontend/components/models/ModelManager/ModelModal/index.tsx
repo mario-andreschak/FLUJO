@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import debounce from 'lodash/debounce';
 import { createLogger } from '@/utils/logger';
 // Create a logger instance for this component
 const log = createLogger('frontend/components/models/ModelManager/ModelModal');
@@ -26,6 +27,7 @@ import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/Pr
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Model } from '@/shared/types';
+import { ModelProvider } from '@/shared/types/model/provider';
 import { modelService } from '@/frontend/services/model';
 
 export interface ModelModalProps {
@@ -55,10 +57,48 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [showBindModal, setShowBindModal] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<Array<{id: string, name: string, description?: string}>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [provider, setProvider] = useState<ModelProvider>('openai');
+  // Create a debounced function for name input
+  const debouncedFetchModels = useCallback(
+    debounce((baseUrl: string) => {
+      if (baseUrl) {
+        log.info(`Debounced fetch models for ${baseUrl}`);
+        fetchModels(baseUrl);
+      }
+    }, 500), // 500ms delay
+    []
+  );
 
-  // Fetch models when baseUrl changes
+  // Clear models list when modal opens
+  useEffect(() => {
+    if (open) {
+      setOpenRouterModels([]);
+    }
+  }, [open]);
+
+  // Fetch models when baseUrl changes and set provider
   useEffect(() => {
     log.debug("Base URL changed", { baseUrl });
+    
+    // Clear the models list when baseUrl changes
+    setOpenRouterModels([]);
+    
+    // Set provider based on baseUrl
+    if (baseUrl.includes('openrouter.ai')) {
+      setProvider('openrouter');
+    } else if (baseUrl.includes('api.x.ai')) {
+      setProvider('xai');
+    } else if (baseUrl.includes('generativelanguage.googleapis.com')) {
+      setProvider('gemini');
+    } else if (baseUrl.includes('api.anthropic.com')) {
+      setProvider('anthropic');
+    } else if (baseUrl.includes('localhost:11434') || baseUrl.includes('127.0.0.1:11434')) {
+      setProvider('ollama');
+    } else if (baseUrl.includes('api.mistral.ai')) {
+      setProvider('mistral');
+    } else {
+      setProvider('openai');
+    }
     
     if (baseUrl) {
       log.info(`Fetching models for ${baseUrl}`);
@@ -66,48 +106,47 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     }
   }, [baseUrl]);
 
-  const fetchModels = async (baseUrl: string) => {
-    log.debug("fetchModels called", { baseUrl });
-    setIsLoadingModels(true);
-    setError(null);
-    try {
-      // Use our server-side API endpoint
-      const url = new URL('/api/model', window.location.origin);
-      url.searchParams.append('action', 'fetchModels');
-      url.searchParams.append('baseUrl', baseUrl);
-      
-      // If we're editing a model, include the model ID to get its API key
-      if (model?.id) {
-        url.searchParams.append('modelId', model.id);
-      }
-      
-      const response = await fetch(url.toString());
-      
-      log.debug("Server API response received", { status: response.status });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      log.debug("Models fetched successfully", { count: data?.data?.length });
-      
-      if (data && Array.isArray(data.data)) {
-        setOpenRouterModels(data.data);
-        log.info("Models set in state", { count: data.data.length });
-      } else {
-        log.error("Unexpected API response format", { data });
-        setOpenRouterModels([]);
-      }
-    } catch (error) {
-      log.warn("Error fetching models", { baseUrl, error });
-      // Add a small delay before showing the error
-      await new Promise(resolve => setTimeout(resolve, 500));
-      // setError(`Failed to load models for ${baseUrl}. ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsLoadingModels(false);
+const fetchModels = async (baseUrl: string) => {
+  log.debug("fetchModels called", { baseUrl, apiKey: apiKey ? "present" : "not present", isApiKeyBound });
+  setIsLoadingModels(true);
+  setError(null);
+  try {
+    // For new models, we need to pass the API key directly
+    // For existing models, we use the model ID to look up the API key on the backend
+    let actualApiKey = apiKey;
+    
+    // If the API key is bound to a global variable, we need to extract the actual key
+    if (isApiKeyBound && boundToGlobalVar && globalEnvVars[boundToGlobalVar]) {
+      const globalValue = globalEnvVars[boundToGlobalVar];
+      actualApiKey = typeof globalValue === 'object' && globalValue !== null && 'value' in globalValue
+        ? globalValue.value as string
+        : globalValue as string;
+      log.debug("Using API key from global variable:", boundToGlobalVar);
     }
-  };
+    
+    const models = model 
+      ? await modelService.fetchProviderModels(baseUrl, model.id)
+      : await modelService.fetchProviderModels(baseUrl, undefined, actualApiKey);
+    
+    log.debug("API key passed to fetchProviderModels:", actualApiKey ? "yes" : "no");
+    
+    log.debug("Models fetched successfully", { count: models?.length });
+    
+    if (Array.isArray(models)) {
+      setOpenRouterModels(models);
+      log.info("Models set in state", { count: models.length });
+    } else {
+      log.warn("Unexpected API response format", { models });
+      setOpenRouterModels([]);
+    }
+  } catch (error) {
+    log.warn("Error fetching models", { baseUrl, error });
+    // Silently fail - don't show error messages in the UI
+    setOpenRouterModels([]);
+  } finally {
+    setIsLoadingModels(false);
+  }
+};
 
   useEffect(() => {
     const loadModel = async () => {
@@ -120,6 +159,28 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         setReasoningSchema(model.reasoningSchema || '');
         setTemperature(model.temperature || '0.0');
         setFunctionCallingSchema(model.functionCallingSchema || '{\n  "tool": "$TOOL_NAME",\n  "parameters": {\n    "$PARAM_NAME1": "$PARAM_VALUE1$",\n    "$PARAM_NAME2": "$PARAM_VALUE2$",\n    "...": "..."\n  }\n}');
+        
+        // Set provider from model if available, otherwise determine from baseUrl
+        if (model.provider) {
+          setProvider(model.provider);
+        } else if (model.baseUrl) {
+          // Determine provider from baseUrl
+          if (model.baseUrl.includes('openrouter.ai')) {
+            setProvider('openrouter');
+          } else if (model.baseUrl.includes('api.x.ai')) {
+            setProvider('xai');
+          } else if (model.baseUrl.includes('generativelanguage.googleapis.com')) {
+            setProvider('gemini');
+          } else if (model.baseUrl.includes('api.anthropic.com')) {
+            setProvider('anthropic');
+          } else if (model.baseUrl.includes('localhost:11434') || model.baseUrl.includes('127.0.0.1:11434')) {
+            setProvider('ollama');
+          } else if (model.baseUrl.includes('api.mistral.ai')) {
+            setProvider('mistral');
+          } else {
+            setProvider('openai');
+          }
+        }
         
         // Check if API key is bound to a global variable
         const apiKeyValue = model.encryptedApiKey || '';
@@ -330,6 +391,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         description: description || undefined,
         encryptedApiKey,
         baseUrl: baseUrl || undefined,
+        provider,
         promptTemplate: promptTemplate || undefined,
         reasoningSchema: reasoningSchema || undefined,
         temperature: temperature || undefined,
@@ -414,30 +476,23 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   <Button 
                     size="small" 
                     variant="outlined" 
-                    onClick={() => setBaseUrl('https://api.x.ai')}
+                    onClick={() => setBaseUrl('https://api.x.ai/v1')}
                   >
                     X.ai
                   </Button>
                   <Button 
                     size="small" 
                     variant="outlined" 
-                    onClick={() => setBaseUrl('https://generativelanguage.googleapis.com')}
+                    onClick={() => setBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai/')}
                   >
                     Gemini
                   </Button>
                   <Button 
                     size="small" 
                     variant="outlined" 
-                    onClick={() => setBaseUrl('https://api.anthropic.com')}
+                    onClick={() => setBaseUrl('https://api.anthropic.com/v1/')}
                   >
                     Anthropic
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => setBaseUrl('https://api.mistral.ai')}
-                  >
-                    Mistral
                   </Button>
                   <Button
                     size="small"
@@ -501,6 +556,11 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   onInputChange={(_, newInputValue) => {
                     setName(newInputValue);
                     setNameError('');
+                    
+                    // Trigger debounced fetch when typing in the technical name
+                    if (baseUrl && newInputValue) {
+                      debouncedFetchModels(baseUrl);
+                    }
                   }}
                   filterOptions={(options, state) => {
                     const inputValue = state.inputValue.toLowerCase();
@@ -722,4 +782,3 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 };
 
 export default ModelModal;
-

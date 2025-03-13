@@ -187,20 +187,50 @@ class ModelService {
 
   /**
    * Fetch models from a provider
+   * @param baseUrl The base URL of the provider
+   * @param modelId Optional model ID for existing models
+   * @param tempApiKey Optional API key for new models that don't have a modelId yet
    */
   async fetchProviderModels(
     baseUrl: string,
-    modelId?: string
+    modelId?: string,
+    tempApiKey?: string
   ): Promise<NormalizedModel[]> {
     log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`);
     try {
-      // Determine provider from baseUrl
-      const provider = getProviderFromBaseUrl(baseUrl);
-      log.debug(`Provider determined as: ${provider}`);
+      // Determine provider from model or baseUrl
+      let provider: ModelProvider;
       
-      // If we need to fetch a specific model's API key (for editing)
-      let apiKey = null;
       if (modelId) {
+        log.debug(`Looking up model with ID: ${modelId}`);
+        const models = await this.loadModels();
+        const model = models.find(m => m.id === modelId);
+        
+        if (model && model.provider) {
+          // Use the stored provider if available
+          provider = model.provider;
+          log.debug(`Using stored provider: ${provider}`);
+        } else {
+          // Fall back to URL-based detection
+          provider = getProviderFromBaseUrl(baseUrl);
+          log.debug(`Provider determined from URL as: ${provider}`);
+        }
+      } else {
+        // For new models, determine provider from baseUrl
+        provider = getProviderFromBaseUrl(baseUrl);
+        log.debug(`Provider determined from URL as: ${provider}`);
+      }
+      
+      // Determine the API key to use
+      let apiKey = null;
+      
+      // If a temporary API key is provided (for new models), use it directly
+      if (tempApiKey) {
+        log.debug('Using temporary API key for new model');
+        apiKey = tempApiKey;
+      } 
+      // Otherwise, if we have a modelId, look up the API key for that model
+      else if (modelId) {
         log.debug(`Looking up API key for model ID: ${modelId}`);
         const models = await this.loadModels();
         const model = models.find(m => m.id === modelId);
@@ -212,6 +242,8 @@ class ModelService {
         } else {
           log.warn(`Model with ID ${modelId} not found for API key resolution`);
         }
+      } else {
+        log.warn(`No API key available - neither modelId nor tempApiKey provided`);
       }
       
       // Fetch models based on provider

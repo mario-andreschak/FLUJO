@@ -119,6 +119,8 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
+  let cwd = config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
+  log.debug(`cwd: ${cwd}`);
 
   // Create the transport with stderr capture
   log.info(`Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`);
@@ -126,7 +128,7 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
     command: command,
     args: args,
     env: config.env,
-    cwd: config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`, // Set working directory to the server's directory
+    cwd: cwd, // Set working directory to the server's directory
     stderr: 'pipe', // Pipe stderr so we can capture it
   });
 

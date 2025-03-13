@@ -37,10 +37,17 @@ const nextConfig: NextConfig = {
           chunks: 'all',
           cacheGroups: {
             vendors: {
-              test: /[\\/]node_modules[\\/]/,
+              test: /[\\/]node_modules[\\/](?!.*\.css$)/,  // Exclude CSS files from vendors chunk
               name: 'vendors',
               priority: -10,
               reuseExistingChunk: true,
+            },
+            styles: {
+              name: 'styles',
+              test: /\.css$/,
+              chunks: 'all',
+              enforce: true,
+              priority: 20,
             },
           },
         },

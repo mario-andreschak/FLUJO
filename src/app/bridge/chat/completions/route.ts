@@ -6,7 +6,7 @@ import { parseRequestParameters, _logRequestDetails } from './requestParser';
 const log = createLogger('app/bridge/chat/completions/route');
 
 // Rate limiting - simple implementation
-const RATE_LIMIT = 60; // requests per minute
+const RATE_LIMIT = 6000; // requests per minute
 const requestCounts = new Map<string, { count: number, resetTime: number }>();
 
 function checkRateLimit(ip: string): boolean {
@@ -80,12 +80,15 @@ async function handleRequest(request: NextRequest) {
         ip,
         duration: `${duration}ms`
       });
+      // Return OpenAI-compatible rate limit error
+      // https://platform.openai.com/docs/guides/error-codes/api-errors
       return NextResponse.json(
         {
           error: {
             message: 'Rate limit exceeded. Please try again later.',
             type: 'rate_limit_error',
-            code: 'rate_limit_exceeded'
+            code: 'rate_limit_exceeded',
+            param: null
           }
         },
         { status: 429 }
@@ -141,12 +144,15 @@ async function handleRequest(request: NextRequest) {
       duration: `${duration}ms`
     });
     
+    // Return OpenAI-compatible error format
+    // https://platform.openai.com/docs/guides/error-codes/api-errors
     return NextResponse.json(
       {
         error: {
           message: error instanceof Error ? error.message : 'Failed to process chat completion',
           type: 'internal_error',
-          code: 'internal_error'
+          code: 'internal_error',
+          param: null
         }
       },
       { status: 500 }

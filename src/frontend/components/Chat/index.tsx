@@ -26,11 +26,20 @@ export interface Attachment {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timestamp: number;
   attachments?: Attachment[];
   disabled?: boolean;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: string;
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
 }
 
 export interface Conversation {
@@ -66,7 +75,6 @@ const Chat: React.FC = () => {
   // Initialize OpenAI client
   useEffect(() => {
     // Create OpenAI client with custom baseURL
-    // In a real app, you'd get this from environment variables or settings
     const baseURL = window.location.origin + '/bridge';
     
     openaiRef.current = new OpenAI({
@@ -271,10 +279,43 @@ const Chat: React.FC = () => {
             ).join('\n\n');
           }
           
+          // Create properly typed message based on role
+          if (msg.role === 'user') {
+            return {
+              role: 'user',
+              content
+            } as OpenAI.ChatCompletionUserMessageParam;
+          } else if (msg.role === 'assistant') {
+            return {
+              role: 'assistant',
+              content,
+              tool_calls: msg.tool_calls
+            } as OpenAI.ChatCompletionAssistantMessageParam;
+          } else if (msg.role === 'system') {
+            return {
+              role: 'system',
+              content
+            } as OpenAI.ChatCompletionSystemMessageParam;
+          } else if (msg.role === 'tool') {
+            if (!msg.tool_call_id) {
+              // If missing tool_call_id, convert to user message
+              return {
+                role: 'user',
+                content: `Tool result: ${content}`
+              } as OpenAI.ChatCompletionUserMessageParam;
+            }
+            return {
+              role: 'tool',
+              content,
+              tool_call_id: msg.tool_call_id
+            } as OpenAI.ChatCompletionToolMessageParam;
+          }
+          
+          // Fallback to user message
           return {
-            role: msg.role,
+            role: 'user',
             content
-          };
+          } as OpenAI.ChatCompletionUserMessageParam;
         });
       
       // Call the API using flow name instead of ID
@@ -284,15 +325,43 @@ const Chat: React.FC = () => {
         stream: false,
       });
       
-      // Add assistant response to conversation
+      // Get the assistant message from the response
+      const responseMessage = completion.choices[0].message;
+      
+      // Create assistant message with tool calls if present
       const assistantMessage: ChatMessage = {
         id: uuidv4(),
         role: 'assistant',
-        content: completion.choices[0].message.content || '',
-        timestamp: Date.now()
+        content: responseMessage.content || '',
+        timestamp: Date.now(),
+        tool_calls: responseMessage.tool_calls
       };
       
-      const updatedMessages = [...conversation.messages, assistantMessage];
+      let updatedMessages = [...conversation.messages, assistantMessage];
+      
+      // If there are tool calls in the response, add tool result messages
+      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+        log.info('Tool calls found in response', { 
+          toolCallsCount: responseMessage.tool_calls.length,
+          toolCalls: JSON.stringify(responseMessage.tool_calls)
+        });
+        
+        // For each tool call, add a tool message with the result
+        // In a real implementation, you would process the tool calls and get actual results
+        // For now, we'll add placeholder tool result messages
+        responseMessage.tool_calls.forEach(toolCall => {
+          const toolResultMessage: ChatMessage = {
+            id: uuidv4(),
+            role: 'tool',
+            content: `Result for tool call: ${toolCall.function.name}`,
+            timestamp: Date.now(),
+            tool_call_id: toolCall.id
+          };
+          
+          updatedMessages.push(toolResultMessage);
+        });
+      }
+      
       const updatedConversation = {
         ...conversation,
         messages: updatedMessages
@@ -479,4 +548,3 @@ const Chat: React.FC = () => {
 };
 
 export default Chat;
-

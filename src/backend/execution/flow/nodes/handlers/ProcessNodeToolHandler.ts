@@ -10,6 +10,9 @@ export class ProcessNodeToolHandler {
    * Prepare tools for OpenAI function calling
    */
   static prepareTools(prepResult: any): any[] {
+    // Add verbose logging of the input
+    log.verbose('prepareTools input', JSON.stringify(prepResult));
+    
     // Check if we have available tools
     if (!prepResult.availableTools || !Array.isArray(prepResult.availableTools) || prepResult.availableTools.length === 0) {
       log.debug('No available tools found in prepResult', {
@@ -17,6 +20,10 @@ export class ProcessNodeToolHandler {
         isArray: Array.isArray(prepResult.availableTools),
         toolsCount: prepResult.availableTools?.length || 0
       });
+      
+      // Add verbose logging of the empty result
+      log.verbose('prepareTools empty result', JSON.stringify([]));
+      
       return [];
     }
     
@@ -74,6 +81,9 @@ export class ProcessNodeToolHandler {
     log.debug(`mapped tools: ${JSON.stringify(mapped_tools)}`);
     
     // Convert MCP tools to OpenAI function calling format
+    // Add verbose logging of the mapped tools
+    log.verbose('prepareTools mapped tools', JSON.stringify(mapped_tools));
+    
     return mapped_tools;
   }
 
@@ -81,8 +91,22 @@ export class ProcessNodeToolHandler {
    * Process MCP nodes and collect available tools
    */
   static async processMCPNodes(mcpNodes: any[], sharedState: any): Promise<void> {
+    // Add verbose logging of the input
+    log.verbose('processMCPNodes input', JSON.stringify({
+      mcpNodes,
+      sharedState: {
+        // Only log relevant parts of sharedState to avoid excessive logging
+        mcpContext: sharedState.mcpContext,
+        availableTools: sharedState.availableTools
+      }
+    }));
+    
     if (!mcpNodes || mcpNodes.length === 0) {
       log.debug('No MCP nodes to process');
+      
+      // Add verbose logging of the empty result
+      log.verbose('processMCPNodes empty result', JSON.stringify(null));
+      
       return;
     }
 
@@ -175,6 +199,11 @@ export class ProcessNodeToolHandler {
       };
       
       log.info(`Stored ${allAvailableTools.length} total tools from all MCP nodes`);
+      
+      // Add verbose logging of the final result
+      log.verbose('processMCPNodes final result', JSON.stringify({
+        availableTools: allAvailableTools
+      }));
       log.debug('Tools storage details:', {
         sharedStateToolsCount: sharedState.availableTools.length,
         mcpContextToolsCount: sharedState.mcpContext.availableTools.length,
@@ -190,6 +219,12 @@ export class ProcessNodeToolHandler {
    * Add tool call tracking information
    */
   static addToolCallTracking(toolCalls: any[], nodeExecutionTracker: any[]): void {
+    // Add verbose logging of the input
+    log.verbose('addToolCallTracking input', JSON.stringify({
+      toolCalls,
+      nodeExecutionTrackerLength: nodeExecutionTracker?.length || 0
+    }));
+    
     if (!Array.isArray(toolCalls) || !Array.isArray(nodeExecutionTracker)) {
       return;
     }

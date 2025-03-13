@@ -1,3 +1,6 @@
+/* Import XYFlow styles globally */
+@import '@xyflow/react/dist/style.css';
+
 :root {
   /* Light theme variables (default) */
   --background: #FFFFFF;

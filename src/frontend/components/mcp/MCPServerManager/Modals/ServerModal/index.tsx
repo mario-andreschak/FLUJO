@@ -58,11 +58,21 @@ const ServerModal: React.FC<ServerModalProps> = ({
   const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery') => {
     setActiveTab(newValue);
   };
+  
+  // Handle close with state reset
+  const handleClose = () => {
+    // Reset parsed config when modal is closed
+    setParsedConfig(null);
+    // Reset to default tab
+    setActiveTab('github');
+    // Call the original onClose
+    onClose();
+  };
 
   return (
     <Dialog 
       open={isOpen} 
-      onClose={onClose}
+      onClose={handleClose}
       maxWidth="xl"
       fullWidth
       PaperProps={{
@@ -91,7 +101,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
         <IconButton
           edge="end"
           color="inherit"
-          onClick={onClose}
+          onClick={handleClose}
           aria-label="close"
         >
           <CloseIcon />

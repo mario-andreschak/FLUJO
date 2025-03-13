@@ -14,6 +14,15 @@ class ModelService {
   private modelsCache: Model[] | null = null;
 
   /**
+   * Clear the models cache
+   * This forces the next loadModels call to fetch fresh data
+   */
+  clearCache(): void {
+    log.debug('clearCache: Clearing models cache');
+    this.modelsCache = null;
+  }
+
+  /**
    * Load all models
    */
   async loadModels(): Promise<Model[]> {
@@ -295,6 +304,12 @@ class ModelService {
   async encryptApiKey(apiKey: string): Promise<string | null> {
     log.debug('encryptApiKey: Entering method');
     try {
+      // Handle empty API key case
+      if (!apiKey || apiKey.trim() === '') {
+        log.debug('encryptApiKey: Empty API key provided, returning empty string');
+        return '';
+      }
+      
       // Call the API to encrypt the API key
       const response = await fetch('/api/model', {
         method: 'POST',
@@ -450,9 +465,12 @@ class ModelService {
 
   /**
    * Fetch models from a provider
+   * @param baseUrl The base URL of the provider
+   * @param modelId Optional model ID for existing models
+   * @param tempApiKey Optional API key for new models that don't have a modelId yet
    */
-  async fetchProviderModels(baseUrl: string, modelId?: string): Promise<any[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`);
+  async fetchProviderModels(baseUrl: string, modelId?: string, tempApiKey?: string): Promise<any[]> {
+    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, modelId: ${modelId}, tempApiKey present: ${!!tempApiKey}`);
     try {
       // Build the URL with query parameters
       let url = `/api/model?action=fetchModels&baseUrl=${encodeURIComponent(baseUrl)}`;
@@ -460,19 +478,43 @@ class ModelService {
         url += `&modelId=${encodeURIComponent(modelId)}`;
       }
       
-      // Call the API to fetch provider models
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to fetch provider models');
+      // For new models, we need to pass the API key directly
+      // For existing models, we use the model ID to look up the API key on the backend
+      if (!modelId && tempApiKey) {
+        log.debug('fetchProviderModels: Using temporary API key for new model');
+        // Call the API to fetch provider models with the temporary API key
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tempApiKey
+          })
+        });
+        
+        if (!response.ok) {
+          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
+          return []; // Return empty array instead of throwing
+        }
+        
+        const data = await response.json();
+        return data.data || [];
+      } else {
+        // Call the API to fetch provider models normally for existing models
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
+          return []; // Return empty array instead of throwing
+        }
+        
+        const data = await response.json();
+        return data.data || [];
       }
-      
-      const data = await response.json();
-      return data.data || [];
     } catch (error) {
-      log.error(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
-      throw error;
+      log.warn(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
+      return []; // Return empty array instead of throwing
     }
   }
 }

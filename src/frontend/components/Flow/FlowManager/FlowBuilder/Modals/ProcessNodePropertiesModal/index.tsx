@@ -20,8 +20,8 @@ import useModelManagement from './hooks/useModelManagement';
 import useServerConnection from './hooks/useServerConnection';
 import useNodeData from './hooks/useNodeData';
 import NodeConfiguration from './NodeConfiguration';
-import ModelBinding from './ModelBinding';
-import ServerTools from './ServerTools';
+import ModelBinding from './ModelBinding/index';
+import ServerTools from './ServerTools/index';
 import PromptTemplateEditor from './PromptTemplateEditor';
 import NodeProperties from './NodeProperties';
 import { getNodeProperties } from './utils';
@@ -81,16 +81,23 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
 
   const handleInsertToolBinding = (serverName: string, toolName: string) => {
-    // Get the tool description if available
-    const tool = serverToolsMap[serverName]?.find(t => t.name === toolName);
+    // Log the parameters to help with debugging
+    log.debug('handleInsertToolBinding called with:', JSON.stringify({ serverName, toolName }));
+    
+    // Validate the parameters
+    if (!serverName || !toolName) {
+      log.warn('Invalid parameters for handleInsertToolBinding:', { serverName, toolName });
+      return;
+    }
+    
+    // Get the tool description if available from serverToolsMap
+    const toolsMap = serverToolsMap as Record<string, any[]>;
+    const tools = toolsMap[serverName] || [];
+    const tool = tools.find((t: any) => t.name === toolName);
     const toolDescription = tool?.description || '';
     
     // Create the binding in the format that will be visually displayed as a pill
     const binding = `\${-_-_-${serverName}-_-_-${toolName}}`;
-    
-    // Create the preview text that will be shown when clicking preview
-    // This will be handled by the PromptBuilder component which converts the binding to a formatted text
-    // The format is: [The User has referenced a tool `{tool_name}` - (tool description) with the following parameters: param1: `param1 description` ... ]
     
     // Add a space before the binding if needed
     const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
@@ -98,7 +105,11 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
 
     // Use the ref to insert text at the current cursor position
     if (promptBuilderRef.current) {
+      log.debug('Inserting text into PromptBuilder:', JSON.stringify({ textToInsert }));
       promptBuilderRef.current.insertText(textToInsert);
+      log.debug('Tool binding inserted successfully');
+    } else {
+      log.warn('promptBuilderRef.current is null, cannot insert text');
     }
     
     // Update the promptTemplate state to reflect the change
@@ -194,14 +205,15 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               <ServerTools
                 isLoadingServers={isLoadingServers}
                 connectedServers={connectedServers}
-                serverToolsMap={serverToolsMap}
                 serverStatuses={serverStatuses}
+                serverToolsMap={serverToolsMap}
                 isLoadingTools={isLoadingTools}
-                handleSelectToolServer={handleSelectToolServer}
                 handleInsertToolBinding={handleInsertToolBinding}
                 selectedToolServer={selectedToolServer}
+                handleSelectToolServer={handleSelectToolServer}
                 isLoadingSelectedServerTools={isLoadingSelectedServerTools}
                 promptBuilderRef={promptBuilderRef}
+                flowNodes={flowNodes}
                 handleRetryServer={handleRetryServer}
                 handleRestartServer={handleRestartServer}
               />

@@ -11,7 +11,8 @@ import {
   ListItemIcon, 
   ListItemText,
   Tooltip,
-  Chip
+  Chip,
+  Divider
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -20,6 +21,9 @@ import BlockIcon from '@mui/icons-material/Block';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import MicIcon from '@mui/icons-material/Mic';
+import BuildIcon from '@mui/icons-material/Build';
+import CodeIcon from '@mui/icons-material/Code';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { ChatMessage } from './index';
 
 interface ChatMessagesProps {
@@ -90,7 +94,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         >
           <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
             <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-              {message.role === 'user' ? 'You' : 'Assistant'} • {formatTime(message.timestamp)}
+              {message.role === 'user' 
+                ? 'You' 
+                : message.role === 'assistant' 
+                  ? 'Assistant' 
+                  : message.role === 'tool' 
+                    ? 'Tool' 
+                    : 'System'} • {formatTime(message.timestamp)}
             </Typography>
             
             {message.disabled && (
@@ -119,9 +129,23 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               maxWidth: '80%',
               width: 'fit-content',
               borderRadius: 2,
-              bgcolor: message.role === 'user' ? 'primary.light' : 'background.paper',
-              color: message.role === 'user' ? 'primary.contrastText' : 'text.primary',
+              bgcolor: message.role === 'user' 
+                ? 'primary.light' 
+                : message.role === 'assistant' 
+                  ? 'background.paper'
+                  : message.role === 'tool'
+                    ? 'success.light'
+                    : 'info.light',
+              color: message.role === 'user' 
+                ? 'primary.contrastText' 
+                : message.role === 'assistant'
+                  ? 'text.primary'
+                  : message.role === 'tool'
+                    ? 'success.contrastText'
+                    : 'info.contrastText',
               position: 'relative',
+              borderLeft: message.role === 'tool' ? '4px solid' : 'none',
+              borderColor: message.role === 'tool' ? 'success.main' : 'transparent',
             }}
           >
             <Box sx={{ 
@@ -182,6 +206,85 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                 {message.content}
               </ReactMarkdown>
             </Box>
+            
+            {/* Display tool calls if any */}
+            {message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0 && (
+              <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                  Tool Calls:
+                </Typography>
+                
+                {message.tool_calls.map((toolCall) => {
+                  // Extract tool name from the function name
+                  // Format is "-_-_-serverName-_-_-toolName"
+                  const parts = toolCall.function.name.split('-_-_-');
+                  const toolName = parts.length === 3 ? parts[2] : toolCall.function.name;
+                  
+                  // Try to parse the arguments as JSON
+                  let formattedArgs = toolCall.function.arguments;
+                  try {
+                    const parsedArgs = JSON.parse(toolCall.function.arguments);
+                    formattedArgs = JSON.stringify(parsedArgs, null, 2);
+                  } catch (e) {
+                    // If parsing fails, use the original string
+                  }
+                  
+                  return (
+                    <Box 
+                      key={toolCall.id} 
+                      sx={{ 
+                        p: 1,
+                        borderRadius: 1,
+                        bgcolor: 'rgba(0, 0, 0, 0.04)',
+                        mb: 0.5
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                        <BuildIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} />
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+                          {toolName}
+                        </Typography>
+                        <Chip 
+                          label={`ID: ${toolCall.id.substring(0, 8)}...`}
+                          size="small" 
+                          color="default" 
+                          variant="outlined" 
+                          sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+                        />
+                      </Box>
+                      
+                      <Box 
+                        component="pre" 
+                        sx={{ 
+                          bgcolor: 'action.hover',
+                          p: 1,
+                          borderRadius: '4px',
+                          overflowX: 'auto',
+                          fontFamily: 'monospace',
+                          fontSize: '0.75rem',
+                          my: 0.5,
+                          maxHeight: '150px'
+                        }}
+                      >
+                        {formattedArgs}
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+            
+            {/* Display tool call ID for tool messages */}
+            {message.role === 'tool' && message.tool_call_id && (
+              <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <CheckCircleIcon fontSize="small" sx={{ mr: 1, color: 'success.main' }} />
+                  <Typography variant="caption" color="text.secondary">
+                    Tool Result for call ID: {message.tool_call_id.substring(0, 8)}...
+                  </Typography>
+                </Box>
+              </Box>
+            )}
             
             {/* Display attachments if any */}
             {message.attachments && message.attachments.length > 0 && (
