@@ -2,7 +2,11 @@
 ->->-> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <-<-<-
 
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
--> Create a Github Issue and I will look into it! 
+-> Create a Github Issue and I will look into it!
+
+Here's a video guiding you through the whole thing - from installation to output! (15min)
+[![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
+ 
 
 # IMPORTANT SECURITY NOTE
 FLUJO has currently EXTENSIVE logging enabled by default! This **will expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
