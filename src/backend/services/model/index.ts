@@ -243,7 +243,7 @@ class ModelService {
           log.warn(`Model with ID ${modelId} not found for API key resolution`);
         }
       } else {
-        log.warn(`No API key available - neither modelId nor tempApiKey provided`);
+        log.error(`No API key available - neither modelId nor tempApiKey provided`);
       }
       
       // Fetch models based on provider

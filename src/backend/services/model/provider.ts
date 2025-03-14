@@ -18,15 +18,12 @@ export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
     return 'gemini';
   } else if (baseUrl.includes('api.anthropic.com')) {
     return 'anthropic';
-  } else if (baseUrl.includes('localhost:11434') || baseUrl.includes('127.0.0.1:11434')) {
-    return 'ollama';
   } else if (baseUrl.includes('api.mistral.ai')) {
     return 'mistral';
   } else if (baseUrl.includes('api.openai.com')) {
     return 'openai';
   } else {
-    // Default to openai for all other providers since they're OpenAI-compatible
-    return 'openai';
+    return 'ollama';
   }
 }
 
