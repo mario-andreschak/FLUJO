@@ -1,9 +1,32 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Box, Typography, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, TextField } from '@mui/material';
+import React, { useState, useEffect, useCallback } from 'react';
+import { 
+  Box, 
+  Typography, 
+  Button, 
+  Dialog, 
+  DialogTitle, 
+  DialogContent, 
+  DialogContentText, 
+  DialogActions, 
+  TextField,
+  Snackbar,
+  Alert,
+  Breadcrumbs,
+  Link,
+  Tooltip,
+  Paper,
+  IconButton,
+  Fade,
+  Zoom,
+  useTheme
+} from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import HomeIcon from '@mui/icons-material/Home';
+import AddIcon from '@mui/icons-material/Add';
 import FlowBuilder from '@/frontend/components/Flow/FlowManager/FlowBuilder';
-import FlowLayout from '@/frontend/components/Flow/FlowManager/FlowLayout';
+import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 // eslint-disable-next-line import/named
@@ -14,17 +37,26 @@ const log = createLogger('app/flows/page');
 
 const FlowsPage = () => {
   log.debug('Rendering FlowsPage');
+  const theme = useTheme();
   const [flows, setFlows] = useState<Flow[]>([]);
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
   
   // Copy flow dialog state
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [flowToCopy, setFlowToCopy] = useState<Flow | null>(null);
   const [newFlowName, setNewFlowName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
+  
+  // Snackbar for notifications
+  const [snackbar, setSnackbar] = useState<{open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning'}>({
+    open: false,
+    message: '',
+    severity: 'info'
+  });
 
-  // Load flows on component mount
+  // Load flows on component mount and when selected flow changes
   useEffect(() => {
     log.info('Loading flows');
     const loadFlows = async () => {
@@ -33,18 +65,58 @@ const FlowsPage = () => {
         const loadedFlows = await flowService.loadFlows();
         log.debug('Flows loaded successfully', { count: loadedFlows.length });
         setFlows(loadedFlows);
+        
+        // If a flow was previously selected, verify it still exists
+        if (selectedFlow) {
+          const flowExists = loadedFlows.some(flow => flow.id === selectedFlow);
+          if (!flowExists) {
+            log.warn('Previously selected flow no longer exists', { flowId: selectedFlow });
+            setSelectedFlow(null);
+            setIsEditing(false);
+            showSnackbar('The previously selected flow is no longer available', 'warning');
+          }
+        }
       } catch (error) {
         log.error('Error loading flows', error);
+        showSnackbar('Failed to load flows', 'error');
       } finally {
         setIsLoading(false);
       }
     };
 
     loadFlows();
+  }, [selectedFlow]);
+  
+  // Handle flow selection
+  const handleSelectFlow = useCallback((flowId: string) => {
+    log.debug('Flow selected', { flowId });
+    setSelectedFlow(flowId);
+    setIsEditing(true); // Auto-enter edit mode when a flow is selected
+  }, []);
+  
+  // Handle back to dashboard
+  const handleBackToDashboard = useCallback(() => {
+    log.debug('Returning to dashboard');
+    setIsEditing(false);
+  }, []);
+  
+  // Show snackbar notification
+  const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+    log.debug('Showing snackbar', { message, severity });
+    setSnackbar({
+      open: true,
+      message,
+      severity
+    });
+  }, []);
+  
+  // Handle snackbar close
+  const handleSnackbarClose = useCallback(() => {
+    setSnackbar(prev => ({ ...prev, open: false }));
   }, []);
 
   // Validate flow name
-  const validateFlowName = (name: string): string | null => {
+  const validateFlowName = useCallback((name: string): string | null => {
     log.debug('Validating flow name', { name });
     
     // Check if name is empty
@@ -68,7 +140,7 @@ const FlowsPage = () => {
     
     log.debug('Flow name validation passed');
     return null;
-  };
+  }, [flows]);
 
   const handleSaveFlow = async (flow: Flow) => {
     log.info('Saving flow', { flowId: flow.id, flowName: flow.name });
@@ -93,8 +165,10 @@ const FlowsPage = () => {
       });
       
       setSelectedFlow(flow.id);
+      showSnackbar('Flow saved successfully', 'success');
     } catch (error) {
       log.error('Error saving flow', error);
+      showSnackbar('Failed to save flow', 'error');
     }
   };
 
@@ -110,9 +184,13 @@ const FlowsPage = () => {
       if (selectedFlow === flowId) {
         log.debug('Clearing selected flow as it was deleted');
         setSelectedFlow(null);
+        setIsEditing(false);
       }
+      
+      showSnackbar('Flow deleted', 'success');
     } catch (error) {
       log.error('Error deleting flow', error);
+      showSnackbar('Failed to delete flow', 'error');
     }
   };
   
@@ -126,6 +204,7 @@ const FlowsPage = () => {
       setCopyDialogOpen(true);
     } else {
       log.warn('Flow to copy not found', { flowId });
+      showSnackbar('Flow not found', 'error');
     }
   };
   
@@ -141,6 +220,7 @@ const FlowsPage = () => {
     log.info('Confirming flow copy');
     if (!flowToCopy) {
       log.warn('No flow to copy');
+      showSnackbar('No flow selected to copy', 'error');
       return;
     }
     
@@ -171,6 +251,8 @@ const FlowsPage = () => {
     // Select the new flow
     log.debug('Selecting newly copied flow');
     setSelectedFlow(newFlow.id);
+    setIsEditing(true);
+    showSnackbar(`Created a copy named "${newFlowName}"`, 'success');
   };
   
   const handleNewFlowNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -179,9 +261,97 @@ const FlowsPage = () => {
     setNewFlowName(name);
     setNameError(validateFlowName(name));
   };
+  
+  // Create a new flow with a unique name
+  const createNewFlow = async () => {
+    log.info('Creating new flow');
+    // Generate a unique name for the new flow
+    let baseName = "NewFlow";
+    let newName = baseName;
+    let counter = 1;
+    
+    // Check if a flow with this name already exists
+    while (flows.some(flow => flow.name === newName)) {
+      newName = `${baseName}${counter}`;
+      counter++;
+    }
+    
+    // Create a new flow with the unique name
+    const newFlow = flowService.createNewFlow(newName);
+    
+    // Add a Start node
+    const startNode = flowService.createNode('start', { x: 250, y: 150 });
+    if (!startNode.data.properties) {
+      startNode.data.properties = {};
+    }
+    startNode.data.properties.promptTemplate = '';
+    
+    newFlow.nodes = [startNode];
+    newFlow.edges = [];
+    
+    // Save the new flow
+    await handleSaveFlow(newFlow);
+    setIsEditing(true); // Switch to editor mode automatically
+    showSnackbar('New flow created', 'success');
+  };
+
+  // Render content based on state (dashboard or editor)
+  const renderContent = () => {
+    if (isEditing && selectedFlow) {
+      const selectedFlowData = flows.find((f: Flow) => f.id === selectedFlow);
+      if (!selectedFlowData) {
+        return (
+          <Box sx={{ p: 4, textAlign: 'center' }}>
+            <Typography variant="h6" color="error">
+              Selected flow not found
+            </Typography>
+            <Button 
+              variant="contained" 
+              onClick={handleBackToDashboard}
+              sx={{ mt: 2 }}
+            >
+              Back to Dashboard
+            </Button>
+          </Box>
+        );
+      }
+      
+      return (
+        <Fade in={true} timeout={300}>
+          <Box sx={{ height: '100%' }}>
+            <FlowBuilder
+              key={selectedFlow}
+              initialFlow={selectedFlowData}
+              onSave={handleSaveFlow}
+              onDelete={handleDeleteFlow}
+              allFlows={flows}
+              onSelectFlow={setSelectedFlow}
+            />
+          </Box>
+        </Fade>
+      );
+    }
+    
+    return (
+      <Fade in={true} timeout={300}>
+        <Box sx={{ height: '100%' }}>
+          <FlowDashboard
+            flows={flows}
+            selectedFlow={selectedFlow}
+            onSelectFlow={handleSelectFlow}
+            onDeleteFlow={handleDeleteFlow}
+            onCopyFlow={handleCopyFlow}
+            onCreateFlow={createNewFlow}
+            isLoading={isLoading}
+          />
+        </Box>
+      </Fade>
+    );
+  };
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Header with breadcrumbs and actions */}
       <Box
         sx={{
           p: 2,
@@ -192,61 +362,78 @@ const FlowsPage = () => {
           borderColor: 'divider',
         }}
       >
-        <Typography variant="h5">Flow Builder</Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={() => {
-              // Generate a unique name for the new flow
-              let baseName = "NewFlow";
-              let newName = baseName;
-              let counter = 1;
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {isEditing && selectedFlow && (
+            <IconButton 
+              color="primary" 
+              onClick={handleBackToDashboard}
+              sx={{ mr: 1 }}
+            >
+              <ArrowBackIcon />
+            </IconButton>
+          )}
+          
+          <Box>
+            <Breadcrumbs aria-label="breadcrumb" sx={{ mb: 1 }}>
+              {/* Home link is always present */}
+              <Link 
+                color="inherit" 
+                href="/"
+                sx={{ display: 'flex', alignItems: 'center' }}
+              >
+                <HomeIcon sx={{ mr: 0.5 }} fontSize="inherit" />
+                Home
+              </Link>
               
-              // Check if a flow with this name already exists
-              while (flows.some(flow => flow.name === newName)) {
-                newName = `${baseName}${counter}`;
-                counter++;
+              {/* Conditionally render either just "Flows" or "Flows" + "Editor" */}
+              {isEditing && selectedFlow ? (
+                <Link 
+                  color="inherit"
+                  component="button"
+                  onClick={handleBackToDashboard}
+                >
+                  Flows
+                </Link>
+              ) : (
+                <Typography color="text.primary">Flows</Typography>
+              )}
+              
+              {/* Add flow name as final breadcrumb when editing */}
+              {isEditing && selectedFlow && (
+                <Typography color="text.primary">
+                  {flows.find(f => f.id === selectedFlow)?.name || 'Editor'}
+                </Typography>
+              )}
+            </Breadcrumbs>
+            <Typography variant="h5">
+              {isEditing && selectedFlow 
+                ? `Editing: ${flows.find(f => f.id === selectedFlow)?.name || 'Flow'}`
+                : 'Flow Dashboard'
               }
-              
-              // Create a new flow with the unique name
-              const newFlow = flowService.createNewFlow(newName);
-              
-              // Add a Start node
-              const startNode = flowService.createNode('start', { x: 250, y: 150 });
-              if (!startNode.data.properties) {
-                startNode.data.properties = {};
-              }
-              startNode.data.properties.promptTemplate = '';
-              
-              newFlow.nodes = [startNode];
-              newFlow.edges = [];
-              
-              // Save the new flow
-              handleSaveFlow(newFlow);
-            }}
-          >
-            New Flow
-          </Button>
+            </Typography>
+          </Box>
         </Box>
+        
+        {!isEditing && (
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Tooltip title="Create a new flow with a starter template">
+              <Button
+                variant="contained"
+                color="primary"
+                startIcon={<AddIcon />}
+                onClick={createNewFlow}
+              >
+                New Flow
+              </Button>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
-      <FlowLayout
-        flows={flows}
-        selectedFlow={selectedFlow}
-        onSelectFlow={setSelectedFlow}
-        onDeleteFlow={handleDeleteFlow}
-        onCopyFlow={handleCopyFlow}
-        isLoading={isLoading}
-      >
-        <FlowBuilder
-          key={selectedFlow || 'new'}
-          initialFlow={selectedFlow ? flows.find((f: Flow) => f.id === selectedFlow) : undefined}
-          onSave={handleSaveFlow}
-          onDelete={handleDeleteFlow}
-          allFlows={flows}
-          onSelectFlow={setSelectedFlow}
-        />
-      </FlowLayout>
+      
+      {/* Main content area - switches between dashboard and editor */}
+      <Box sx={{ flex: 1, overflow: 'hidden' }}>
+        {renderContent()}
+      </Box>
       
       {/* Copy Flow Dialog */}
       <Dialog open={copyDialogOpen} onClose={handleCopyDialogClose}>
@@ -279,6 +466,18 @@ const FlowsPage = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      
+      {/* Snackbar for notifications */}
+      <Snackbar 
+        open={snackbar.open} 
+        autoHideDuration={6000} 
+        onClose={handleSnackbarClose}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert onClose={handleSnackbarClose} severity={snackbar.severity} sx={{ width: '100%' }}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

@@ -6,133 +6,163 @@ import { CompletionResponse } from '@/shared/types/model/response';
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/util/ProcessNodeUtility');
 
+// Model type definition for initializing OpenAI client
+interface ModelConfig {
+  name: string;
+  baseUrl?: string;
+  temperature?: string;
+  functionCallingSchema?: string;
+  encryptedApiKey: string;
+}
+
+// Type definition for JSON Schema parameter property
+interface SchemaProperty {
+  description?: string;
+  type?: string;
+  [key: string]: any; // Allow other JSON Schema properties
+}
+
 export class ProcessNodeUtility {
   /**
    * Parse tool descriptions based on function calling schema
    * Used to format tool descriptions for models that don't support tools natively
    */
-  private static parseToolDescriptions(functionCallingSchema: string | undefined, tools: any[]): string {
+  private static parseToolDescriptions(
+    functionCallingSchema: string | undefined, 
+    tools: OpenAI.Chat.ChatCompletionTool[]
+  ): string {
+    // Early return for empty tools
     if (!tools || tools.length === 0) {
       return '';
     }
     
     log.debug('parseToolDescriptions: Generating tool descriptions based on schema');
-    let toolDescriptions = '';
     
-    if (functionCallingSchema && typeof functionCallingSchema === 'string') {
-      log.debug('parseToolDescriptions: Using functionCallingSchema to format tool descriptions');
-      
-      // Try to parse as JSON first
-      let isJson = false;
-      try {
-        JSON.parse(functionCallingSchema);
-        isJson = true;
-      } catch (e) {
-        isJson = false;
-      }
-      
-      if (isJson) {
-        // It's a JSON schema
-        toolDescriptions = '\n\nYou have access to the following tools. Use them when appropriate:\n\n';
-        
-        // Generate example for each tool
-        tools.forEach(tool => {
-          toolDescriptions += `{\n  "tool": "${tool.function.name}",\n  "parameters": {\n`;
-          
-          // Add parameters
-          if (tool.function.parameters && tool.function.parameters.properties) {
-            const properties = tool.function.parameters.properties;
-            const propertyNames = Object.keys(properties);
-            
-            propertyNames.forEach((paramName, index) => {
-              const param = properties[paramName];
-              toolDescriptions += `    "${paramName}": "${param.description || paramName}"`;
-              if (index < propertyNames.length - 1) {
-                toolDescriptions += ',\n';
-              } else {
-                toolDescriptions += '\n';
-              }
-            });
-          }
-          
-          toolDescriptions += '  }\n}\n\n';
-        });
-      } else {
-        // Check if it's XML
-        // Using a pattern that works without the 's' flag (which requires ES2018+)
-        const xmlPattern = /<\s*([a-zA-Z][a-zA-Z0-9]*)\s*>[\s\S]*?<\s*\/\s*\1\s*>/;
-        const isXml = xmlPattern.test(functionCallingSchema);
-        
-        if (isXml) {
-          // It's an XML schema
-          toolDescriptions = '\n\nYou have access to the following tools. Use them when appropriate:\n\n';
-          
-          // Generate example for each tool
-          tools.forEach(tool => {
-            toolDescriptions += `<${tool.function.name}>\n`;
-            
-            // Add parameters
-            if (tool.function.parameters && tool.function.parameters.properties) {
-              const properties = tool.function.parameters.properties;
-              const propertyNames = Object.keys(properties);
-              
-              propertyNames.forEach(paramName => {
-                const param = properties[paramName];
-                toolDescriptions += `<${paramName}>${param.description || paramName}</${paramName}>\n`;
-              });
-            }
-            
-            toolDescriptions += `</${tool.function.name}>\n\n`;
-          });
-        } else {
-          // Neither JSON nor XML, use a default format
-          toolDescriptions = '\n\nYou have access to the following tools. The format for using tools is unknown for this model, but try to use them if appropriate:\n\n';
-          
-          // List tools and their parameters
-          tools.forEach(tool => {
-            toolDescriptions += `Tool: ${tool.function.name}\n`;
-            
-            // Add parameters
-            if (tool.function.parameters && tool.function.parameters.properties) {
-              toolDescriptions += 'Parameters:\n';
-              
-              const properties = tool.function.parameters.properties;
-              const propertyNames = Object.keys(properties);
-              
-              propertyNames.forEach(paramName => {
-                const param = properties[paramName];
-                toolDescriptions += `- ${paramName}: ${param.description || paramName}\n`;
-              });
-            }
-            
-            toolDescriptions += '\n';
-          });
-        }
-      }
-    } else {
-      // No schema available, use a default format
-      toolDescriptions = '\n\nYou have access to the following tools. The format for using tools is unknown for this model, but try to use them if appropriate:\n\n';
-      
-      // List tools and their parameters
-      tools.forEach(tool => {
-        toolDescriptions += `Tool: ${tool.function.name}\n`;
-        
-        // Add parameters
-        if (tool.function.parameters && tool.function.parameters.properties) {
-          toolDescriptions += 'Parameters:\n';
-          
-          const properties = tool.function.parameters.properties;
-          const propertyNames = Object.keys(properties);
-          
-          propertyNames.forEach(paramName => {
-            const param = properties[paramName];
-            toolDescriptions += `- ${paramName}: ${param.description || paramName}\n`;
-          });
-        }
-        
-        toolDescriptions += '\n';
-      });
+    // No schema available or invalid schema
+    if (!functionCallingSchema || typeof functionCallingSchema !== 'string') {
+      return this.generateDefaultToolFormat(tools);
     }
+    
+    log.debug('parseToolDescriptions: Using functionCallingSchema to format tool descriptions');
+    
+    // Detect schema format and use the appropriate formatter
+    if (this.isJsonSchema(functionCallingSchema)) {
+      return this.generateJsonToolFormat(tools);
+    }
+    
+    if (this.isXmlSchema(functionCallingSchema)) {
+      return this.generateXmlToolFormat(tools);
+    }
+    
+    // Fallback to default format if schema format is unrecognized
+    return this.generateDefaultToolFormat(tools);
+  }
+  
+  /**
+   * Check if a schema is in JSON format
+   */
+  private static isJsonSchema(schema: string): boolean {
+    try {
+      JSON.parse(schema);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  
+  /**
+   * Check if a schema is in XML format
+   */
+  private static isXmlSchema(schema: string): boolean {
+    // Using a pattern that works without the 's' flag (which requires ES2018+)
+    const xmlPattern = /<\s*([a-zA-Z][a-zA-Z0-9]*)\s*>[\s\S]*?<\s*\/\s*\1\s*>/;
+    return xmlPattern.test(schema);
+  }
+
+  /**
+   * Generate tool descriptions in JSON format
+   */
+  private static generateJsonToolFormat(tools: OpenAI.Chat.ChatCompletionTool[]): string {
+    let toolDescriptions = '\n\nYou have access to the following tools. Use them when appropriate:\n\n';
+    
+    // Generate example for each tool
+    tools.forEach(tool => {
+      toolDescriptions += `{\n  "tool": "${tool.function.name}",\n  "parameters": {\n`;
+      
+      // Add parameters
+      if (tool.function.parameters && 'properties' in tool.function.parameters) {
+        const properties = tool.function.parameters.properties as Record<string, SchemaProperty> || {};
+        const propertyNames = Object.keys(properties);
+        
+        propertyNames.forEach((paramName, index) => {
+          const param = properties[paramName];
+          toolDescriptions += `    "${paramName}": "${param.description || paramName}"`;
+          if (index < propertyNames.length - 1) {
+            toolDescriptions += ',\n';
+          } else {
+            toolDescriptions += '\n';
+          }
+        });
+      }
+      
+      toolDescriptions += '  }\n}\n\n';
+    });
+    
+    return toolDescriptions;
+  }
+  
+  /**
+   * Generate tool descriptions in XML format
+   */
+  private static generateXmlToolFormat(tools: OpenAI.Chat.ChatCompletionTool[]): string {
+    let toolDescriptions = '\n\nYou have access to the following tools. Use them when appropriate:\n\n';
+    
+    // Generate example for each tool
+    tools.forEach(tool => {
+      toolDescriptions += `<${tool.function.name}>\n`;
+      
+      // Add parameters
+      if (tool.function.parameters && 'properties' in tool.function.parameters) {
+        const properties = tool.function.parameters.properties as Record<string, SchemaProperty> || {};
+        const propertyNames = Object.keys(properties);
+        
+        propertyNames.forEach(paramName => {
+          const param = properties[paramName];
+          toolDescriptions += `<${paramName}>${param.description || paramName}</${paramName}>\n`;
+        });
+      }
+      
+      toolDescriptions += `</${tool.function.name}>\n\n`;
+    });
+    
+    return toolDescriptions;
+  }
+  
+  /**
+   * Generate tool descriptions in a default text format
+   */
+  private static generateDefaultToolFormat(tools: OpenAI.Chat.ChatCompletionTool[]): string {
+    let toolDescriptions = '\n\nYou have access to the following tools. The format for using tools is unknown for this model, but try to use them if appropriate:\n\n';
+    
+    // List tools and their parameters
+    tools.forEach(tool => {
+      toolDescriptions += `Tool: ${tool.function.name}\n`;
+      
+      // Add parameters
+      if (tool.function.parameters && 'properties' in tool.function.parameters) {
+        toolDescriptions += 'Parameters:\n';
+        
+        const properties = tool.function.parameters.properties as Record<string, SchemaProperty> || {};
+        const propertyNames = Object.keys(properties);
+        
+        propertyNames.forEach(paramName => {
+          const param = properties[paramName];
+          toolDescriptions += `- ${paramName}: ${param.description || paramName}\n`;
+        });
+      }
+      
+      toolDescriptions += '\n';
+    });
     
     return toolDescriptions;
   }
@@ -143,8 +173,8 @@ export class ProcessNodeUtility {
   static async generateCompletion(
     modelId: string,
     prompt: string,
-    messages: any[] = [],
-    tools?: any[],
+    messages: OpenAI.Chat.ChatCompletionMessageParam[] = [],
+    tools?: OpenAI.Chat.ChatCompletionTool[],
     mcpContext?: any
   ): Promise<CompletionResponse> {
     log.debug(`generateCompletion: Generating completion with model: ${modelId}`);
@@ -157,11 +187,15 @@ export class ProcessNodeUtility {
       tools,
       mcpContext
     }));
+    
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
       if (!model) {
-        const errorResult = { success: false, error: `Model not found: ${modelId}` };
+        const errorResult: CompletionResponse = { 
+          success: false, 
+          error: `Model not found: ${modelId}` 
+        };
         
         // Add verbose logging of the error result
         log.verbose('generateCompletion model not found error', JSON.stringify(errorResult));
@@ -175,7 +209,10 @@ export class ProcessNodeUtility {
       // Resolve and decrypt the API key
       const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
       if (!decryptedApiKey) {
-        const errorResult = { success: false, error: 'Failed to resolve or decrypt API key' };
+        const errorResult: CompletionResponse = { 
+          success: false, 
+          error: 'Failed to resolve or decrypt API key' 
+        };
         
         // Add verbose logging of the error result
         log.verbose('generateCompletion API key error', JSON.stringify(errorResult));
@@ -216,7 +253,6 @@ export class ProcessNodeUtility {
       }
       
       log.info('generateCompletion - Calling model API');
-
       log.debug('generateCompletion - Calling model API - Info', JSON.stringify(requestParams));
 
       // Make the API request using the OpenAI client
@@ -226,55 +262,9 @@ export class ProcessNodeUtility {
       
       // Add verbose logging of the API response
       log.verbose('generateCompletion API response', JSON.stringify(chatCompletion));
-      // return chatCompletion;
-
-      // Check if the response contains an error (standardized OpenAI error format)
-      if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion) {
-        const errorResponse = chatCompletion as { error: { message?: string, code?: string | number | null, type?: string, param?: string } };
-        log.warn('generateCompletion: API returned an error response', errorResponse.error);
-        const errorResult = {
-          success: false,
-          error: errorResponse.error.message || 'Unknown provider error',
-          errorDetails: {
-            message: errorResponse.error.message || 'Unknown provider error',
-            type: errorResponse.error.type || 'api_error',
-            code: errorResponse.error.code !== null && errorResponse.error.code !== undefined ? String(errorResponse.error.code) : undefined,
-            param: errorResponse.error.param || undefined,
-            name: 'ProviderError'
-          }
-        };
-        
-        // Add verbose logging of the error result
-        log.verbose('generateCompletion provider error', JSON.stringify(errorResult));
-        
-        return errorResult;
-      }      
-
-      // Return the successful response
-      // Add additional null checks to prevent "Cannot read properties of undefined" errors
-      if (!chatCompletion || !chatCompletion.choices || chatCompletion.choices.length === 0) {
-        log.warn('generateCompletion: Received empty or invalid response from API');
-        
-        // Format error in OpenAI-compatible format
-        const errorResult = {
-          success: false,
-          error: 'Received empty or invalid response from API',
-          errorDetails: {
-            message: 'API returned empty or invalid response',
-            type: 'api_error',
-            code: 'empty_response',
-            name: 'EmptyResponseError'
-          }
-        };
-        
-        // Add verbose logging of the error result
-        log.verbose('generateCompletion empty response error', JSON.stringify(errorResult));
-        
-        return errorResult;
-      }
       
       // Create a standardized response with OpenAI-compatible structure
-      const successResult = {
+      const successResult: CompletionResponse = {
         success: true,
         content: chatCompletion.choices[0]?.message?.content || '',
         fullResponse: chatCompletion
@@ -301,21 +291,21 @@ export class ProcessNodeUtility {
         // Special handling for models that don't support tools
         if (error.status === 400 && error.message.includes("does not support tools") && tools && tools.length > 0) {
           log.warn('Model does not support tools. Retrying without tools parameter...');
-        log.info('Model does not support tools. Retrying without tools parameter...');
-        
-        // Add verbose logging of the retry attempt
-        log.verbose('generateCompletion retrying without tools', JSON.stringify({
-          modelId,
-          prompt,
-          messagesCount: messages.length,
-          toolsCount: tools?.length || 0
-        }));
-        
-        return ProcessNodeUtility.retryWithoutTools(modelId, prompt, messages, tools);
+          log.info('Model does not support tools. Retrying without tools parameter...');
+          
+          // Add verbose logging of the retry attempt
+          log.verbose('generateCompletion retrying without tools', JSON.stringify({
+            modelId,
+            prompt,
+            messagesCount: messages.length,
+            toolsCount: tools?.length || 0
+          }));
+          
+          return ProcessNodeUtility.retryWithoutTools(modelId, prompt, messages, tools);
         }
         
         // Return error in OpenAI-compatible format
-        const errorResult = {
+        const errorResult: CompletionResponse = {
           success: false,
           error: `Model API error: ${error.message}`,
           errorDetails: {
@@ -345,7 +335,7 @@ export class ProcessNodeUtility {
       
       log.error('generateCompletion: Error generating completion:', errorDetails);
       
-      const errorResult = {
+      const errorResult: CompletionResponse = {
         success: false,
         error: `Failed to generate completion: ${errorDetails.message}`,
         errorDetails: errorDetails
@@ -361,16 +351,11 @@ export class ProcessNodeUtility {
   /**
    * Initialize OpenAI client with the appropriate settings
    */
-  private static async initializeOpenAIClient(model: any, apiKey: string): Promise<OpenAI> {
+  private static async initializeOpenAIClient(model: ModelConfig, apiKey: string): Promise<OpenAI> {
     log.debug('initializeOpenAIClient: Initializing OpenAI client');
     
     // Determine the API endpoint
-    let baseURL = model.baseUrl || '';
-    if (baseURL.endsWith('/chat/completions')) {
-      // Remove the /chat/completions part as the client will add it
-      baseURL = baseURL.replace('/chat/completions', '');
-      log.debug('Removed /chat/completions suffix from baseURL');
-    }
+    const baseURL = model.baseUrl;
     
     log.debug('Creating OpenAI client', { baseURL });
     
@@ -388,8 +373,8 @@ export class ProcessNodeUtility {
   private static async retryWithoutTools(
     modelId: string,
     prompt: string,
-    messages: any[] = [],
-    tools?: any[]
+    messages: OpenAI.Chat.ChatCompletionMessageParam[] = [],
+    tools?: OpenAI.Chat.ChatCompletionTool[]
   ): Promise<CompletionResponse> {
     log.info('retryWithoutTools: Retrying completion without tools parameter');
     
@@ -400,11 +385,15 @@ export class ProcessNodeUtility {
       messages,
       tools
     }));
+    
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
       if (!model) {
-        const errorResult = { success: false, error: `Model not found: ${modelId}` };
+        const errorResult: CompletionResponse = { 
+          success: false, 
+          error: `Model not found: ${modelId}` 
+        };
         
         // Add verbose logging of the error result
         log.verbose('retryWithoutTools model not found error', JSON.stringify(errorResult));
@@ -415,7 +404,10 @@ export class ProcessNodeUtility {
       // Resolve and decrypt the API key
       const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
       if (!decryptedApiKey) {
-        const errorResult = { success: false, error: 'Failed to resolve or decrypt API key' };
+        const errorResult: CompletionResponse = { 
+          success: false, 
+          error: 'Failed to resolve or decrypt API key' 
+        };
         
         // Add verbose logging of the error result
         log.verbose('retryWithoutTools API key error', JSON.stringify(errorResult));
@@ -483,7 +475,7 @@ export class ProcessNodeUtility {
       if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion) {
         const errorResponse = chatCompletion as { error: { message?: string, code?: string | number, type?: string, param?: string } };
         log.warn('retryWithoutTools: API returned an error response', errorResponse.error);
-        const errorResult = {
+        const errorResult: CompletionResponse = {
           success: false,
           error: errorResponse.error.message || 'Unknown provider error',
           errorDetails: {
@@ -504,7 +496,7 @@ export class ProcessNodeUtility {
       // Return the successful response from retry
       if (!chatCompletion || !chatCompletion.choices || chatCompletion.choices.length === 0) {
         log.warn('retryWithoutTools: Received empty or invalid response from API');
-        const errorResult = {
+        const errorResult: CompletionResponse = {
           success: false,
           error: 'Received empty or invalid response from API retry',
           errorDetails: {
@@ -519,7 +511,39 @@ export class ProcessNodeUtility {
         return errorResult;
       }
       
-      const successResult = {
+      // Parse tool calls from text response
+      const content = chatCompletion.choices[0]?.message?.content || '';
+      
+      log.info('Attempting to parse tool calls from text response in retryWithoutTools');
+      
+      // Dynamic import to avoid potential circular dependencies
+      const { parseToolCalls } = await import('./ProcessNodeParsingUtility');
+      
+      // Try to parse tool calls from the text
+      const parseResult = await parseToolCalls(content, modelId);
+      
+      // If parsing succeeded and tool calls were found
+      if (parseResult.success && parseResult.toolCalls) {
+        log.info(`Successfully parsed ${parseResult.toolCalls.length} tool calls from text in retryWithoutTools`);
+        
+        // Add the parsed tool calls to the response
+        if (chatCompletion.choices && chatCompletion.choices[0] && 
+            chatCompletion.choices[0].message) {
+          chatCompletion.choices[0].message.tool_calls = parseResult.toolCalls;
+          
+          log.debug('Updated retryWithoutTools response with parsed tool calls', {
+            toolCallsCount: parseResult.toolCalls.length,
+            toolCalls: parseResult.toolCalls.map(tc => ({
+              id: tc.id,
+              name: tc.function.name
+            }))
+          });
+        }
+      } else if (parseResult.error) {
+        log.warn(`Failed to parse tool calls from text in retryWithoutTools: ${parseResult.error}`);
+      }
+      
+      const successResult: CompletionResponse = {
         success: true,
         content: chatCompletion.choices[0]?.message?.content || '',
         fullResponse: chatCompletion
@@ -542,7 +566,7 @@ export class ProcessNodeUtility {
           }
         : { message: 'Unknown error' };
       
-      const errorResult = {
+      const errorResult: CompletionResponse = {
         success: false,
         error: `Failed to generate completion without tools: ${errorDetails.message}`,
         errorDetails: errorDetails
@@ -585,7 +609,7 @@ export class ProcessNodeUtility {
     
     log.info(`processToolCalls: Processing ${toolCalls.length} tool calls`);
     log.debug('Tool calls details', {
-      toolCalls: toolCalls.map((tc: any) => ({
+      toolCalls: toolCalls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
         id: tc.id,
         name: tc.function?.name,
         argsString: tc.function?.arguments
@@ -597,7 +621,7 @@ export class ProcessNodeUtility {
     
     // Process each tool call
     for (const toolCall of toolCalls) {
-      const { id, function: { name, arguments: argsString } } = toolCall;
+      const { id, function: { name, arguments: argsString } } = toolCall as OpenAI.ChatCompletionMessageToolCall;
       
       try {
         // Parse the arguments
@@ -642,7 +666,8 @@ export class ProcessNodeUtility {
           tool_call_id: id,
           content: resultContent
         });
-        // Add tool result message
+        
+        // Add user message about the tool result
         newMessages.push({
           role: "user",
           content: "This is the result of the tool call. If you want to call any further tools, let me know"

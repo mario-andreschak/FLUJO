@@ -82,38 +82,33 @@ export class ProcessNode extends BaseNode {
     };
     
     // Reorder messages to ensure system messages are at the top
-    // First, extract all system messages and non-system messages
-    const systemMessages: OpenAI.ChatCompletionMessageParam[] = [];
+    // Extract non-system messages
     const nonSystemMessages: OpenAI.ChatCompletionMessageParam[] = [];
     
     // Copy and categorize messages
     sharedState.messages.forEach(msg => {
-      if (msg.role === 'system') {
-        systemMessages.push(msg);
-      } else {
+      if (msg.role !== 'system') {
         nonSystemMessages.push(msg);
       }
     });
     
-    // Add our own system message if none exist
-    if (systemMessages.length === 0) {
-      systemMessages.push({
-        role: 'system',
-        content: completePrompt
-      } as OpenAI.ChatCompletionMessageParam);
-      
-      log.info('Added system message from prompt template', {
-        contentLength: completePrompt.length,
-        contentPreview: completePrompt.length > 100 ?
-          completePrompt.substring(0, 100) + '...' : completePrompt
-      });
-    }
+    // Create our own system message with the current prompt
+    const systemMessage = {
+      role: 'system',
+      content: completePrompt
+    } as OpenAI.ChatCompletionMessageParam;
     
-    // Combine messages with system messages first, then non-system messages
-    prepResult.messages = [...systemMessages, ...nonSystemMessages];
+    log.info('Added system message from prompt template', {
+      contentLength: completePrompt.length,
+      contentPreview: completePrompt.length > 100 ?
+        completePrompt.substring(0, 100) + '...' : completePrompt
+    });
+    
+    // Combine messages with our system message first, then non-system messages
+    prepResult.messages = [systemMessage, ...nonSystemMessages];
     
     log.info('Reordered messages with system messages at the top', {
-      systemMessageCount: systemMessages.length,
+      systemMessageCount: 1, // We now have exactly one system message
       nonSystemMessageCount: nonSystemMessages.length,
       totalMessageCount: prepResult.messages.length
     });
@@ -156,6 +151,9 @@ export class ProcessNode extends BaseNode {
         tools = toolsResult.value.tools;
       }
       
+      // Get the node name for display
+      const nodeName = node_params?.label || node_params?.properties?.name || 'Process Node';
+      
       // Call the model with tool support
       const modelResult = await ModelHandler.callModel({
         modelId: prepResult.boundModel,
@@ -163,7 +161,8 @@ export class ProcessNode extends BaseNode {
         messages: prepResult.messages,
         tools,
         iteration: 1,
-        maxIterations: 30
+        maxIterations: 30,
+        nodeName // Pass the node name to be included in the response header
       });
       
       if (!modelResult.success) {

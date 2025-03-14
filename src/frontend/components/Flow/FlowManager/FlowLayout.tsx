@@ -1,11 +1,14 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Box, Button, Divider, Typography, styled } from '@mui/material';
+import { Box, Button, Divider, Typography, styled, Fade, Slide } from '@mui/material';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import FlowList from './FlowBuilder/FlowList';
 import { Flow } from '@/frontend/types/flow/flow';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('components/Flow/FlowManager/FlowLayout');
 
 interface FlowLayoutProps {
   flows: Flow[];
@@ -21,20 +24,19 @@ interface FlowLayoutProps {
 const ListContainer = styled(Box, {
   shouldForwardProp: (prop) => prop !== 'isVisible' && prop !== 'isCollapsed',
 })<{ isVisible: boolean; isCollapsed: boolean }>(({ theme, isVisible, isCollapsed }) => ({
-  transition: 'transform 0.3s ease, max-height 0.3s ease, opacity 0.3s ease',
-  transform: isVisible ? 'translateY(0)' : 'translateY(-100%)',
-  maxHeight: isCollapsed ? '0' : '300px',
+  transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+  maxHeight: isCollapsed ? '0' : '350px',
   opacity: isVisible ? 1 : 0,
   overflow: 'hidden',
   position: 'relative',
   zIndex: 10,
   backgroundColor: theme.palette.background.paper,
-  borderBottom: `1px solid ${theme.palette.divider}`,
+  borderBottom: isVisible && !isCollapsed ? `1px solid ${theme.palette.divider}` : 'none',
+  boxShadow: isVisible && !isCollapsed ? theme.shadows[1] : 'none',
 }));
 
 const ToggleButton = styled(Button)(({ theme }) => ({
   position: 'absolute',
-  top: 0,
   right: '20px',
   zIndex: 20,
   minWidth: '120px',
@@ -45,15 +47,16 @@ const ToggleButton = styled(Button)(({ theme }) => ({
   '&:hover': {
     backgroundColor: theme.palette.primary.dark,
   },
+  transition: 'top 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
 }));
 
 const ContentContainer = styled(Box, {
   shouldForwardProp: (prop) => prop !== 'fullscreen',
 })<{ fullscreen: boolean }>(({ fullscreen }) => ({
   flex: 1,
-  transition: 'height 0.3s ease',
-  height: fullscreen ? 'calc(100vh - 64px)' : 'calc(100vh - 64px - 200px)',
-  overflow: 'hidden',
+  transition: 'height 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+  height: fullscreen ? 'calc(100vh - 64px)' : 'calc(100vh - 64px - 350px)',
+  overflow: 'auto',
 }));
 
 export const FlowLayout = ({
@@ -71,25 +74,29 @@ export const FlowLayout = ({
   // State to track if the list is fully collapsed (for animation purposes)
   const [isListCollapsed, setIsListCollapsed] = useState(false);
   
-  // When a flow is selected, collapse the list
+  // When a flow is selected, don't automatically collapse the list anymore
+  // Let the user decide when to show/hide
   useEffect(() => {
-    if (selectedFlow) {
-      setIsListVisible(false);
-    } else {
+    // If no flow is selected, always show the list
+    if (!selectedFlow) {
       setIsListVisible(true);
+      setIsListCollapsed(false);
     }
+    // Otherwise maintain current state
   }, [selectedFlow]);
   
-  // Handle the animation timing for collapsing
+  // Handle the animation timing for collapsing with improved timing
   useEffect(() => {
     let timer: NodeJS.Timeout;
     
     if (!isListVisible) {
-      // When hiding, start collapsing after the slide-up animation starts
+      log.debug('Collapsing flow list');
+      // When hiding, wait a bit longer before collapse to make animation smoother
       timer = setTimeout(() => {
         setIsListCollapsed(true);
-      }, 150);
+      }, 300);
     } else {
+      log.debug('Expanding flow list');
       // When showing, immediately uncollapse to start the height animation
       setIsListCollapsed(false);
     }
@@ -102,42 +109,42 @@ export const FlowLayout = ({
   // Toggle the list visibility
   const toggleList = () => {
     setIsListVisible(prev => !prev);
+    log.debug('Toggle list visibility', { newState: !isListVisible });
   };
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      {/* FlowList container with animation */}
-      <ListContainer isVisible={isListVisible} isCollapsed={isListCollapsed}>
-        <Box sx={{ p: 2 }}>
-          <FlowList
-            flows={flows}
-            selectedFlow={selectedFlow}
-            onSelectFlow={onSelectFlow}
-            onDeleteFlow={onDeleteFlow}
-            onCopyFlow={onCopyFlow}
-            isLoading={isLoading}
-          />
-        </Box>
-      </ListContainer>
+      {/* FlowList container with improved animation */}
+      <Fade in={isListVisible} timeout={{ enter: 500, exit: 300 }}>
+        <ListContainer isVisible={isListVisible} isCollapsed={isListCollapsed}>
+          <Box sx={{ p: 2 }}>
+            <FlowList
+              flows={flows}
+              selectedFlow={selectedFlow}
+              onSelectFlow={onSelectFlow}
+              onDeleteFlow={onDeleteFlow}
+              onCopyFlow={onCopyFlow}
+              isLoading={isLoading}
+            />
+          </Box>
+        </ListContainer>
+      </Fade>
       
-      {/* Toggle button - only show when a flow is selected */}
-      {selectedFlow && (
-        <ToggleButton 
-          variant="contained" 
-          onClick={toggleList}
-          startIcon={isListVisible ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
-          sx={{ 
-            top: 0,
-          }}
-        >
-          {isListVisible ? 'Hide List' : 'Show List'}
-        </ToggleButton>
-      )}
+      {/* Toggle button with improved positioning */}
+      <ToggleButton 
+        variant="contained" 
+        onClick={toggleList}
+        startIcon={isListVisible ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+        sx={{ 
+          top: isListVisible ? 'auto' : 0,
+          bottom: isListVisible ? 0 : 'auto',
+          transform: isListVisible ? 'translateY(100%)' : 'none',
+        }}
+      >
+        {isListVisible ? 'Hide List' : 'Show List'}
+      </ToggleButton>
       
-      {/* Divider - only show when list is visible */}
-      {isListVisible && <Divider />}
-      
-      {/* Content container (FlowBuilder) */}
+      {/* Content container (FlowBuilder) with improved spacing */}
       <ContentContainer fullscreen={!isListVisible}>
         {selectedFlow ? (
           children

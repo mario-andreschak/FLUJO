@@ -70,8 +70,6 @@ declare module 'slate' {
   }
 }
 
-// // Tool reference regex pattern
-// const toolBindingRegex = /\$\{_-_-_([\w^}]+)_-_-_([\w^}]+)\}/g;
 
 // Convert markdown string to Slate value
 const deserialize = (markdown: string): Descendant[] => {

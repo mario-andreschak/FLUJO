@@ -18,7 +18,21 @@ export class ModelHandler {
    * Call model with tool support - pure function that doesn't modify inputs
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
-    const { modelId, prompt, messages, tools, iteration, maxIterations } = input;
+    const { modelId, prompt, messages, tools, iteration, maxIterations, nodeName } = input;
+    
+    // Fetch model information for display name
+    let modelDisplayName = '';
+    let modelTechnicalName = '';
+    const nodeDisplayName = nodeName;
+    try {
+      const model = await modelService.getModel(modelId);
+      if (model) {
+        modelDisplayName = model.displayName || model.name;
+        modelTechnicalName = model.name;
+      }
+    } catch (error) {
+      log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
+    }
     
     log.info(`callModel - Iteration ${iteration}/${maxIterations}`, {
       modelId,
@@ -81,10 +95,15 @@ export class ModelHandler {
         };
       }
       
+      // Format content with model prefix and node name
+      const prefixedContent = modelDisplayName 
+        ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${content}`
+        : content;
+
       // Add assistant message with tool calls
       const assistantMessage: OpenAI.ChatCompletionMessageParam = {
         role: 'assistant',
-        content,
+        content: prefixedContent,
         tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls
       };
       newMessages.push(assistantMessage);
@@ -100,13 +119,28 @@ export class ModelHandler {
         messages: newMessages,
         tools,
         iteration: iteration + 1,
-        maxIterations
+        maxIterations,
+        nodeName
       });
     } else {
-      // No tool calls, just add the assistant message
+      // No tool calls, check for empty content with stop reason
+      let messageContent = content;
+      
+      // If content is empty and there's a stop reason, provide a helpful message
+      if (content === '' && modelResponse.fullResponse?.choices?.[0]?.finish_reason === 'stop') {
+        messageContent = "I decided to stop processing your request without further explanation by setting a stop_reason.";
+        log.info('Empty content with stop reason detected, using fallback message');
+      }
+      
+      // Format content with model prefix and node name
+      const prefixedContent = modelDisplayName 
+        ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${messageContent}`
+        : messageContent;
+
+      // Add the assistant message
       const assistantMessage: OpenAI.ChatCompletionMessageParam = {
         role: 'assistant',
-        content
+        content: prefixedContent
       };
       newMessages.push(assistantMessage);
       
@@ -129,11 +163,12 @@ export class ModelHandler {
         }
       });
       
+      // For the result, use the prefixed content
       // Return the final result
       const result: Result<ModelCallResult> = {
         success: true,
         value: {
-          content,
+          content: typeof assistantMessage.content === 'string' ? assistantMessage.content : messageContent, // Use the prefixed content for the result, ensuring it's a string
           messages: newMessages,
           fullResponse: modelResponse.fullResponse,
           toolCalls

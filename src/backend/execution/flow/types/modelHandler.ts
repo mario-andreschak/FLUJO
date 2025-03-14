@@ -12,6 +12,7 @@ export interface ModelCallInput {
   tools?: OpenAI.ChatCompletionTool[];
   iteration: number;
   maxIterations: number;
+  nodeName: string; // Name of the process node for display purposes
 }
 
 // Result of model call

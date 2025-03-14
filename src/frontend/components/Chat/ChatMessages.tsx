@@ -180,6 +180,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               position: 'relative',
               borderLeft: message.role === 'tool' ? '4px solid' : 'none',
               borderColor: message.role === 'tool' ? 'grey.400' : 'transparent',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+              wordWrap: 'break-word',
             }}
           >
             {isEditing && message.id === editingMessageId ? (
@@ -269,7 +272,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                               overflowX: 'auto',
                               fontFamily: 'monospace',
                               fontSize: '0.875rem',
-                              my: 1
+                              my: 1,
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              overflowWrap: 'break-word'
                             }}>{children}</Box>
                         }
                       }}
@@ -341,7 +347,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                             fontFamily: 'monospace',
                             fontSize: '0.75rem',
                             my: 0.5,
-                            maxHeight: '150px'
+                            maxHeight: '150px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            overflowWrap: 'break-word'
                           }}
                         >
                           {formattedArgs}
@@ -466,16 +475,28 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                           
                           // Fallback: Display the stringified JSON if we can't determine the format
                           return (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {JSON.stringify(parsedContent, null, 2)}
-                            </ReactMarkdown>
+                            <Box sx={{ 
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              overflowWrap: 'break-word'
+                            }}>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {JSON.stringify(parsedContent, null, 2)}
+                              </ReactMarkdown>
+                            </Box>
                           );
                         } catch (e) {
                           // If parsing fails, use the original content
                           return (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {message.content}
-                            </ReactMarkdown>
+                            <Box sx={{ 
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              overflowWrap: 'break-word'
+                            }}>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {message.content}
+                              </ReactMarkdown>
+                            </Box>
                           );
                         }
                       })()}
@@ -509,7 +530,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                     ) : (
                       <MicIcon fontSize="small" sx={{ mr: 1 }} />
                     )}
-                    <Typography variant="caption" noWrap>
+                    <Typography variant="caption" sx={{ 
+                      wordBreak: 'break-word',
+                      overflowWrap: 'break-word'
+                    }}>
                       {attachment.originalName || `${attachment.type} attachment`}
                     </Typography>
                   </Box>

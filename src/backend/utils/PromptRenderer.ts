@@ -54,6 +54,7 @@ export class PromptRenderer {
 
     // Build the complete prompt
     let completePrompt = '';
+    let functionCallingSchema: string | null = null;
 
     // 1. Start Node Prompt (if not excluded)
     if (!excludeStartNodePrompt) {
@@ -66,15 +67,18 @@ export class PromptRenderer {
 
     // 2. Model Prompt (if not excluded)
     if (!excludeModelPrompt) {
-      const { prompt: modelPrompt, modelId, reasoningSchema, functionCallingSchema } = await this.findModelPrompt(nodeId, flowId);
-      if (modelPrompt) {
-        log.debug('Adding model prompt', { modelId, length: modelPrompt.length });
-        completePrompt += modelPrompt + '\n\n';
+      const modelPromptResult = await this.findModelPrompt(nodeId, flowId);
+      if (modelPromptResult.prompt) {
+        log.debug('Adding model prompt', { modelId: modelPromptResult.modelId, length: modelPromptResult.prompt.length });
+        completePrompt += modelPromptResult.prompt + '\n\n';
       }
 
+      // Store function calling schema for later use
+      functionCallingSchema = modelPromptResult.functionCallingSchema;
+
       // Add reasoning schema if available
-      if (reasoningSchema) {
-        completePrompt += `Please use the following pattern to mark your reasoning: ${reasoningSchema}\n\n`;
+      if (modelPromptResult.reasoningSchema) {
+        completePrompt += `Please use the following pattern to mark your reasoning: ${modelPromptResult.reasoningSchema}\n\n`;
       }
 
       // Add function calling schema if available
@@ -89,8 +93,8 @@ export class PromptRenderer {
       completePrompt += nodePrompt;
     }
 
-    // 4. Resolve tool pills
-    completePrompt = await this.resolveToolPills(completePrompt, renderMode);
+    // 4. Resolve tool pills with function calling schema
+    completePrompt = await this.resolveToolPills(completePrompt, renderMode, functionCallingSchema);
 
     // 5. Add placeholder for conversation history if requested
     if (includeConversationHistory) {
@@ -251,19 +255,46 @@ export class PromptRenderer {
   }
 
   /**
-     * Resolve tool pills in a prompt, replacing them with detailed tool information.
-     * Retries up to 3 times on failure.
-     * 
-     * @param prompt - The prompt containing tool pills
-     * @param renderMode - Whether to render tool pills as raw or with descriptions
-     * @returns The prompt with resolved tool pills
-     */
-  private async resolveToolPills(prompt: string, renderMode: 'raw' | 'rendered'): Promise<string> {
-    log.debug(`Resolving tool pills in prompt`, { renderMode, promptLength: prompt.length });
+   * Resolve tool pills in a prompt, replacing them with detailed tool information.
+   * Retries up to 3 times on failure.
+   * 
+   * @param prompt - The prompt containing tool pills
+   * @param renderMode - Whether to render tool pills as raw or with descriptions
+   * @param functionCallingSchema - Optional schema format to use for structuring tool descriptions
+   * @returns The prompt with resolved tool pills
+   */
+  private async resolveToolPills(
+    prompt: string, 
+    renderMode: 'raw' | 'rendered',
+    functionCallingSchema?: string | null
+  ): Promise<string> {
+    log.debug(`Resolving tool pills in prompt`, { 
+      renderMode,
+      promptLength: prompt.length,
+      hasFunctionCallingSchema: !!functionCallingSchema
+    });
 
     if (renderMode === 'raw') {
       log.debug('Using raw mode, not resolving tool pills');
       return prompt; // Return the raw prompt with tool pills
+    }
+
+    // Determine format based on functionCallingSchema
+    let formatType: 'json' | 'xml' | 'text' = 'text'; // Default to text
+
+    if (functionCallingSchema) {
+      // Check if schema matches JSON or XML pattern
+      if (functionCallingSchema.includes('"tool"') && functionCallingSchema.includes('"parameters"')) {
+        formatType = 'json';
+        log.debug('Using JSON format for tool descriptions');
+      } else if (functionCallingSchema.includes('<') && functionCallingSchema.includes('</')) {
+        formatType = 'xml';
+        log.debug('Using XML format for tool descriptions');
+      } else {
+        log.debug('Using text format for tool descriptions (unrecognized schema format)');
+      }
+    } else {
+      log.debug('No function calling schema provided, using text format');
     }
 
     // Regular expression to find tool pills: ${_-_-_serverName_-_-_toolName}
@@ -293,7 +324,7 @@ export class PromptRenderer {
       });
     }
 
-    log.debug(`Found ${matches.length} tool pills to resolve`);
+    log.debug(`Found ${matches.length} tool pills to resolve with format: ${formatType}`);
 
     // Process each match with retries
     for (const { fullMatch, serverName, toolName } of matches) {
@@ -320,16 +351,24 @@ export class PromptRenderer {
             const toolsResult = await mcpService.listServerTools(serverName);
             log.debug(`toolResult.status is ${toolsResult.error?.toString()}`)
             if (toolsResult.tools && toolsResult.tools.length > 0) {
-            log.debug(`listed ${toolsResult.tools.length} tools from ${serverName} for tool render`);
+              log.debug(`listed ${toolsResult.tools.length} tools from ${serverName} for tool render`);
               // Find the specific tool
               const tool = toolsResult.tools.find(t => t.name === toolName);
 
               if (tool) {
-                // Format parameters if available
-                const paramsText = this.formatToolParameters(tool);
-
-                // Create enhanced description
-                description = `[The user is referencing a tool \`${serverName}:${toolName}\` (${tool.description || 'No description'})${paramsText}]`;
+                // Generate description based on format type
+                switch (formatType) {
+                  case 'json':
+                    description = this.formatToolDescriptionJSON(serverName, toolName, tool);
+                    break;
+                  case 'xml':
+                    description = this.formatToolDescriptionXML(serverName, toolName, tool);
+                    break;
+                  default:
+                    // Use existing text format
+                    const paramsText = this.formatToolParameters(tool);
+                    description = `[The user is referencing a tool \`_-_-_${serverName}_-_-_${toolName}\` (${tool.description || 'No description'})${paramsText}]`;
+                }
 
                 // Replace the tool pill
                 resolvedPrompt = resolvedPrompt.replace(fullMatch, description);
@@ -363,6 +402,58 @@ export class PromptRenderer {
 
     log.debug(`Resolved tool pills`);
     return resolvedPrompt;
+  }
+
+  /**
+   * Format tool description in JSON format
+   */
+  private formatToolDescriptionJSON(serverName: string, toolName: string, tool: any): string {
+    // Generate JSON format description with proper TypeScript typing
+    const toolObj: {
+      tool: string;
+      parameters: { [key: string]: string };
+    } = {
+      tool: `${toolName}`,  // Just the tool name, not the fully qualified name
+      parameters: {}
+    };
+    
+    // Add parameters if available
+    if (tool.inputSchema?.properties) {
+      for (const key in tool.inputSchema.properties) {
+        const prop = tool.inputSchema.properties[key];
+        // Use the property description as an example value
+        toolObj.parameters[key] = prop.description || key;
+      }
+    }
+    
+    // Return stringified JSON with explanation
+    return `[Tool: \`_-_-_${serverName}_-_-_${toolName}\` (${tool.description || 'No description'})
+Example usage:
+${JSON.stringify(toolObj, null, 2)}]`;
+  }
+
+  /**
+   * Format tool description in XML format
+   */
+  private formatToolDescriptionXML(serverName: string, toolName: string, tool: any): string {
+    // Generate XML format description
+    let xmlExample = `<${toolName}>\n`;
+    
+    // Add parameters if available
+    if (tool.inputSchema?.properties) {
+      for (const key in tool.inputSchema.properties) {
+        const prop = tool.inputSchema.properties[key];
+        // Use the property description as example value
+        xmlExample += `  <${key}>${prop.description || key}</${key}>\n`;
+      }
+    }
+    
+    xmlExample += `</${toolName}>`;
+    
+    // Return XML with explanation
+    return `[Tool: \`_-_-_${serverName}_-_-_${toolName}\` (${tool.description || 'No description'})
+Example usage:
+${xmlExample}]`;
   }
 
   // Helper method to format tool parameters

@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
     client = new Client(
       {
         name: serverName || `flujo-mcp-client-${requestId}`,
-        version: '0.1.1',
+        version: '0.1.2',
       },
       {
         capabilities: {
@@ -413,4 +413,3 @@ export async function POST(request: NextRequest) {
     return new NextResponse(`Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}`, { status: 500 });
   }
 }
-
