@@ -76,7 +76,7 @@ const Chat: React.FC = () => {
   // Initialize OpenAI client
   useEffect(() => {
     // Create OpenAI client with custom baseURL
-    const baseURL = window.location.origin + '/bridge';
+    const baseURL = window.location.origin + '/v1';
     
     openaiRef.current = new OpenAI({
       baseURL,
@@ -355,20 +355,26 @@ const Chat: React.FC = () => {
           // Keep messages up to and including the last user message
           updatedMessages = updatedMessages.slice(0, lastUserMsgIndex + 1);
           
-          // Add all messages from the flow execution after the last user message
-          responseData.messages.forEach((msg: any) => {
-            if (msg.role !== 'user') { // Skip user messages as we already have them
-              const newMessage: ChatMessage = {
-                id: uuidv4(),
-                role: msg.role as 'assistant' | 'system' | 'tool',
-                content: typeof msg.content === 'string' ? msg.content : '',
-                timestamp: Date.now(),
-                tool_calls: msg.tool_calls,
-                tool_call_id: msg.tool_call_id
-              };
-              updatedMessages.push(newMessage);
-            }
-          });
+          // Find the index of the last user message in the response messages
+          const responseLastUserIndex = responseData.messages.findLastIndex((msg: any) => msg.role === 'user');
+          
+          if (responseLastUserIndex !== -1) {
+            // Only add messages that come after the last user message in the response
+            // This ensures we only add new messages and not duplicate old ones
+            responseData.messages.slice(responseLastUserIndex + 1).forEach((msg: any) => {
+              if (msg.role !== 'user') { // Skip user messages as we already have them
+                const newMessage: ChatMessage = {
+                  id: uuidv4(),
+                  role: msg.role as 'assistant' | 'system' | 'tool',
+                  content: typeof msg.content === 'string' ? msg.content : '',
+                  timestamp: Date.now(),
+                  tool_calls: msg.tool_calls,
+                  tool_call_id: msg.tool_call_id
+                };
+                updatedMessages.push(newMessage);
+              }
+            });
+          }
         }
       } else {
         // No flow execution messages, just use the standard OpenAI response

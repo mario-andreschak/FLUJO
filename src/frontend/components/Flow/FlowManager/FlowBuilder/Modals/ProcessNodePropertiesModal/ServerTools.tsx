@@ -39,6 +39,7 @@ interface ServerToolsProps {
   handleSelectToolServer: (serverName: string) => void;
   handleInsertToolBinding: (serverName: string, toolName: string) => void;
   selectedToolServer: string | null;
+  selectedNodeId: string | null;
   isLoadingSelectedServerTools: boolean;
   promptBuilderRef: RefObject<PromptBuilderRef | null>;
   handleRetryServer?: (serverName: string) => Promise<boolean>;
@@ -56,6 +57,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   handleSelectToolServer,
   handleInsertToolBinding,
   selectedToolServer,
+  selectedNodeId,
   isLoadingSelectedServerTools,
   promptBuilderRef,
   handleRetryServer,
@@ -78,8 +80,37 @@ const ServerTools: React.FC<ServerToolsProps> = ({
         return [];
       }
       
-      // Find the MCP node that is bound to this server
-      const mcpNode = flowNodes.find(node => 
+      // Find the connected server object for this server name
+      const connectedServer = connectedServers.find(server => server && server.name === serverName);
+      if (!connectedServer) {
+        log.debug(`No connected server found for ${serverName}`);
+        return [];
+      }
+      
+      // If the server has a nodeId, use it to find the specific MCP node
+      if (connectedServer.nodeId) {
+        const specificNode = flowNodes.find(node => 
+          node && 
+          node.id === connectedServer.nodeId && 
+          node.data && 
+          node.data.type === 'mcp'
+        );
+        
+        if (specificNode) {
+          const enabledTools = specificNode.data.properties.enabledTools;
+          log.info(`Using specific node ${specificNode.id} enabled tools: ${JSON.stringify(enabledTools)}`);
+          
+          if (!enabledTools || !Array.isArray(enabledTools)) {
+            log.debug(`No enabled tools found for specific node ${specificNode.id}`);
+            return [];
+          }
+          
+          return enabledTools;
+        }
+      }
+      
+      // If we couldn't find a specific node by ID, fall back to finding all nodes bound to this server
+      const mcpNodes = flowNodes.filter(node => 
         node && 
         node.data && 
         node.data.type === 'mcp' && 
@@ -87,19 +118,62 @@ const ServerTools: React.FC<ServerToolsProps> = ({
         node.data.properties.boundServer === serverName
       );
       
-      if (!mcpNode) {
-        log.debug(`No MCP node found for server ${serverName}`);
+      if (mcpNodes.length === 0) {
+        log.debug(`No MCP nodes found for server ${serverName}`);
         return [];
       }
       
-      // If found, return its enabled tools, otherwise return empty array
+      // If multiple nodes found for this server, try to find the one that's currently selected
+      if (mcpNodes.length > 1) {
+        // First, try to use the selectedNodeId if it's available and matches one of our nodes
+        if (selectedNodeId) {
+          const nodeWithSelectedId = mcpNodes.find(node => node.id === selectedNodeId);
+          if (nodeWithSelectedId) {
+            const enabledTools = nodeWithSelectedId.data.properties.enabledTools;
+            log.info(`Using node with selected ID ${nodeWithSelectedId.id} enabled tools: ${JSON.stringify(enabledTools)}`);
+            
+            if (!enabledTools || !Array.isArray(enabledTools)) {
+              log.debug(`No enabled tools found for node with ID ${nodeWithSelectedId.id}`);
+              return [];
+            }
+            
+            return enabledTools;
+          }
+        }
+        
+        // If the selected server matches this server, try to find a node that matches the selection
+        if (selectedServer === serverName) {
+          // Find the MCP node that's currently selected in the UI
+          const selectedNode = mcpNodes.find(node => {
+            // Try to match based on any identifying information we have
+            return node.id === selectedToolServer || 
+                  (node.data.properties.selectedInUI === true);
+          });
+          
+          if (selectedNode) {
+            const enabledTools = selectedNode.data.properties.enabledTools;
+            log.info(`Using selected node ${selectedNode.id} enabled tools: ${JSON.stringify(enabledTools)}`);
+            
+            if (!enabledTools || !Array.isArray(enabledTools)) {
+              log.debug(`No enabled tools found for selected node ${selectedNode.id}`);
+              return [];
+            }
+            
+            return enabledTools;
+          }
+        }
+      }
+      
+      // If only one node or we couldn't find a specific node, use the first one
+      const mcpNode = mcpNodes[0];
       const enabledTools = mcpNode.data.properties.enabledTools;
       
       if (!enabledTools || !Array.isArray(enabledTools)) {
         log.debug(`No enabled tools found for server ${serverName}`);
         return [];
       }
-      log.info(`enabled tools ${JSON.stringify(enabledTools)}`);
+      
+      log.info(`Using first node ${mcpNode.id} enabled tools: ${JSON.stringify(enabledTools)}`);
       return enabledTools;
     } catch (error) {
       log.error(`Error getting enabled tools for server ${serverName}:`, error);
@@ -310,40 +384,46 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                     minHeight: '48px',
                     opacity: server.status !== 'connected' ? 0.7 : 1
                   }}
-                  icon={
-                    <Box sx={{ display: 'flex', ml: 1 }}>
-                      <Tooltip title="Retry connection">
-                        <IconButton 
-                          size="small" 
-                          onClick={(e) => { e.stopPropagation(); handleRetry(server.name, e); }}
-                          disabled={isRetrying}
-                        >
-                          {isRetrying ? (
-                            <CircularProgress size={16} />
-                          ) : (
-                            <RefreshIcon fontSize="small" />
-                          )}
-                        </IconButton>
-                      </Tooltip>
-                      
-                      {server.status === 'connected' && (
-                        <Tooltip title="Restart server">
-                          <IconButton 
-                            size="small" 
-                            onClick={(e) => { e.stopPropagation(); handleRestart(server.name, e); }}
-                            disabled={isRetrying}
-                          >
-                            <RestartAltIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      )}
-                    </Box>
-                  }
-                  iconPosition="end"
                 />
               );
             })}
           </Tabs>
+          
+          {/* Server actions */}
+          {selectedServer && (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+              <Tooltip title="Retry connection">
+                <span>
+                  <IconButton 
+                    size="small" 
+                    onClick={(e) => handleRetry(selectedServer, e)}
+                    disabled={retryingServers[selectedServer] || isLoadingTools[selectedServer]}
+                  >
+                    {retryingServers[selectedServer] ? (
+                      <CircularProgress size={16} />
+                    ) : (
+                      <RefreshIcon fontSize="small" />
+                    )}
+                  </IconButton>
+                </span>
+              </Tooltip>
+              
+              {serverStatuses[selectedServer] === 'connected' && (
+                <Tooltip title="Restart server">
+                  <span>
+                    <IconButton 
+                      size="small" 
+                      onClick={(e) => handleRestart(selectedServer, e)}
+                      disabled={retryingServers[selectedServer]}
+                      sx={{ ml: 1 }}
+                    >
+                      <RestartAltIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+            </Box>
+          )}
           
           {/* Search input */}
           <TextField

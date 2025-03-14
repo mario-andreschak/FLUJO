@@ -65,8 +65,7 @@ export function useServerTools(serverName: string | null) {
       serverName === currentServerName // Only apply rate limiting if the server hasn't changed
     ) {
       log.debug(`Rate limiting tool refresh for server: ${serverName}`);
-      // return;
-      await sleep(250)
+      return; // Return early to prevent the API call entirely
     }
 
     log.debug(`Loading tools for server: ${serverName}`);

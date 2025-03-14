@@ -37,7 +37,7 @@ route.ts               - HTTP route handlers and rate limiting
 
 ```typescript
 // Example POST request to the chat completions endpoint
-const response = await fetch('/bridge/chat/completions', {
+const response = await fetch('/v1/chat/completions', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json'
@@ -58,7 +58,7 @@ const result = await response.json();
 
 ```typescript
 // Example streaming request
-const response = await fetch('/bridge/chat/completions', {
+const response = await fetch('/v1/chat/completions', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json'
@@ -91,7 +91,7 @@ while (true) {
 
 ```typescript
 // Example GET request (simplified interface)
-const response = await fetch('/bridge/chat/completions?model=flow-MyCustomFlow&message=Hello&temperature=0.7');
+const response = await fetch('/v1/chat/completions?model=flow-MyCustomFlow&message=Hello&temperature=0.7');
 const result = await response.json();
 ```
 
@@ -258,7 +258,7 @@ The module uses the application's logging system for detailed logging:
 ```typescript
 import { createLogger } from '@/utils/logger';
 
-const log = createLogger('app/bridge/chat/completions/component');
+const log = createLogger('app/v1/chat/completions/component');
 ```
 
 Log levels used:

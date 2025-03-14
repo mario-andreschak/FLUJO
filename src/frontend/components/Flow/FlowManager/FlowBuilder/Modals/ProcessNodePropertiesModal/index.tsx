@@ -21,7 +21,7 @@ import useServerConnection from './hooks/useServerConnection';
 import useNodeData from './hooks/useNodeData';
 import NodeConfiguration from './NodeConfiguration';
 import ModelBinding from './ModelBinding/index';
-import ServerTools from './ServerTools/index';
+import ServerTools from './ServerTools';
 import PromptTemplateEditor from './PromptTemplateEditor';
 import NodeProperties from './NodeProperties';
 import { getNodeProperties } from './utils';
@@ -49,6 +49,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     connectedServers,
     isLoadingServers,
     selectedToolServer,
+    selectedNodeId,
     serverToolsMap,
     serverStatuses,
     isLoadingTools,
@@ -210,6 +211,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 isLoadingTools={isLoadingTools}
                 handleInsertToolBinding={handleInsertToolBinding}
                 selectedToolServer={selectedToolServer}
+                selectedNodeId={selectedNodeId}
                 handleSelectToolServer={handleSelectToolServer}
                 isLoadingSelectedServerTools={isLoadingSelectedServerTools}
                 promptBuilderRef={promptBuilderRef}

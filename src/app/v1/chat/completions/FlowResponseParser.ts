@@ -1,6 +1,6 @@
 // import { createLogger } from '@/utils/logger';
 
-// const log = createLogger('app/bridge/chat/completions/FlowResponseParser');
+// const log = createLogger('app/v1/chat/completions/FlowResponseParser');
 
 // /**
 //  * Parses and formats the result from a flow execution into a response content string

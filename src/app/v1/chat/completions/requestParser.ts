@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import OpenAI from 'openai';
 
-const log = createLogger('app/bridge/chat/completions/requestParser');
+const log = createLogger('app/v1/chat/completions/requestParser');
 
 // Types for better TypeScript support using OpenAI SDK types directly
 export interface ChatCompletionRequest {

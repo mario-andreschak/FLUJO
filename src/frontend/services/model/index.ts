@@ -28,11 +28,10 @@ class ModelService {
   async loadModels(): Promise<Model[]> {
     log.debug('loadModels: Entering method');
     try {
-      // Try to use cache first
-      if (this.modelsCache) {
-        return this.modelsCache;
-      }
-
+      // Always fetch fresh data from the API
+      // This ensures we always have the most up-to-date list of models
+      log.debug('loadModels: Fetching fresh data from API');
+      
       // Call the API to list models
       const response = await fetch('/api/model?action=listModels');
       
@@ -49,6 +48,7 @@ class ModelService {
       
       const models = data.models || [];
       this.modelsCache = models;
+      log.debug(`loadModels: Loaded ${models.length} models from API`);
       return models;
     } catch (error) {
       log.warn('loadModels: Failed to load models:', error);
@@ -62,13 +62,9 @@ class ModelService {
   async getModel(modelId: string): Promise<Model | null> {
     log.debug(`getModel: Looking for model with ID: ${modelId}`);
     try {
-      // Try to use cache first
-      if (this.modelsCache) {
-        const cachedModel = this.modelsCache.find(model => model.id === modelId);
-        if (cachedModel) {
-          return cachedModel;
-        }
-      }
+      // Always fetch fresh data from the API
+      // This ensures we always have the most up-to-date model
+      log.debug(`getModel: Fetching fresh data from API for model ID: ${modelId}`);
       
       // Call the API to get the model
       const response = await fetch(`/api/model?action=getModel&id=${encodeURIComponent(modelId)}`);
@@ -90,6 +86,7 @@ class ModelService {
         return null;
       }
       
+      log.debug(`getModel: Successfully fetched model ${modelId} from API`);
       return data.model;
     } catch (error) {
       log.error(`getModel: Error getting model ${modelId}:`, error);
@@ -132,10 +129,8 @@ class ModelService {
         };
       }
       
-      // Update cache
-      if (this.modelsCache) {
-        this.modelsCache.push(data.model);
-      }
+      // Clear cache instead of updating it
+      this.clearCache();
       
       return { 
         success: true,
@@ -185,10 +180,8 @@ class ModelService {
         };
       }
       
-      // Update cache
-      if (this.modelsCache) {
-        this.modelsCache = this.modelsCache.map(m => m.id === model.id ? data.model : m);
-      }
+      // Clear cache instead of updating it
+      this.clearCache();
       
       return { 
         success: true,
@@ -238,10 +231,8 @@ class ModelService {
         };
       }
       
-      // Update cache
-      if (this.modelsCache) {
-        this.modelsCache = this.modelsCache.filter(m => m.id !== id);
-      }
+      // Clear cache instead of updating it
+      this.clearCache();
       
       return { success: true };
     } catch (error) {

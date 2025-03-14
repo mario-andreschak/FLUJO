@@ -4,28 +4,36 @@ import { StorageKey } from '@/shared/types/storage';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
 
-const log = createLogger('app/bridge/models/route');
+const log = createLogger('app/v1/api/tags/route');
 
 export async function GET() {
   try {
-    log.info('Fetching all flows for models endpoint');
+    log.info('Fetching all flows for tags endpoint (Ollama format)');
     
     // Load all flows directly from storage
     const flows = await loadItem<Flow[]>(StorageKey.FLOWS, []);
     log.debug('Flows loaded successfully', { count: flows.length });
     
-    // Transform flows into the required format
+    // Transform flows into the Ollama format
     const models = flows.map(flow => ({
-      id: `flow-${flow.name}`,
-      object: 'model'
+      name: `flow-${flow.name}`,
+      modified_at: new Date().toISOString(),
+      size: 0,
+      digest: "",
+      details: {
+        format: "",
+        family: "",
+        families: null,
+        parameter_size: "",
+        quantization_level: ""
+      }
     }));
-    log.debug('Transformed flows into models', { modelCount: models.length });
+    log.debug('Transformed flows into Ollama format', { modelCount: models.length });
     
-    // Return the models in the OpenAI format
-    log.info('Returning models in OpenAI format');
+    // Return the models in the Ollama format
+    log.info('Returning models in Ollama format');
     return NextResponse.json({
-      object: 'list',
-      data: models
+      models: models
     });
   } catch (error) {
     log.error('Error fetching models', error);

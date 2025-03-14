@@ -3,7 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
 import { parseRequestParameters, _logRequestDetails } from './requestParser';
 
-const log = createLogger('app/bridge/chat/completions/route');
+const log = createLogger('app/v1/chat/completions/route');
 
 // Rate limiting - simple implementation
 const RATE_LIMIT = 6000; // requests per minute

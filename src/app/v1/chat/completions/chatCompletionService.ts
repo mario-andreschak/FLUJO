@@ -7,7 +7,7 @@ import { ChatCompletionRequest } from './requestParser';
 // Removed formatResponseContent import
 import OpenAI from 'openai';
 
-const log = createLogger('app/bridge/chat/completions/chatCompletionService');
+const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
 // Simple token counter (approximation)
 // For production, consider using a proper tokenizer like 'tiktoken' or 'gpt-tokenizer'

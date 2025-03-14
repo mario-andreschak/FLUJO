@@ -21,7 +21,7 @@ export async function listServerTools(client: Client | undefined, serverName: st
   try {
     log.info(`Listing tools for server ${serverName}`);
     const response = await client.listTools();
-    log.debug('Raw response from MCP server:', response);
+    log.verbose('Raw response from MCP server:', response);
 
     const tools = (response.tools || []).map(tool => ({
       name: tool.name,

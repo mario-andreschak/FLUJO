@@ -93,8 +93,8 @@ class ModelService {
       const updatedModels = [...models, model];
       await saveItem(StorageKey.MODELS, updatedModels);
       
-      // Update cache
-      this.modelsCache = updatedModels;
+      // Clear cache instead of updating it
+      this.modelsCache = null;
       
       return { success: true, model };
     } catch (error) {
@@ -129,8 +129,8 @@ class ModelService {
       const updatedModels = models.map(m => m.id === model.id ? model : m);
       await saveItem(StorageKey.MODELS, updatedModels);
       
-      // Update cache
-      this.modelsCache = updatedModels;
+      // Clear cache instead of updating it
+      this.modelsCache = null;
       
       return { success: true, model };
     } catch (error) {
@@ -155,8 +155,8 @@ class ModelService {
       const updatedModels = models.filter(m => m.id !== id);
       await saveItem(StorageKey.MODELS, updatedModels);
       
-      // Update cache
-      this.modelsCache = updatedModels;
+      // Clear cache instead of updating it
+      this.modelsCache = null;
       
       return { success: true };
     } catch (error) {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { modelService } from '@/frontend/services/model';
-import { Model } from '@/shared/types';
+import { Model } from '@/shared/types/model';
 import { createLogger } from '@/utils/logger';
 
 // Create a logger instance for this file

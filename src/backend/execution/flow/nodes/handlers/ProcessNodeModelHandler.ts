@@ -395,7 +395,7 @@ export class ProcessNodeModelHandler {
     const modelDisplayName = sharedState.modelDisplayName || 'Unknown Model';
     
     // Determine allowed tools (if available)
-    let allowedTools = 'Not specified';
+    let allowedTools = '';
     if (nodeParams.properties?.allowedTools) {
       allowedTools = Array.isArray(nodeParams.properties.allowedTools) 
         ? nodeParams.properties.allowedTools.join(', ')

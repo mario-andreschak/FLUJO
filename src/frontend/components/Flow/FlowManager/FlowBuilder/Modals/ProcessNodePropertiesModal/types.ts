@@ -1,18 +1,9 @@
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
+import { Model as SharedModel } from '@/shared/types/model';
 
-export interface Model {
-    id: string;
-    name: string;
-    displayName?: string;
-    description?: string;
-    encryptedApiKey: string;
-    baseUrl?: string;
-    promptTemplate?: string;
-    reasoningStartTag?: string;
-    reasoningEndTag?: string;
-    functionCallingSchema?: string;
-}
+// Re-export the shared Model type
+export type Model = SharedModel;
 
 export interface ProcessNodePropertiesModalProps {
     open: boolean;

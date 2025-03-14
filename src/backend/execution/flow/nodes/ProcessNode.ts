@@ -295,7 +295,7 @@ export class ProcessNode extends BaseNode {
         nodeName: node_params?.properties?.name || 'Process Node',
         modelDisplayName: prepResult.modelDisplayName || 'Unknown Model',
         modelTechnicalName: prepResult.boundModel || 'unknown',
-        allowedTools: node_params?.properties?.allowedTools?.join(', ') || 'Not specified',
+        allowedTools: node_params?.properties?.allowedTools?.join(', '),
         timestamp: new Date().toISOString()
       });
       
