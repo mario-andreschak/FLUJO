@@ -1,5 +1,6 @@
 # DISCLAIMER
-->->-> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <-<-<-
+====> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <====
+
 Important:  Please -for today- save your API Key in the Settings->Global Environment Variables  first, and bind it to the model, like shown in the Video below.
 **There is currently an issue with decrypting the API key when it's saved directly on the model, wich leads to an empty response in the Chat.**
 
