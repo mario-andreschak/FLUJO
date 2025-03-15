@@ -5,7 +5,7 @@ Important:  Please -for today- save your API Key in the Settings->Global Environ
 **There is currently an issue with decrypting the API key when it's saved directly on the model, wich leads to an empty response in the Chat.**
 
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
--> Create a Github Issue and I will look into it!
+-> Create a Github Issue or write on Discord (https://discord.gg/bW7amT5j) and I will look into it! 
 
 Here's a video guiding you through the whole thing - from installation to output! (15min)
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
