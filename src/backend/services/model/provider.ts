@@ -62,12 +62,13 @@ export async function fetchOpenRouterModels(): Promise<NormalizedModel[]> {
 export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string): Promise<NormalizedModel[]> {
   log.debug('fetchOpenAIModels: Entering method');
   
-  // Ensure baseUrl ends with /v1
+  // Ensure baseUrl ends with /v1 but avoid duplicate /v1/v1
   let modelsUrl = baseUrl;
-  if (!modelsUrl.endsWith('/v1')) {
+  if (!modelsUrl.endsWith('/v1') && !modelsUrl.endsWith('/v1/')) {
     modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}v1` : `${modelsUrl}/v1`;
   }
-  modelsUrl = `${modelsUrl}/models`;
+  // Remove trailing slash if present before adding /models
+  modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}models` : `${modelsUrl}/models`;
   
   log.debug(`Fetching models from: ${modelsUrl}`);
   
