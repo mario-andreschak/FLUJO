@@ -11,17 +11,6 @@ const log = createLogger('frontend/services/model/index');
  * This service makes API calls to the server-side API layer
  */
 class ModelService {
-  private modelsCache: Model[] | null = null;
-
-  /**
-   * Clear the models cache
-   * This forces the next loadModels call to fetch fresh data
-   */
-  clearCache(): void {
-    log.debug('clearCache: Clearing models cache');
-    this.modelsCache = null;
-  }
-
   /**
    * Load all models
    */
@@ -29,7 +18,6 @@ class ModelService {
     log.debug('loadModels: Entering method');
     try {
       // Always fetch fresh data from the API
-      // This ensures we always have the most up-to-date list of models
       log.debug('loadModels: Fetching fresh data from API');
       
       // Call the API to list models
@@ -47,7 +35,6 @@ class ModelService {
       }
       
       const models = data.models || [];
-      this.modelsCache = models;
       log.debug(`loadModels: Loaded ${models.length} models from API`);
       return models;
     } catch (error) {
@@ -63,7 +50,6 @@ class ModelService {
     log.debug(`getModel: Looking for model with ID: ${modelId}`);
     try {
       // Always fetch fresh data from the API
-      // This ensures we always have the most up-to-date model
       log.debug(`getModel: Fetching fresh data from API for model ID: ${modelId}`);
       
       // Call the API to get the model
@@ -129,9 +115,6 @@ class ModelService {
         };
       }
       
-      // Clear cache instead of updating it
-      this.clearCache();
-      
       return { 
         success: true,
         model: data.model
@@ -180,9 +163,6 @@ class ModelService {
         };
       }
       
-      // Clear cache instead of updating it
-      this.clearCache();
-      
       return { 
         success: true,
         model: data.model
@@ -230,9 +210,6 @@ class ModelService {
           error: data.error || 'Failed to delete model' 
         };
       }
-      
-      // Clear cache instead of updating it
-      this.clearCache();
       
       return { success: true };
     } catch (error) {
@@ -458,10 +435,10 @@ class ModelService {
    * Fetch models from a provider
    * @param baseUrl The base URL of the provider
    * @param modelId Optional model ID for existing models
-   * @param tempApiKey Optional API key for new models that don't have a modelId yet
+   * @param apiKey Optional API key for new models that don't have a modelId yet
    */
-  async fetchProviderModels(baseUrl: string, modelId?: string, tempApiKey?: string): Promise<any[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, modelId: ${modelId}, tempApiKey present: ${!!tempApiKey}`);
+  async fetchProviderModels(baseUrl: string, modelId?: string, apiKey?: string): Promise<any[]> {
+    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, modelId: ${modelId}, apiKey present: ${!!apiKey}`);
     try {
       // Build the URL with query parameters
       let url = `/api/model?action=fetchModels&baseUrl=${encodeURIComponent(baseUrl)}`;
@@ -469,18 +446,30 @@ class ModelService {
         url += `&modelId=${encodeURIComponent(modelId)}`;
       }
       
-      // For new models, we need to pass the API key directly
-      // For existing models, we use the model ID to look up the API key on the backend
-      if (!modelId && tempApiKey) {
-        log.debug('fetchProviderModels: Using temporary API key for new model');
-        // Call the API to fetch provider models with the temporary API key
+      // For existing models (with modelId), we don't need to pass the API key - the backend will look it up
+      if (modelId) {
+        log.debug('fetchProviderModels: Using model ID to look up API key on backend');
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
+          return []; // Return empty array instead of throwing
+        }
+        
+        const data = await response.json();
+        return data.data || [];
+      } 
+      // For new models, we need to pass the API key directly if provided
+      else if (apiKey) {
+        log.debug('fetchProviderModels: Using provided API key');
+        // Call the API to fetch provider models with the API key
         const response = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            tempApiKey
+            tempApiKey: apiKey // Keep using tempApiKey field for backward compatibility
           })
         });
         
@@ -491,8 +480,10 @@ class ModelService {
         
         const data = await response.json();
         return data.data || [];
-      } else {
-        // Call the API to fetch provider models normally for existing models
+      }
+      // No modelId and no API key, just try to fetch models without authentication
+      else {
+        log.debug('fetchProviderModels: No model ID or API key provided');
         const response = await fetch(url);
         
         if (!response.ok) {

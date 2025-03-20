@@ -50,9 +50,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [promptTemplate, setPromptTemplate] = useState('');
-  const [reasoningSchema, setReasoningSchema] = useState(ReasoningDefaultPattern);
+  const [reasoningSchema, setReasoningSchema] = useState('');
   const [temperature, setTemperature] = useState('0.0');
-  const [functionCallingSchema, setFunctionCallingSchema] = useState(ToolCallDefaultPattern);
+  const [functionCallingSchema, setFunctionCallingSchema] = useState('');
   const [isApiKeyBound, setIsApiKeyBound] = useState(false);
   const [boundToGlobalVar, setBoundToGlobalVar] = useState<string | null>(null);
   const [showBindModal, setShowBindModal] = useState(false);
@@ -112,24 +112,42 @@ const fetchModels = async (baseUrl: string) => {
   setIsLoadingModels(true);
   setError(null);
   try {
-    // For new models, we need to pass the API key directly
-    // For existing models, we use the model ID to look up the API key on the backend
-    let actualApiKey = apiKey;
+    // Get the actual API key based on the current state
+    let actualApiKey: string | undefined;
     
-    // If the API key is bound to a global variable, we need to extract the actual key
+    // If editing an existing model, use the model ID to look up the API key on the backend
+    if (model) {
+      log.debug("Using existing model ID for API key lookup:", model.id);
+      const models = await modelService.fetchProviderModels(baseUrl, model.id);
+      
+      if (Array.isArray(models)) {
+        setOpenRouterModels(models);
+        log.info("Models set in state for existing model", { count: models.length });
+      } else {
+        log.warn("Unexpected API response format", { models });
+        setOpenRouterModels([]);
+      }
+      setIsLoadingModels(false);
+      return;
+    }
+    
+    // For new models:
+    // If the API key is bound to a global variable, extract the actual key
     if (isApiKeyBound && boundToGlobalVar && globalEnvVars[boundToGlobalVar]) {
       const globalValue = globalEnvVars[boundToGlobalVar];
       actualApiKey = typeof globalValue === 'object' && globalValue !== null && 'value' in globalValue
         ? globalValue.value as string
         : globalValue as string;
       log.debug("Using API key from global variable:", boundToGlobalVar);
+    } 
+    // Otherwise use the directly entered API key
+    else if (!isApiKeyBound && apiKey) {
+      actualApiKey = apiKey;
+      log.debug("Using directly entered API key");
     }
     
-    const models = model 
-      ? await modelService.fetchProviderModels(baseUrl, model.id)
-      : await modelService.fetchProviderModels(baseUrl, undefined, actualApiKey);
-    
-    log.debug("API key passed to fetchProviderModels:", actualApiKey ? "yes" : "no");
+    // Fetch models with the temporary API key for new models
+    const models = await modelService.fetchProviderModels(baseUrl, undefined, actualApiKey);
     
     log.debug("Models fetched successfully", { count: models?.length });
     
@@ -248,9 +266,9 @@ const fetchModels = async (baseUrl: string) => {
         setApiKey('');
         setBaseUrl('');
         setPromptTemplate('');
-        setReasoningSchema(ReasoningDefaultPattern);
+        setReasoningSchema('');
         setTemperature('0.0');
-        setFunctionCallingSchema(ToolCallDefaultPattern);
+        setFunctionCallingSchema('');
         setIsApiKeyBound(false);
         setBoundToGlobalVar(null);
         setError(null);
@@ -336,6 +354,11 @@ const fetchModels = async (baseUrl: string) => {
     if (isApiKeyBound && boundToGlobalVar) {
       // Use the binding syntax for global variables
       encryptedApiKey = `\${global:${boundToGlobalVar}}`;
+    } else if (model && apiKey === '********') {
+      // If editing an existing model and the API key is still masked,
+      // preserve the original encrypted API key instead of encrypting the mask
+      log.debug('Preserving original encrypted API key instead of overwriting with masked value');
+      encryptedApiKey = model.encryptedApiKey;
     } else {
       try {
         // Check encryption status
@@ -657,33 +680,7 @@ const fetchModels = async (baseUrl: string) => {
                   helperText="Value between 0 and 1. Lower values make output more deterministic."
                 />
                 
-                <TextField
-                  margin="dense"
-                  label="Reasoning Pattern"
-                  fullWidth
-                  multiline
-                  rows={3}
-                  value={reasoningSchema}
-                  onChange={(e) => setReasoningSchema(e.target.value)}
-                />
-                
-                <Box sx={{ mt: 2 }}>
-                  <Alert severity="warning" sx={{ mb: 1 }}>
-                    <Typography variant="body2">
-                      It is not advised to change the Tool Call Pattern unless you know exactly what you're doing. 
-                      Incorrect patterns may cause tool functionality to break.
-                    </Typography>
-                  </Alert>
-                  <TextField
-                    margin="dense"
-                    label="Tool Call Pattern"
-                    fullWidth
-                    multiline
-                    rows={4}
-                    value={functionCallingSchema || ''}
-                    onChange={(e) => setFunctionCallingSchema(e.target.value)}
-                  />
-                </Box>
+                {/* Reasoning Pattern and Tool Call Pattern fields are hidden */}
               </Box>
             </Grid>
             

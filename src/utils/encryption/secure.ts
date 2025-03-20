@@ -620,7 +620,7 @@ export async function decryptWithPassword(ciphertext: string, passwordOrToken?: 
         padding: CryptoJS.pad.Pkcs7
       }
     );
-    
+    log.verbose('decrypted', decrypted);
     return decrypted.toString(CryptoJS.enc.Utf8);
   } catch (error) {
     log.error('decryptWithPassword: Failed to decrypt data:', error);

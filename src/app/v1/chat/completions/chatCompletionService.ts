@@ -3,7 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ChatCompletionRequest } from './requestParser';
 // import { parseFlowResponse } from './FlowResponseParser';
-// import { FlowExecutionResponse } from '@/shared/types/flow/response';
+import { FlowExecutionResponse, ErrorResult } from '@/shared/types/flow/response';
 // Removed formatResponseContent import
 import OpenAI from 'openai';
 
@@ -146,12 +146,42 @@ export async function processChatCompletion(data: ChatCompletionRequest) {
     const result = await FlowExecutor.executeFlow(flowName, { messages: inputMessages });
     
     const flowDuration = Date.now() - flowStartTime;
-    log.info('Flow execution completed successfully', {
+    log.info('Flow execution completed', {
       requestId,
       duration: `${flowDuration}ms`,
+      success: result.success,
       hasResult: result?.result !== undefined && result?.result !== null
     });
     log.debug('chatCompletionService - Full result : ', result);
+    
+    // Check if the flow execution resulted in an error
+    if (!result.success) {
+      // Extract error details from the result
+      const errorResult = result.result as ErrorResult;
+      const statusCode = 
+        typeof errorResult?.errorDetails?.status === 'number' ? 
+        errorResult.errorDetails.status as number : 500;
+      
+      // Create OpenAI-compatible error response
+      log.error('Flow execution returned an error', {
+        requestId,
+        errorMessage: errorResult.error,
+        statusCode,
+        errorDetails: errorResult.errorDetails
+      });
+      
+      const errorResponse = NextResponse.json({
+        error: {
+          message: errorResult.error || 'An error occurred during flow execution',
+          type: errorResult.errorDetails?.type as string || 'api_error',
+          code: errorResult.errorDetails?.code as string || 'internal_error',
+          param: errorResult.errorDetails?.param as string,
+          details: errorResult.errorDetails
+        }
+      }, { status: statusCode });
+      
+      return errorResponse;
+    }
     
     // Format the response according to OpenAI API format
     const responseId = `chatcmpl-${Date.now()}`;

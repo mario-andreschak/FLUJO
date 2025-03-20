@@ -92,12 +92,24 @@ export class FlowExecutor {
       throw error;
     }
     
-    // Return the final state
+    // Check if there's an error in the shared state's last response
+    const hasError = typeof sharedState.lastResponse === 'object' && 
+                     sharedState.lastResponse !== null && 
+                     'success' in sharedState.lastResponse && 
+                     sharedState.lastResponse.success === false;
+    
+    // Return the final state with appropriate success/error flags
     const result: FlowExecutionResponse = {
-      success: true,
+      success: !hasError,
       result: typeof sharedState.lastResponse === 'string' 
         ? sharedState.lastResponse 
-        : { success: true, ...sharedState.lastResponse } as SuccessResult,
+        : hasError 
+          ? { 
+              success: false, 
+              error: (sharedState.lastResponse as any).error,
+              errorDetails: (sharedState.lastResponse as any).errorDetails
+            } 
+          : { success: true, ...sharedState.lastResponse as object } as SuccessResult,
       messages: sharedState.messages, // Already using OpenAI.ChatCompletionMessageParam
       executionTime: Date.now() - sharedState.trackingInfo.startTime,
       nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker,

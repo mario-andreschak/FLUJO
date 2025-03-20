@@ -8,7 +8,7 @@ import { Model } from '@/shared/types';
 interface ModelListProps {
   models: Model[];
   isLoading: boolean;
-  onAdd: (model: Model) => Promise<void>;
+  onAdd: () => void;
   onUpdate: (model: Model) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }

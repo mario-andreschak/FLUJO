@@ -32,21 +32,13 @@ const log = createLogger('backend/services/model/index');
  * This is the core backend service that handles all model operations
  */
 class ModelService {
-  private modelsCache: Model[] | null = null;
-
   /**
    * Load all models from storage
    */
   async loadModels(): Promise<Model[]> {
     log.debug('loadModels: Entering method');
     try {
-      // Try to use cache first
-      if (this.modelsCache) {
-        return this.modelsCache;
-      }
-
       const models = await loadItem<Model[]>(StorageKey.MODELS, []);
-      this.modelsCache = models;
       return models;
     } catch (error) {
       log.warn('loadModels: Failed to load models:', error);
@@ -93,9 +85,6 @@ class ModelService {
       const updatedModels = [...models, model];
       await saveItem(StorageKey.MODELS, updatedModels);
       
-      // Clear cache instead of updating it
-      this.modelsCache = null;
-      
       return { success: true, model };
     } catch (error) {
       log.warn('addModel: Failed to add model:', error);
@@ -129,9 +118,6 @@ class ModelService {
       const updatedModels = models.map(m => m.id === model.id ? model : m);
       await saveItem(StorageKey.MODELS, updatedModels);
       
-      // Clear cache instead of updating it
-      this.modelsCache = null;
-      
       return { success: true, model };
     } catch (error) {
       log.warn('updateModel: Failed to update model:', error);
@@ -154,9 +140,6 @@ class ModelService {
       // Remove the model
       const updatedModels = models.filter(m => m.id !== id);
       await saveItem(StorageKey.MODELS, updatedModels);
-      
-      // Clear cache instead of updating it
-      this.modelsCache = null;
       
       return { success: true };
     } catch (error) {

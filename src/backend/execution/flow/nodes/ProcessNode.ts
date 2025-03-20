@@ -271,8 +271,15 @@ export class ProcessNode extends BaseNode {
       messagesCount: execResult.messages?.length || 0
     });
     
-    // Store the model response in shared state
-    if (execResult.content) {
+    // Store the model response or error in shared state
+    if (!execResult.success) {
+      // Store error information in shared state
+      sharedState.lastResponse = {
+        success: false,
+        error: execResult.error,
+        errorDetails: execResult.errorDetails
+      };
+    } else if (execResult.content) {
       sharedState.lastResponse = execResult.content;
     }
     
