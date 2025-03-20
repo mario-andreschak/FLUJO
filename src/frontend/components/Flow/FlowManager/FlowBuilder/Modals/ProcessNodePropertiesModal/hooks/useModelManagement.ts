@@ -12,15 +12,7 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Load models when modal opens
-  useEffect(() => {
-    log.debug('useModelManagement useEffect: Checking if modal is open', { open });
-    if (open) {
-      // Clear the cache to force a fresh load of models
-      modelService.clearCache();
-      loadModels();
-    }
-  }, [open]);
+
 
   // Load models from the service
   const loadModels = async () => {
