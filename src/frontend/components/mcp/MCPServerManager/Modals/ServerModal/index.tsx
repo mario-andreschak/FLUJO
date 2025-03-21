@@ -6,6 +6,7 @@ import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
 import SmitheryTab from './tabs/SmitheryTab';
+import ReferenceServersTab from './tabs/ReferenceServersTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import {
   Dialog,
@@ -29,7 +30,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onUpdate,
   onRestartAfterUpdate
 }) => {
-  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'smithery'>('github');
+  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'smithery' | 'reference'>('github');
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
@@ -39,10 +40,12 @@ const ServerModal: React.FC<ServerModalProps> = ({
     github: boolean;
     local: boolean;
     smithery: boolean;
+    reference: boolean;
   }>({
     github: false,
     local: false,
-    smithery: false
+    smithery: false,
+    reference: false
   });
 
   // Initialize fields only on first visit to each tab in add mode
@@ -55,7 +58,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery' | 'reference') => {
     setActiveTab(newValue);
   };
   
@@ -121,6 +124,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               <Tab label="GitHub" value="github" />
               <Tab label="Local Server" value="local" />
               <Tab label="Install from Registry" value="smithery" />
+              <Tab label="Reference Servers" value="reference" />
             </Tabs>
           </Box>
         ) : null}
@@ -147,6 +151,13 @@ const ServerModal: React.FC<ServerModalProps> = ({
               initialConfig={parsedConfig}
               onAdd={onAdd}
               onClose={onClose}
+            />
+          ) : activeTab === 'reference' ? (
+            <ReferenceServersTab
+              onAdd={onAdd}
+              onClose={onClose}
+              setActiveTab={setActiveTab}
+              onUpdate={(config) => setParsedConfig(config)}
             />
           ) : (
             <SmitheryTab

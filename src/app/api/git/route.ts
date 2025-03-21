@@ -218,6 +218,38 @@ export async function POST(request: NextRequest) {
     log.info(`Executing action: ${action} [${requestId}]`);
 
     switch (action) {
+      
+      case 'exists': {
+        log.info(`Starting exists action [${requestId}]`);
+        if (!savePath) {
+          log.error(`Missing save path [${requestId}]`);
+          return NextResponse.json({ error: 'Missing save path' }, { status: 400 });
+        }
+
+        try {
+          // Check if directory exists
+          log.debug(`Checking if path exists: ${savePath} [${requestId}]`);
+          let exists = false;
+          try {
+            await fs.access(savePath);
+            exists = true;
+            log.debug(`Path exists: ${savePath} [${requestId}]`);
+          } catch {
+            log.debug(`Path does not exist: ${savePath} [${requestId}]`);
+          }
+
+          log.info(`Returning exists response: ${exists} [${requestId}]`);
+          return NextResponse.json({
+            success: true,
+            exists
+          });
+        } catch (error) {
+          log.error(`Error checking if path exists [${requestId}]`, error);
+          return NextResponse.json({ 
+            error: `Failed to check if path exists: ${error instanceof Error ? error.message : 'Unknown error'}` 
+          }, { status: 500 });
+        }
+      }
 
       case 'run': {
         log.info(`Starting run action [${requestId}]`);
@@ -400,6 +432,39 @@ export async function POST(request: NextRequest) {
           log.error(`File read error [${requestId}]`, error);
           return NextResponse.json({ 
             error: `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}` 
+          }, { status: 500 });
+        }
+      }
+      
+      case 'listDir': {
+        log.info(`Starting listDir action [${requestId}]`);
+        if (!savePath) {
+          log.error(`Missing directory path [${requestId}]`);
+          return NextResponse.json({ error: 'Missing directory path' }, { status: 400 });
+        }
+        
+        try {
+          log.debug(`Reading directory: ${savePath} [${requestId}]`);
+          const entries = await fs.readdir(savePath, { withFileTypes: true });
+          
+          // Map entries to objects with name and type properties
+          const items = entries.map(entry => ({
+            name: entry.name,
+            type: entry.isDirectory() ? 'directory' : 'file',
+            isHidden: entry.name.startsWith('.') // Identify hidden files/directories
+          }));
+          
+          log.debug(`Found ${items.length} items in directory [${requestId}]`);
+          log.info(`Returning successful response for listDir [${requestId}]`);
+          return NextResponse.json({
+            success: true,
+            path: savePath,
+            items: items
+          });
+        } catch (error) {
+          log.error(`Failed to list directory contents [${requestId}]`, error);
+          return NextResponse.json({ 
+            error: `Failed to list directory contents: ${error instanceof Error ? error.message : 'Unknown error'}` 
           }, { status: 500 });
         }
       }

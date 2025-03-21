@@ -119,7 +119,7 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  let cwd = config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
+  let cwd = config.rootPath || config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
   log.debug(`cwd: ${cwd}`);
 
   // Create the transport with stderr capture

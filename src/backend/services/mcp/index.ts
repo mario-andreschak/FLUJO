@@ -4,6 +4,7 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
+import { executeCommand } from '@/utils/mcp/directExecution';
 
 // Global recovery map to persist clients across hot reloads
 declare global {
@@ -17,7 +18,7 @@ if (typeof global.__mcp_recovery === 'undefined') {
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
 import {
@@ -577,8 +578,46 @@ export class MCPService {
           stderrOutput: stderrOutput
         };
       } else {
-        // The server is configured but not connected
-        log.info(`getServerStatus: No stderr output available for ${serverName}`);
+        // No stderr output available, try direct execution to capture error
+        log.info(`getServerStatus: No stderr output available for ${serverName}, attempting direct execution to capture error`);
+        
+        // Only attempt direct execution for stdio configs
+        if (config.transport === 'stdio') {
+          try {
+            // Generate a request ID for logging
+            const requestId = uuidv4();
+            
+            // Get the server path
+            const serverPath = config.rootPath || `${SERVER_DIR_PREFIX}/${config.name}`;
+            
+            // Execute the command directly to capture any error output
+            const result = await executeCommand({
+              savePath: serverPath,
+              command: config.command,
+              args: config.args,
+              env: config.env,
+              actionName: 'ErrorCapture',
+              requestId,
+              timeout: 5000 // 5 second timeout to avoid hanging
+            });
+            
+            // If we got output, use it as the error message
+            if (result.commandOutput) {
+              log.info(`getServerStatus: Direct execution captured output for ${serverName}`);
+              return {
+                status: 'error',
+                message: result.commandOutput,
+                stderrOutput: result.commandOutput
+              };
+            }
+          } catch (execError) {
+            // If direct execution also fails, log but continue to default message
+            log.warn(`getServerStatus: Direct execution failed for ${serverName}:`, execError);
+          }
+        }
+        
+        // Fall back to generic message if all else fails
+        log.info(`getServerStatus: No specific error details available for ${serverName}`);
         return {
           status: 'error',
           message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
@@ -668,4 +707,3 @@ export class MCPService {
 
 // Create and export the singleton instance for use in other server components
 export const mcpService = new MCPService();
-

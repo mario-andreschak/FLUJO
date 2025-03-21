@@ -26,18 +26,8 @@ const EnvManager: React.FC<EnvManagerProps> = ({ serverName }) => {
     
     log.debug(`Saving environment variables for server: ${serverName}`);
     
-    // Convert complex env structure to simple Record<string, string> for saveEnv
-    const simpleEnv: Record<string, string> = {};
-    
-    for (const [key, value] of Object.entries(env)) {
-      if (typeof value === 'string') {
-        simpleEnv[key] = value;
-      } else if (value && typeof value === 'object' && 'value' in value) {
-        simpleEnv[key] = value.value;
-      }
-    }
-    
-    await saveEnv(serverName, simpleEnv);
+    // Pass the complete environment structure with metadata to saveEnv
+    await saveEnv(serverName, env);
   };
 
   // If no server is selected, show a message
