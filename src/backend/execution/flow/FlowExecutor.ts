@@ -3,7 +3,7 @@ import { Flow as PocketFlow } from './temp_pocket';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from './FlowConverter';
 import { createLogger } from '@/utils/logger';
-import { FlowExecutionResponse, SuccessResult } from '@/shared/types/flow/response';
+import { FlowExecutionResponse, SuccessResult, ErrorResult } from '@/shared/types/flow/response';
 import { SharedState, FlowParams } from './types';
 import OpenAI from 'openai';
 
@@ -89,7 +89,63 @@ export class FlowExecutor {
         flowName,
         error: error instanceof Error ? error.message : String(error)
       });
-      throw error;
+      
+      // CHANGE HERE: Handle model errors specifically
+      if (error && typeof error === 'object' && 'isModelError' in error) {
+        // Create a structured error response
+        const errorDetails = (error as any).details || {};
+        const errorResponse: FlowExecutionResponse = {
+          success: false,
+          result: {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+            errorDetails: {
+              message: errorDetails.message || (error instanceof Error ? error.message : String(error)),
+              type: errorDetails.type || 'model_error',
+              code: errorDetails.code,
+              param: errorDetails.param,
+              status: errorDetails.status,
+              ...errorDetails
+            }
+          },
+          messages: sharedState.messages || [],
+          executionTime: Date.now() - sharedState.trackingInfo.startTime,
+          nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker || []
+        };
+        
+        // Cast result to ErrorResult to access error property
+        const errorResult = errorResponse.result as ErrorResult;
+        log.info('Returning model error response to frontend', {
+          errorMessage: errorResult.error,
+          errorType: errorResult.errorDetails?.type
+        });
+        
+        return errorResponse;
+      }
+      
+      // For other errors, create a generic error response
+      const errorResponse: FlowExecutionResponse = {
+        success: false,
+        result: {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          errorDetails: {
+            message: error instanceof Error ? error.message : String(error),
+            type: 'flow_execution_error'
+          }
+        },
+        messages: sharedState.messages || [],
+        executionTime: Date.now() - sharedState.trackingInfo.startTime,
+        nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker || []
+      };
+      
+      // Cast result to ErrorResult to access error property
+      const errorResult = errorResponse.result as ErrorResult;
+      log.info('Returning generic error response to frontend', {
+        errorMessage: errorResult.error
+      });
+      
+      return errorResponse;
     }
     
     // Check if there's an error in the shared state's last response

@@ -184,29 +184,35 @@ export class ProcessNode extends BaseNode {
         nodeName // Pass the node name to be included in the response header
       });
       
-      if (!modelResult.success) {
-        log.error('Model execution error', { error: modelResult.error });
-        
-        // Instead of throwing a new Error, return a properly structured error result
-        // that preserves all the original error details
-        const errorResult: ProcessNodeExecResult = {
-          success: false,
-          error: modelResult.error.message,
-          errorDetails: {
-            message: modelResult.error.message,
-            name: modelResult.error.type,
-            code: modelResult.error.code,
-            type: modelResult.error.type,
-            param: typeof modelResult.error.details?.param === 'string' ? modelResult.error.details.param : undefined,
-            status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
-            // Include all other details from the original error
-            ...modelResult.error.details
-          }
-        };
-        
-        log.verbose('Preserving original error details from ModelHandler', JSON.stringify(errorResult));
-        
-        return errorResult;
+    if (!modelResult.success) {
+      log.error('Model execution error', { error: modelResult.error });
+      
+      // CHANGE: Instead of returning an error result, throw a custom error
+      const modelError = new Error(`Model execution failed: ${modelResult.error.message}`);
+      
+      // Add properties to the error object
+      (modelError as any).isModelError = true;
+      (modelError as any).details = {
+        message: modelResult.error.message,
+        type: modelResult.error.type,
+        code: modelResult.error.code,
+        // Only include modelId if it exists
+        ...(modelResult.error.type === 'model' ? { modelId: modelResult.error.modelId } : {}),
+        param: typeof modelResult.error.details?.param === 'string' ? modelResult.error.details.param : undefined,
+        status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
+        // Include all other details from the original error
+        ...modelResult.error.details
+      };
+      
+      // Log that we're throwing a critical error
+      log.error('Throwing critical model error to abort flow execution', {
+        error: modelResult.error.message,
+        type: modelResult.error.type,
+        code: modelResult.error.code
+      });
+      
+      // Throw the error to abort execution
+      throw modelError;
       }
       
       const result = modelResult.value;
@@ -239,20 +245,20 @@ export class ProcessNode extends BaseNode {
       
       return execResult;
     } catch (error) {
-      // For critical tool errors, we want to rethrow them with a special error type
-      // that will be caught by the FlowExecutor and properly displayed to the user
-      if (error && typeof error === 'object' && 'isCriticalToolError' in error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        
-        log.error('Critical tool error detected - propagating to frontend:', {
-          error: errorMessage
-        });
-        
-        // Create a new error with a clear message that will be displayed to the user
-        const criticalError = new Error(`CRITICAL TOOL ERROR: ${errorMessage}`);
-        
-        // Rethrow the error to stop execution and propagate to the frontend
-        throw criticalError;
+    // For critical tool errors or model errors, we want to rethrow them
+    // to abort the flow execution
+    if (error && typeof error === 'object' && 
+        ('isCriticalToolError' in error || 'isModelError' in error)) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      log.error('Critical error detected - propagating to abort flow:', {
+        error: errorMessage,
+        isModelError: 'isModelError' in error,
+        isCriticalToolError: 'isCriticalToolError' in error
+      });
+      
+      // Rethrow the error to stop execution and propagate to the frontend
+      throw error;
       }
       
       // For other errors, create an error result
