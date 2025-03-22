@@ -1,16 +1,16 @@
 # Model Frontend Service
 
-This directory contains the frontend service implementation for the Model service. The frontend service is part of a clean architecture pattern that separates concerns between UI components, frontend services, API layer, and backend services.
+This directory contains the frontend service for the Model feature. The frontend service acts as a client for the Model API, providing a clean interface for UI components to interact with the backend.
 
 ## Architecture
 
-The Model implementation follows a clean architecture pattern:
+The Model implementation follows a clean architecture pattern with clear separation of concerns:
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
 │  UI Components  │◄───►│  Frontend       │◄───►│  API Layer      │◄───┐
-│  (ModelManager) │     │  Service        │     │  (Adapters)     │    │
+│  (ModelClient)  │     │  Service        │     │  (Adapters)     │    │
 └─────────────────┘     └─────────────────┘     └─────────────────┘    │
                                                         │               │
                                                         ▼               │
@@ -21,145 +21,56 @@ The Model implementation follows a clean architecture pattern:
                                                 └─────────────────┘
 ```
 
-## Responsibilities
+## Components
 
-The frontend service is responsible for:
+### Frontend Service
 
-- **UI Integration**: Providing a clean API for UI components
-- **API Communication**: Making API calls to the server-side API layer
-- **Caching**: Managing client-side caching for performance
-- **Error Handling**: Providing user-friendly error handling
-- **Data Transformation**: Transforming data for UI consumption
+- `index.ts`: Main service class that provides methods for model management
+  - Makes HTTP requests to the API endpoints
+  - Handles error handling and data formatting
+  - Provides a clean interface for UI components
 
-## Key Features
+## Flow of Control
 
-### Model Management
+1. UI components use the frontend service to make API calls
+2. Frontend service makes HTTP requests to the API endpoints
+3. API routes process the requests and delegate to the appropriate adapter
+4. Adapters delegate to the backend service and sanitize sensitive data
+5. Backend service performs the operations and returns the raw results
+6. Adapters sanitize the results before returning them to the API routes
+7. API routes format the results and return them to the frontend
+8. Frontend service processes the response and returns it to the UI component
 
-- Loading, retrieving, and caching models
-- Adding, updating, and deleting models
-- Validating model data before submission
+## Separation of Concerns
 
-### Provider Integration
+- **UI Components**: Focus on presentation and user interaction
+- **Frontend Service**: Handles API communication and error handling
+- **API Layer**: Handles HTTP concerns and delegates to adapters
+- **Adapter Layer**: Sanitizes data and delegates to backend services
+- **Backend Service**: Handles business logic and data operations
 
-- Fetching available models from providers
-- Displaying provider-specific information
-
-### Security
-
-- Handling API key encryption through API calls
-- Masking sensitive information for UI display
-- Supporting global variable references
-
-### Completion Generation
-
-- Generating completions using configured models
-- Error handling and user feedback
-
-## API Reference
-
-### Model Management
-
-- `loadModels()`: Load all models
-- `getModel(modelId)`: Get a specific model by ID
-- `addModel(model)`: Add a new model
-- `updateModel(model)`: Update an existing model
-- `deleteModel(id)`: Delete a model by ID
-
-### Provider Integration
-
-- `fetchProviderModels(baseUrl, modelId?)`: Fetch models from a provider
-
-### Security
-
-- `encryptApiKey(apiKey)`: Encrypt an API key
-- `decryptApiKey(encryptedApiKey)`: Decrypt an API key for UI display
-- `isEncryptionConfigured()`: Check if encryption is configured
-- `isUserEncryptionEnabled()`: Check if user encryption is enabled
-- `setEncryptionKey(key)`: Set the encryption key
-
-### Completion Generation
-
-- `generateCompletion(modelId, prompt, messages)`: Generate a completion using a model
-
-## Usage Examples
+## Usage
 
 ```typescript
-// Import the service
+// Import the frontend service
 import { modelService } from '@/frontend/services/model';
 
-// Load all models
+// Use the service methods
 const models = await modelService.loadModels();
-
-// Get a specific model
-const model = await modelService.getModel('model-id');
-
-// Add a new model
-const result = await modelService.addModel({
-  id: 'new-model-id',
-  name: 'gpt-4',
-  displayName: 'GPT-4',
-  encryptedApiKey: 'encrypted-api-key',
-  baseUrl: 'https://api.openai.com/v1'
-});
-
-// Fetch models from a provider
-const providerModels = await modelService.fetchProviderModels(
-  'https://api.openai.com/v1'
-);
-
-// Generate a completion
-try {
-  const completion = await modelService.generateCompletion(
-    'model-id',
-    'Generate a response to this prompt',
-    [{ role: 'user', content: 'Hello, world!' }]
-  );
-  console.log(completion);
-} catch (error) {
-  console.error('Error generating completion:', error);
-}
+const model = await modelService.getModel(id);
+const result = await modelService.addModel(model);
+const result = await modelService.updateModel(model);
+const result = await modelService.deleteModel(id);
 ```
 
-## Implementation Details
+## Error Handling
 
-### API Communication
+The frontend service provides consistent error handling for all operations:
 
-The frontend service communicates with the backend through the API layer:
+- All methods return a Promise that resolves to a result object
+- Result objects include a `success` flag and optional `error` message
+- UI components can use the result to display appropriate messages to the user
 
-```typescript
-// Example API call
-const response = await fetch('/api/model?action=listModels');
-const data = await response.json();
-```
+## Security
 
-### Caching Strategy
-
-The service implements a simple caching strategy:
-
-- Cache models after initial load
-- Update cache when models are added, updated, or deleted
-- Use cache first, then fallback to API calls
-
-### Error Handling
-
-The service provides user-friendly error handling:
-
-- Catch and log errors
-- Return meaningful error messages
-- Format errors for UI consumption
-
-### Security Considerations
-
-The service follows security best practices:
-
-- Never expose decrypted API keys in the UI
-- Mask sensitive information with asterisks
-- Support global variable references for shared API keys
-
-## Benefits of This Architecture
-
-- **Separation of Concerns**: UI components only need to know about the frontend service
-- **Abstraction**: The frontend service abstracts away API details
-- **Consistency**: Provides a consistent interface for UI components
-- **Maintainability**: Changes to the API layer don't affect UI components
-- **Testability**: The frontend service can be tested independently
+The frontend service never receives sensitive data like API keys. The backend service and adapter layer ensure that sensitive data is sanitized before it reaches the frontend.

@@ -121,13 +121,41 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   log.debug(`Final args: ${JSON.stringify(args)}`);
   let cwd = config.rootPath || config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
   log.debug(`cwd: ${cwd}`);
+  log.debug(`env: ${JSON.stringify(config.env)}`);
 
   // Create the transport with stderr capture
   log.info(`Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`);
+  
+  // Define the type for environment variables that may have metadata
+  interface EnvVarWithMetadata {
+    value: string;
+    metadata?: {
+      isSecret?: boolean;
+      [key: string]: unknown;
+    };
+  }
+
+  // Transform the env object to extract only the value part from each key
+  const transformedEnv: Record<string, string> = {};
+  if (config.env) {
+    for (const [key, envVar] of Object.entries(config.env)) {
+      // Check if the env variable is an object with a 'value' property
+      if (envVar && typeof envVar === 'object' && 'value' in (envVar as EnvVarWithMetadata)) {
+        const typedEnvVar = envVar as EnvVarWithMetadata;
+        transformedEnv[key] = typedEnvVar.value;
+      } else {
+        // If it's already a simple value, use it as is
+        transformedEnv[key] = envVar as string;
+      }
+    }
+  }
+  
+  log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
+  
   const transport = new StdioClientTransport({
     command: command,
     args: args,
-    env: config.env,
+    env: transformedEnv,
     cwd: cwd, // Set working directory to the server's directory
     stderr: 'pipe', // Pipe stderr so we can capture it
   });

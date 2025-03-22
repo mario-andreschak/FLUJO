@@ -132,31 +132,6 @@ export async function POST(req: NextRequest) {
         log.info(`Data encrypted successfully`, { requestId });
         return NextResponse.json({ result: encrypted });
         
-      case 'decrypt':
-        log.debug(`Processing decrypt action`, { requestId, hasToken: !!token, hasPassword: !!password });
-        if (!data) {
-          log.error(`Missing data parameter for decryption`, { requestId });
-          return NextResponse.json({ error: 'Data is required' }, { status: 400 });
-        }
-        
-        // Try to use token first, then password, then default encryption
-        let decrypted;
-        if (token) {
-          decrypted = await decryptWithPassword(data, token, true);
-        } else if (password) {
-          decrypted = await decryptWithPassword(data, password, false);
-        } else {
-          decrypted = await decryptWithPassword(data);
-        }
-        
-        if (decrypted === null) {
-          log.error(`Failed to decrypt data`, { requestId });
-          return NextResponse.json({ error: 'Failed to decrypt data' }, { status: 500 });
-        }
-        
-        log.info(`Data decrypted successfully`, { requestId });
-        return NextResponse.json({ result: decrypted });
-        
       case 'verify_password':
         log.debug(`Processing verify_password action`, { requestId });
         if (!password) {
@@ -200,4 +175,3 @@ export async function POST(req: NextRequest) {
     }, { status: 500 });
   }
 }
-

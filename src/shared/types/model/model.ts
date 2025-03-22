@@ -5,7 +5,7 @@ export interface Model {
     name: string;
     displayName?: string;
     description?: string;
-    encryptedApiKey: string;
+    ApiKey: string;
     baseUrl?: string;
     provider?: ModelProvider;
     promptTemplate?: string;

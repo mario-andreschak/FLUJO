@@ -5,7 +5,7 @@ import { loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { decryptWithPassword } from '@/utils/encryption/secure';
 
-const log = createLogger('utils/shared/server');
+const log = createLogger('backend/utils/resolveGlobalVars');
 
 // Define interfaces for the new environment variable structure
 interface EnvVarMetadata {
@@ -158,40 +158,81 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
 }
 
 /**
- * Helper function to resolve and decrypt an API key
+ * Helper function to resolve and decrypt an API key or global variable
  * This handles both global variable references and encrypted values
+ * 
+ * The process follows this order:
+ * 1. Decrypt (if encrypted)
+ * 2. Resolve global variables (if it contains references)
+ * 3. Repeat from step 1 if necessary (up to 10 levels deep)
+ * 
+ * @param value The value to resolve and decrypt
+ * @param depth Current recursion depth (used internally)
+ * @returns The resolved and decrypted value, or null if resolution failed
  */
-export async function resolveAndDecryptApiKey(encryptedApiKey: string): Promise<string | null> {
-  log.debug('Entering resolveAndDecryptApiKey method');
+export async function resolveAndDecryptApiKey(
+  value: string, 
+  depth: number = 0
+): Promise<string | null> {
+  log.debug(`Entering resolveAndDecryptApiKey method (depth: ${depth})`);
   
-  if (!encryptedApiKey) {
-    log.warn('Empty API key provided');
+  // Check for empty input
+  if (!value) {
+    log.warn('Empty value provided');
     return null;
   }
   
-  // Check if the API key is a global variable reference
-  const globalVarMatch = encryptedApiKey.match(/\$\{global:([^}]+)\}/);
-  if (globalVarMatch) {
-    // It's a global variable reference, resolve it
-    const resolved = await resolveGlobalVars(encryptedApiKey) as string;
-    if (resolved === encryptedApiKey) {
-      // If it wasn't resolved (global var not found), return null
-      log.warn(`Failed to resolve global variable in API key: ${encryptedApiKey}`);
-      return null;
-    }
-    return resolved;
+  // Add depth limit to prevent infinite recursion
+  if (depth >= 10) {
+    log.warn(`Maximum resolution depth reached (10) for value: ${value}`);
+    return value;
   }
   
-  // It's an encrypted value, decrypt it
-  try {
-    const decrypted = await decryptWithPassword(encryptedApiKey);
-    if (!decrypted) {
-      log.warn('Failed to decrypt API key');
+  let currentValue = value;
+  
+  // Step 1: Decrypt if encrypted
+  if (currentValue.startsWith('encrypted:')) {
+    log.debug(`Decrypting encrypted value at depth ${depth}`);
+    try {
+      const encryptedValue = currentValue.substring(10); // Remove 'encrypted:' prefix
+      const decrypted = await decryptWithPassword(encryptedValue);
+      
+      if (decrypted) {
+        log.debug(`Successfully decrypted value at depth ${depth}`);
+        log.verbose(decrypted)
+        currentValue = decrypted;
+      } else {
+        log.warn(`Failed to decrypt value at depth ${depth}`);
+        return null;
+      }
+    } catch (error) {
+      log.error(`Error decrypting value at depth ${depth}:`, error);
       return null;
     }
-    return decrypted;
-  } catch (error) {
-    log.error('Error decrypting API key:', error);
-    return null;
+  } else if (currentValue.startsWith('encrypted_failed:')) {
+    log.warn(`Skipping failed encrypted value at depth ${depth}`);
+    currentValue = currentValue.substring('encrypted_failed:'.length);
   }
+  
+  // Step 2: Resolve global variables
+  if (currentValue.includes('${global:')) {
+    log.debug(`Resolving global variables at depth ${depth}`);
+    try {
+      const resolved = await resolveGlobalVars(currentValue) as string;
+      log.verbose(resolved)
+      // If the value changed after resolution, process it again recursively
+      if (resolved !== currentValue) {
+        log.debug(`Value changed after resolving globals at depth ${depth}, processing recursively`);
+        return resolveAndDecryptApiKey(resolved, depth + 1);
+      }
+      
+      currentValue = resolved;
+    } catch (error) {
+      log.error(`Error resolving global variables at depth ${depth}:`, error);
+      return null;
+    }
+  }
+  
+  log.debug(`Completed resolveAndDecryptApiKey at depth ${depth}`);
+  return currentValue;
 }

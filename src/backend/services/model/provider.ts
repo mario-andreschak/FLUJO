@@ -64,9 +64,13 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   
   // Ensure baseUrl ends with /v1 but avoid duplicate /v1/v1
   let modelsUrl = baseUrl;
-  if (!modelsUrl.endsWith('/v1') && !modelsUrl.endsWith('/v1/')) {
-    modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}v1` : `${modelsUrl}/v1`;
-  }
+
+  // lets not do that because we dont want to magically add something to the url. 
+  // use it exactly as entered on the frontend:
+
+  // if (!modelsUrl.endsWith('/v1') && !modelsUrl.endsWith('/v1/')) {
+  //   modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}v1` : `${modelsUrl}/v1`;
+  // }
   // Remove trailing slash if present before adding /models
   modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}models` : `${modelsUrl}/models`;
   
@@ -79,13 +83,30 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   
   // Add Authorization header if API key is provided (OpenRouter doesn't require it for listing models)
   if (apiKey) {
+    if (baseUrl.includes('anthropic')){
+    headers['x-api-key'] = `${apiKey}`;
+    headers['anthropic-version'] = `2023-06-01`; // TODO make dynamic? e.g. fetch models with anthropic sdk
+
+    } else {
     headers['Authorization'] = `Bearer ${apiKey}`;
+
+    }
   }
   
   try {
+    // // Log headers without exposing API keys
+    // const sanitizedHeaders = { ...headers };
+    // if (sanitizedHeaders['Authorization']) {
+    //   sanitizedHeaders['Authorization'] = 'Bearer ********';
+    // }
+    // if (sanitizedHeaders['x-api-key']) {
+    //   sanitizedHeaders['x-api-key'] = '********';
+    // }
+    log.verbose(`fetching models @${modelsUrl} with ${JSON.stringify(headers)}`)
     const response = await fetch(modelsUrl, { headers });
     
     if (!response.ok) {
+      log.verbose('model list response', response)
       throw new Error(`API error: ${response.status} ${response.statusText}`);
     }
     

@@ -47,7 +47,8 @@ interface EnvEditorProps {
   serverName: string;
   initialEnv: Record<string, { value: string, metadata: { isSecret: boolean } } | string>;
   onSave: (env: Record<string, { value: string, metadata: { isSecret: boolean } } | string>) => Promise<void>;
-  onDelete?: (key: string) => Promise<void>; // Add this new prop
+  onDelete?: (key: string) => Promise<void>;
+  onServerRestart?: (serverName: string) => Promise<void>; // Add this new prop for server restart
 }
 
 const EnvEditor: React.FC<EnvEditorProps> = ({
@@ -55,6 +56,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
   initialEnv,
   onSave,
   onDelete,
+  onServerRestart,
 }) => {
   const { globalEnvVars } = useStorage();
   const [variables, setVariables] = useState<EnvVariable[]>([]);
@@ -276,9 +278,15 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
         {} as Record<string, { value: string, metadata: { isSecret: boolean } }>
       );
 
-      // Save the environment variables,
+      // Save the environment variables
       await onSave(envObject);
       setIsEditing(false);
+
+      // Restart the server if the prop is provided and it's not the Global server
+      if (onServerRestart && serverName !== "Global") {
+        log.debug(`Restarting server after env variable changes: ${serverName}`);
+        await onServerRestart(serverName);
+      }
 
     } catch (error) {
       log.error('Failed to save environment variables:', error);

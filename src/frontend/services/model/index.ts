@@ -1,93 +1,153 @@
-'use client';
-
-import { Model } from '@/shared/types/model';
+import { Model } from '@/shared/types';
 import { createLogger } from '@/utils/logger';
 
-// Create a logger instance for this file
-const log = createLogger('frontend/services/model/index');
+const log = createLogger('frontend/services/model');
 
-/**
- * ModelService class provides a client-side API for UI components
- * This service makes API calls to the server-side API layer
- */
+export interface ModelResult {
+  success: boolean;
+  model?: Model;
+  error?: string;
+}
+
+interface ModelsResult {
+  success: boolean;
+  models?: Model[];
+  error?: string;
+}
+
 class ModelService {
-  /**
-   * Load all models
-   */
-  async loadModels(): Promise<Model[]> {
-    log.debug('loadModels: Entering method');
+  private async fetchWithErrorHandling(url: string, options?: RequestInit): Promise<any> {
     try {
-      // Always fetch fresh data from the API
-      log.debug('loadModels: Fetching fresh data from API');
+      // Log request attempt
+      log.debug('Making API request', { 
+        url,
+        method: options?.method || 'GET'
+      });
+
+      const response = await fetch(url, options);
+      let data = null;
       
-      // Call the API to list models
-      const response = await fetch('/api/model?action=listModels');
+      try {
+        // Try to parse JSON response if status is not 204
+        if (response.status !== 204) {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            data = await response.json();
+          } else {
+            // For non-JSON responses, get the text
+            const text = await response.text();
+            log.warn('Received non-JSON response', { 
+              url, 
+              contentType,
+              text: text.substring(0, 200) // Log first 200 chars only
+            });
+            data = text;
+          }
+        }
+      } catch (parseError) {
+        log.error('Failed to parse response', { 
+          url, 
+          status: response.status,
+          contentType: response.headers.get('content-type'),
+          parseError 
+        });
+        throw new Error('Invalid response format');
+      }
       
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to load models');
+        // For error responses, ensure we extract the error message properly
+        let errorMessage: string;
+        
+        if (typeof data === 'object' && data !== null) {
+          // Try to extract error message from common error response formats
+          errorMessage = data.error || data.message || data.errorMessage || 
+            JSON.stringify(data);
+        } else {
+          errorMessage = data || `HTTP error! status: ${response.status}`;
+        }
+        
+        log.error('Request failed', { 
+          url, 
+          method: options?.method || 'GET',
+          status: response.status,
+          error: errorMessage,
+          data 
+        });
+        
+        throw new Error(errorMessage);
       }
       
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to load models');
+      // Log success
+      log.debug('API request successful', {
+        url,
+        method: options?.method || 'GET',
+        status: response.status
+      });
+
+      return data;
+    } catch (error) {
+      // If it's a network error, provide a more user-friendly message
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        log.error('Network error', { 
+          url,
+          method: options?.method || 'GET',
+          error 
+        });
+        throw new Error('Unable to connect to the server. Please check your internet connection.');
       }
       
-      const models = data.models || [];
-      log.debug(`loadModels: Loaded ${models.length} models from API`);
+      // If it's already an Error object with a message, rethrow it
+      if (error instanceof Error) {
+        throw error;
+      }
+      
+      // Otherwise log and throw a generic error
+      log.error('API request failed', { 
+        url,
+        method: options?.method || 'GET',
+        error 
+      });
+      throw new Error('Failed to complete request');
+    }
+  }
+
+  async loadModels(): Promise<Model[]> {
+    try {
+      const models = await this.fetchWithErrorHandling('/api/model');
       return models;
     } catch (error) {
-      log.warn('loadModels: Failed to load models:', error);
+      log.error('Failed to load models', error);
       return [];
     }
   }
 
-  /**
-   * Get a model by ID
-   */
-  async getModel(modelId: string): Promise<Model | null> {
-    log.debug(`getModel: Looking for model with ID: ${modelId}`);
+  async getModel(id: string): Promise<Model | null> {
     try {
-      // Always fetch fresh data from the API
-      log.debug(`getModel: Fetching fresh data from API for model ID: ${modelId}`);
-      
-      // Call the API to get the model
-      const response = await fetch(`/api/model?action=getModel&id=${encodeURIComponent(modelId)}`);
-      
-      if (!response.ok) {
-        if (response.status === 404) {
-          log.debug(`getModel: Model ${modelId} not found`);
-          return null;
-        }
-        
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to get model: ${modelId}`);
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        log.debug(`getModel: Model ${modelId} not found`);
-        return null;
-      }
-      
-      log.debug(`getModel: Successfully fetched model ${modelId} from API`);
-      return data.model;
+      const model = await this.fetchWithErrorHandling(`/api/model?id=${id}`);
+      return model;
     } catch (error) {
-      log.error(`getModel: Error getting model ${modelId}:`, error);
+      log.error('Failed to get model', { id, error });
       return null;
     }
   }
 
-  /**
-   * Add a new model
-   */
-  async addModel(model: Model): Promise<{ success: boolean; error?: string; model?: Model }> {
-    log.debug('addModel: Entering method');
+  async addModel(model: Model): Promise<ModelResult> {
     try {
-      // Call the API to add the model
-      const response = await fetch('/api/model', {
+      // Validate required fields
+      if (!model.provider) {
+        return {
+          success: false,
+          error: 'Provider is required'
+        };
+      }
+
+      // Log the add attempt
+      log.debug('Attempting to add model', { 
+        displayName: model.displayName,
+        provider: model.provider 
+      });
+
+      const newModel = await this.fetchWithErrorHandling('/api/model', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -95,95 +155,142 @@ class ModelService {
         body: JSON.stringify({
           action: 'addModel',
           model
-        })
+        }),
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Failed to add model' 
-        };
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to add model' 
-        };
-      }
-      
-      return { 
+      // Log successful addition
+      log.debug('Model added successfully', { 
+        modelId: newModel.id,
+        displayName: newModel.displayName 
+      });
+
+      return {
         success: true,
-        model: data.model
+        model: newModel,
       };
     } catch (error) {
-      log.warn('addModel: Failed to add model:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to add model' 
+      // Log the detailed error
+      log.error('Failed to add model', { 
+        displayName: model.displayName,
+        provider: model.provider,
+        error: error instanceof Error ? error.message : error 
+      });
+
+      // Return a user-friendly error message
+      const errorMessage = error instanceof Error ? error.message : 'Failed to add model';
+      
+      // Handle specific error cases
+      if (errorMessage.includes('display name already exists')) {
+        return {
+          success: false,
+          error: `The display name "${model.displayName}" is already in use. Please choose a different name.`
+        };
+      }
+      
+      if (errorMessage.includes('technical name already exists')) {
+        return {
+          success: false,
+          error: `A model with the name "${model.name}" already exists. Please choose a different name.`
+        };
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
       };
     }
   }
 
-  /**
-   * Update an existing model
-   */
-  async updateModel(model: Model): Promise<{ success: boolean; error?: string; model?: Model }> {
-    log.debug('updateModel: Entering method');
+  async updateModel(model: Model): Promise<ModelResult> {
     try {
-      // Call the API to update the model
-      const response = await fetch('/api/model', {
+      // First validate the model has required fields
+      if (!model.id) {
+        return {
+          success: false,
+          error: 'Model ID is required'
+        };
+      }
+
+      // Log the update attempt
+      log.debug('Attempting to update model', { 
+        modelId: model.id,
+        displayName: model.displayName 
+      });
+
+      const updatedModel = await this.fetchWithErrorHandling('/api/model', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           action: 'updateModel',
-          model
-        })
+          model: model
+        }),
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Failed to update model' 
-        };
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to update model' 
-        };
-      }
-      
-      return { 
+      // Log successful update
+      log.debug('Model updated successfully', { 
+        modelId: model.id,
+        displayName: model.displayName 
+      });
+
+      return {
         success: true,
-        model: data.model
+        model: updatedModel,
       };
     } catch (error) {
-      log.warn('updateModel: Failed to update model:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to update model' 
+      // Log the detailed error
+      log.error('Failed to update model', { 
+        modelId: model.id,
+        displayName: model.displayName,
+        error: error instanceof Error ? error.message : error 
+      });
+
+      // Return a user-friendly error message
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update model';
+      
+      // If it's a duplicate name error, use the backend's detailed message
+      if (errorMessage.includes('display name') && errorMessage.includes('already exists')) {
+        // The backend now provides a detailed message with the conflicting model ID
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
       };
     }
   }
 
-  /**
-   * Delete a model by ID
-   */
-  async deleteModel(id: string): Promise<{ success: boolean; error?: string }> {
-    log.debug('deleteModel: Entering method');
+  async deleteModel(id: string): Promise<ModelResult> {
     try {
-      // Call the API to delete the model
-      const response = await fetch('/api/model', {
+      // Validate required fields
+      if (!id) {
+        return {
+          success: false,
+          error: 'Model ID is required'
+        };
+      }
+
+      // Get model details for logging
+      const model = await this.getModel(id);
+      if (!model) {
+        return {
+          success: false,
+          error: 'Model not found'
+        };
+      }
+
+      // Log the delete attempt
+      log.debug('Attempting to delete model', { 
+        modelId: id,
+        displayName: model.displayName 
+      });
+
+      await this.fetchWithErrorHandling('/api/model', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -191,312 +298,91 @@ class ModelService {
         body: JSON.stringify({
           action: 'deleteModel',
           id
-        })
+        }),
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Failed to delete model' 
-        };
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to delete model' 
-        };
-      }
-      
+      // Log successful deletion
+      log.debug('Model deleted successfully', { 
+        modelId: id,
+        displayName: model.displayName 
+      });
+
       return { success: true };
     } catch (error) {
-      log.warn('deleteModel: Failed to delete model:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to delete model' 
+      // Get model details for error logging if possible
+      let displayName: string | undefined;
+      try {
+        const model = await this.getModel(id);
+        displayName = model?.displayName;
+      } catch {
+        // Ignore error from getModel
+      }
+
+      // Log the detailed error
+      log.error('Failed to delete model', { 
+        modelId: id,
+        displayName,
+        error: error instanceof Error ? error.message : error 
+      });
+
+      // Return a user-friendly error message
+      const errorMessage = error instanceof Error ? error.message : 'Failed to delete model';
+
+      // Handle specific error cases
+      if (errorMessage.includes('not found')) {
+        return {
+          success: false,
+          error: 'The model no longer exists or has already been deleted'
+        };
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
       };
     }
   }
 
-  /**
-   * Set encryption key
-   */
-  async setEncryptionKey(key: string): Promise<{ success: boolean; error?: string }> {
-    log.debug('setEncryptionKey: Entering method');
+  async updateModelApiKey(modelId: Model["id"], newApiKey: string): Promise<ModelResult> {
     try {
-      // Call the API to set the encryption key
-      const response = await fetch('/api/model', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'setEncryptionKey',
-          key
-        })
-      });
+      const model = await this.getModel(modelId);
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Failed to set encryption key' 
+      if (!model) {
+        return {
+          success: false,
+          error: 'Model not found',
         };
       }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to set encryption key' 
-        };
-      }
-      
-      return { success: true };
+
+      const result = await this.updateModel({...model,ApiKey:newApiKey});
+
+      return result;
     } catch (error) {
-      log.warn('setEncryptionKey: Failed to set encryption key:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to set encryption key' 
+      log.error('Failed to update model API key', { modelId, error });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update API key',
       };
     }
   }
 
-  /**
-   * Encrypt an API key
-   */
-  async encryptApiKey(apiKey: string): Promise<string | null> {
-    log.debug('encryptApiKey: Entering method');
+  async fetchProviderModels(baseUrl: string, modelId: string): Promise<Array<{id: string, name: string, description?: string}>> {
     try {
-      // Handle empty API key case
-      if (!apiKey || apiKey.trim() === '') {
-        log.debug('encryptApiKey: Empty API key provided, returning empty string');
-        return '';
-      }
-      
-      // Call the API to encrypt the API key
-      const response = await fetch('/api/model', {
+      const response = await this.fetchWithErrorHandling('/api/model/provider', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          action: 'encryptApiKey',
-          apiKey
-        })
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to encrypt API key');
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to encrypt API key');
-      }
-      
-      return data.result;
-    } catch (error) {
-      log.error('encryptApiKey: Failed to encrypt API key:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Decrypt an API key for UI display
-   * Note: This should only be used for UI display purposes.
-   * For API calls, use the server-side API directly.
-   * 
-   * IMPORTANT: In line with the "always encrypted" policy, this method
-   * will return asterisks for UI display instead of decrypted values.
-   */
-  async decryptApiKey(encryptedApiKey: string): Promise<string | null> {
-    log.debug('decryptApiKey: Entering method');
-    try {
-      // Check if this is a global variable reference
-      if (encryptedApiKey && encryptedApiKey.startsWith('${global:')) {
-        // For global variables, show a placeholder in the UI
-        return `Bound to global: ${encryptedApiKey.substring(9, encryptedApiKey.length - 1)}`;
-      }
-      
-      // Check if this is a failed encryption marker
-      if (encryptedApiKey && encryptedApiKey.startsWith('encrypted_failed:')) {
-        // Return asterisks for security
-        return '********';
-      }
-      
-      // For security, we no longer decrypt and show API keys in the UI
-      // Instead, we return asterisks to indicate the value is encrypted
-      return '********';
-    } catch (error) {
-      log.warn('decryptApiKey: Failed to process API key:', error);
-      // Return asterisks for security
-      return '********';
-    }
-  }
-
-  /**
-   * Check if encryption is configured
-   */
-  async isEncryptionConfigured(): Promise<boolean> {
-    log.debug('isEncryptionConfigured: Entering method');
-    try {
-      // Call the API to check encryption status
-      const response = await fetch('/api/model?action=checkEncryption');
-      
-      if (!response.ok) {
-        throw new Error('Failed to check encryption status');
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to check encryption status');
-      }
-      
-      return data.initialized === true;
-    } catch (error) {
-      log.warn('isEncryptionConfigured: Failed to check encryption status:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Check if user encryption is enabled
-   */
-  async isUserEncryptionEnabled(): Promise<boolean> {
-    log.debug('isUserEncryptionEnabled: Entering method');
-    try {
-      // Call the API to check user encryption status
-      const response = await fetch('/api/model?action=checkEncryption');
-      
-      if (!response.ok) {
-        throw new Error('Failed to check user encryption status');
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to check user encryption status');
-      }
-      
-      return data.userEncryption === true;
-    } catch (error) {
-      log.warn('isUserEncryptionEnabled: Failed to check user encryption status:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Generate a completion using the specified model
-   */
-  async generateCompletion(
-    modelId: string,
-    prompt: string,
-    messages: any[] = []
-  ): Promise<string> {
-    log.debug(`generateCompletion: Generating completion with model: ${modelId}`);
-    try {
-      // Call the API to generate a completion
-      const response = await fetch('/api/model', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'generateCompletion',
+          baseUrl,
           modelId,
-          prompt,
-          messages
-        })
+        }),
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to generate completion');
-      }
-      
-      const data = await response.json();
-      log.info(`generateCompletion: Successfully generated completion with model: ${modelId}`);
-      return data.content || '';
+      return response.models || [];
     } catch (error) {
-      log.error('generateCompletion: Error generating completion:', error);
-      throw new Error(`Failed to generate completion: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  /**
-   * Fetch models from a provider
-   * @param baseUrl The base URL of the provider
-   * @param modelId Optional model ID for existing models
-   * @param apiKey Optional API key for new models that don't have a modelId yet
-   */
-  async fetchProviderModels(baseUrl: string, modelId?: string, apiKey?: string): Promise<any[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}, modelId: ${modelId}, apiKey present: ${!!apiKey}`);
-    try {
-      // Build the URL with query parameters
-      let url = `/api/model?action=fetchModels&baseUrl=${encodeURIComponent(baseUrl)}`;
-      if (modelId) {
-        url += `&modelId=${encodeURIComponent(modelId)}`;
-      }
-      
-      // For existing models (with modelId), we don't need to pass the API key - the backend will look it up
-      if (modelId) {
-        log.debug('fetchProviderModels: Using model ID to look up API key on backend');
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
-          return []; // Return empty array instead of throwing
-        }
-        
-        const data = await response.json();
-        return data.data || [];
-      } 
-      // For new models, we need to pass the API key directly if provided
-      else if (apiKey) {
-        log.debug('fetchProviderModels: Using provided API key');
-        // Call the API to fetch provider models with the API key
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            tempApiKey: apiKey // Keep using tempApiKey field for backward compatibility
-          })
-        });
-        
-        if (!response.ok) {
-          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
-          return []; // Return empty array instead of throwing
-        }
-        
-        const data = await response.json();
-        return data.data || [];
-      }
-      // No modelId and no API key, just try to fetch models without authentication
-      else {
-        log.debug('fetchProviderModels: No model ID or API key provided');
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-          log.warn(`fetchProviderModels: Non-OK response from API: ${response.status}`);
-          return []; // Return empty array instead of throwing
-        }
-        
-        const data = await response.json();
-        return data.data || [];
-      }
-    } catch (error) {
-      log.warn(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
-      return []; // Return empty array instead of throwing
+      log.error('Failed to fetch provider models', { baseUrl, error });
+      return [];
     }
   }
 }

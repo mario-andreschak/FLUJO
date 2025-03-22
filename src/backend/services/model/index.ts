@@ -23,6 +23,7 @@ import {
   fetchModelsFromProvider,
   getProviderFromBaseUrl
 } from './provider';
+import { mode } from 'crypto-js';
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/index');
@@ -54,8 +55,14 @@ class ModelService {
     try {
       const models = await this.loadModels();
       const model = models.find(model => model.id === modelId) || null;
-      log.debug(`getModel: Model ${modelId} ${model ? 'found' : 'not found'}`);
-      return model;
+      
+      if (model) {
+        log.debug(`getModel: Model ${modelId} found`);
+        return model;
+      }
+      
+      log.debug(`getModel: Model ${modelId} not found`);
+      return null;
     } catch (error) {
       log.error(`getModel: Error finding model ${modelId}:`, error);
       return null;
@@ -101,29 +108,94 @@ class ModelService {
   async updateModel(model: Model): Promise<ModelOperationResponse> {
     log.debug('updateModel: Entering method');
     try {
+      log.verbose("updateModel: full model before validation", JSON.stringify(model))
+      // Validate required fields
+      if (!model.id) {
+        log.warn('updateModel: Missing model ID');
+        return { success: false, error: 'Model ID is required' };
+      }
+
       // Load current models
       const models = await this.loadModels();
       
-      // Check for duplicate technical name (excluding the current model)
-      if (models.some(m => m.name === model.name && m.id !== model.id)) {
-        return { success: false, error: 'A model with this technical name already exists' };
+      // Check if model exists
+      const existingModel = models.find(m => m.id === model.id);
+      if (!existingModel) {
+        log.warn('updateModel: Model not found', { modelId: model.id });
+        return { success: false, error: 'Model not found' };
       }
-      
+
+      // Validate model data
+      if (!model.provider) {
+        log.warn('updateModel: Missing provider', { modelId: model.id });
+        return { success: false, error: 'Provider is required' };
+      }
+
       // Check for duplicate display name (excluding the current model)
-      if (model.displayName && models.some(m => m.displayName === model.displayName && m.id !== model.id)) {
-        return { success: false, error: 'A model with this display name already exists' };
+      if (model.displayName && model.displayName.trim()) {
+        const normalizedDisplayName = model.displayName.trim();
+        const duplicate = models.find(m => 
+          m.displayName?.toLowerCase() === normalizedDisplayName.toLowerCase() && 
+          m.id !== model.id
+        );
+        
+        if (duplicate) {
+          const errorMessage = `A model with the display name "${normalizedDisplayName}" already exists (ID: ${duplicate.id})`;
+          log.warn('updateModel: Duplicate display name', { 
+            modelId: model.id,
+            displayName: normalizedDisplayName,
+            duplicateId: duplicate.id,
+            duplicateDisplayName: duplicate.displayName
+          });
+          return { 
+            success: false, 
+            error: errorMessage
+          };
+        }
+
+        // Update display name with normalized version
+        model.displayName = normalizedDisplayName;
       }
       
-      // Update the model
-      const updatedModels = models.map(m => m.id === model.id ? model : m);
+      // Prepare update data
+      const updatedModel = {
+        ...existingModel,
+        ...model
+      };
+      
+      updatedModel.ApiKey = await encryptApiKey(updatedModel.ApiKey);
+
+      // Update all the models
+      const updatedModels = models.map(m => 
+        m.id === model.id ? updatedModel : m
+      );
+      
+      // Log the update details
+      log.verbose('updateModel: Updating models', JSON.stringify(updatedModel));
+
+      // Save the changes
       await saveItem(StorageKey.MODELS, updatedModels);
       
-      return { success: true, model };
+      // Log success
+      log.debug('updateModel: Model updated successfully', {
+        modelId: model.id,
+        displayName: updatedModel.displayName
+      });
+      
+      return { success: true, model: updatedModel };
     } catch (error) {
-      log.warn('updateModel: Failed to update model:', error);
+      // Log detailed error
+      log.error('updateModel: Failed to update model', { 
+        modelId: model.id,
+        displayName: model.displayName,
+        error: error instanceof Error ? error.message : error
+      });
+
       return { 
         success: false, 
-        error: error instanceof Error ? error.message : 'Failed to update model' 
+        error: error instanceof Error ? 
+          error.message : 
+          'An unexpected error occurred while updating the model' 
       };
     }
   }
@@ -134,19 +206,51 @@ class ModelService {
   async deleteModel(id: string): Promise<ModelServiceResponse> {
     log.debug('deleteModel: Entering method');
     try {
+      // Validate required fields
+      if (!id) {
+        log.warn('deleteModel: Missing model ID');
+        return { success: false, error: 'Model ID is required' };
+      }
+
       // Load current models
       const models = await this.loadModels();
+
+      // Check if model exists
+      const existingModel = models.find(m => m.id === id);
+      if (!existingModel) {
+        log.warn('deleteModel: Model not found', { modelId: id });
+        return { success: false, error: 'Model not found' };
+      }
+
+      // Log the delete attempt
+      log.debug('deleteModel: Attempting to delete model', {
+        modelId: id,
+        displayName: existingModel.displayName
+      });
       
       // Remove the model
       const updatedModels = models.filter(m => m.id !== id);
       await saveItem(StorageKey.MODELS, updatedModels);
+
+      // Log successful deletion
+      log.debug('deleteModel: Model deleted successfully', {
+        modelId: id,
+        displayName: existingModel.displayName
+      });
       
       return { success: true };
     } catch (error) {
-      log.warn('deleteModel: Failed to delete model:', error);
+      // Log detailed error
+      log.error('deleteModel: Failed to delete model', {
+        modelId: id,
+        error: error instanceof Error ? error.message : error
+      });
+
       return { 
         success: false, 
-        error: error instanceof Error ? error.message : 'Failed to delete model' 
+        error: error instanceof Error ? 
+          error.message : 
+          'An unexpected error occurred while deleting the model'
       };
     }
   }
@@ -158,12 +262,24 @@ class ModelService {
     log.debug('listModels: Entering method');
     try {
       const models = await this.loadModels();
+      
+      // Log success with count
+      log.debug('listModels: Models loaded successfully', {
+        count: models.length
+      });
+
       return { success: true, models };
     } catch (error) {
-      log.warn('listModels: Failed to list models:', error);
+      // Log detailed error
+      log.error('listModels: Failed to list models', {
+        error: error instanceof Error ? error.message : error
+      });
+
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to list models'
+        error: error instanceof Error ? 
+          error.message : 
+          'An unexpected error occurred while listing models'
       };
     }
   }
@@ -172,12 +288,10 @@ class ModelService {
    * Fetch models from a provider
    * @param baseUrl The base URL of the provider
    * @param modelId Optional model ID for existing models
-   * @param tempApiKey Optional API key for new models that don't have a modelId yet
    */
   async fetchProviderModels(
     baseUrl: string,
-    modelId?: string,
-    tempApiKey?: string
+    modelId?: string
   ): Promise<NormalizedModel[]> {
     log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`);
     try {
@@ -207,26 +321,26 @@ class ModelService {
       // Determine the API key to use
       let apiKey = null;
       
-      // If a temporary API key is provided (for new models), use it directly
-      if (tempApiKey) {
-        log.debug('Using temporary API key for new model');
-        apiKey = tempApiKey;
-      } 
-      // Otherwise, if we have a modelId, look up the API key for that model
-      else if (modelId) {
+      // Look up the API key for the model
+      if (modelId) {
         log.debug(`Looking up API key for model ID: ${modelId}`);
-        const models = await this.loadModels();
-        const model = models.find(m => m.id === modelId);
+        const model = await this.getModel(modelId);
         if (model) {
           log.debug(`Found model, resolving and decrypting API key`);
           // Resolve global vars and decrypt if needed
-          apiKey = await resolveAndDecryptApiKey(model.encryptedApiKey);
+
+          // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
+          log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key pre-resolve: `, JSON.stringify(model.ApiKey));
+          apiKey = await resolveAndDecryptApiKey(model.ApiKey);
           log.debug(`API key successfully resolved and decrypted`);
+          
+          // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
+          log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key: `, JSON.stringify(apiKey));
         } else {
           log.warn(`Model with ID ${modelId} not found for API key resolution`);
         }
       } else {
-        log.error(`No API key available - neither modelId nor tempApiKey provided`);
+        log.error(`No API key available - modelId not provided`);
       }
       
       // Fetch models based on provider

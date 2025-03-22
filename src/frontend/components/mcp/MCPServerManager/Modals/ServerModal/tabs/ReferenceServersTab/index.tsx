@@ -210,7 +210,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       }
       
       // Install dependencies and build
-      updateConsole('Installing dependencies...\n');
+      updateConsole('Installing dependencies... (This can take up to several MINUTES, please be patient, do not close this window.) \n');
       
       const installResponse = await fetch('/api/git', {
         method: 'POST',

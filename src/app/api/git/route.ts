@@ -514,7 +514,8 @@ export async function POST(request: NextRequest) {
           // Fetch the HTML content of the platform page
           log.debug(`Fetching HTML content from platform [${requestId}]`);
           const response = await fetch(platformUrl);
-          
+          log.verbose(`response received [${JSON.stringify(response)}]`);
+
           if (!response.ok) {
             throw new Error(`Failed to fetch platform page: ${response.statusText}`);
           }
