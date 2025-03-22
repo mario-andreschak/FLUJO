@@ -60,26 +60,45 @@ export class ProcessNode extends BaseNode {
         completePrompt.substring(0, 100) + '...' : completePrompt
     });
     
-    // Process MCP nodes if available
+  // Check if tools are already available in shared state
+  let availableTools: ToolDefinition[] = [];
+  
+  if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
+    // Use tools already processed by MCPNode
+    log.info('Using MCP tools from shared state', {
+      toolsCount: sharedState.mcpContext.availableTools.length
+    });
+    availableTools = sharedState.mcpContext.availableTools;
+  } else {
+    // Only process MCP nodes if tools are not available in shared state
     const mcpNodes = node_params?.properties?.mcpNodes || [];
     
-    // Process MCP nodes using the ToolHandler
-    const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
-    
-    if (!mcpResult.success) {
-      log.error('Failed to process MCP nodes', { error: mcpResult.error });
-      throw new Error(`Failed to process MCP nodes: ${mcpResult.error.message}`);
+    if (mcpNodes.length > 0) {
+      log.info('No MCP tools found in shared state, processing MCP nodes', {
+        mcpNodesCount: mcpNodes.length
+      });
+      
+      // Process MCP nodes using the ToolHandler
+      const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
+      
+      if (!mcpResult.success) {
+        log.error('Failed to process MCP nodes', { error: mcpResult.error });
+        throw new Error(`Failed to process MCP nodes: ${mcpResult.error.message}`);
+      }
+      
+      availableTools = mcpResult.value.availableTools;
     }
-    
-    // Create a properly typed PrepResult
-    const prepResult: ProcessNodePrepResult = {
-      nodeId,
-      nodeType: 'process',
-      currentPrompt: completePrompt,
-      boundModel,
-      availableTools: mcpResult.value.availableTools,
-      messages: [] // Will be populated after reordering
-    };
+  }
+  
+  // Create a properly typed PrepResult
+  const prepResult: ProcessNodePrepResult = {
+    nodeId,
+    nodeType: 'process',
+    currentPrompt: completePrompt,
+    boundModel,
+    availableTools: availableTools,
+    messages: [] // Will be populated after reordering
+  };
     
     // Reorder messages to ensure system messages are at the top
     // Extract non-system messages
@@ -325,20 +344,29 @@ export class ProcessNode extends BaseNode {
     });
     
     // Handle successors as a Map (which is what PocketFlowFramework uses)
-    const actions = this.successors instanceof Map 
+    const allActions = this.successors instanceof Map 
       ? Array.from(this.successors.keys()) 
       : Object.keys(this.successors || {});
     
+    // Filter out MCP edges - only keep standard edges for flow navigation
+    const actions = allActions.filter(action => !action.includes('-mcpEdge') && !action.endsWith('mcpEdge') && !action.includes('-mcp'));
+    
     // Log the actions for debugging
     log.info('Actions:', {
-      actionsCount: actions.length,
-      actions: actions
+      allActionsCount: allActions.length,
+      allActions: allActions,
+      filteredActionsCount: actions.length,
+      filteredActions: actions
     });
+    
     if (actions.length > 0) {
-      // Return the first available action
+      // Return the first available standard action
       const action = actions[0];
-      log.info(`Returning action: ${action}`);
+      log.info(`Returning standard action: ${action}`);
       return action;
+    } else if (allActions.length > 0) {
+      // If no standard actions but we have other actions, log a warning
+      log.warn(`No standard actions found, only MCP edges. This may indicate a flow configuration issue.`);
     }
     
     return "default"; // Default fallback

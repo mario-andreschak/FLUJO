@@ -16,7 +16,7 @@ const BaseNode = ({ data }: NodeProps) => {
     <NodeContainer elevation={2}>
       <Handle type="target" position={Position.Top} />
       <Typography variant="subtitle2" textAlign="center">
-        {data.label}
+        {data.label as string}
       </Typography>
       <Handle type="source" position={Position.Bottom} />
     </NodeContainer>

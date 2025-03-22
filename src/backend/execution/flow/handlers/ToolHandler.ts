@@ -16,6 +16,9 @@ const log = createLogger('backend/flow/execution/handlers/ToolHandler');
 export class ToolHandler {
   /**
    * Prepare tools for model - pure function
+   * 
+   * Note: This method is a pure function that formats tools for the model without reconnecting to servers.
+   * It only validates and transforms the tools into the format expected by the OpenAI API.
    */
   static prepareTools(input: ToolPreparationInput): Result<ToolPreparationResult> {
     const { availableTools } = input;
@@ -99,6 +102,10 @@ export class ToolHandler {
   
   /**
    * Process MCP nodes - pure function
+   * 
+   * Note: This method connects to MCP servers and fetches tools for each MCP node.
+   * It should only be called when necessary, as it creates network connections.
+   * If tools are already available in shared state, prefer to use those instead.
    */
   static async processMCPNodes(
     input: MCPNodeProcessingInput
