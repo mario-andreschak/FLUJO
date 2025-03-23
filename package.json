@@ -11,7 +11,7 @@
     "lint": "next lint",
     "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:4200 && electron .\"",
     "electron-build": "next build && electron-builder",
-    "electron-start": "electron .",
+    "electron-start": "$env:NODE_ENV=\"production\"; electron .",
     "electron-pack": "npm run build && electron-builder --dir",
     "electron-dist": "npm run build && electron-builder",
     "electron-dist-all": "npm run build && electron-builder -mwl",

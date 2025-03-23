@@ -19,8 +19,8 @@ const PORT = 4200;
 // Create the browser window
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1920,
+    height: 1080,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -36,8 +36,8 @@ function createWindow() {
 
   mainWindow.loadURL(startUrl);
 
-  // Open DevTools in development mode
-  if (isDev) {
+  // Open DevTools only if NODE_ENV is explicitly set to 'development'
+  if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
 
@@ -59,16 +59,9 @@ function createWindow() {
 // Start the Next.js server
 function startNextServer() {
   return new Promise((resolve, reject) => {
-    // In development, we assume the Next.js server is already running
-    if (isDev) {
-      console.log('Development mode: Using existing Next.js server');
-      resolve();
-      return;
-    }
-
     console.log('Starting Next.js server...');
-    
-    // In production, we need to start the Next.js server
+
+    // Start the Next.js server
     nextProcess = spawn('node', ['server.js'], {
       cwd: path.join(__dirname, '..'),
       stdio: 'pipe',
