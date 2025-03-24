@@ -1,0 +1,5 @@
+# Ignore all JS config files
+**/*.config.js
+**/.eslintrc.js
+# Ignore all JS files in electron folder
+electron/**/*.js 

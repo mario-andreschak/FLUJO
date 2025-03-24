@@ -3,6 +3,13 @@ const path = require('path');
 const isDev = require('electron-is-dev');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const minimist = require('minimist');
+const os = require('os');
+const http = require('http');
+
+// Parse command line arguments
+const argv = minimist(process.argv.slice(isDev ? 2 : 1));
+const headless = argv.headless || argv.h || false;
 
 // Hide the default menu
 Menu.setApplicationMenu(null);
@@ -13,11 +20,16 @@ let tray;
 let nextProcess;
 let isQuitting = false;
 
-// Default port for Next.js server
-const PORT = 4200;
+// Port for the Next.js server
+const PORT = parseInt(process.env.PORT || '4200', 10);
 
 // Create the browser window
 function createWindow() {
+  if (headless) {
+    console.log('Running in headless mode - no window will be created');
+    return null;
+  }
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -54,6 +66,8 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  return mainWindow;
 }
 
 // Start the Next.js server
@@ -90,13 +104,12 @@ function startNextServer() {
     });
 
     // Wait for the server to start
-    let startupTimeout = setTimeout(() => {
+    const startupTimeout = setTimeout(() => {
       reject(new Error('Timeout waiting for Next.js server to start'));
     }, 30000);
 
     // Simple polling to check if the server is up
     const checkServer = () => {
-      const http = require('http');
       const req = http.get(`http://localhost:${PORT}`, (res) => {
         clearTimeout(startupTimeout);
         console.log('Next.js server started successfully');
@@ -110,6 +123,68 @@ function startNextServer() {
 
     setTimeout(checkServer, 1000);
   });
+}
+
+// Display network interfaces for headless mode
+function displayNetworkInfo() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+  
+  console.log('\n=======================================================');
+  console.log('🚀 FLUJO API SERVER READY!');
+  console.log('=======================================================');
+  console.log('📡 API Endpoints:');
+  console.log(`   - OpenAI API Compatible: http://localhost:${PORT}/v1`);
+  console.log(`   - Local API: http://localhost:${PORT}/api`);
+  
+  // Display all network interfaces that could be accessed from other machines
+  console.log('\n📱 Available Network Interfaces:');
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip internal/non-IPv4 addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        console.log(`   - ${name}: http://${iface.address}:${PORT}/v1`);
+        addresses.push(iface.address);
+      }
+    }
+  }
+  
+  console.log('\n🔍 Example API Calls:');
+  console.log('   curl -X POST http://localhost:4200/v1/chat/completions \\');
+  console.log('     -H "Content-Type: application/json" \\');
+  console.log('     -d \'{"model": "flow-YourFlowName", "messages": [{"role": "user", "content": "Hello"}]}\'');
+  
+  console.log('\n👋 Press Ctrl+C to exit the application');
+  console.log('=======================================================\n');
+  
+  return addresses;
+}
+
+// Create a status endpoint to check if the server is running
+function createStatusEndpoint() {
+  const startTime = new Date();
+  
+  const server = http.createServer((req, res) => {
+    if (req.url === '/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'running',
+        mode: 'headless',
+        uptime: Math.floor((new Date() - startTime) / 1000),
+        nextjs_port: PORT
+      }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  
+  // Use a different port for the status endpoint
+  const statusPort = PORT + 1;
+  server.listen(statusPort);
+  console.log(`Status endpoint available at: http://localhost:${statusPort}/status`);
+  
+  return server;
 }
 
 // Create system tray
@@ -143,7 +218,11 @@ function createTray() {
     if (mainWindow === null) {
       createWindow();
     } else {
-      mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+      }
     }
   });
 }
@@ -151,11 +230,50 @@ function createTray() {
 // App ready event
 app.whenReady().then(async () => {
   try {
+    // Always start the Next.js server
     await startNextServer();
-    createWindow();
+    
+    // Create window only if not in headless mode
+    if (!headless) {
+      mainWindow = createWindow();
+    } else {
+      // Additional setup for headless mode
+      const addresses = displayNetworkInfo();
+      
+      // Create a simple status endpoint
+      const statusServer = createStatusEndpoint();
+      
+      // Write the API info to a file for easier scripting
+      const apiInfoFile = path.join(app.getPath('userData'), 'api-info.json');
+      fs.writeFileSync(apiInfoFile, JSON.stringify({
+        port: PORT,
+        addresses: addresses,
+        startTime: new Date().toISOString()
+      }));
+      
+      console.log(`API info written to: ${apiInfoFile}`);
+      
+      // Cleanup on exit
+      app.on('will-quit', () => {
+        if (statusServer) statusServer.close();
+      });
+      
+      // If a timeout was specified
+      if (argv.timeout) {
+        const timeoutMinutes = parseInt(argv.timeout, 10);
+        if (!isNaN(timeoutMinutes) && timeoutMinutes > 0) {
+          console.log(`⏱️ Server will automatically shut down after ${timeoutMinutes} minutes`);
+          setTimeout(() => {
+            console.log(`\n⏱️ Timeout of ${timeoutMinutes} minutes reached. Shutting down...`);
+            app.quit();
+          }, timeoutMinutes * 60 * 1000);
+        }
+      }
+    }
+    
     createTray();
   } catch (error) {
-    console.error('Failed to start application:', error);
+    console.error('Failed to initialize application:', error);
     app.quit();
   }
 
@@ -170,13 +288,14 @@ app.whenReady().then(async () => {
 app.on('will-quit', () => {
   // Clean up the Next.js server process
   if (nextProcess) {
+    console.log('Shutting down Next.js server...');
     nextProcess.kill();
   }
 });
 
 // Quit when all windows are closed, except on macOS
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && !headless) {
     app.quit();
   }
 });
@@ -222,4 +341,24 @@ ipcMain.handle('set-network-mode', (event, enabled) => {
     console.error('Error writing config:', error);
     return { success: false, error: error.message };
   }
+});
+
+// Add IPC handlers for headless mode control
+ipcMain.handle('headless-control', async (event, action, params) => {
+  if (action === 'status') {
+    return { 
+      running: true,
+      headless,
+      port: PORT,
+      startTime: app.startTime || new Date().toISOString()
+    };
+  }
+  
+  if (action === 'shutdown') {
+    console.log('Received shutdown command');
+    setTimeout(() => app.quit(), 500);
+    return { success: true };
+  }
+  
+  return { success: false, error: 'Unknown action' };
 });

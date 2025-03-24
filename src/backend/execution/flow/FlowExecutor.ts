@@ -84,6 +84,16 @@ export class FlowExecutor {
         executionTime: Date.now() - sharedState.trackingInfo.startTime,
         messagesCount: sharedState.messages?.length || 0
       });
+      
+      // Safely check for and use clearInternalState if available
+      if (pocketFlow && typeof (pocketFlow as any).clearInternalState === 'function') {
+        (pocketFlow as any).clearInternalState();
+      }
+      
+      // Suggest garbage collection after heavy operations
+      if (typeof global !== 'undefined' && typeof (global as any).gc === 'function') {
+        (global as any).gc();
+      }
     } catch (error) {
       log.error('Error during flow execution', {
         flowName,
@@ -92,54 +102,14 @@ export class FlowExecutor {
       throw error;
     }
     
-    // Return the final state
-    const result: FlowExecutionResponse = {
+    // Return object with all required properties
+    return {
       success: true,
-      result: typeof sharedState.lastResponse === 'string' 
-        ? sharedState.lastResponse 
-        : { success: true, ...sharedState.lastResponse } as SuccessResult,
-      messages: sharedState.messages, // Already using OpenAI.ChatCompletionMessageParam
+      messages: [...(sharedState.messages || [])],
       executionTime: Date.now() - sharedState.trackingInfo.startTime,
-      nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker,
-      // Include any tool calls from the last message if it's an assistant message with tool calls
-      toolCalls: (() => {
-        if (sharedState.messages.length > 0 && 
-            sharedState.messages[sharedState.messages.length - 1].role === 'assistant') {
-          const assistantMsg = sharedState.messages[sharedState.messages.length - 1] as OpenAI.ChatCompletionAssistantMessageParam;
-          if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-            return assistantMsg.tool_calls.map(tc => ({
-              name: tc.function.name,
-              args: (() => {
-                try {
-                  return JSON.parse(tc.function.arguments);
-                } catch (e) {
-                  return {};
-                }
-              })(),
-              id: tc.id,
-              result: '' // Empty result since these haven't been processed yet
-            }));
-          }
-        }
-        return undefined;
-      })()
+      executionId: sharedState.trackingInfo.executionId,
+      nodeCount: sharedState.trackingInfo.nodeExecutionTracker.length,
+      nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker
     };
-    
-    log.debug('Returning flow execution result', {
-      resultLength: typeof result.result === 'string' ? result.result.length : 0,
-      messagesCount: result.messages.length,
-      executionTime: result.executionTime
-    });
-    
-    // Add verbose logging of the result
-    log.verbose('executeFlow result', JSON.stringify({
-      success: result.success,
-      resultType: typeof result.result,
-      messagesCount: result.messages.length,
-      executionTime: result.executionTime,
-      nodeExecutionTrackerLength: result.nodeExecutionTracker.length
-    }));
-    
-    return result;
   }
 }

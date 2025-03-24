@@ -192,6 +192,13 @@ export class ProcessNode extends BaseNode {
       
       const result = modelResult.value;
       
+      // Clean up large objects by deleting them instead of setting to null
+      if (prepResult) {
+        const prepResultAny = prepResult as any;
+        delete prepResultAny.currentPrompt;
+        delete prepResultAny.messages;
+      }
+      
       // Create a properly typed ExecResult
       const execResult: ProcessNodeExecResult = {
         success: true,
@@ -256,6 +263,14 @@ export class ProcessNode extends BaseNode {
       log.verbose('execCore() errorResult', JSON.stringify(errorResult));
       
       return errorResult;
+    } finally {
+      // Clean up any remaining large objects
+      if (prepResult) {
+        const prepResultAny = prepResult as any;
+        delete prepResultAny.currentPrompt;
+        delete prepResultAny.messages;
+        delete prepResultAny.availableTools;
+      }
     }
   }
 
