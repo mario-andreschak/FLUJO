@@ -114,5 +114,7 @@ export class FlowExecutor {
       nodeCount: sharedState.trackingInfo.nodeExecutionTracker.length,
       nodeExecutionTracker: sharedState.trackingInfo.nodeExecutionTracker
     };
+    
+    return result;
   }
 }
