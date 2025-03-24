@@ -3,7 +3,7 @@ import { Flow as PocketFlow } from './temp_pocket';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from './FlowConverter';
 import { createLogger } from '@/utils/logger';
-import { FlowExecutionResponse, SuccessResult } from '@/shared/types/flow/response';
+import { FlowExecutionResponse, SuccessResult, ErrorResult } from '@/shared/types/flow/response';
 import { SharedState, FlowParams } from './types';
 import OpenAI from 'openai';
 
@@ -102,10 +102,13 @@ export class FlowExecutor {
       throw error;
     }
     
-    // Return object with all required properties
-    return {
+    // Return the final state
+    const result: FlowExecutionResponse = {
       success: true,
-      messages: [...(sharedState.messages || [])],
+      result: typeof sharedState.lastResponse === 'string' 
+        ? sharedState.lastResponse 
+        : { success: true, ...sharedState.lastResponse } as SuccessResult,
+      messages: sharedState.messages, // Already using OpenAI.ChatCompletionMessageParam
       executionTime: Date.now() - sharedState.trackingInfo.startTime,
       executionId: sharedState.trackingInfo.executionId,
       nodeCount: sharedState.trackingInfo.nodeExecutionTracker.length,

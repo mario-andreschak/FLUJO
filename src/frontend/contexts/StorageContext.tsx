@@ -7,7 +7,6 @@ import {
   StorageKey,
 } from '@/utils/storage';
 import { isSecretEnvVar } from '@/utils/shared/common';
-import { Model } from '@/shared/types';
 import { createLogger } from '@/utils/logger';
 import { Settings } from '@/shared/types/storage/storage';
 
@@ -15,10 +14,6 @@ import { Settings } from '@/shared/types/storage/storage';
 const log = createLogger('frontend/contexts/StorageContext');
 
 interface StorageContextType {
-  models: Model[];
-  addModel: (model: Model) => Promise<void>;
-  updateModel: (model: Model) => Promise<void>;
-  deleteModel: (id: string) => Promise<void>;
   setKey: (key: string) => Promise<void>;
   changeKey: (oldKey: string, newKey: string) => Promise<boolean>;
   verifyKey: (key: string) => Promise<boolean>;
@@ -29,16 +24,12 @@ interface StorageContextType {
   encryptValue: (value: string, password?: string) => Promise<string | null>;
   decryptValue: (encryptedValue: string, password?: string) => Promise<string | null>;
   isUserEncryptionEnabled: () => Promise<boolean>;
-  isLoading: boolean; // Add loading state
+  isLoading: boolean; // Loading state
   settings: Settings; // Application settings
   updateSettings: (newSettings: Settings) => Promise<void>; // Update settings
 }
 
 const StorageContext = createContext<StorageContextType>({
-  models: [],
-  addModel: async () => {},
-  updateModel: async () => {},
-  deleteModel: async () => {},
   setKey: async () => {},
   changeKey: async () => false,
   verifyKey: async () => false,
@@ -63,7 +54,6 @@ export const useStorage = () => useContext(StorageContext);
 export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Track hydration status
   const [isHydrated, setIsHydrated] = useState(false);
-  const [models, setModels] = useState<Model[]>([]);
   const [globalEnvVars, setGlobalEnvVarsState] = useState<Record<string, { value: string, metadata: { isSecret: boolean } }>>({});
   const [settings, setSettings] = useState<Settings>({
     speech: {
@@ -242,11 +232,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           });
         }
         
-        // Load models
-        const loadedModels = await loadItem<Model[]>(StorageKey.MODELS, []);
-        log.debug('Loaded models from storage', { count: loadedModels.length });
-        setModels(loadedModels);
-        
         // Load environment variables from the server-side API
         // We don't include secrets in the UI for security
         const response = await fetch('/api/env?includeSecrets=false');
@@ -277,27 +262,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     
     loadData();
   }, [isEncryptionInitialized]);
-
-  const addModel = useCallback(async (model: Model) => {
-    log.debug('addModel: Entering method');
-    const updatedModels = [...models, model];
-    await saveItem(StorageKey.MODELS, updatedModels);
-    setModels(updatedModels);
-  }, [models]);
-
-  const updateModel = useCallback(async (model: Model) => {
-    log.debug('updateModel: Entering method');
-    const updatedModels = models.map(m => m.id === model.id ? model : m);
-    await saveItem(StorageKey.MODELS, updatedModels);
-    setModels(updatedModels);
-  }, [models]);
-
-  const deleteModel = useCallback(async (id: string) => {
-    log.debug('deleteModel: Entering method');
-    const updatedModels = models.filter(m => m.id !== id);
-    await saveItem(StorageKey.MODELS, updatedModels);
-    setModels(updatedModels);
-  }, [models]);
 
   const encryptValue = useCallback(async (value: string, password?: string): Promise<string | null> => {
     log.debug('encryptValue: Entering method');
@@ -343,48 +307,14 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, []);
 
+  // This method is deprecated and should not be used
+  // Decryption should only happen on the backend
   const decryptValue = useCallback(async (encryptedValue: string, password?: string): Promise<string | null> => {
-    log.debug('decryptValue: Entering method');
-    try {
-      // Check if we have a token in session storage (from authentication)
-      const sessionToken = typeof window !== 'undefined' ? sessionStorage.getItem('encryption_token') : null;
-      // Check if we have a password in session storage (legacy support)
-      const sessionPassword = typeof window !== 'undefined' ? sessionStorage.getItem('encryption_key') : null;
-      
-      // Prepare the request body
-      const requestBody: any = {
-        action: 'decrypt',
-        data: encryptedValue
-      };
-      
-      // Use token first, then provided password, then session password
-      if (sessionToken) {
-        requestBody.token = sessionToken;
-      } else if (password) {
-        requestBody.password = password;
-      } else if (sessionPassword) {
-        requestBody.password = sessionPassword;
-      }
-      
-      // Use the secure server-side API for decryption
-      const response = await fetch('/api/encryption/secure', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to decrypt value');
-      }
-
-      const data = await response.json();
-      return data.result;
-    } catch (error) {
-      log.warn('decryptValue: Failed to decrypt value:', error);
-      return null;
-    }
+    log.debug('decryptValue: Entering method - THIS METHOD IS DEPRECATED');
+    log.warn('decryptValue: Frontend decryption is deprecated for security reasons');
+    
+    // For backward compatibility, return null instead of throwing an error
+    return null;
   }, []);
 
   const isUserEncryptionEnabled = useCallback(async (): Promise<boolean> => {
@@ -520,10 +450,6 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   return (
     <StorageContext.Provider
       value={{
-        models,
-        addModel,
-        updateModel,
-        deleteModel,
         setKey,
         changeKey,
         verifyKey,

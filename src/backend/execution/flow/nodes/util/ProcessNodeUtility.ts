@@ -2,18 +2,11 @@ import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { modelService } from '@/backend/services/model';
 import { CompletionResponse } from '@/shared/types/model/response';
+import { Model } from '@/shared/types';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/util/ProcessNodeUtility');
 
-// Model type definition for initializing OpenAI client
-interface ModelConfig {
-  name: string;
-  baseUrl?: string;
-  temperature?: string;
-  functionCallingSchema?: string;
-  encryptedApiKey: string;
-}
 
 // Type definition for JSON Schema parameter property
 interface SchemaProperty {
@@ -207,7 +200,7 @@ export class ProcessNodeUtility {
       const temperature = model.temperature ? parseFloat(model.temperature) : 0.0;
 
       // Resolve and decrypt the API key
-      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
+      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       if (!decryptedApiKey) {
         const errorResult: CompletionResponse = { 
           success: false, 
@@ -351,7 +344,7 @@ export class ProcessNodeUtility {
   /**
    * Initialize OpenAI client with the appropriate settings
    */
-  private static async initializeOpenAIClient(model: ModelConfig, apiKey: string): Promise<OpenAI> {
+  private static async initializeOpenAIClient(model: Model, apiKey: string): Promise<OpenAI> {
     log.debug('initializeOpenAIClient: Initializing OpenAI client');
     
     // Determine the API endpoint
@@ -402,7 +395,7 @@ export class ProcessNodeUtility {
       }
       
       // Resolve and decrypt the API key
-      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
+      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       if (!decryptedApiKey) {
         const errorResult: CompletionResponse = { 
           success: false, 

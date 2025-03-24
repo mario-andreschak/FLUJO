@@ -13,7 +13,7 @@ interface EnvManagerProps {
 }
 
 const EnvManager: React.FC<EnvManagerProps> = ({ serverName }) => {
-  const { servers, saveEnv } = useServerStatus();
+  const { servers, saveEnv, toggleServer } = useServerStatus();
 
   // Find the selected server
   const selectedServer = serverName 
@@ -26,18 +26,21 @@ const EnvManager: React.FC<EnvManagerProps> = ({ serverName }) => {
     
     log.debug(`Saving environment variables for server: ${serverName}`);
     
-    // Convert complex env structure to simple Record<string, string> for saveEnv
-    const simpleEnv: Record<string, string> = {};
+    // Pass the complete environment structure with metadata to saveEnv
+    await saveEnv(serverName, env);
+  };
+
+  // Handle server restart after env variable changes
+  const handleServerRestart = async (serverName: string) => {
+    log.debug(`Restarting server after env variable changes: ${serverName}`);
     
-    for (const [key, value] of Object.entries(env)) {
-      if (typeof value === 'string') {
-        simpleEnv[key] = value;
-      } else if (value && typeof value === 'object' && 'value' in value) {
-        simpleEnv[key] = value.value;
-      }
-    }
+    // Disable the server
+    await toggleServer(serverName, false);
     
-    await saveEnv(serverName, simpleEnv);
+    // Re-enable the server immediately (no delay)
+    await toggleServer(serverName, true);
+    
+    log.info(`Server ${serverName} restarted after env variable changes`);
   };
 
   // If no server is selected, show a message
@@ -68,6 +71,7 @@ const EnvManager: React.FC<EnvManagerProps> = ({ serverName }) => {
         serverName={serverName}
         initialEnv={selectedServer.env || {}}
         onSave={handleSaveEnv}
+        onServerRestart={handleServerRestart}
       />
     </Box>
   );

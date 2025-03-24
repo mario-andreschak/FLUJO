@@ -216,7 +216,7 @@ export class ModelHandler {
       const temperature = model.temperature ? parseFloat(model.temperature) : 0.0;
 
       // Resolve and decrypt the API key
-      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.encryptedApiKey);
+      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       if (!decryptedApiKey) {
         return {
           success: false,

@@ -129,7 +129,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
     setRetryTimeoutId(timeoutId);
   };
 
-  const { getThemeValue, colors } = useThemeUtils();
+  const { getThemeValue, getThemeColor, colors } = useThemeUtils();
   
   return (
     <Card 
@@ -188,9 +188,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
               overflow: 'auto', 
               p: 1, 
               borderRadius: 1, 
-              bgcolor: 'error.light',
-              color: 'error.contrastText',
+              bgcolor: (theme) => getThemeColor('error.background'),
+              color: (theme) => getThemeColor('error.text'),
+              border: '1px solid',
+              borderColor: (theme) => getThemeColor('error.border'),
               fontSize: '0.75rem',
+              fontWeight: 500,
               whiteSpace: 'pre-wrap'
             }}>
               {error || 'Unknown error'}
@@ -306,10 +309,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
           <Box sx={{ 
             p: 2, 
             borderRadius: 1, 
-            bgcolor: 'error.light', 
-            color: 'error.contrastText',
+            bgcolor: (theme) => getThemeColor('error.background'),
+            color: (theme) => getThemeColor('error.text'),
+            border: '1px solid',
+            borderColor: (theme) => getThemeColor('error.border'),
             fontFamily: 'monospace',
             fontSize: '0.875rem',
+            fontWeight: 500,
             whiteSpace: 'pre-wrap',
             overflow: 'auto',
             maxHeight: '300px',

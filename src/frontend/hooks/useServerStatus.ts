@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { mcpService } from '@/frontend/services/mcp';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig } from '@/shared/types';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue } from '@/shared/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/hooks/useServerStatus');
@@ -15,12 +15,14 @@ function isWebSocketConfig(config: MCPServerConfig): config is MCPWebSocketConfi
   return config.transport === 'websocket';
 }
 
-// Define ServerState as an intersection type instead of extending MCPServerConfig
-type ServerState = MCPServerConfig & {
+// Define ServerState as an intersection type instead of extending MCPServerConfig 
+// but with the updated environment variable type
+type ServerState = Omit<MCPServerConfig, 'env'> & {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting';
   path: string;
   error?: string;
   stderrOutput?: string;
+  env: Record<string, EnvVarValue>;
 };
 
 /**
@@ -379,7 +381,10 @@ export function useServerStatus() {
   /**
    * Save environment variables for a server
    */
-  const saveEnv = useCallback(async (serverName: string, env: Record<string, string>) => {
+  const saveEnv = useCallback(async (
+    serverName: string, 
+    env: Record<string, { value: string, metadata: { isSecret: boolean } } | string>
+  ) => {
     log.debug(`Saving environment variables for server: ${serverName}`, env);
     try {
       const server = servers.find((s) => s.name === serverName);
@@ -405,7 +410,7 @@ export function useServerStatus() {
       log.warn('Failed to save environment variables:', error);
       return false;
     }
-  }, []);
+  }, [servers]);
 
   // Load servers when the hook is first used
   useEffect(() => {

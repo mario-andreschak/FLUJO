@@ -1,7 +1,7 @@
 /**
  * Supported model providers
  */
-export type ModelProvider =
+export type ModelProvider = 
   | 'openai'
   | 'openrouter'
   | 'anthropic'
@@ -11,37 +11,54 @@ export type ModelProvider =
   | 'ollama';
 
 /**
- * Provider-specific configuration
+ * Provider information mapping
  */
-export interface ProviderConfig {
+export interface ProviderInfo {
+  id: ModelProvider;
+  label: string;
   baseUrl: string;
-  apiVersion?: string;
-  defaultModel?: string;
 }
 
 /**
- * Provider API request options
+ * Map of providers with their display labels and base URLs
  */
-export interface ProviderRequestOptions {
-  headers?: Record<string, string>;
-  timeout?: number;
-  retries?: number;
-}
+export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
+  openai: {
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1'
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1'
+  },
+  xai: {
+    label: 'X.ai',
+    baseUrl: 'https://api.x.ai/v1'
+  },
+  gemini: {
+    label: 'Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/'
+  },
+  anthropic: {
+    label: 'Anthropic',
+    baseUrl: 'https://api.anthropic.com/v1/'
+  },
+  mistral: {
+    label: 'Mistral',
+    baseUrl: 'https://api.mistral.ai/v1'
+  },
+  ollama: {
+    label: 'Ollama',
+    baseUrl: 'http://localhost:11434/v1'
+  }
+};
 
 /**
- * Provider-specific completion request parameters
+ * Helper function to get all providers as an array
  */
-export interface CompletionRequestParams {
-  model: string;
-  messages: Array<{
-    role: string;
-    content: string;
-  }>;
-  temperature?: number;
-  max_tokens?: number;
-  top_p?: number;
-  frequency_penalty?: number;
-  presence_penalty?: number;
-  stop?: string[];
-  [key: string]: any; // Allow for provider-specific parameters
+export function getProvidersArray(): ProviderInfo[] {
+  return Object.entries(PROVIDER_INFO).map(([id, info]) => ({
+    id: id as ModelProvider,
+    ...info
+  }));
 }

@@ -60,26 +60,45 @@ export class ProcessNode extends BaseNode {
         completePrompt.substring(0, 100) + '...' : completePrompt
     });
     
-    // Process MCP nodes if available
+  // Check if tools are already available in shared state
+  let availableTools: ToolDefinition[] = [];
+  
+  if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
+    // Use tools already processed by MCPNode
+    log.info('Using MCP tools from shared state', {
+      toolsCount: sharedState.mcpContext.availableTools.length
+    });
+    availableTools = sharedState.mcpContext.availableTools;
+  } else {
+    // Only process MCP nodes if tools are not available in shared state
     const mcpNodes = node_params?.properties?.mcpNodes || [];
     
-    // Process MCP nodes using the ToolHandler
-    const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
-    
-    if (!mcpResult.success) {
-      log.error('Failed to process MCP nodes', { error: mcpResult.error });
-      throw new Error(`Failed to process MCP nodes: ${mcpResult.error.message}`);
+    if (mcpNodes.length > 0) {
+      log.info('No MCP tools found in shared state, processing MCP nodes', {
+        mcpNodesCount: mcpNodes.length
+      });
+      
+      // Process MCP nodes using the ToolHandler
+      const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
+      
+      if (!mcpResult.success) {
+        log.error('Failed to process MCP nodes', { error: mcpResult.error });
+        throw new Error(`Failed to process MCP nodes: ${mcpResult.error.message}`);
+      }
+      
+      availableTools = mcpResult.value.availableTools;
     }
-    
-    // Create a properly typed PrepResult
-    const prepResult: ProcessNodePrepResult = {
-      nodeId,
-      nodeType: 'process',
-      currentPrompt: completePrompt,
-      boundModel,
-      availableTools: mcpResult.value.availableTools,
-      messages: [] // Will be populated after reordering
-    };
+  }
+  
+  // Create a properly typed PrepResult
+  const prepResult: ProcessNodePrepResult = {
+    nodeId,
+    nodeType: 'process',
+    currentPrompt: completePrompt,
+    boundModel,
+    availableTools: availableTools,
+    messages: [] // Will be populated after reordering
+  };
     
     // Reorder messages to ensure system messages are at the top
     // Extract non-system messages
@@ -165,29 +184,35 @@ export class ProcessNode extends BaseNode {
         nodeName // Pass the node name to be included in the response header
       });
       
-      if (!modelResult.success) {
-        log.error('Model execution error', { error: modelResult.error });
-        
-        // Instead of throwing a new Error, return a properly structured error result
-        // that preserves all the original error details
-        const errorResult: ProcessNodeExecResult = {
-          success: false,
-          error: modelResult.error.message,
-          errorDetails: {
-            message: modelResult.error.message,
-            name: modelResult.error.type,
-            code: modelResult.error.code,
-            type: modelResult.error.type,
-            param: typeof modelResult.error.details?.param === 'string' ? modelResult.error.details.param : undefined,
-            status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
-            // Include all other details from the original error
-            ...modelResult.error.details
-          }
-        };
-        
-        log.verbose('Preserving original error details from ModelHandler', JSON.stringify(errorResult));
-        
-        return errorResult;
+    if (!modelResult.success) {
+      log.error('Model execution error', { error: modelResult.error });
+      
+      // CHANGE: Instead of returning an error result, throw a custom error
+      const modelError = new Error(`Model execution failed: ${modelResult.error.message}`);
+      
+      // Add properties to the error object
+      (modelError as any).isModelError = true;
+      (modelError as any).details = {
+        message: modelResult.error.message,
+        type: modelResult.error.type,
+        code: modelResult.error.code,
+        // Only include modelId if it exists
+        ...(modelResult.error.type === 'model' ? { modelId: modelResult.error.modelId } : {}),
+        param: typeof modelResult.error.details?.param === 'string' ? modelResult.error.details.param : undefined,
+        status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
+        // Include all other details from the original error
+        ...modelResult.error.details
+      };
+      
+      // Log that we're throwing a critical error
+      log.error('Throwing critical model error to abort flow execution', {
+        error: modelResult.error.message,
+        type: modelResult.error.type,
+        code: modelResult.error.code
+      });
+      
+      // Throw the error to abort execution
+      throw modelError;
       }
       
       const result = modelResult.value;
@@ -227,20 +252,20 @@ export class ProcessNode extends BaseNode {
       
       return execResult;
     } catch (error) {
-      // For critical tool errors, we want to rethrow them with a special error type
-      // that will be caught by the FlowExecutor and properly displayed to the user
-      if (error && typeof error === 'object' && 'isCriticalToolError' in error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        
-        log.error('Critical tool error detected - propagating to frontend:', {
-          error: errorMessage
-        });
-        
-        // Create a new error with a clear message that will be displayed to the user
-        const criticalError = new Error(`CRITICAL TOOL ERROR: ${errorMessage}`);
-        
-        // Rethrow the error to stop execution and propagate to the frontend
-        throw criticalError;
+    // For critical tool errors or model errors, we want to rethrow them
+    // to abort the flow execution
+    if (error && typeof error === 'object' && 
+        ('isCriticalToolError' in error || 'isModelError' in error)) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      log.error('Critical error detected - propagating to abort flow:', {
+        error: errorMessage,
+        isModelError: 'isModelError' in error,
+        isCriticalToolError: 'isCriticalToolError' in error
+      });
+      
+      // Rethrow the error to stop execution and propagate to the frontend
+      throw error;
       }
       
       // For other errors, create an error result
@@ -286,8 +311,15 @@ export class ProcessNode extends BaseNode {
       messagesCount: execResult.messages?.length || 0
     });
     
-    // Store the model response in shared state
-    if (execResult.content) {
+    // Store the model response or error in shared state
+    if (!execResult.success) {
+      // Store error information in shared state
+      sharedState.lastResponse = {
+        success: false,
+        error: execResult.error,
+        errorDetails: execResult.errorDetails
+      };
+    } else if (execResult.content) {
       sharedState.lastResponse = execResult.content;
     }
     
@@ -333,20 +365,29 @@ export class ProcessNode extends BaseNode {
     });
     
     // Handle successors as a Map (which is what PocketFlowFramework uses)
-    const actions = this.successors instanceof Map 
+    const allActions = this.successors instanceof Map 
       ? Array.from(this.successors.keys()) 
       : Object.keys(this.successors || {});
     
+    // Filter out MCP edges - only keep standard edges for flow navigation
+    const actions = allActions.filter(action => !action.includes('-mcpEdge') && !action.endsWith('mcpEdge') && !action.includes('-mcp'));
+    
     // Log the actions for debugging
     log.info('Actions:', {
-      actionsCount: actions.length,
-      actions: actions
+      allActionsCount: allActions.length,
+      allActions: allActions,
+      filteredActionsCount: actions.length,
+      filteredActions: actions
     });
+    
     if (actions.length > 0) {
-      // Return the first available action
+      // Return the first available standard action
       const action = actions[0];
-      log.info(`Returning action: ${action}`);
+      log.info(`Returning standard action: ${action}`);
       return action;
+    } else if (allActions.length > 0) {
+      // If no standard actions but we have other actions, log a warning
+      log.warn(`No standard actions found, only MCP edges. This may indicate a flow configuration issue.`);
     }
     
     return "default"; // Default fallback

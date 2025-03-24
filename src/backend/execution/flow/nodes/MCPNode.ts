@@ -140,20 +140,36 @@ export class MCPNode extends BaseNode {
           };
         });
       
-      // Store in shared state for use by ProcessNode
-      sharedState.mcpContext = {
-        server: execResult.server,
-        availableTools
-      };
+      // Initialize mcpContext if it doesn't exist
+      if (!sharedState.mcpContext) {
+        sharedState.mcpContext = {
+          server: execResult.server,
+          availableTools
+        };
+      } else {
+        // Merge with existing tools, avoiding duplicates
+        const existingTools = sharedState.mcpContext.availableTools || [];
+        const mergedTools = [...existingTools];
+        
+        // Add new tools that don't already exist
+        for (const tool of availableTools) {
+          if (!mergedTools.some(t => t.name === tool.name)) {
+            mergedTools.push(tool);
+          }
+        }
+        
+        sharedState.mcpContext.availableTools = mergedTools;
+      }
       
       // Get tool names for logging
       const toolNames = availableTools.map(tool => tool.name);
       
       log.info('Stored MCP context in shared state', { 
-        server: sharedState.mcpContext.server,
-        availableToolsCount: sharedState.mcpContext.availableTools.length,
+        server: execResult.server,
+        availableToolsCount: availableTools.length,
         availableToolNames: toolNames.length > 10 ? 
-          toolNames.slice(0, 10).join(', ') + '...' : toolNames.join(', ')
+          toolNames.slice(0, 10).join(', ') + '...' : toolNames.join(', '),
+        totalToolsCount: sharedState.mcpContext.availableTools.length
       });
     }
     

@@ -85,12 +85,19 @@ export class PromptRenderer {
       if (functionCallingSchema) {
         completePrompt += `Please use the following pattern to use a tool: ${functionCallingSchema}\n\n`;
       }
+
+      completePrompt += `# GENERAL INFORMATION:\n`
+      completePrompt += `You are operating in a team with shared responsibilities.\n`
+      completePrompt += `The user message you will receive may contain instructions that are outside of your scope.\n`
+      completePrompt += `Focus on the parts of the user message that can be accomplished using the tools provided to you.\n\n`
+
     }
 
     // 3. Node Prompt
     if (nodePrompt) {
+      completePrompt += `# YOUR OPERATIONAL INSTRUCTION:\n`
       log.debug('Adding node prompt', { length: nodePrompt.length });
-      completePrompt += nodePrompt;
+      completePrompt += nodePrompt + `\n`;
     }
 
     // 4. Resolve tool pills with function calling schema

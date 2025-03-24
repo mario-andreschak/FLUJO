@@ -6,12 +6,19 @@ import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js
 export const SERVER_DIR_PREFIX = 'mcp-servers';
 
 // Types
+export type EnvVarValue = string | { 
+  value: string; 
+  metadata: { 
+    isSecret: boolean 
+  } 
+};
+
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
   autoApprove: string[];
   rootPath: string;
-  env: Record<string, string>
+  env: Record<string, EnvVarValue>
   _buildCommand: string;
   _installCommand: string;
 }

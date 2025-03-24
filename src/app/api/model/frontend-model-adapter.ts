@@ -11,12 +11,35 @@ import { modelService } from '@/backend/services/model';
 const log = createLogger('app/api/model/model-adapter');
 
 /**
+ * Sanitize a model object before sending it to the frontend
+ * This ensures sensitive data like API keys are never sent to the client
+ */
+function sanitizeModelForFrontend(model: Model): Model {
+  // Create a copy to avoid modifying the original
+  const sanitizedModel = { ...model };
+  
+  // Replace the API key with a placeholder
+  if (sanitizedModel.ApiKey) {
+    sanitizedModel.ApiKey = '********';
+  }
+  
+  return sanitizedModel;
+}
+
+/**
  * Load all models
  * This adapter delegates to the backend service
  */
 export async function loadModels(): Promise<ModelListResponse> {
   log.debug('loadModels: Delegating to backend service');
-  return modelService.listModels();
+  const result = await modelService.listModels();
+  
+  // Sanitize models before sending to frontend
+  if (result.success && result.models) {
+    result.models = result.models.map(sanitizeModelForFrontend);
+  }
+  
+  return result;
 }
 
 /**
@@ -30,7 +53,9 @@ export async function getModel(modelId: string): Promise<ModelOperationResponse>
     if (!model) {
       return { success: false, error: `Model not found: ${modelId}` };
     }
-    return { success: true, model };
+    
+    // Sanitize model before sending to frontend
+    return { success: true, model: sanitizeModelForFrontend(model) };
   } catch (error) {
     log.error(`getModel: Error getting model ${modelId}:`, error);
     return {
@@ -46,7 +71,14 @@ export async function getModel(modelId: string): Promise<ModelOperationResponse>
  */
 export async function addModel(model: Model): Promise<ModelOperationResponse> {
   log.debug('addModel: Delegating to backend service');
-  return modelService.addModel(model);
+  const result = await modelService.addModel(model);
+  
+  // Sanitize model before sending to frontend
+  if (result.success && result.model) {
+    result.model = sanitizeModelForFrontend(result.model);
+  }
+  
+  return result;
 }
 
 /**
@@ -55,7 +87,14 @@ export async function addModel(model: Model): Promise<ModelOperationResponse> {
  */
 export async function updateModel(model: Model): Promise<ModelOperationResponse> {
   log.debug('updateModel: Delegating to backend service');
-  return modelService.updateModel(model);
+  const result = await modelService.updateModel(model);
+  
+  // Sanitize model before sending to frontend
+  if (result.success && result.model) {
+    result.model = sanitizeModelForFrontend(result.model);
+  }
+  
+  return result;
 }
 
 /**
@@ -102,4 +141,3 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
   log.debug('isUserEncryptionEnabled: Delegating to backend service');
   return modelService.isUserEncryptionEnabled();
 }
-
