@@ -1,25 +1,25 @@
-'use client';
+"use client";
 
-import React from 'react';
-import { MCPServerConfig } from '@/shared/types/mcp/mcp';
-import { MessageState } from '../../../types';
-import RunTools from '../RunTools';
-import ArgumentsManager from '../ArgumentsManager';
-import SectionHeader from './SectionHeader';
+import React from "react";
+import { MCPServerConfig, EnvVarValue } from "@/shared/types/mcp/mcp";
+import { MessageState } from "../../../types";
+import RunTools from "../RunTools";
+import ArgumentsManager from "../ArgumentsManager";
+import SectionHeader from "./SectionHeader";
 
 interface RunSectionProps {
   localConfig: MCPServerConfig;
   command: string;
   setCommand: (command: string) => void;
-  transport: 'stdio' | 'websocket';
-  setTransport: (transport: 'stdio' | 'websocket') => void;
+  transport: "stdio" | "websocket";
+  setTransport: (transport: "stdio" | "websocket") => void;
   websocketUrl: string;
   setWebsocketUrl: (url: string) => void;
   onRun: () => Promise<void>;
   isRunning: boolean;
   runCompleted: boolean;
-  env: Record<string, string>;
-  onEnvChange: (env: Record<string, string>) => void;
+  env: Record<string, EnvVarValue>;
+  onEnvChange: (env: Record<string, EnvVarValue>) => void;
   serverName: string;
   consoleOutput: string;
   message: MessageState | null;
@@ -60,33 +60,40 @@ const RunSection: React.FC<RunSectionProps> = ({
   onParseClipboard,
   isParsingReadme,
   isExpanded,
-  toggleSection
+  toggleSection,
 }) => {
   // Determine section status based on run state
   const getSectionStatus = () => {
-    if (message?.type === 'error' && !isRunning) {
-      return 'error';
+    if (message?.type === "error" && !isRunning) {
+      return "error";
     } else if (runCompleted) {
-      return 'success';
+      return "success";
     } else if (isRunning) {
-      return 'loading';
+      return "loading";
     }
-    return 'default';
+    return "default";
   };
 
   return (
-    <div className={`bg-gray-50 dark:bg-gray-800 border rounded-lg p-4 mb-6
-      ${message?.type === 'error' && !isRunning ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20' : 
-        runCompleted ? 'border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20' : 
-        isRunning ? 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20' :
-        'border-gray-200 dark:border-gray-700'}`}>
+    <div
+      className={`bg-gray-50 dark:bg-gray-800 border rounded-lg p-4 mb-6
+      ${
+        message?.type === "error" && !isRunning
+          ? "border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20"
+          : runCompleted
+          ? "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20"
+          : isRunning
+          ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20"
+          : "border-gray-200 dark:border-gray-700"
+      }`}
+    >
       <SectionHeader
         title="Third, define how to run your server"
         isExpanded={isExpanded}
         onToggle={toggleSection}
         status={getSectionStatus()}
       />
-      
+
       {isExpanded && (
         <div className="space-y-6">
           <RunTools
@@ -106,11 +113,15 @@ const RunSection: React.FC<RunSectionProps> = ({
             message={message}
             setMessage={setMessage}
           />
-          
+
           <div className="mt-6">
             <h4 className="text-md font-medium mb-4">Arguments</h4>
             <ArgumentsManager
-              args={localConfig.transport === 'stdio' ? (localConfig as any).args || [] : []}
+              args={
+                localConfig.transport === "stdio"
+                  ? (localConfig as any).args || []
+                  : []
+              }
               onArgChange={handleArgChange}
               onAddArg={addArgField}
               onRemoveArg={removeArgField}

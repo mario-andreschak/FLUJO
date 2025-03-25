@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import React, { useEffect, useState } from 'react';
-import { TabProps, MessageState } from '../../types';
-import { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp/mcp';
-import ConsoleOutput from './ConsoleOutput';
-import { useLocalServerState } from './hooks/useLocalServerState';
-import { useConsoleOutput } from './hooks/useConsoleOutput';
-import LocalServerForm from './LocalServerForm';
-import BuildTools from './BuildTools';
-import RunTools from './RunTools';
-import ArgumentsManager from './ArgumentsManager';
-import { 
+import React, { useEffect, useState } from "react";
+import { TabProps, MessageState } from "../../types";
+import { MCPServerConfig, MCPStdioConfig } from "@/shared/types/mcp/mcp";
+import ConsoleOutput from "./ConsoleOutput";
+import { useLocalServerState } from "./hooks/useLocalServerState";
+import { useConsoleOutput } from "./hooks/useConsoleOutput";
+import LocalServerForm from "./LocalServerForm";
+import BuildTools from "./BuildTools";
+import RunTools from "./RunTools";
+import ArgumentsManager from "./ArgumentsManager";
+import {
   handleSubmit,
   handleRootPathSelect,
   handleFolderSelect,
@@ -20,8 +20,8 @@ import {
   handleParseReadme,
   handleInstall,
   handleBuild,
-  handleRun
-} from './utils/formHandlers';
+  handleRun,
+} from "./utils/formHandlers";
 import {
   Alert,
   Box,
@@ -32,15 +32,15 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
-  Typography
-} from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+  Typography,
+} from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 const LocalServerTab: React.FC<TabProps> = ({
   initialConfig,
   onAdd,
   onUpdate,
-  onClose
+  onClose,
 }) => {
   // Use custom hooks for state management first
   const {
@@ -78,34 +78,34 @@ const LocalServerTab: React.FC<TabProps> = ({
     handleArgChange,
     addArgField,
     removeArgField,
-    handleEnvChange
-  } = useLocalServerState({ 
+    handleEnvChange,
+  } = useLocalServerState({
     initialConfig,
-    isOpen: true // Always pass true here since we're already in the component
+    isOpen: true, // Always pass true here since we're already in the component
   });
-  
+
   // Check if we're coming from GitHub tab with empty fields
   useEffect(() => {
     // If we have a name but no command or build/install commands, show a warning
     if (
-      initialConfig && 
-      initialConfig.name && 
-      initialConfig.rootPath && 
-      initialConfig.transport === 'stdio' &&
-      (!initialConfig.command || initialConfig.command === '') &&
-      (!initialConfig._buildCommand || initialConfig._buildCommand === '') &&
-      (!initialConfig._installCommand || initialConfig._installCommand === '')
+      initialConfig &&
+      initialConfig.name &&
+      initialConfig.rootPath &&
+      initialConfig.transport === "stdio" &&
+      (!initialConfig.command || initialConfig.command === "") &&
+      (!initialConfig._buildCommand || initialConfig._buildCommand === "") &&
+      (!initialConfig._installCommand || initialConfig._installCommand === "")
     ) {
       setMessage({
-        type: 'warning',
-        text: 'Configuration detection was not successful. Please configure the server manually.'
+        type: "warning",
+        text: "Configuration detection was not successful. Please configure the server manually.",
       });
-      
+
       // Expand all sections to make it easier for the user to configure
       setExpandedSections({
         define: true,
         build: true,
-        run: true
+        run: true,
       });
     }
   }, [initialConfig]);
@@ -226,87 +226,92 @@ const LocalServerTab: React.FC<TabProps> = ({
     setIsConsoleVisible,
     appendToConsole,
     clearConsole,
-    updateConsole: setConsoleOutput
+    updateConsole: setConsoleOutput,
   } = useConsoleOutput();
-  
+
   // Handle accordion expansion
-  const handleAccordionChange = (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
-    setExpandedSections({
-      ...expandedSections,
-      [panel]: isExpanded
-    });
-  };
-  
+  const handleAccordionChange =
+    (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
+      setExpandedSections({
+        ...expandedSections,
+        [panel]: isExpanded,
+      });
+    };
+
   // Helper function to get accordion status color
-  const getAccordionStatusColor = (status: 'default' | 'error' | 'success' | 'warning' | 'loading') => {
+  const getAccordionStatusColor = (
+    status: "default" | "error" | "success" | "warning" | "loading"
+  ) => {
     switch (status) {
-      case 'error':
-        return 'error.main';
-      case 'success':
-        return 'success.main';
-      case 'warning':
-        return 'warning.main';
-      case 'loading':
-        return 'info.main';
+      case "error":
+        return "error.main";
+      case "success":
+        return "success.main";
+      case "warning":
+        return "warning.main";
+      case "loading":
+        return "info.main";
       default:
-        return 'text.primary';
+        return "text.primary";
     }
   };
-  
+
   // Determine section statuses
   const getDefineStatus = () => {
     if (!localConfig.name || !localConfig.rootPath) {
-      return 'error';
+      return "error";
     }
-    return 'default';
+    return "default";
   };
-  
+
   const getBuildStatus = () => {
-    if (buildMessage?.type === 'error') {
-      return 'error';
+    if (buildMessage?.type === "error") {
+      return "error";
     } else if (installCompleted && buildCompleted) {
-      return 'success';
+      return "success";
     } else if (installCompleted || buildCompleted) {
-      return 'warning';
+      return "warning";
     } else if (isInstalling || isBuilding) {
-      return 'loading';
+      return "loading";
     }
-    return 'default';
+    return "default";
   };
-  
+
   const getRunStatus = () => {
-    if (message?.type === 'error' && !isRunning) {
-      return 'error';
+    if (message?.type === "error" && !isRunning) {
+      return "error";
     } else if (runCompleted) {
-      return 'success';
+      return "success";
     } else if (isRunning) {
-      return 'loading';
+      return "loading";
     }
-    return 'default';
+    return "default";
   };
-  
+
   return (
-    <Box component="form" onSubmit={onSubmit} sx={{ width: '100%' }}>
+    <Box component="form" onSubmit={onSubmit} sx={{ width: "100%" }}>
       <Grid container spacing={2}>
         <Grid item xs={isConsoleVisible ? 8 : 12}>
           <Stack spacing={3}>
             {/* Define Server Section */}
-            <Accordion 
-              expanded={expandedSections.define} 
-              onChange={handleAccordionChange('define')}
+            <Accordion
+              expanded={expandedSections.define}
+              onChange={handleAccordionChange("define")}
               sx={{
                 border: 1,
-                borderColor: !localConfig.name || !localConfig.rootPath 
-                  ? 'error.main' 
-                  : 'divider',
-                bgcolor: !localConfig.name || !localConfig.rootPath
-                  ? 'error.lighter'
-                  : 'background.paper',
-                '&:before': { display: 'none' },
+                borderColor:
+                  !localConfig.name || !localConfig.rootPath
+                    ? "error.main"
+                    : "divider",
+                bgcolor:
+                  !localConfig.name || !localConfig.rootPath
+                    ? "error.lighter"
+                    : "background.paper",
+                "&:before": { display: "none" },
                 borderRadius: 1,
-                boxShadow: theme => theme.palette.mode === 'dark' ? 1 : 0,
+                boxShadow: (theme) => (theme.palette.mode === "dark" ? 1 : 0),
                 mb: 2,
-                overflow: 'hidden'
+                overflow: "hidden",
               }}
             >
               <AccordionSummary
@@ -314,18 +319,18 @@ const LocalServerTab: React.FC<TabProps> = ({
                 aria-controls="define-server-content"
                 id="define-server-header"
                 sx={{
-                  '& .MuiAccordionSummary-content': {
-                    alignItems: 'center'
+                  "& .MuiAccordionSummary-content": {
+                    alignItems: "center",
                   },
                   minHeight: 56,
-                  px: 2
+                  px: 2,
                 }}
               >
-                <Typography 
-                  variant="h6" 
-                  sx={{ 
+                <Typography
+                  variant="h6"
+                  sx={{
                     color: getAccordionStatusColor(getDefineStatus()),
-                    fontWeight: 500
+                    fontWeight: 500,
                   }}
                 >
                   First, define your server
@@ -335,42 +340,46 @@ const LocalServerTab: React.FC<TabProps> = ({
                 <LocalServerForm
                   name={localConfig.name}
                   setName={(name) => setLocalConfig({ ...localConfig, name })}
-                  rootPath={localConfig.rootPath || ''}
-                  setRootPath={(rootPath) => setLocalConfig({ ...localConfig, rootPath })}
+                  rootPath={localConfig.rootPath || ""}
+                  setRootPath={(rootPath) =>
+                    setLocalConfig({ ...localConfig, rootPath })
+                  }
                   onRootPathSelect={onRootPathSelect}
                 />
               </AccordionDetails>
             </Accordion>
-            
+
             {/* Build Section */}
-            <Accordion 
-              expanded={expandedSections.build} 
-              onChange={handleAccordionChange('build')}
+            <Accordion
+              expanded={expandedSections.build}
+              onChange={handleAccordionChange("build")}
               sx={{
                 border: 1,
-                borderColor: buildMessage?.type === 'error'
-                  ? 'error.main'
-                  : installCompleted && buildCompleted 
-                  ? 'success.main' 
-                  : installCompleted || buildCompleted 
-                  ? 'warning.main' 
-                  : isInstalling || isBuilding 
-                  ? 'info.main' 
-                  : 'divider',
-                bgcolor: buildMessage?.type === 'error'
-                  ? 'error.lighter'
-                  : installCompleted && buildCompleted 
-                  ? 'success.lighter' 
-                  : installCompleted || buildCompleted 
-                  ? 'warning.lighter' 
-                  : isInstalling || isBuilding 
-                  ? 'info.lighter' 
-                  : 'background.paper',
-                '&:before': { display: 'none' },
+                borderColor:
+                  buildMessage?.type === "error"
+                    ? "error.main"
+                    : installCompleted && buildCompleted
+                    ? "success.main"
+                    : installCompleted || buildCompleted
+                    ? "warning.main"
+                    : isInstalling || isBuilding
+                    ? "info.main"
+                    : "divider",
+                bgcolor:
+                  buildMessage?.type === "error"
+                    ? "error.lighter"
+                    : installCompleted && buildCompleted
+                    ? "success.lighter"
+                    : installCompleted || buildCompleted
+                    ? "warning.lighter"
+                    : isInstalling || isBuilding
+                    ? "info.lighter"
+                    : "background.paper",
+                "&:before": { display: "none" },
                 borderRadius: 1,
-                boxShadow: theme => theme.palette.mode === 'dark' ? 1 : 0,
+                boxShadow: (theme) => (theme.palette.mode === "dark" ? 1 : 0),
                 mb: 2,
-                overflow: 'hidden'
+                overflow: "hidden",
               }}
             >
               <AccordionSummary
@@ -378,18 +387,18 @@ const LocalServerTab: React.FC<TabProps> = ({
                 aria-controls="build-content"
                 id="build-header"
                 sx={{
-                  '& .MuiAccordionSummary-content': {
-                    alignItems: 'center'
+                  "& .MuiAccordionSummary-content": {
+                    alignItems: "center",
                   },
                   minHeight: 56,
-                  px: 2
+                  px: 2,
                 }}
               >
-                <Typography 
-                  variant="h6" 
-                  sx={{ 
+                <Typography
+                  variant="h6"
+                  sx={{
                     color: getAccordionStatusColor(getBuildStatus()),
-                    fontWeight: 500
+                    fontWeight: 500,
                   }}
                 >
                   Second, install and build
@@ -411,32 +420,34 @@ const LocalServerTab: React.FC<TabProps> = ({
                 />
               </AccordionDetails>
             </Accordion>
-            
+
             {/* Run Section */}
-            <Accordion 
-              expanded={expandedSections.run} 
-              onChange={handleAccordionChange('run')}
+            <Accordion
+              expanded={expandedSections.run}
+              onChange={handleAccordionChange("run")}
               sx={{
                 border: 1,
-                borderColor: message?.type === 'error' && !isRunning 
-                  ? 'error.main' 
-                  : runCompleted 
-                  ? 'success.main' 
-                  : isRunning 
-                  ? 'info.main' 
-                  : 'divider',
-                bgcolor: message?.type === 'error' && !isRunning 
-                  ? 'error.lighter' 
-                  : runCompleted 
-                  ? 'success.lighter' 
-                  : isRunning 
-                  ? 'info.lighter' 
-                  : 'background.paper',
-                '&:before': { display: 'none' },
+                borderColor:
+                  message?.type === "error" && !isRunning
+                    ? "error.main"
+                    : runCompleted
+                    ? "success.main"
+                    : isRunning
+                    ? "info.main"
+                    : "divider",
+                bgcolor:
+                  message?.type === "error" && !isRunning
+                    ? "error.lighter"
+                    : runCompleted
+                    ? "success.lighter"
+                    : isRunning
+                    ? "info.lighter"
+                    : "background.paper",
+                "&:before": { display: "none" },
                 borderRadius: 1,
-                boxShadow: theme => theme.palette.mode === 'dark' ? 1 : 0,
+                boxShadow: (theme) => (theme.palette.mode === "dark" ? 1 : 0),
                 mb: 2,
-                overflow: 'hidden'
+                overflow: "hidden",
               }}
             >
               <AccordionSummary
@@ -444,18 +455,18 @@ const LocalServerTab: React.FC<TabProps> = ({
                 aria-controls="run-content"
                 id="run-header"
                 sx={{
-                  '& .MuiAccordionSummary-content': {
-                    alignItems: 'center'
+                  "& .MuiAccordionSummary-content": {
+                    alignItems: "center",
                   },
                   minHeight: 56,
-                  px: 2
+                  px: 2,
                 }}
               >
-                <Typography 
-                  variant="h6" 
-                  sx={{ 
+                <Typography
+                  variant="h6"
+                  sx={{
                     color: getAccordionStatusColor(getRunStatus()),
-                    fontWeight: 500
+                    fontWeight: 500,
                   }}
                 >
                   Third, define how to run your server
@@ -464,18 +475,22 @@ const LocalServerTab: React.FC<TabProps> = ({
               <AccordionDetails sx={{ px: 3, py: 2 }}>
                 <Stack spacing={4}>
                   <RunTools
-                    command={localConfig.transport === 'stdio' ? (localConfig as MCPStdioConfig).command : ''}
+                    command={
+                      localConfig.transport === "stdio"
+                        ? (localConfig as MCPStdioConfig).command
+                        : ""
+                    }
                     setCommand={(command) => {
-                      if (localConfig.transport === 'stdio') {
-                        setLocalConfig(prev => {
-                          if (prev.transport === 'stdio') {
+                      if (localConfig.transport === "stdio") {
+                        setLocalConfig((prev) => {
+                          if (prev.transport === "stdio") {
                             return { ...prev, command };
                           }
                           return prev;
                         });
                       }
                     }}
-                    transport={localConfig.transport as 'stdio' | 'websocket'}
+                    transport={localConfig.transport as "stdio" | "websocket"}
                     setTransport={handleTransportChange}
                     websocketUrl={websocketUrl}
                     setWebsocketUrl={setWebsocketUrl}
@@ -489,10 +504,14 @@ const LocalServerTab: React.FC<TabProps> = ({
                     message={message}
                     setMessage={setMessage}
                   />
-                  
+
                   <Box>
                     <ArgumentsManager
-                      args={localConfig.transport === 'stdio' ? (localConfig as any).args || [] : []}
+                      args={
+                        localConfig.transport === "stdio"
+                          ? (localConfig as any).args || []
+                          : []
+                      }
                       onArgChange={handleArgChange}
                       onAddArg={addArgField}
                       onRemoveArg={removeArgField}
@@ -507,7 +526,7 @@ const LocalServerTab: React.FC<TabProps> = ({
             </Accordion>
           </Stack>
         </Grid>
-        
+
         {isConsoleVisible && (
           <Grid item xs={4}>
             {/* Right column with console output */}
@@ -523,25 +542,16 @@ const LocalServerTab: React.FC<TabProps> = ({
 
       {message && (
         <Box sx={{ mt: 2, mb: 2 }}>
-          <Alert severity={message.type}>
-            {message.text}
-          </Alert>
+          <Alert severity={message.type}>{message.text}</Alert>
         </Box>
       )}
 
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
-        <Button
-          variant="outlined"
-          onClick={onClose}
-        >
+      <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mt: 3 }}>
+        <Button variant="outlined" onClick={onClose}>
           Cancel
         </Button>
-        <Button
-          type="submit"
-          variant="contained"
-          color="primary"
-        >
-          {initialConfig ? 'Update Server' : 'Add Server'}
+        <Button type="submit" variant="contained" color="primary">
+          {initialConfig ? "Update Server" : "Add Server"}
         </Button>
       </Box>
     </Box>

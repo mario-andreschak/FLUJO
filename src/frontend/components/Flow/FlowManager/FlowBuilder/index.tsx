@@ -1,19 +1,19 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { styled } from '@mui/material/styles';
-import { 
-  Box, 
-  Button, 
-  TextField, 
-  Paper, 
-  Typography, 
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import { styled } from "@mui/material/styles";
+import {
+  Box,
+  Button,
+  TextField,
+  Paper,
+  Typography,
   Divider,
   IconButton,
-} from '@mui/material';
-import { createLogger } from '@/utils/logger';
+} from "@mui/material";
+import { createLogger } from "@/utils/logger";
 // Create a logger instance for this file
-const log = createLogger('components/flow/FlowBuilder/index.tsx');
+const log = createLogger("components/flow/FlowBuilder/index.tsx");
 
 import {
   Dialog,
@@ -22,50 +22,50 @@ import {
   DialogContentText,
   DialogActions,
   FormHelperText,
-  Alert
-} from '@mui/material';
-import { 
-  ReactFlowProvider, 
-  Node, 
-  Edge, 
-  NodeChange, 
-  EdgeChange, 
-  ReactFlowInstance, 
+  Alert,
+} from "@mui/material";
+import {
+  ReactFlowProvider,
+  Node,
+  Edge,
+  NodeChange,
+  EdgeChange,
+  ReactFlowInstance,
   useReactFlow,
   Panel,
   applyNodeChanges,
-  applyEdgeChanges
-} from '@xyflow/react';
+  applyEdgeChanges,
+} from "@xyflow/react";
 // eslint-disable-next-line import/named
-import { v4 as uuidv4 } from 'uuid';
-import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
-import { flowService } from '@/frontend/services/flow';
-import { Canvas } from './Canvas/index';
-import { NodePalette } from './NodePalette';
-import PropertiesPanel from './PropertiesPanel';
-import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
-import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
-import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
-import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
-import SaveIcon from '@mui/icons-material/Save';
-import UndoIcon from '@mui/icons-material/Undo';
-import RedoIcon from '@mui/icons-material/Redo';
+import { v4 as uuidv4 } from "uuid";
+import { Flow, FlowNode, HistoryEntry } from "@/shared/types/flow";
+import { flowService } from "@/frontend/services/flow";
+import { Canvas } from "./Canvas/index";
+import { NodePalette } from "./NodePalette";
+import PropertiesPanel from "./PropertiesPanel";
+import ProcessNodePropertiesModal from "./Modals/ProcessNodePropertiesModal";
+import MCPNodePropertiesModal from "./Modals/MCPNodePropertiesModal";
+import StartNodePropertiesModal from "./Modals/StartNodePropertiesModal";
+import FinishNodePropertiesModal from "./Modals/FinishNodePropertiesModal";
+import SaveIcon from "@mui/icons-material/Save";
+import UndoIcon from "@mui/icons-material/Undo";
+import RedoIcon from "@mui/icons-material/Redo";
 
 const FlowBuilderContainer = styled(Box)({
-  display: 'flex',
-  height: 'calc(100vh - 64px)',
-  gap: '16px',
-  padding: '16px',
-  backgroundColor: '#f8f9fa',
+  display: "flex",
+  height: "calc(100vh - 64px)",
+  gap: "16px",
+  padding: "16px",
+  backgroundColor: "#f8f9fa",
 });
 
 const ToolbarContainer = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(1),
-  display: 'flex',
+  display: "flex",
   gap: theme.spacing(1),
-  borderBottom: '1px solid',
+  borderBottom: "1px solid",
   borderColor: theme.palette.divider,
-  alignItems: 'center',
+  alignItems: "center",
   marginBottom: theme.spacing(1),
   backgroundColor: theme.palette.background.paper,
   boxShadow: theme.shadows[1],
@@ -73,10 +73,10 @@ const ToolbarContainer = styled(Paper)(({ theme }) => ({
 
 const MainContent = styled(Box)({
   flex: 1,
-  display: 'flex',
-  flexDirection: 'column',
-  position: 'relative',
-  overflow: 'hidden',
+  display: "flex",
+  flexDirection: "column",
+  position: "relative",
+  overflow: "hidden",
 });
 
 interface FlowBuilderProps {
@@ -88,44 +88,50 @@ interface FlowBuilderProps {
 }
 
 // Dialog types for save/copy/rename
-type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
+type DialogType = "none" | "duplicate" | "rename" | "unsaved";
 
-export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectFlow }: FlowBuilderProps) => {
-  log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
+export const FlowBuilder = ({
+  initialFlow,
+  onSave,
+  onDelete,
+  allFlows,
+  onSelectFlow,
+}: FlowBuilderProps) => {
+  log.debug("FlowBuilder rendered with initialFlow:", initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
   const [edges, setEdges] = useState<Edge[]>(initialFlow?.edges || []);
   const [selectedNode, setSelectedNode] = useState<FlowNode | null>(null);
-  const [flowName, setFlowName] = useState<string>(initialFlow?.name || 'NewFlow');
+  const [flowName, setFlowName] = useState<string>(
+    initialFlow?.name || "NewFlow"
+  );
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
-  
+
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
-  const [dialogType, setDialogType] = useState<DialogType>('none');
-  const [newFlowName, setNewFlowName] = useState<string>('');
+  const [dialogType, setDialogType] = useState<DialogType>("none");
+  const [newFlowName, setNewFlowName] = useState<string>("");
   const [newFlowNameError, setNewFlowNameError] = useState<string | null>(null);
-  
+
   // Modal states
   const [processModalOpen, setProcessModalOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
   const [startModalOpen, setStartModalOpen] = useState(false);
   const [finishModalOpen, setFinishModalOpen] = useState(false);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
-  
+
   // History for undo/redo functionality
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isHistoryAction, setIsHistoryAction] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [pendingFlowId, setPendingFlowId] = useState<string | null>(null);
-  
+
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
-    return edges.filter(edge => 
-      edge.source && 
-      edge.target && 
-      edge.sourceHandle && 
-      edge.targetHandle
+    return edges.filter(
+      (edge) =>
+        edge.source && edge.target && edge.sourceHandle && edge.targetHandle
     );
   }, []);
 
@@ -133,64 +139,68 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   useEffect(() => {
     if (initialFlow) {
       setNodes(initialFlow.nodes || []);
-      
+
       // Filter out invalid edges before setting them
       const validEdges = filterInvalidEdges(initialFlow.edges || []);
       if (validEdges.length !== initialFlow.edges.length) {
-        console.warn(`Filtered out ${initialFlow.edges.length - validEdges.length} invalid edges`);
+        console.warn(
+          `Filtered out ${
+            initialFlow.edges.length - validEdges.length
+          } invalid edges`
+        );
       }
       setEdges(validEdges);
       setFlowName(initialFlow.name);
-      
+
       // Initialize history with initial state
       const initialState: HistoryEntry = {
         nodes: initialFlow.nodes || [],
-        edges: validEdges
+        edges: validEdges,
       };
       setHistory([initialState]);
       setHistoryIndex(0);
     } else {
       // Create a new flow with a Start node
-      const startNode = flowService.createNode('start', { x: 250, y: 150 });
+      const startNode = flowService.createNode("start", { x: 250, y: 150 });
       // Ensure properties object exists and set promptTemplate
       if (!startNode.data.properties) {
         startNode.data.properties = {};
       }
-      startNode.data.properties.promptTemplate = '';
-      
+      startNode.data.properties.promptTemplate = "";
+
       setNodes([startNode]);
       setEdges([]);
-      setFlowName('NewFlow');
-      
+      setFlowName("NewFlow");
+
       // Initialize history with the Start node
       const emptyState: HistoryEntry = {
         nodes: [startNode],
-        edges: []
+        edges: [],
       };
       setHistory([emptyState]);
       setHistoryIndex(0);
     }
   }, [initialFlow]);
-  
+
   // Add to history when nodes or edges change
   useEffect(() => {
     if (isHistoryAction) {
       setIsHistoryAction(false);
       return;
     }
-    
+
     // Create new history entry
     const newEntry: HistoryEntry = {
       nodes: [...nodes],
-      edges: [...edges]
+      edges: [...edges],
     };
-    
+
     // Truncate history if we're not at the end
     const newHistory = history.slice(0, historyIndex + 1);
-    
+
     // Only add to history if there's a real change
     if (
-      historyIndex < 0 || 
+      historyIndex < 0 ||
       JSON.stringify(newEntry) !== JSON.stringify(newHistory[historyIndex])
     ) {
       setHistory([...newHistory, newEntry]);
@@ -205,15 +215,15 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       if (hasUnsavedChanges) {
         // Standard way to show a confirmation dialog when closing the browser
         e.preventDefault();
-        e.returnValue = '';
-        return '';
+        e.returnValue = "";
+        return "";
       }
     };
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [hasUnsavedChanges]);
 
@@ -223,24 +233,25 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     if (!name.trim()) {
       return "Flow name cannot be empty";
     }
-    
+
     // Check if name contains only allowed characters (alphanumeric, underscores, dashes)
     if (!/^[\w-]+$/.test(name)) {
       return "Flow name can only contain letters, numbers, underscores, and dashes";
     }
-    
+
     // Check for duplicate names (only if it's a new flow or the name has changed)
     if (!initialFlow || (initialFlow && initialFlow.name !== name)) {
-      const isDuplicate = allFlows.some(flow => 
-        flow.id !== (initialFlow?.id || '') && 
-        flow.name.toLowerCase() === name.toLowerCase()
+      const isDuplicate = allFlows.some(
+        (flow) =>
+          flow.id !== (initialFlow?.id || "") &&
+          flow.name.toLowerCase() === name.toLowerCase()
       );
-      
+
       if (isDuplicate) {
         return "A flow with this name already exists";
       }
     }
-    
+
     return null;
   };
 
@@ -254,7 +265,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   // Handle save flow
   const handleSave = useCallback(() => {
     log.debug(`handleSave: Attempting to save flow "${flowName}"`);
-    
+
     // Validate flow name
     const error = validateFlowName(flowName);
     if (error) {
@@ -262,56 +273,63 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       setFlowNameError(error);
       return;
     }
-    
+
     // Ensure there's at least a Start node in the flow
     let flowNodes = [...nodes];
-    
+
     // If there are no nodes, add a Start node
     if (flowNodes.length === 0) {
       log.debug(`handleSave: No nodes found, adding a default Start node`);
-      const startNode = flowService.createNode('start', { x: 250, y: 150 });
+      const startNode = flowService.createNode("start", { x: 250, y: 150 });
       // Ensure properties object exists and set promptTemplate
       if (!startNode.data.properties) {
         startNode.data.properties = {};
       }
-      startNode.data.properties.promptTemplate = '';
-      
+      startNode.data.properties.promptTemplate = "";
+
       flowNodes = [startNode];
       setNodes(flowNodes);
     }
-    
+
     // Check if we're trying to save with a new name for an existing flow
     if (initialFlow && initialFlow.name !== flowName) {
-      log.debug(`handleSave: Flow name changed from "${initialFlow.name}" to "${flowName}", opening rename dialog`);
+      log.debug(
+        `handleSave: Flow name changed from "${initialFlow.name}" to "${flowName}", opening rename dialog`
+      );
       // Ask if user wants to rename or copy
-      setDialogType('rename');
+      setDialogType("rename");
       setNewFlowName(flowName);
       setDialogOpen(true);
       return;
     }
-    
+
     const flow: Flow = {
       id: initialFlow?.id || flowService.createNewFlow().id,
       name: flowName,
       nodes: flowNodes,
       edges,
     };
-    
-    log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
+
+    log.info(
+      `handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`
+    );
     onSave(flow);
     setHasUnsavedChanges(false);
   }, [flowName, nodes, edges, initialFlow, onSave, allFlows]);
 
   // Handle flow selection with unsaved changes check
-  const handleFlowSelection = useCallback((flowId: string | null) => {
-    if (hasUnsavedChanges) {
-      setPendingFlowId(flowId);
-      setDialogType('unsaved');
-      setDialogOpen(true);
-    } else if (onSelectFlow) {
-      onSelectFlow(flowId);
-    }
-  }, [hasUnsavedChanges, onSelectFlow]);
+  const handleFlowSelection = useCallback(
+    (flowId: string | null) => {
+      if (hasUnsavedChanges) {
+        setPendingFlowId(flowId);
+        setDialogType("unsaved");
+        setDialogOpen(true);
+      } else if (onSelectFlow) {
+        onSelectFlow(flowId);
+      }
+    },
+    [hasUnsavedChanges, onSelectFlow]
+  );
 
   // Export the handleFlowSelection function to be used by the parent component
   useEffect(() => {
@@ -320,7 +338,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       // We're overriding the onSelectFlow prop with our wrapped version
       const originalOnSelectFlow = onSelectFlow;
       (onSelectFlow as any).__wrapped = true;
-      
+
       if (!(originalOnSelectFlow as any).__wrapped) {
         const wrappedOnSelectFlow = (flowId: string | null) => {
           handleFlowSelection(flowId);
@@ -334,37 +352,48 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   // Handle delete flow
   const handleDelete = useCallback(() => {
     if (initialFlow) {
-      log.info(`handleDelete: Deleting flow "${initialFlow.name}" (ID: ${initialFlow.id})`);
+      log.info(
+        `handleDelete: Deleting flow "${initialFlow.name}" (ID: ${initialFlow.id})`
+      );
       onDelete(initialFlow.id);
     } else {
-      log.warn('handleDelete: Attempted to delete flow but no initialFlow is available');
+      log.warn(
+        "handleDelete: Attempted to delete flow but no initialFlow is available"
+      );
     }
   }, [initialFlow, onDelete]);
-  
+
   // Handle copy flow
-  const handleCopyFlow = useCallback((flowToCopy: Flow, newName: string) => {
-    log.debug(`handleCopyFlow: Copying flow "${flowToCopy.name}" to "${newName}"`);
-    
-    // Create a new flow with the same nodes and edges but a new ID and name
-    const newFlow: Flow = {
-      id: uuidv4(), // Generate a new ID
-      name: newName,
-      nodes: flowToCopy.nodes,
-      edges: flowToCopy.edges,
-    };
-    
-    log.info(`handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`);
-    onSave(newFlow);
-  }, [onSave]);
-  
+  const handleCopyFlow = useCallback(
+    (flowToCopy: Flow, newName: string) => {
+      log.debug(
+        `handleCopyFlow: Copying flow "${flowToCopy.name}" to "${newName}"`
+      );
+
+      // Create a new flow with the same nodes and edges but a new ID and name
+      const newFlow: Flow = {
+        id: uuidv4(), // Generate a new ID
+        name: newName,
+        nodes: flowToCopy.nodes,
+        edges: flowToCopy.edges,
+      };
+
+      log.info(
+        `handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`
+      );
+      onSave(newFlow);
+    },
+    [onSave]
+  );
+
   // Handle dialog close
   const handleDialogClose = () => {
     setDialogOpen(false);
-    setDialogType('none');
-    setNewFlowName('');
+    setDialogType("none");
+    setNewFlowName("");
     setNewFlowNameError(null);
   };
-  
+
   // Handle dialog confirm
   const handleDialogConfirm = () => {
     // Validate new flow name
@@ -373,13 +402,13 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       setNewFlowNameError(error);
       return;
     }
-    
-    if (dialogType === 'duplicate') {
+
+    if (dialogType === "duplicate") {
       // Copy the flow with a new name
       if (initialFlow) {
         handleCopyFlow(initialFlow, newFlowName);
       }
-    } else if (dialogType === 'rename') {
+    } else if (dialogType === "rename") {
       // Save the flow with the new name
       const flow: Flow = {
         id: initialFlow?.id || flowService.createNewFlow().id,
@@ -389,14 +418,14 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       };
       onSave(flow);
       setHasUnsavedChanges(false);
-    } else if (dialogType === 'unsaved') {
+    } else if (dialogType === "unsaved") {
       // User confirmed to discard changes
       if (onSelectFlow && pendingFlowId !== undefined) {
         onSelectFlow(pendingFlowId);
         setHasUnsavedChanges(false);
       }
     }
-    
+
     handleDialogClose();
   };
 
@@ -417,87 +446,109 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     }
     handleDialogClose();
   };
-  
+
   // Handle new flow name change in dialog
   const handleNewFlowNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const name = e.target.value;
     setNewFlowName(name);
     setNewFlowNameError(validateFlowName(name));
   };
-  
+
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
-  
+
   const handleUndo = useCallback(() => {
     if (canUndo) {
-      log.debug(`handleUndo: Performing undo operation, moving from history index ${historyIndex} to ${historyIndex - 1}`);
+      log.debug(
+        `handleUndo: Performing undo operation, moving from history index ${historyIndex} to ${
+          historyIndex - 1
+        }`
+      );
       setIsHistoryAction(true);
       const newIndex = historyIndex - 1;
       const prevState = history[newIndex];
       setNodes(prevState.nodes);
       setEdges(prevState.edges);
       setHistoryIndex(newIndex);
-      log.info(`handleUndo: Restored flow state to previous version (${prevState.nodes.length} nodes, ${prevState.edges.length} edges)`);
+      log.info(
+        `handleUndo: Restored flow state to previous version (${prevState.nodes.length} nodes, ${prevState.edges.length} edges)`
+      );
     }
   }, [history, historyIndex, canUndo]);
-  
+
   const handleRedo = useCallback(() => {
     if (canRedo) {
-      log.debug(`handleRedo: Performing redo operation, moving from history index ${historyIndex} to ${historyIndex + 1}`);
+      log.debug(
+        `handleRedo: Performing redo operation, moving from history index ${historyIndex} to ${
+          historyIndex + 1
+        }`
+      );
       setIsHistoryAction(true);
       const newIndex = historyIndex + 1;
       const nextState = history[newIndex];
       setNodes(nextState.nodes);
       setEdges(nextState.edges);
       setHistoryIndex(newIndex);
-      log.info(`handleRedo: Restored flow state to next version (${nextState.nodes.length} nodes, ${nextState.edges.length} edges)`);
+      log.info(
+        `handleRedo: Restored flow state to next version (${nextState.nodes.length} nodes, ${nextState.edges.length} edges)`
+      );
     }
   }, [history, historyIndex, canRedo]);
 
   // Memoized handlers for better performance
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    log.debug(`onNodesChange: Processing ${changes.length} node changes`);
-    
-    // Handle node selection separately
-    changes.forEach((change) => {
-      if (change.type === 'select' && change.id) {
-        const node = nodes.find((n: FlowNode) => n.id === change.id);
-        if (node) {
-          log.debug(`onNodesChange: Node ${node.id} selection changed to ${change.selected}`);
-          setSelectedNode(change.selected ? node : null);
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      log.debug(`onNodesChange: Processing ${changes.length} node changes`);
+
+      // Handle node selection separately
+      changes.forEach((change) => {
+        if (change.type === "select" && change.id) {
+          const node = nodes.find((n: FlowNode) => n.id === change.id);
+          if (node) {
+            log.debug(
+              `onNodesChange: Node ${node.id} selection changed to ${change.selected}`
+            );
+            setSelectedNode(change.selected ? node : null);
+          }
+        } else if (change.type === "position" && change.id) {
+          log.debug(`onNodesChange: Node ${change.id} position changed`);
+        } else if (change.type === "remove" && change.id) {
+          log.info(`onNodesChange: Node ${change.id} removed`);
         }
-      } else if (change.type === 'position' && change.id) {
-        log.debug(`onNodesChange: Node ${change.id} position changed`);
-      } else if (change.type === 'remove' && change.id) {
-        log.info(`onNodesChange: Node ${change.id} removed`);
-      }
-    });
-    
-    // Update nodes with changes
-    setNodes((nds) => applyNodeChanges(changes, nds) as FlowNode[]);
-  }, [nodes]);
+      });
+
+      // Update nodes with changes
+      setNodes((nds) => applyNodeChanges(changes, nds) as FlowNode[]);
+    },
+    [nodes]
+  );
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     log.debug(`onEdgesChange: Processing ${changes.length} edge changes`);
-    
+
     // Log specific change types
-    changes.forEach(change => {
-      if (change.type === 'remove') {
+    changes.forEach((change) => {
+      if (change.type === "remove") {
         log.info(`onEdgesChange: Edge ${change.id} removed`);
-      } else if (change.type === 'select') {
-        log.debug(`onEdgesChange: Edge ${change.id} selection changed to ${change.selected}`);
+      } else if (change.type === "select") {
+        log.debug(
+          `onEdgesChange: Edge ${change.id} selection changed to ${change.selected}`
+        );
       }
     });
-    
+
     setEdges((eds) => applyEdgeChanges(changes, eds));
   }, []);
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<
+    FlowNode,
+    Edge
+  > | null>(null);
 
   const handleNodeUpdate = useCallback((nodeId: string, data: any) => {
     log.debug(`handleNodeUpdate: Updating node ${nodeId} properties`);
-    
+
     setNodes((nds) =>
       nds.map((node) => {
         if (node.id === nodeId) {
@@ -507,7 +558,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
         return node;
       })
     );
-    
+
     // Close any open modals
     setProcessModalOpen(false);
     setMcpModalOpen(false);
@@ -516,17 +567,17 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, []);
-  
+
   // Open the appropriate properties modal based on node type
   const openNodeProperties = useCallback((node: FlowNode) => {
-    log.debug('Opening properties for node:', node);
+    log.debug("Opening properties for node:", node);
     setNodeToEdit(node);
 
-    if (node.data.type === 'mcp') {
+    if (node.data.type === "mcp") {
       setMcpModalOpen(true);
-    } else if (node.data.type === 'start') {
+    } else if (node.data.type === "start") {
       setStartModalOpen(true);
-    } else if (node.data.type === 'finish') {
+    } else if (node.data.type === "finish") {
       setFinishModalOpen(true);
     } else {
       setProcessModalOpen(true);
@@ -535,52 +586,54 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
 
   const onDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
-      log.debug('onDrop: Node dropped on canvas');
+      log.debug("onDrop: Node dropped on canvas");
       event.preventDefault();
-      
+
       // Get the node type from the data transfer
-      const type = event.dataTransfer.getData('application/reactflow');
+      const type = event.dataTransfer.getData("application/reactflow");
       log.debug(`onDrop: Node type from data transfer: ${type}`);
-      
+
       // Check if we have all the required data to create a node
       if (!type || !reactFlowInstance) {
-        log.debug(`onDrop: Missing required data - type: ${!!type}, reactFlowInstance: ${!!reactFlowInstance}`);
+        log.debug(
+          `onDrop: Missing required data - type: ${!!type}, reactFlowInstance: ${!!reactFlowInstance}`
+        );
         return;
       }
-      
+
       // Calculate the position where the node should be placed
       const position = reactFlowInstance.screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
       });
       log.debug(`onDrop: Calculated position: (${position.x}, ${position.y})`);
-      
+
       // Create the new node using flowService
       const newNode = flowService.createNode(type, position);
       log.info(`onDrop: Created new ${type} node with ID: ${newNode.id}`);
-      
+
       // Add the new node to the existing nodes
       setNodes((nds) => {
         // Deselect all existing nodes
-        const updatedNodes = nds.map(node => ({
+        const updatedNodes = nds.map((node) => ({
           ...node,
-          selected: false
+          selected: false,
         }));
-        
+
         // Add the new node with selected property
         return [
           ...updatedNodes,
           {
             ...newNode,
-            selected: true
-          }
+            selected: true,
+          },
         ];
       });
-      
+
       // Select the newly created node in the properties panel
       setSelectedNode(newNode);
       log.debug(`onDrop: Selected new node in properties panel: ${newNode.id}`);
-      
+
       // Automatically open the edit properties modal for the new node
       openNodeProperties(newNode);
       log.debug(`onDrop: Opened properties modal for new node: ${newNode.id}`);
@@ -590,12 +643,12 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
 
   const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
+    event.dataTransfer.dropEffect = "move";
     // We don't need to log every dragover event as it would be too verbose
   }, []);
 
   const onInit = useCallback((instance: any) => {
-    log.debug('onInit: ReactFlow instance initialized');
+    log.debug("onInit: ReactFlow instance initialized");
     setReactFlowInstance(instance as ReactFlowInstance<FlowNode, Edge>);
   }, []);
 
@@ -614,24 +667,24 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
               error={!!flowNameError}
               helperText={flowNameError}
             />
-            
-            <Button 
-              variant="contained" 
-              color="primary" 
+
+            <Button
+              variant="contained"
+              color="primary"
               onClick={handleSave}
               startIcon={<SaveIcon />}
               disabled={!!flowNameError}
             >
               Save Flow
             </Button>
-            
+
             {initialFlow && (
               <>
-                <Button 
-                  variant="outlined" 
-                  color="primary" 
+                <Button
+                  variant="outlined"
+                  color="primary"
                   onClick={() => {
-                    setDialogType('duplicate');
+                    setDialogType("duplicate");
                     setNewFlowName(`${initialFlow.name}_copy`);
                     setDialogOpen(true);
                   }}
@@ -643,31 +696,31 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
                 </Button>
               </>
             )}
-            
+
             <Divider orientation="vertical" flexItem />
-            
-            <IconButton 
-              onClick={handleUndo} 
+
+            <IconButton
+              onClick={handleUndo}
               disabled={!canUndo}
               color="primary"
               size="small"
             >
               <UndoIcon />
             </IconButton>
-            
-            <IconButton 
-              onClick={handleRedo} 
+
+            <IconButton
+              onClick={handleRedo}
               disabled={!canRedo}
               color="primary"
               size="small"
             >
               <RedoIcon />
             </IconButton>
-            
+
             <Box sx={{ flex: 1 }} />
           </ToolbarContainer>
-          
-          <Box sx={{ flex: 1, position: 'relative' }}>
+
+          <Box sx={{ flex: 1, position: "relative" }}>
             <Canvas
               ref={reactFlowWrapper}
               initialNodes={nodes}
@@ -683,59 +736,60 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
           </Box>
         </MainContent>
       </ReactFlowProvider>
-      
+
       {/* Node Properties Modals */}
-      <ProcessNodePropertiesModal 
+      <ProcessNodePropertiesModal
         open={processModalOpen}
         node={nodeToEdit}
-        onClose={() => setProcessModalOpen(false)}
-        onSave={handleNodeUpdate}
+        onCloseAction={() => setProcessModalOpen(false)}
+        onSaveAction={handleNodeUpdate}
         flowEdges={edges}
         flowNodes={nodes}
         flowId={initialFlow?.id}
       />
-      
-      <MCPNodePropertiesModal 
+
+      <MCPNodePropertiesModal
         open={mcpModalOpen}
         node={nodeToEdit}
         onClose={() => setMcpModalOpen(false)}
         onSave={handleNodeUpdate}
       />
-      
+
       <StartNodePropertiesModal
         open={startModalOpen}
         node={nodeToEdit}
         onClose={() => setStartModalOpen(false)}
         onSave={handleNodeUpdate}
       />
-      
+
       <FinishNodePropertiesModal
         open={finishModalOpen}
         node={nodeToEdit}
         onClose={() => setFinishModalOpen(false)}
         onSave={handleNodeUpdate}
       />
-      
+
       {/* Dialog for Copy/Rename/Unsaved Changes */}
       <Dialog open={dialogOpen} onClose={handleDialogClose}>
         <DialogTitle>
-          {dialogType === 'duplicate' 
-            ? 'Copy Flow' 
-            : dialogType === 'rename' 
-              ? 'Rename Flow' 
-              : 'Unsaved Changes'}
+          {dialogType === "duplicate"
+            ? "Copy Flow"
+            : dialogType === "rename"
+            ? "Rename Flow"
+            : "Unsaved Changes"}
         </DialogTitle>
         <DialogContent>
-          {dialogType === 'unsaved' ? (
+          {dialogType === "unsaved" ? (
             <DialogContentText>
-              You have unsaved changes in the current flow. What would you like to do?
+              You have unsaved changes in the current flow. What would you like
+              to do?
             </DialogContentText>
           ) : (
             <>
               <DialogContentText>
-                {dialogType === 'duplicate' 
-                  ? 'Enter a name for the copied flow:' 
-                  : 'You are changing the name of this flow. Do you want to rename it or create a copy with the new name?'}
+                {dialogType === "duplicate"
+                  ? "Enter a name for the copied flow:"
+                  : "You are changing the name of this flow. Do you want to rename it or create a copy with the new name?"}
               </DialogContentText>
               <TextField
                 autoFocus
@@ -754,28 +808,25 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
         </DialogContent>
         <DialogActions>
           <Button onClick={handleDialogClose}>Cancel</Button>
-          
-          {dialogType === 'unsaved' && (
+
+          {dialogType === "unsaved" && (
             <>
-              <Button 
-                onClick={handleDiscardAndContinue}
-                color="error"
-              >
+              <Button onClick={handleDiscardAndContinue} color="error">
                 Discard Changes
               </Button>
-              <Button 
+              <Button
                 onClick={handleSaveAndContinue}
-                variant="contained" 
+                variant="contained"
                 color="primary"
               >
                 Save Changes
               </Button>
             </>
           )}
-          
-          {dialogType === 'rename' && (
+
+          {dialogType === "rename" && (
             <>
-              <Button 
+              <Button
                 onClick={() => {
                   // Validate new flow name
                   const error = validateFlowName(newFlowName);
@@ -783,20 +834,20 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
                     setNewFlowNameError(error);
                     return;
                   }
-                  
+
                   // Copy the flow with a new name
                   if (initialFlow) {
                     handleCopyFlow(initialFlow, newFlowName);
                   }
-                  
+
                   handleDialogClose();
                 }}
               >
                 Copy
               </Button>
-              <Button 
-                onClick={handleDialogConfirm} 
-                variant="contained" 
+              <Button
+                onClick={handleDialogConfirm}
+                variant="contained"
                 color="primary"
                 disabled={!!newFlowNameError}
               >
@@ -804,11 +855,11 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
               </Button>
             </>
           )}
-          
-          {dialogType === 'duplicate' && (
-            <Button 
-              onClick={handleDialogConfirm} 
-              variant="contained" 
+
+          {dialogType === "duplicate" && (
+            <Button
+              onClick={handleDialogConfirm}
+              variant="contained"
               color="primary"
               disabled={!!newFlowNameError}
             >
