@@ -53,7 +53,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
-    "redoc": "^2.4.0",
+    "react-swagger-ui": "^3.0.17-0",
     "remark-gfm": "^4.0.1",
     "simple-git": "^3.27.0",
     "slate": "^0.112.0",
@@ -89,5 +89,11 @@
     "typescript": "^5",
     "wait-on": "^8.0.2",
     "webpack": "^5.98.0"
+  },
+  "overrides": {
+    "swagger-ui-react": {
+      "react": "$react",
+      "react-dom": "$react-dom"
+    }
   }
 }
