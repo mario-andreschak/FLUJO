@@ -1,0 +1,39 @@
+/* Main Swagger Styles Index */
+@import './parameters.css';
+@import './buttons.css';
+@import './layout.css';
+@import './codeBlocks.css';
+@import './schema.css';
+@import './darkMode.css';
+
+/* Global theme variables for Swagger UI */
+:root {
+  --primary-color: #2196f3;
+  --primary-light: #64b5f6;
+  --primary-dark: #1976d2;
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --bg-paper: #ffffff;
+  --bg-default: #f5f5f5;
+  --get-method-color: #61affe;
+  --post-method-color: #49cc90;
+  --put-method-color: #fca130;
+  --delete-method-color: #f93e3e;
+  --divider-color: #e0e0e0;
+}
+
+/* Dark theme override */
+.swagger-dark-theme {
+  --primary-color: #2196f3;
+  --primary-light: #64b5f6;
+  --primary-dark: #1976d2;
+  --text-primary: #f5f5f5;
+  --text-secondary: #e0e0e0;
+  --bg-paper: #1e1e1e;
+  --bg-default: #121212;
+  --get-method-color: #4fc3f7;
+  --post-method-color: #66bb6a;
+  --put-method-color: #ffb74d;
+  --delete-method-color: #ef5350;
+  --divider-color: #444444;
+} 

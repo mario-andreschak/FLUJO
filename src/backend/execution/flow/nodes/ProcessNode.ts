@@ -219,9 +219,10 @@ export class ProcessNode extends BaseNode {
       
       // Clean up large objects by deleting them instead of setting to null
       if (prepResult) {
-        const prepResultAny = prepResult as any;
-        delete prepResultAny.currentPrompt;
-        delete prepResultAny.messages;
+        // Use type assertion to tell TypeScript this is safe
+        (prepResult as Partial<ProcessNodePrepResult>).currentPrompt = undefined;
+        (prepResult as Partial<ProcessNodePrepResult>).messages = undefined;
+        (prepResult as Partial<ProcessNodePrepResult>).availableTools = undefined;
       }
       
       // Create a properly typed ExecResult
@@ -289,12 +290,18 @@ export class ProcessNode extends BaseNode {
       
       return errorResult;
     } finally {
-      // Clean up any remaining large objects
+      // Clean up memory-intensive properties to prevent memory leaks
+      // This is especially important in headless execution mode where
+      // processes may run for extended periods without UI-based garbage collection
       if (prepResult) {
-        const prepResultAny = prepResult as any;
-        delete prepResultAny.currentPrompt;
-        delete prepResultAny.messages;
-        delete prepResultAny.availableTools;
+        // Instead of using delete, set to empty values to free memory
+        prepResult.currentPrompt = '';
+        prepResult.messages = [];
+        
+        // If availableTools is defined in the interface
+        if (prepResult.availableTools) {
+          prepResult.availableTools = [];
+        }
       }
     }
   }

@@ -1,0 +1,97 @@
+/* Fix code block text visibility and spacing */
+.swagger-ui pre.curl-command,
+.swagger-ui pre.microlight {
+  padding: 16px 20px !important;
+  color: #e0e0e0 !important;
+  background-color: #282828 !important;
+  overflow-x: auto !important;
+  font-family: 'Monaco', 'Menlo', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+}
+
+/* Improve string color in code blocks for better visibility */
+.swagger-ui pre.microlight .token.string {
+  color: #7fc97f !important;
+}
+
+/* Fix copy button positioning in code blocks */
+.swagger-ui .copy-to-clipboard {
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  height: 30px !important;
+  width: 30px !important;
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border-radius: 3px !important;
+  border: none !important;
+  color: #fff !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.swagger-ui .copy-to-clipboard:hover {
+  background-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Ensure code blocks have proper positioning for buttons */
+.swagger-ui .response-body-container,
+.swagger-ui .response-headers-container,
+.swagger-ui .curl-command-container,
+.swagger-ui .request-url-container {
+  position: relative !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Fix the response body buttons (copy/download) layout */
+.swagger-ui .download-contents {
+  position: absolute !important;
+  top: 10px !important;
+  right: 50px !important;
+  height: 30px !important;
+  padding: 5px 10px !important;
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border-radius: 3px !important;
+  border: none !important;
+  color: #fff !important;
+  font-size: 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.swagger-ui .download-contents:hover {
+  background-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Ensure code blocks have proper height even with long content */
+.swagger-ui pre {
+  min-height: 60px !important;
+  max-height: 400px !important;
+}
+
+/* Improve section labels and headers */
+.swagger-ui .response-body h5,
+.swagger-ui .response-headers h5,
+.swagger-ui .curl-command h5,
+.swagger-ui .request-url h5 {
+  color: #888 !important;
+  font-size: 12px !important;
+  text-transform: uppercase !important;
+  font-weight: 600 !important;
+  padding: 10px 20px !important;
+  margin: 0 !important;
+  background-color: #f5f5f5 !important;
+  border-bottom: 1px solid #e0e0e0 !important;
+}
+
+/* Fix layout for the response headers and body */
+.swagger-ui .response-body,
+.swagger-ui .response-headers {
+  margin: 10px 0 !important;
+  border: 1px solid #e0e0e0 !important;
+} 
