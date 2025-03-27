@@ -511,6 +511,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         rootPath: server.directory,
         command: command,
         args: args,
+        stderr: 'pipe',
         env: {},
         disabled: false,
         autoApprove: [],

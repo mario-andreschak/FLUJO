@@ -18,7 +18,7 @@ if (typeof global.__mcp_recovery === 'undefined') {
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
 import {
@@ -363,8 +363,8 @@ export class MCPService {
    */
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
-    
-    // Load all configs from storage
+
+    // Load all configs from storage first to determine if this is a new server
     const configsResult = await this.loadServerConfigs();
     if (!Array.isArray(configsResult)) {
       log.warn(`updateServerConfig: Failed to load configs:`, configsResult.error);
@@ -373,24 +373,33 @@ export class MCPService {
     
     const configs = configsResult;
     let config = configs.find(c => c.name === serverName);
+    const isNewServer = !config;
 
-    if (!config && updates.name) {
-      // New server being added - default to stdio transport
-      log.info(`updateServerConfig: Creating new server config for ${updates.name}`);
-      config = {
-        name: updates.name,
-        transport: 'stdio',
-        command: '',
-        args: [],
-        env: {},
+    // First validate the updates if they contain enough information to be a complete config
+    // This handles the case of creating a new server with invalid config
+    if (Object.keys(updates).length > 0) {
+      const configToValidate = updates as MCPServerConfig;
+      const validationError = this.validateServerConfig(configToValidate, isNewServer);
+      if (validationError) {
+        log.warn(`updateServerConfig: Invalid configuration for ${serverName}:`, validationError);
+        return { success: false, error: validationError };
+      }
+    }
+
+    // Handle new server creation
+    if (isNewServer && updates.name) {
+      log.debug(`updateServerConfig: Creating new server config for ${updates.name}`);
+      const newConfig = {
         disabled: false,
         autoApprove: [],
-        _buildCommand: '',
-        _installCommand: '',
-        rootPath: '',
-      };
+        env: {},
+        ...updates
+      } as MCPServerConfig;
+
+      log.info(`updateServerConfig: Creating new server config for ${updates.name}`);
+      config = newConfig;
       configs.push(config);
-    } else if (!config) {
+    } else if (isNewServer) {
       log.warn(`updateServerConfig: Server ${serverName} not found`);
       return { success: false, error: `Server ${serverName} not found` };
     }
@@ -402,11 +411,50 @@ export class MCPService {
         // Log the original env variables for debugging
         log.debug(`Original env variables for ${serverName}:`, JSON.stringify(updates.env, null, 2));
         
-        // Resolve global variables in the environment variables and update directly
-        updates.env = await resolveGlobalVars(updates.env) as Record<string, string>;
+        // First resolve any references within the current environment variables
+        const resolvedEnv: Record<string, string> = {};
+        const envVars = updates.env;
+        
+        // First pass: collect all non-reference values
+        for (const [key, value] of Object.entries(envVars)) {
+          if (typeof value === 'string' && !value.includes('${')) {
+            resolvedEnv[key] = value;
+          }
+        }
+        
+        // Second pass: resolve references
+        for (const [key, value] of Object.entries(envVars)) {
+          if (typeof value === 'string' && value.includes('${')) {
+            let resolvedValue = value;
+            const matches = value.match(/\$\{([^}]+)\}/g);
+            if (matches) {
+              for (const match of matches) {
+                const varName = match.substring(2, match.length - 1);
+                const envValue = resolvedEnv[varName];
+                if (envValue !== undefined) {
+                  resolvedValue = resolvedValue.replace(match, envValue);
+                }
+              }
+            }
+            resolvedEnv[key] = resolvedValue;
+          } else if (typeof value === 'object' && value !== null && 'value' in value) {
+            // Handle encrypted values
+            resolvedEnv[key] = (value as { value: string }).value;
+          } else if (typeof value === 'string') {
+            resolvedEnv[key] = value;
+          } else {
+            resolvedEnv[key] = String(value);
+          }
+        }
         
         // Log the resolved env variables for debugging
-        log.debug(`Resolved env variables for ${serverName}:`, JSON.stringify(updates.env, null, 2));
+        log.debug(`Resolved env variables for ${serverName}:`, JSON.stringify(resolvedEnv, null, 2));
+        
+        // Update the env in the updates object
+        updates = {
+          ...updates,
+          env: resolvedEnv
+        };
         
         log.debug(`updateServerConfig: Successfully resolved global variables for ${serverName}`);
       } catch (error) {
@@ -416,10 +464,21 @@ export class MCPService {
     }
 
     // Update the config with the new values (including resolved env variables)
-    let updatedConfig: MCPServerConfig = { ...config };
-    updatedConfig = {
+    if (!config) {
+      return { success: false, error: `Server ${serverName} not found` };
+    }
+    
+    // Create a new config object with the updates
+    const updatedConfig = {
       ...config,
-      ...updates,
+      // Apply all updates except env and disabled
+      ...Object.fromEntries(
+        Object.entries(updates).filter(([key]) => key !== 'env' && key !== 'disabled')
+      ),
+      // Use the resolved env variables directly if they exist
+      env: updates.env || config.env || {},
+      // Set disabled flag directly from updates if provided, otherwise keep existing value
+      disabled: updates.disabled ?? config.disabled,
     } as MCPServerConfig;
 
     // Find and update the config in the array
@@ -702,6 +761,77 @@ export class MCPService {
       log.error('getAvailableClients: Error getting available clients:', error);
       return [];
     }
+  }
+
+  /**
+   * Validate a server configuration
+   * @param config The configuration to validate
+   * @param isNewServer Whether this is a new server being created (requires all fields)
+   * @returns null if valid, error message if invalid
+   */
+  private validateServerConfig(config: Partial<MCPServerConfig>, isNewServer: boolean = false): string | null {
+    // For new servers or if name is provided, validate name
+    if (isNewServer || 'name' in config) {
+      if (!config.name) {
+        return 'Invalid server configuration: name is required';
+      }
+    }
+
+    // For new servers or if transport is provided, validate transport and its specific fields
+    if (isNewServer || 'transport' in config) {
+      if (!config.transport) {
+        return 'Invalid server configuration: transport is required';
+      }
+
+      if (config.transport === 'stdio') {
+        // Additional validation for stdio transport
+        const stdioConfig = config as Partial<MCPStdioConfig>;
+        if (isNewServer || 'command' in stdioConfig) {
+          if (!stdioConfig.command) {
+            return 'Invalid server configuration: command is required for stdio transport';
+          }
+        }
+        if (isNewServer || 'args' in stdioConfig) {
+          if (!Array.isArray(stdioConfig.args)) {
+            return 'Invalid server configuration: args must be an array for stdio transport';
+          }
+        }
+      } else if (config.transport === 'websocket') {
+        // Additional validation for websocket transport
+        const wsConfig = config as Partial<MCPWebSocketConfig>;
+        if (isNewServer || 'websocketUrl' in wsConfig) {
+          if (!wsConfig.websocketUrl) {
+            return 'Invalid server configuration: websocketUrl is required for websocket transport';
+          }
+        }
+      } else {
+        return `Invalid server configuration: unsupported transport type "${config.transport}"`;
+      }
+    }
+
+    // For new servers or if env is provided, validate env
+    if (isNewServer || 'env' in config) {
+      if (!config.env || typeof config.env !== 'object') {
+        return 'Invalid server configuration: env must be an object';
+      }
+    }
+
+    // For new servers or if autoApprove is provided, validate autoApprove
+    if (isNewServer || 'autoApprove' in config) {
+      if (!Array.isArray(config.autoApprove)) {
+        return 'Invalid server configuration: autoApprove must be an array';
+      }
+    }
+
+    // For new servers or if disabled is provided, validate disabled
+    if (isNewServer || 'disabled' in config) {
+      if (typeof config.disabled !== 'boolean') {
+        return 'Invalid server configuration: disabled must be a boolean';
+      }
+    }
+
+    // All validations passed
+    return null;
   }
 }
 

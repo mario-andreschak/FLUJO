@@ -1,7 +1,7 @@
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, EnvVarValue } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -28,12 +28,24 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
         _installCommand: ''
       };
       
+      // Ensure env is properly merged
+      const env = Object.fromEntries(
+        Object.entries({
+          ...defaults.env,
+          ...serverConfig.env
+        }).map(([key, val]) => [
+          key,
+          typeof val === 'string' ? val : (val as { value: string }).value
+        ])
+      );
+      
       if (transport === 'websocket') {
         // Create WebSocket config with defaults
         return {
           ...defaults,
           ...serverConfig,
           name, // Ensure name is set correctly
+          env, // Ensure env is preserved
           websocketUrl: serverConfig.websocketUrl || ''
         } as MCPWebSocketConfig;
       } else {
@@ -42,6 +54,7 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           ...defaults,
           ...serverConfig,
           name, // Ensure name is set correctly
+          env, // Ensure env is preserved
           command: serverConfig.command || '',
           args: serverConfig.args || [],
           stderr: serverConfig.stderr || 'pipe'
@@ -68,8 +81,20 @@ export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise
         // Remove the name property since it's used as the key
         const { name: _, ...configWithoutName } = config;
         
+        // Ensure env is preserved
+        const env = configWithoutName.env || {};
+        const processedEnv = Object.fromEntries(
+          Object.entries(env).map(([key, val]) => [
+            key,
+            typeof val === 'string' ? val : val.value
+          ])
+        );
+        
         // Return the entry with the server name as the key
-        return [name, configWithoutName];
+        return [name, {
+          ...configWithoutName,
+          env: processedEnv,
+        }];
       })
     );
 

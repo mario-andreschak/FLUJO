@@ -164,10 +164,10 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
     // Include stderr output if available for other MCP errors
     if (stderrOutput) {
-      return `MCP error ${error.code}: ${errorMessage}\n\nStderr output:\n${stderrOutput}`;
+      return `MCP error ${errorMessage}\n\nStderr output:\n${stderrOutput}`;
     }
 
-    return `MCP error ${error.code}: ${errorMessage}`;
+    return `MCP error ${errorMessage}`;
   }
 
   // Include stderr output if available for other errors

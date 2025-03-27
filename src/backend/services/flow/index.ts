@@ -17,7 +17,7 @@ const log = createLogger('backend/services/flow/index');
  * FlowService class provides a clean interface for flow-related operations
  * This is the core backend service that handles all flow operations
  */
-class FlowService {
+export class FlowService {
   private flowsCache: Flow[] | null = null;
 
   /**
@@ -181,8 +181,12 @@ class FlowService {
   createHistoryEntry(nodes: FlowNode[], edges: Edge[]): HistoryEntry {
     log.debug('Creating history entry', { nodeCount: nodes.length, edgeCount: edges.length });
     return {
-      nodes: [...nodes],
-      edges: [...edges]
+      nodes: nodes.map(node => ({
+        ...node,
+        position: { ...node.position },
+        data: { ...node.data, properties: { ...node.data.properties } }
+      })),
+      edges: edges.map(edge => ({ ...edge }))
     };
   }
 
