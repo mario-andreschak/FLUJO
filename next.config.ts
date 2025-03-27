@@ -87,7 +87,26 @@ const nextConfig: NextConfig = {
       asyncWebAssembly: true,
     };
     
+    // Add memory optimization for all builds
+    if (!dev) {
+      // Production optimizations
+      config.optimization.minimize = true;
+      
+      // Reduce chunk size for better memory usage
+      config.optimization.splitChunks.chunks = 'all';
+      config.optimization.splitChunks.minSize = 10000;
+      config.optimization.splitChunks.maxSize = 250000;
+    }
+    
     return config;
+  },
+  
+  // Enable page level memory optimization
+  onDemandEntries: {
+    // How long should we keep pages in memory
+    maxInactiveAge: 15 * 1000,
+    // Number of pages to keep in memory
+    pagesBufferLength: 2,
   },
 };
 

@@ -47,27 +47,24 @@ export async function decryptApiKey(encryptedValue: string, key?: string): Promi
   try {
     // Check if this is a global variable reference
     if (encryptedValue && encryptedValue.startsWith('${global:')) {
-      return encryptedValue; // Return as is, it will be resolved at runtime
+      return encryptedValue;
     }
     
     // Check if this is a failed encryption marker
     if (encryptedValue && encryptedValue.startsWith('encrypted_failed:')) {
-      // Return asterisks for security
       return '********';
     }
     
     const { decryptWithPassword } = await import('./secure');
     const result = await decryptWithPassword(encryptedValue, key);
     
-    if (result === null) {
-      // Return the encrypted value for UI display
+    if (!result) {
       return '********';
     }
     
     return result;
   } catch (error) {
     log.error('decryptApiKey: Failed to decrypt API key:', error);
-    // Return asterisks for security instead of the original encrypted value
     return '********';
   }
 }

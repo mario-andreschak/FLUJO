@@ -163,7 +163,27 @@ class ModelService {
         ...model
       };
       
-      updatedModel.ApiKey = await encryptApiKey(updatedModel.ApiKey);
+      // Encrypt the API key if it's not already encrypted
+      try {
+        if (!updatedModel.ApiKey.startsWith('encrypted:')) {
+          updatedModel.ApiKey = await encryptApiKey(updatedModel.ApiKey);
+          
+          // Check if encryption failed
+          if (updatedModel.ApiKey.startsWith('encrypted_failed:')) {
+            log.error('updateModel: Failed to encrypt API key');
+            return { 
+              success: false, 
+              error: 'Failed to encrypt API key'
+            };
+          }
+        }
+      } catch (error) {
+        log.error('updateModel: Error encrypting API key:', error);
+        return { 
+          success: false, 
+          error: error instanceof Error ? error.message : 'Failed to encrypt API key'
+        };
+      }
 
       // Update all the models
       const updatedModels = models.map(m => 

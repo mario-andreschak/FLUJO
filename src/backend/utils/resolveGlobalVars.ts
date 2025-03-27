@@ -73,9 +73,10 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
   }
   
   // Helper function to resolve a single string
-  const resolveString = async (str: string): Promise<string> => {
+  const resolveString = async (str: string, currentValue: unknown): Promise<string> => {
     // Use a regex that captures the entire pattern including the braces
-    const regex = /\$\{global:([^}]+)\}/g;
+    // Match both ${global:VAR} and ${VAR} patterns
+    const regex = /\$\{(?:global:)?([^}]+)\}/g;
     const matches = str.match(regex);
     
     // If no matches, return the original string
@@ -83,48 +84,74 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
     
     // Process each match
     let result = str;
+    let madeReplacement = false;  // Add this flag to track if we made any changes
+    
     for (const match of matches) {
       // Extract the variable key from the match
-      const globalVarKey = match.substring(9, match.length - 1);
+      const varKey = match.includes('global:') 
+        ? match.substring(9, match.length - 1)  // Remove ${global: and }
+        : match.substring(2, match.length - 1); // Remove ${ and }
       
-      if (globalEnvVars[globalVarKey] !== undefined) {
-        let value = globalEnvVars[globalVarKey];
+      // First try to resolve from the current environment variables
+      let resolved = false;
+      if (typeof currentValue === 'object' && currentValue !== null) {
+        const envVars = 'env' in currentValue 
+          ? currentValue.env as Record<string, string>
+          : currentValue as Record<string, string>;
         
-        // Check if the value is encrypted
-        if (value.startsWith('encrypted:')) {
-          log.debug(`Decrypting encrypted global variable: ${globalVarKey}`);
-          try {
-            // Extract the encrypted value (remove 'encrypted:' prefix)
-            const encryptedValue = value.substring(10);
-            // Decrypt the value
-            const decryptedValue = await decryptWithPassword(encryptedValue);
-            
-            if (decryptedValue) {
-              value = decryptedValue;
-              log.debug(`Successfully decrypted global variable: ${globalVarKey}`);
-            } else {
-              log.warn(`Failed to decrypt global variable: ${globalVarKey}`);
-              // Keep the original reference if decryption fails
-              continue;
-            }
-          } catch (error) {
-            log.error(`Error decrypting global variable: ${globalVarKey}`, error);
-            // Keep the original reference if decryption fails
-            continue;
-          }
-        } else if (value.startsWith('encrypted_failed:')) {
-          log.warn(`Skipping failed encrypted global variable: ${globalVarKey}`);
-          // Keep the original reference for failed encryptions
-          continue;
+        if (varKey in envVars) {
+          const envValue = envVars[varKey];
+          const resolvedValue = await resolveString(envValue, envVars);
+          result = result.replace(match, resolvedValue);
+          resolved = true;
+          madeReplacement = true;  // Set flag when we make a replacement
+          log.debug(`Resolved environment variable: ${varKey} = ${resolvedValue}`);
         }
-        
-        log.debug(`Resolved global variable: ${globalVarKey}`);
-        // Replace the match with the resolved value
-        result = result.replace(match, value);
-      } else {
-        log.warn(`Global variable not found: ${globalVarKey}`);
-        // Keep original if not found (no replacement needed)
       }
+      
+      // If not resolved from env, try global variables
+      if (!resolved) {
+        const globalValue = globalEnvVars[varKey];
+        if (globalValue !== undefined) {
+          if (globalValue.startsWith('encrypted:')) {
+            log.debug(`Decrypting encrypted global variable: ${varKey}`);
+            try {
+              // Extract the encrypted value (remove 'encrypted:' prefix)
+              const encryptedValue = globalValue.substring(10);
+              // Decrypt the value
+              const decryptedValue = await decryptWithPassword(encryptedValue);
+              
+              if (decryptedValue) {
+                result = result.replace(match, decryptedValue);
+                madeReplacement = true;  // Set flag when we make a replacement
+                log.debug(`Successfully decrypted global variable: ${varKey}`);
+              } else {
+                log.warn(`Failed to decrypt global variable: ${varKey}`);
+                // Keep the original reference if decryption fails
+              }
+            } catch (error) {
+              log.error(`Error decrypting global variable: ${varKey}`, error);
+              // Keep the original reference if decryption fails
+            }
+          } else if (globalValue.startsWith('encrypted_failed:')) {
+            log.warn(`Skipping failed encrypted global variable: ${varKey}`);
+            // Keep the original reference for failed encryptions
+          } else {
+            result = result.replace(match, globalValue);
+            madeReplacement = true;  // Set flag when we make a replacement
+            log.debug(`Resolved global variable: ${varKey}`);
+          }
+        } else {
+          log.warn(`Variable not found: ${varKey}`);
+          // Keep original if not found (no replacement needed)
+        }
+      }
+    }
+    
+    // Only recursively resolve if we actually made replacements
+    const remainingMatches = result.match(regex);
+    if (remainingMatches && madeReplacement) {
+      result = await resolveString(result, currentValue);
     }
     
     return result;
@@ -133,7 +160,7 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
   // Recursively process the value
   const processValue = async (val: unknown): Promise<unknown> => {
     if (typeof val === 'string') {
-      return await resolveString(val);
+      return await resolveString(val, value);
     } else if (Array.isArray(val)) {
       return await Promise.all(val.map(item => processValue(item)));
     } else if (val !== null && typeof val === 'object') {

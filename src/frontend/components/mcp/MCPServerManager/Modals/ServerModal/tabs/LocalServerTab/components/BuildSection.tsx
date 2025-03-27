@@ -1,8 +1,9 @@
-'use client';
+"use client";
 
-import React from 'react';
-import BuildTools from '../BuildTools';
-import SectionHeader from './SectionHeader';
+import React from "react";
+import BuildTools from "../BuildTools";
+import SectionHeader from "./SectionHeader";
+import { MessageState } from "../../../types";
 
 interface BuildSectionProps {
   installCommand: string;
@@ -17,6 +18,7 @@ interface BuildSectionProps {
   buildCompleted: boolean;
   isExpanded: boolean;
   toggleSection: () => void;
+  buildMessage?: MessageState | null;
 }
 
 const BuildSection: React.FC<BuildSectionProps> = ({
@@ -31,33 +33,41 @@ const BuildSection: React.FC<BuildSectionProps> = ({
   installCompleted,
   buildCompleted,
   isExpanded,
-  toggleSection
+  toggleSection,
+  buildMessage = null,
 }) => {
   // Determine section status based on build/install state
   const getSectionStatus = () => {
     if (installCompleted && buildCompleted) {
-      return 'success';
+      return "success";
     } else if (installCompleted || buildCompleted) {
-      return 'warning';
+      return "warning";
     } else if (isInstalling || isBuilding) {
-      return 'loading';
+      return "loading";
     }
-    return 'default';
+    return "default";
   };
 
   return (
-    <div className={`bg-gray-50 dark:bg-gray-800 border rounded-lg p-4 mb-6 
-      ${installCompleted && buildCompleted ? 'border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20' : 
-        (installCompleted || buildCompleted) ? 'border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20' : 
-        (isInstalling || isBuilding) ? 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20' :
-        'border-gray-200 dark:border-gray-700'}`}>
+    <div
+      className={`bg-gray-50 dark:bg-gray-800 border rounded-lg p-4 mb-6 
+      ${
+        installCompleted && buildCompleted
+          ? "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20"
+          : installCompleted || buildCompleted
+          ? "border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20"
+          : isInstalling || isBuilding
+          ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20"
+          : "border-gray-200 dark:border-gray-700"
+      }`}
+    >
       <SectionHeader
         title="Second, install and build"
         isExpanded={isExpanded}
         onToggle={toggleSection}
         status={getSectionStatus()}
       />
-      
+
       {isExpanded && (
         <BuildTools
           installCommand={installCommand}
@@ -70,6 +80,7 @@ const BuildSection: React.FC<BuildSectionProps> = ({
           isBuilding={isBuilding}
           installCompleted={installCompleted}
           buildCompleted={buildCompleted}
+          buildMessage={buildMessage}
         />
       )}
     </div>

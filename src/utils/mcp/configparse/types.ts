@@ -1,19 +1,19 @@
-'use client';
+"use client";
 
-import { MessageState } from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/types';
-import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { MessageState } from "@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/types";
+import { MCPServerConfig, EnvVarValue } from "@/shared/types/mcp/mcp";
 
 /**
  * Result of parsing configuration from a repository
  */
 export interface ConfigParseResult {
   detected: boolean;
-  language?: 'typescript' | 'python' | 'java' | 'kotlin' | 'unknown';
+  language?: "typescript" | "python" | "java" | "kotlin" | "unknown";
   installCommand?: string;
   buildCommand?: string;
   runCommand?: string;
   args?: string[];
-  env?: Record<string, string>;
+  env?: Record<string, EnvVarValue>;
   message?: MessageState;
   config?: Partial<MCPServerConfig>;
 }

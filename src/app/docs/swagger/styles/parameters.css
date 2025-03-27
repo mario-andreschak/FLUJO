@@ -1,0 +1,102 @@
+/* Reset approach: Hide everything related to required indicators */
+.swagger-ui .parameter__name.required:before,
+.swagger-ui .parameter__name.required:after,
+.swagger-ui .parameter__name.required span,
+.swagger-ui .parameter__name.required em,
+.swagger-ui .parameter-label span {
+  display: none !important;
+  content: "" !important;
+}
+
+/* Create our own clean required indicator */
+.swagger-ui .parameter__name.required {
+  position: relative !important;
+  padding-left: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+}
+
+/* Use ::after pseudo element for our single asterisk */
+.swagger-ui .parameter__name.required::after {
+  content: " *" !important;
+  display: inline !important;
+  color: #ff4d4f !important;
+  font-weight: bold !important;
+  margin-left: 3px !important;
+  line-height: 1 !important;
+  font-size: 16px !important;
+}
+
+/* Ensure no span or other elements inside can add more asterisks */
+.swagger-ui table.parameters-table .parameter__name *,
+.swagger-ui .opblock-description-wrapper .parameter__name * {
+  display: none !important;
+}
+
+/* Improve parameter row visual hierarchy */
+.swagger-ui .parameters-col_description {
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+}
+
+/* Hide all parameter__name asterisks completely */
+.swagger-ui .parameter__name > span {
+  display: none !important;
+}
+
+/* Hide all parameter__name direct content */
+.swagger-ui .parameter__name > *:not(text) {
+  display: none !important;
+}
+
+/* Handle asterisks in parameter labels specifically */
+.swagger-ui .parameter-label {
+  position: relative;
+}
+
+/* Hide all spans inside parameter labels */
+.swagger-ui .parameter-label > span {
+  display: none !important;
+}
+
+/* Fix text field alignment and styling in parameters */
+.swagger-ui .parameters-col_description input[type="text"] {
+  width: 100% !important;
+  max-width: 350px !important;
+  height: 36px !important;
+  padding: 8px 12px !important;
+  border-radius: 4px !important;
+  font-size: 14px !important;
+}
+
+/* Fix the text area in parameters */
+.swagger-ui .parameters-col_description textarea {
+  width: 100% !important;
+  min-height: 120px !important;
+  padding: 8px 12px !important;
+  border-radius: 4px !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+/* Parameters section */
+.swagger-ui .parameters-container {
+  margin-bottom: 15px;
+  border-radius: 4px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.swagger-ui .parameter__name {
+  vertical-align: middle;
+  margin-right: 0.5em;
+}
+
+.swagger-ui .parameter__type {
+  font-weight: 400;
+}
+
+.swagger-ui .parameter__in {
+  font-size: 12px;
+} 

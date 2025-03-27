@@ -1,0 +1,201 @@
+/* Schema section improvements */
+.swagger-ui .model-container {
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(200, 200, 200, 0.8);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  margin: 10px 0;
+}
+
+.swagger-ui .model-title {
+  font-weight: 600;
+  font-size: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(200, 200, 200, 0.8);
+  margin-bottom: 12px;
+}
+
+.swagger-ui .model {
+  margin-bottom: 12px;
+}
+
+.swagger-ui .property {
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.swagger-ui .property-primitive {
+  font-weight: 500;
+}
+
+/* Improve schema tables */
+.swagger-ui table.model {
+  width: 100%;
+  margin: 10px 0;
+}
+
+.swagger-ui table.model tr.property-row td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(230, 230, 230, 0.8);
+}
+
+/* Fix schema rendering */
+.swagger-ui .model-box {
+  border: 1px solid rgba(220, 220, 220, 0.8);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 10px 0;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Better model property styling */
+.swagger-ui .model .property {
+  padding: 5px 0;
+  font-size: 14px;
+}
+
+/* Better schema section styling */
+.swagger-ui section.models {
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  margin-top: 20px;
+}
+
+.swagger-ui section.models h4 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 0;
+  margin-bottom: 15px;
+}
+
+/* Fix type display */
+.swagger-ui .model .property .property-type {
+  font-weight: 500;
+}
+
+/* Better schema styling */
+.swagger-ui .model-box {
+  padding: 15px;
+  margin-top: 10px;
+}
+
+.swagger-ui section.models {
+  padding: 20px;
+  border-radius: 8px;
+  margin-top: 20px;
+}
+
+.swagger-ui .model-title {
+  font-weight: 600;
+}
+
+/* Fix positioning for code block action buttons */
+.swagger-ui .curl-command-container,
+.swagger-ui .response-body-container,
+.swagger-ui .response-headers-container,
+.swagger-ui .request-url-container {
+  position: relative !important;
+  padding-top: 0 !important; /* Remove top padding */
+}
+
+/* Style for header/label above code blocks */
+.swagger-ui .curl-command h5, 
+.swagger-ui .response-body h5,
+.swagger-ui .response-headers h5,
+.swagger-ui .request-url h5 {
+  position: relative !important;
+  margin: 0 !important;
+  padding: 8px 15px !important;
+  z-index: 1 !important; /* Ensure it stays above code */
+}
+
+/* Code block itself needs space for buttons */
+.swagger-ui pre.microlight,
+.swagger-ui pre.curl-command {
+  position: relative !important;
+  padding: 16px !important;
+  margin: 0 !important;
+  width: 100% !important;
+}
+
+/* Position the buttons container properly */
+.swagger-ui .response-content-type, 
+.swagger-ui .request-url-container,
+.swagger-ui .curl-command-container {
+  position: relative !important;
+  width: 100% !important;
+}
+
+/* Fix the copy button position */
+.swagger-ui .copy-to-clipboard {
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  width: 30px !important;
+  height: 30px !important;
+  background-color: rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid rgba(0, 0, 0, 0.2) !important;
+  border-radius: 4px !important;
+  z-index: 10 !important;
+}
+
+/* Fix the download button position */
+.swagger-ui .download-contents {
+  position: absolute !important;
+  top: 10px !important;
+  right: 50px !important; /* Position to the left of copy button */
+  padding: 5px 10px !important;
+  background-color: rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid rgba(0, 0, 0, 0.2) !important;
+  border-radius: 4px !important;
+  z-index: 10 !important;
+}
+
+/* Make icons/text visible in both modes */
+.swagger-ui .copy-to-clipboard svg {
+  fill: rgba(0, 0, 0, 0.8) !important;
+}
+
+.swagger-ui .download-contents {
+  color: rgba(0, 0, 0, 0.8) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+/* Dark mode adjustments */
+.swagger-dark-theme .swagger-ui .copy-to-clipboard,
+.swagger-dark-theme .swagger-ui .download-contents {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.swagger-dark-theme .swagger-ui .copy-to-clipboard svg {
+  fill: rgba(255, 255, 255, 0.9) !important;
+}
+
+.swagger-dark-theme .swagger-ui .download-contents {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Fix container sizes and positions */
+.swagger-ui .opblock-body .opblock-section .highlight-code {
+  position: relative !important;
+  width: 100% !important;
+}
+
+/* Ensure code blocks display properly */
+.swagger-ui pre {
+  display: block !important;
+  width: 100% !important;
+  margin: 0 !important;
+  overflow-x: auto !important;
+}
+
+/* Fix button centering */
+.swagger-ui .copy-to-clipboard,
+.swagger-ui .download-contents {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+} 

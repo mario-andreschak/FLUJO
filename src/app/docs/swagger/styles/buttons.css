@@ -1,0 +1,138 @@
+/* Improve "Try it out" button visibility */
+.swagger-ui .try-out__btn {
+  min-width: 120px !important;
+  height: 40px !important;
+  padding: 8px 16px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background-color: #2196f3 !important; 
+  color: white !important;
+  border: none !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+  border-radius: 0 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+/* Hover effect for Try it out button */
+.swagger-ui .try-out__btn:hover {
+  background-color: #1976d2 !important;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.3) !important;
+}
+
+/* Fix the container for the Try it out button */
+.swagger-ui .try-out {
+  padding: 15px 20px !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+}
+
+/* Improve execute button */
+.swagger-ui .btn.execute {
+  min-width: 120px !important;
+  height: 40px !important;
+  padding: 8px 16px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: none !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+  transition: all 0.2s !important;
+}
+
+.swagger-ui .btn.execute:hover {
+  box-shadow: 0 3px 6px rgba(0,0,0,0.3) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Improve Cancel button */
+.swagger-ui .btn.cancel {
+  min-width: 120px !important;
+  width: auto !important;
+  max-width: 120px !important;
+  height: 40px !important;
+  padding: 8px 16px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: none !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+  transition: all 0.2s !important;
+}
+
+.swagger-ui .btn.cancel:hover {
+  box-shadow: 0 3px 6px rgba(0,0,0,0.3) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Fix Clear button size and position it next to Execute */
+.swagger-ui .btn.clear {
+  min-width: 120px !important;
+  width: auto !important;
+  max-width: 120px !important;
+  height: 40px !important;
+  padding: 8px 16px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
+  border-radius: 0 !important;
+  margin-left: 15px !important;
+}
+
+/* Hover effect for Clear button */
+.swagger-ui .btn.clear:hover {
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Fix the container for Execute and Clear buttons */
+.swagger-ui .execute-wrapper {
+  display: flex !important;
+  justify-content: flex-start !important; /* Left-align to accommodate both buttons */
+  gap: 15px !important; /* Space between buttons */
+  padding: 20px !important;
+  flex-wrap: nowrap !important;
+  width: auto !important;
+  max-width: none !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Hide any unnecessary container width */
+.swagger-ui .execute-wrapper .btn-group {
+  width: auto !important;
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: 10px !important;
+}
+
+/* Improve button group layout when both buttons appear */
+.swagger-ui .btn-group {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 15px !important;
+  width: 100% !important;
+}
+
+/* Fix the Authorize button */
+.swagger-ui .btn.authorize {
+  border-radius: 4px;
+  font-weight: 600;
+  padding: 6px 12px;
+  font-size: 13px;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+} 

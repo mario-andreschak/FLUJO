@@ -108,6 +108,8 @@ export interface FlowExecutionResponse extends FlowServiceResponse {
   result?: string | ErrorResult | SuccessResult | MessageResult;
   messages: OpenAI.ChatCompletionMessageParam[];
   executionTime: number;
+  executionId?: string;
+  nodeCount?: number;
   nodeExecutionTracker: NodeExecutionTrackerEntry[];
   // Additional properties used in chatCompletionService
   retryAttempts?: number;

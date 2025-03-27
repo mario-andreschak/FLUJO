@@ -1,14 +1,15 @@
 # DISCLAIMER
+
 ====> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <====
 
-For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
+For _anything_ that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
 -> Create a Github Issue or write on Discord (https://discord.gg/bW7amT5j) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
 Here's a video guiding you through the whole thing - from installation to output! (15min)
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
- 
 
 # IMPORTANT SECURITY NOTE
+
 FLUJO has currently EXTENSIVE logging enabled by default! This **will expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
 
 ![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
@@ -63,12 +64,12 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **Model Integration**: Connect different models in your workflow
 - **Tool Management**: Allow or restrict specific tools for each model
 - **Prompt Design**: Configure system prompts at multiple levels (Model, Flow, Node)
-![image](https://github.com/user-attachments/assets/36d417ca-a0e6-4f87-90cb-b17a70641372)
-![Flow Design](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
-![Flow Configuration](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
-![System Prompts](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
-![Tool References](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
-![Screenshot 2025-03-08 223218](https://github.com/user-attachments/assets/922b9368-c0b6-4a06-b500-c8d71506173a)
+  ![image](https://github.com/user-attachments/assets/36d417ca-a0e6-4f87-90cb-b17a70641372)
+  ![Flow Design](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
+  ![Flow Configuration](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
+  ![System Prompts](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
+  ![Tool References](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
+  ![Screenshot 2025-03-08 223218](https://github.com/user-attachments/assets/922b9368-c0b6-4a06-b500-c8d71506173a)
 
 ### 💬 Chat Interface
 
@@ -95,12 +96,17 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **System Tray**: Minimize to system tray for quick access
 - **Network Mode**: Configure the application to be accessible from other devices
 - **Dual-Mode Operation**: Use as a desktop app or headless server on edge devices
+- **Headless API Server**: Run FLUJO as an API server without the GUI for integration with other tools or services
+- **Interactive API Documentation**: Access comprehensive API documentation with Swagger UI
 
 ## 🚀 Getting Started
+
 ### Electron Bundle
+
 - Download the Setup.exe here: https://github.com/mario-andreschak/FLUJO/releases/tag/preview
 
 ### Manual installation:
+
 ### Prerequisites
 
 - Node.js (v18 or higher)
@@ -109,12 +115,14 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 ### Installation
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/mario-andreschak/FLUJO.git
    cd FLUJO
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    # or
@@ -122,6 +130,7 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
    ```
 
 3. Start the development server:
+
    ```bash
    npm run dev
    # or
@@ -132,8 +141,8 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
    ```
    http://localhost:4200
    ```
-   
 5. FLUJO feels and works best if you run it compiled:
+
    ```bash
    npm run build
    npm start
@@ -187,6 +196,16 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 4. Minimize to system tray by closing the window (the application will continue running)
 5. Access the application from the system tray icon
 
+### Using Headless Mode
+
+1. Start FLUJO in headless mode with `npm run headless`
+2. For API documentation, use `npm run headless-docs`
+3. Access the API endpoints:
+   - OpenAI-compatible: `http://localhost:4200/v1/chat/completions`
+   - Native FLUJO API: `http://localhost:4200/api/flow/execute/{flowName}`
+4. View interactive API documentation at `http://localhost:4200/docs/swagger`
+5. For more details, see the [Headless Mode Documentation](docs/headless-mode.md)
+
 ## 🔄 MCP Integration
 
 FLUJO provides comprehensive support for the Model Context Protocol (MCP), allowing you to:
@@ -200,7 +219,9 @@ FLUJO provides comprehensive support for the Model Context Protocol (MCP), allow
 ## 📄 License
 
 FLUJO is licensed under the [MIT License](LICENSE).
+
 ## 🚀 Roadmap
+
 Here's a roadmap of upcoming features and improvements:
 
 - Real-time Voice Feature: Adding support for Whisper.js or OpenWhisper to enable real-time voice capabilities.
@@ -228,10 +249,12 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 - GitHub: [mario-andreschak](https://github.com/mario-andreschak)
 
 ## Notes:
+
 - You can add ~FLUJO=HTML, ~FLUJO=MARKDOWN, ~FLUJO=JSON, ~FLUJO=TEXT in your message to format the response, this will give varying results in different tools where you integrate FLUJO.
 - You can add ~FLUJOEXPAND=1 or ~FLUJODEBUG=1 somewhere in your message to show more details
 - in config/features.ts you can change the Logging-level for the whole application
 - in config/features.ts you can enable SSE support which is currently disabled by default
+
 ---
 
 FLUJO - Empowering your AI workflows with open-source orchestration.

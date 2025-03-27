@@ -1,0 +1,396 @@
+/* Prevent vertical path display during loading */
+.swagger-ui .opblock-summary-path,
+.swagger-ui .opblock-summary-path a {
+  display: inline-block !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 800px !important;
+  word-break: normal !important;
+  word-wrap: normal !important;
+  vertical-align: middle !important;
+}
+
+/* Hide paths until properly rendered */
+.swagger-ui .opblock-summary-path:empty {
+  opacity: 0;
+}
+
+/* Fix focus outlines */
+.swagger-ui .opblock:focus,
+.swagger-ui .opblock:focus-within,
+.swagger-ui .opblock-summary:focus,
+.swagger-ui .opblock-summary:focus-within,
+.swagger-ui .opblock-summary-control:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Fix animation during opening */
+.swagger-ui .opblock-body {
+  will-change: height;
+}
+
+/* Fix corners where blue outline appears */
+.swagger-ui .opblock {
+  overflow: hidden;
+  border-radius: 8px !important;
+  margin: 0 0 20px 0 !important;
+  border: 1px solid #e8e8e8 !important;
+}
+
+/* Fix the curved edges causing visual issues */
+.swagger-ui .opblock .opblock-summary {
+  border-radius: 0 !important;
+  padding: 15px 20px !important;
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+/* Fix the expand/collapse icon positioning and style */
+.swagger-ui .opblock-summary-control button.expand-operation {
+  position: absolute !important;
+  right: 15px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  padding: 5px !important;
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 4px !important;
+  background-color: rgba(0, 0, 0, 0.05) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: none !important;
+  transition: background-color 0.2s ease, transform 0.2s ease !important;
+}
+
+.swagger-ui .opblock-summary-control button.expand-operation:hover {
+  background-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+.swagger-ui .opblock-summary-control button.expand-operation svg {
+  width: 16px !important;
+  height: 16px !important;
+  fill: #666 !important;
+  transition: fill 0.2s ease !important;
+}
+
+.swagger-ui .opblock-summary-control button.expand-operation:hover svg {
+  fill: #333 !important;
+}
+
+/* Styling for category collapse icons */
+.swagger-ui .opblock-tag button {
+  background-color: transparent !important;
+  border: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.swagger-ui .opblock-tag button svg {
+  width: 16px !important;
+  height: 16px !important;
+  fill: #666 !important;
+}
+
+/* Dark mode styling for all SVG icons */
+.swagger-dark-theme .swagger-ui svg {
+  fill: #e0e0e0 !important;
+}
+
+/* Dark mode styling for expand/collapse icons */
+.swagger-dark-theme .swagger-ui .opblock-summary-control button.expand-operation {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.swagger-dark-theme .swagger-ui .opblock-summary-control button.expand-operation:hover {
+  background-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+.swagger-dark-theme .swagger-ui .opblock-summary-control button.expand-operation svg {
+  fill: #e0e0e0 !important; /* Much lighter color for dark mode */
+}
+
+.swagger-dark-theme .swagger-ui .opblock-summary-control button.expand-operation:hover svg {
+  fill: #ffffff !important;
+}
+
+/* Fix category and navbar collapse/expand buttons in dark mode */
+.swagger-dark-theme .swagger-ui .opblock-tag button svg,
+.swagger-dark-theme .swagger-ui .arrow,
+.swagger-dark-theme .swagger-ui button.expand-operation svg,
+.swagger-dark-theme .swagger-ui .expand-methods svg,
+.swagger-dark-theme .swagger-ui .expand-operation svg,
+.swagger-dark-theme .swagger-ui button svg {
+  fill: #e0e0e0 !important;
+}
+
+/* Fix copy button in dark mode */
+.swagger-dark-theme .swagger-ui .copy-to-clipboard {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.swagger-dark-theme .swagger-ui .copy-to-clipboard svg {
+  fill: #e0e0e0 !important;
+}
+
+.swagger-dark-theme .swagger-ui .copy-to-clipboard:hover {
+  background-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+.swagger-dark-theme .swagger-ui .copy-to-clipboard:hover svg {
+  fill: #ffffff !important;
+}
+
+/* Add proper spacing to parameters */
+.swagger-ui tr.parameters {
+  border-spacing: 0 8px !important;
+}
+
+/* Fix sidebar scrolling issue */
+.swagger-ui .wrapper {
+  padding: 0 !important;
+  max-width: none !important;
+}
+
+/* Make the sidebar sticky and not scroll away */
+.swagger-ui .opblock-tag-section {
+  position: relative !important;
+  margin-bottom: 4px !important;
+}
+
+/* Add spacing between API categories */
+.swagger-ui .opblock-tag-section {
+  margin-bottom: 35px !important;
+}
+
+.swagger-ui .opblock-tag {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 10 !important;
+  margin: 0 !important;
+  padding: 15px 20px !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
+  background-color: #f8f9fa !important;
+  border-radius: 8px 8px 0 0 !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Make schema titles more visible */
+.swagger-ui .schemas-title {
+  font-weight: 600;
+  font-size: 20px;
+  margin: 20px 0 10px;
+}
+
+/* Method badges for better visibility */
+.swagger-ui .opblock-summary-method {
+  border-radius: 4px !important;
+  min-width: 80px;
+  text-align: center;
+  font-weight: bold;
+  padding: 6px 0;
+}
+
+/* Fix API path spacing */
+.swagger-ui .opblock-summary-path {
+  display: inline-block !important;
+  font-size: 13px !important;
+  font-family: monospace !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  padding: 6px 12px !important;
+  letter-spacing: 0.3px !important;
+  border-radius: 4px !important;
+  margin-right: 40px !important;
+}
+
+/* Hide the info section since we have our own header */
+.swagger-ui .info {
+  display: none !important;
+}
+
+/* Fix scroll behavior on the whole page */
+.swagger-ui {
+  overflow-x: hidden !important;
+}
+
+/* Fix mobile display */
+@media (max-width: 768px) {
+  .swagger-ui .opblock-summary-path {
+    max-width: 200px !important;
+  }
+}
+
+/* Improve spacing for operation blocks */
+.swagger-ui .opblock {
+  margin-bottom: 10px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12) !important;
+}
+
+/* Fix the operation title wrapping */
+.swagger-ui .opblock-summary-description {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  flex: 1 !important;
+  margin-right: 40px !important;
+}
+
+/* Add visual container around each category */
+.swagger-ui .opblock-tag-section > div:nth-child(2) {
+  border: 1px solid #e8e8e8 !important;
+  border-top: none !important;
+  border-radius: 0 0 8px 8px !important;
+  padding: 10px !important;
+  background-color: #ffffff !important;
+}
+
+/* Add spacing after the last endpoint in a category */
+.swagger-ui .opblock-tag-section .opblock:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* Dark mode support for categories */
+.swagger-dark-theme .swagger-ui .opblock-tag {
+  background-color: #2d3748 !important;
+  border-color: #4a5568 !important;
+}
+
+.swagger-dark-theme .swagger-ui .opblock-tag-section > div:nth-child(2) {
+  border-color: #4a5568 !important;
+  background-color: #1a202c !important;
+}
+
+/* Fix the copy button positioning */
+.swagger-ui .opblock-summary-control {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+/* Position the copy button next to the route */
+.swagger-ui .opblock-summary-path-wrapper {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  flex: 1 !important;
+  max-width: calc(100% - 50px) !important;
+}
+
+/* Fix the copy button for paths - make it more visible in light mode */
+.swagger-ui .opblock-summary .view-line-link {
+  position: relative !important;
+  margin-left: 8px !important;
+  width: 30px !important;
+  height: 30px !important;
+  background-color: rgba(0, 0, 0, 0.15) !important; /* Darker background */
+  border-radius: 4px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(0, 0, 0, 0.2) !important; /* Darker border */
+}
+
+/* Make copy button icon much darker in light mode */
+.swagger-ui .opblock-summary .view-line-link svg {
+  fill: rgba(0, 0, 0, 0.8) !important; /* Much darker icon */
+}
+
+/* Enhance hover effect */
+.swagger-ui .opblock-summary .view-line-link:hover {
+  background-color: rgba(0, 0, 0, 0.25) !important;
+}
+
+/* Fix the expand/collapse arrow positioning */
+.swagger-ui .opblock-summary-control button.expand-operation {
+  margin-left: 8px !important;
+  position: static !important;
+  transform: none !important;
+}
+
+/* Ensure the route text and buttons are properly arranged */
+.swagger-ui .opblock-summary {
+  display: flex !important;
+  align-items: center !important;
+  padding: 10px 20px !important;
+}
+
+/* Prevent the entire row from changing on hover */
+.swagger-ui .opblock-summary:hover {
+  background-color: transparent !important;
+}
+
+/* Method badge (POST, GET, etc.) */
+.swagger-ui .opblock-summary-method {
+  margin-right: 15px !important;
+  flex-shrink: 0 !important;
+}
+
+/* Path container with copy button */
+.swagger-ui .opblock-summary-path-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  flex: 1 !important;
+  margin-right: 15px !important;
+}
+
+/* Path text */
+.swagger-ui .opblock-summary-path {
+  margin-right: 0 !important;
+}
+
+/* Description text */
+.swagger-ui .opblock-summary-description {
+  flex: 1 !important;
+}
+
+/* Expand/collapse button */
+.swagger-ui .opblock-summary-control {
+  flex-shrink: 0 !important;
+  margin-left: auto !important;
+}
+
+/* Fix hover behaviors */
+.swagger-ui .opblock-summary:hover {
+  background-color: transparent !important;
+}
+
+.swagger-dark-theme .swagger-ui .opblock-summary .view-line-link {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.swagger-dark-theme .swagger-ui .opblock-summary .view-line-link:hover {
+  background-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+/* Dark mode adjustments */
+.swagger-dark-theme .swagger-ui .opblock-summary .view-line-link svg {
+  fill: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Position copy button DIRECTLY after path text */
+.swagger-ui .opblock-summary-path-wrapper .view-line-link {
+  margin-left: 8px !important;
+  position: static !important;
+  background-color: rgba(0, 0, 0, 0.15) !important;
+  border-radius: 4px !important;
+  border: 1px solid rgba(0, 0, 0, 0.2) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  width: 30px !important;
+  height: 30px !important;
+}
+
+/* Make copy button icon darker in light mode */
+.swagger-ui .view-line-link svg {
+  fill: rgba(0, 0, 0, 0.8) !important;
+} 

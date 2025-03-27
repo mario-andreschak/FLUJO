@@ -71,10 +71,9 @@ function generateRandomDEK(): CryptoJS.lib.WordArray {
 export async function initializeDefaultEncryption(): Promise<boolean> {
   log.debug('initializeDefaultEncryption: Entering method');
   try {
-    // Check if encryption is already initialized
-    const isInitialized = await isEncryptionInitialized();
-    if (isInitialized) {
-      // Already initialized, no need to do it again
+    // Load metadata directly instead of using isEncryptionInitialized
+    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
+    if (metadata) {
       return true;
     }
     
@@ -102,16 +101,16 @@ export async function initializeDefaultEncryption(): Promise<boolean> {
     const fixedSalt = CryptoJS.enc.Utf8.parse("flujo_fixed_salt_v1");
     
     // Store the encrypted DEK and metadata
-    const metadata: EncryptionMetadata = {
+    const newMetadata: EncryptionMetadata = {
       [DEK_KEY]: encryptedDEK.toString(),
       [DEK_IV]: iv.toString(),
       [DEK_SALT]: fixedSalt.toString(),
-      [DEK_VERSION]: 1, // Initial version
+      [DEK_VERSION]: 1,
       [ENCRYPTION_TYPE]: EncryptionType.DEFAULT
     };
     
     // Save the encryption metadata
-    await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
+    await saveItem(StorageKey.ENCRYPTION_KEY, newMetadata);
     
     return true;
   } catch (error) {
@@ -194,15 +193,8 @@ async function getDefaultDEK(): Promise<CryptoJS.lib.WordArray | null> {
     // Load the encryption metadata
     const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
     if (!metadata) {
-      // No encryption metadata found, initialize default encryption
-      const initialized = await initializeDefaultEncryption();
-      if (!initialized) {
-        log.error('getDefaultDEK: Failed to initialize default encryption');
-        return null;
-      }
-      
-      // Try again after initialization
-      return await getDefaultDEK();
+      log.error('getDefaultDEK: No encryption metadata found');
+      return null;
     }
     
     // Check if we're using default encryption
@@ -480,73 +472,30 @@ async function getDEK(passwordOrToken?: string, isToken: boolean = false): Promi
       if (dekString) {
         return CryptoJS.enc.Hex.parse(dekString);
       }
-      log.warn('getDEK: Invalid or expired session token, falling back to default encryption');
+      log.warn('getDEK: Invalid or expired session token');
+      return null;
     }
     
     // Load the encryption metadata
     const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
     if (!metadata) {
-      // No encryption metadata found, initialize default encryption
-      log.info('getDEK: No encryption metadata found, initializing default encryption');
-      const initialized = await initializeDefaultEncryption();
-      if (!initialized) {
-        log.error('getDEK: Failed to initialize default encryption');
+      log.error('getDEK: No encryption metadata found');
+      return null;
+    }
+    
+    // If using user encryption, require a password
+    if (metadata[ENCRYPTION_TYPE] === EncryptionType.USER) {
+      if (!passwordOrToken || isToken) {
+        log.error('getDEK: Password required for user encryption');
         return null;
       }
-      
-      // Try again after initialization
-      return await getDEK(passwordOrToken, isToken);
+      return await getUserDEK(passwordOrToken);
     }
     
-    // Check the encryption type
-    if (metadata[ENCRYPTION_TYPE] === EncryptionType.USER) {
-      // User encryption requires a password
-      if (!passwordOrToken || isToken) {
-        log.warn('getDEK: Password required for user encryption but not provided, falling back to default encryption');
-        // Instead of failing, try to initialize default encryption and use that
-        const defaultDEK = await getDefaultDEK();
-        if (defaultDEK) {
-          return defaultDEK;
-        }
-        
-        // If default DEK fails, try to initialize it
-        const initialized = await initializeDefaultEncryption();
-        if (!initialized) {
-          log.error('getDEK: Failed to initialize default encryption as fallback');
-          return null;
-        }
-        
-        // Try to get the default DEK again
-        return await getDefaultDEK();
-      }
-      
-      // Try to get the user DEK
-      const userDEK = await getUserDEK(passwordOrToken);
-      if (userDEK) {
-        return userDEK;
-      }
-      
-      // If user DEK fails, fall back to default encryption
-      log.warn('getDEK: Failed to get user DEK, falling back to default encryption');
-      return await getDefaultDEK();
-    } else {
-      // Default encryption
-      return await getDefaultDEK();
-    }
+    // Otherwise use default encryption
+    return await getDefaultDEK();
   } catch (error) {
     log.error('getDEK: Failed to get DEK:', error);
-    
-    // Try to initialize default encryption as a last resort
-    try {
-      log.warn('getDEK: Attempting to initialize default encryption as error recovery');
-      const initialized = await initializeDefaultEncryption();
-      if (initialized) {
-        return await getDefaultDEK();
-      }
-    } catch (fallbackError) {
-      log.error('getDEK: Failed to initialize default encryption as error recovery:', fallbackError);
-    }
-    
     return null;
   }
 }
@@ -711,4 +660,19 @@ export async function getEncryptionType(): Promise<EncryptionType | null> {
   }
   
   return metadata[ENCRYPTION_TYPE] || EncryptionType.DEFAULT;
+}
+
+/**
+ * Get encryption metadata
+ * Returns the encryption metadata stored in the system
+ */
+export async function getEncryptionMetadata(): Promise<EncryptionMetadata | null> {
+  log.debug('getEncryptionMetadata: Entering method');
+  try {
+    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
+    return metadata;
+  } catch (error) {
+    log.error('getEncryptionMetadata: Failed to get encryption metadata:', error);
+    return null;
+  }
 }

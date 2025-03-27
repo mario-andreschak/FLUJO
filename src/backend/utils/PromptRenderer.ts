@@ -22,102 +22,106 @@ export class PromptRenderer {
    * @returns The rendered prompt
    */
   async renderPrompt(flowId: string, nodeId: string, options?: PromptRenderOptions): Promise<string> {
-    const renderMode = options?.renderMode || 'rendered';
-    const includeConversationHistory = options?.includeConversationHistory || false;
+    try {
+      const renderMode = options?.renderMode || 'rendered';
+      const includeConversationHistory = options?.includeConversationHistory || false;
 
-    log.info(`Rendering prompt for node ${nodeId} in flow ${flowId}`, { renderMode, includeConversationHistory });
+      log.info(`Rendering prompt for node ${nodeId} in flow ${flowId}`, { renderMode, includeConversationHistory });
 
-    // Get the node prompt and exclusion settings
-    const {
-      prompt: nodePrompt,
-      excludeModelPrompt: nodeExcludeModelPrompt,
-      excludeStartNodePrompt: nodeExcludeStartNodePrompt
-    } = await this.findNodePrompt(nodeId, flowId);
+      // Get the node prompt and exclusion settings
+      const {
+        prompt: nodePrompt,
+        excludeModelPrompt: nodeExcludeModelPrompt,
+        excludeStartNodePrompt: nodeExcludeStartNodePrompt
+      } = await this.findNodePrompt(nodeId, flowId);
 
-    // Use options to override node settings if provided
-    const excludeModelPrompt = options?.excludeModelPrompt !== undefined
-      ? options?.excludeModelPrompt
-      : nodeExcludeModelPrompt;
+      // Use options to override node settings if provided
+      const excludeModelPrompt = options?.excludeModelPrompt !== undefined
+        ? options?.excludeModelPrompt
+        : nodeExcludeModelPrompt;
 
-    const excludeStartNodePrompt = options?.excludeStartNodePrompt !== undefined
-      ? options?.excludeStartNodePrompt
-      : nodeExcludeStartNodePrompt;
+      const excludeStartNodePrompt = options?.excludeStartNodePrompt !== undefined
+        ? options?.excludeStartNodePrompt
+        : nodeExcludeStartNodePrompt;
 
-    log.debug('Exclusion settings', {
-      excludeModelPrompt,
-      excludeStartNodePrompt,
-      fromOptions: {
-        excludeModelPrompt: options?.excludeModelPrompt !== undefined,
-        excludeStartNodePrompt: options?.excludeStartNodePrompt !== undefined
+      log.debug('Exclusion settings', {
+        excludeModelPrompt,
+        excludeStartNodePrompt,
+        fromOptions: {
+          excludeModelPrompt: options?.excludeModelPrompt !== undefined,
+          excludeStartNodePrompt: options?.excludeStartNodePrompt !== undefined
+        }
+      });
+
+      // Build the complete prompt
+      let completePrompt = '';
+      let functionCallingSchema: string | null = null;
+
+      // 1. Start Node Prompt (if not excluded)
+      if (!excludeStartNodePrompt) {
+        const startNodePrompt = await this.findStartNodePrompt(flowId);
+        if (startNodePrompt) {
+          log.debug('Adding start node prompt', { length: startNodePrompt.length });
+          completePrompt += startNodePrompt + '\n\n';
+        }
       }
-    });
 
-    // Build the complete prompt
-    let completePrompt = '';
-    let functionCallingSchema: string | null = null;
+      // 2. Model Prompt (if not excluded)
+      if (!excludeModelPrompt) {
+        const modelPromptResult = await this.findModelPrompt(nodeId, flowId);
+        if (modelPromptResult.prompt) {
+          log.debug('Adding model prompt', { modelId: modelPromptResult.modelId, length: modelPromptResult.prompt.length });
+          completePrompt += modelPromptResult.prompt + '\n\n';
+        }
 
-    // 1. Start Node Prompt (if not excluded)
-    if (!excludeStartNodePrompt) {
-      const startNodePrompt = await this.findStartNodePrompt(flowId);
-      if (startNodePrompt) {
-        log.debug('Adding start node prompt', { length: startNodePrompt.length });
-        completePrompt += startNodePrompt + '\n\n';
+        // Store function calling schema for later use
+        functionCallingSchema = modelPromptResult.functionCallingSchema;
+
+        // Add reasoning schema if available
+        if (modelPromptResult.reasoningSchema) {
+          completePrompt += `Please use the following pattern to mark your reasoning: ${modelPromptResult.reasoningSchema}\n\n`;
+        }
+
+        // Add function calling schema if available
+        if (functionCallingSchema) {
+          completePrompt += `Please use the following pattern to use a tool: ${functionCallingSchema}\n\n`;
+        }
+
+        completePrompt += `# GENERAL INFORMATION:\n`
+        completePrompt += `You are operating in a team with shared responsibilities.\n`
+        completePrompt += `The user message you will receive may contain instructions that are outside of your scope.\n`
+        completePrompt += `Focus on the parts of the user message that can be accomplished using the tools provided to you.\n\n`
       }
+
+      // 3. Node Prompt
+      if (nodePrompt) {
+        completePrompt += `# YOUR OPERATIONAL INSTRUCTION:\n`
+        log.debug('Adding node prompt', { length: nodePrompt.length });
+        completePrompt += nodePrompt + `\n`;
+      }
+
+      // 4. Resolve tool pills with function calling schema
+      completePrompt = await this.resolveToolPills(completePrompt, renderMode, functionCallingSchema);
+
+      // 5. Add placeholder for conversation history if requested
+      if (includeConversationHistory) {
+        log.debug('Adding conversation history placeholder');
+        completePrompt += '\n\n[Conversation History will be included here]';
+      }
+
+      log.info('Prompt rendering completed', {
+        totalLength: completePrompt.length,
+        hasStartNodePrompt: !excludeStartNodePrompt,
+        hasModelPrompt: !excludeModelPrompt,
+        hasNodePrompt: !!nodePrompt,
+        includesConversationHistory: includeConversationHistory
+      });
+
+      return completePrompt;
+    } catch (error) {
+      log.error('Error rendering prompt', { error });
+      return `# GENERAL INFORMATION:\nYou are operating in a team with shared responsibilities.\nThe user message you will receive may contain instructions that are outside of your scope.\nFocus on the parts of the user message that can be accomplished using the tools provided to you.\n\n`;
     }
-
-    // 2. Model Prompt (if not excluded)
-    if (!excludeModelPrompt) {
-      const modelPromptResult = await this.findModelPrompt(nodeId, flowId);
-      if (modelPromptResult.prompt) {
-        log.debug('Adding model prompt', { modelId: modelPromptResult.modelId, length: modelPromptResult.prompt.length });
-        completePrompt += modelPromptResult.prompt + '\n\n';
-      }
-
-      // Store function calling schema for later use
-      functionCallingSchema = modelPromptResult.functionCallingSchema;
-
-      // Add reasoning schema if available
-      if (modelPromptResult.reasoningSchema) {
-        completePrompt += `Please use the following pattern to mark your reasoning: ${modelPromptResult.reasoningSchema}\n\n`;
-      }
-
-      // Add function calling schema if available
-      if (functionCallingSchema) {
-        completePrompt += `Please use the following pattern to use a tool: ${functionCallingSchema}\n\n`;
-      }
-
-      completePrompt += `# GENERAL INFORMATION:\n`
-      completePrompt += `You are operating in a team with shared responsibilities.\n`
-      completePrompt += `The user message you will receive may contain instructions that are outside of your scope.\n`
-      completePrompt += `Focus on the parts of the user message that can be accomplished using the tools provided to you.\n\n`
-
-    }
-
-    // 3. Node Prompt
-    if (nodePrompt) {
-      completePrompt += `# YOUR OPERATIONAL INSTRUCTION:\n`
-      log.debug('Adding node prompt', { length: nodePrompt.length });
-      completePrompt += nodePrompt + `\n`;
-    }
-
-    // 4. Resolve tool pills with function calling schema
-    completePrompt = await this.resolveToolPills(completePrompt, renderMode, functionCallingSchema);
-
-    // 5. Add placeholder for conversation history if requested
-    if (includeConversationHistory) {
-      log.debug('Adding conversation history placeholder');
-      completePrompt += '\n\n[Conversation History will be included here]';
-    }
-
-    log.info('Prompt rendering completed', {
-      totalLength: completePrompt.length,
-      hasStartNodePrompt: !excludeStartNodePrompt,
-      hasModelPrompt: !excludeModelPrompt,
-      hasNodePrompt: !!nodePrompt,
-      includesConversationHistory: includeConversationHistory
-    });
-
-    return completePrompt;
   }
 
   /**

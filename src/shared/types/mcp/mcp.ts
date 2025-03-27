@@ -1,14 +1,21 @@
 import { z } from 'zod';
 import { ToolSchema } from '@modelcontextprotocol/sdk/types.js';
-import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+// Define the StdioServerParameters type ourselves to avoid import issues
+type StdioServerParameters = {
+  command: string;
+  args: string[];
+  stderr: string;
+  env?: Record<string, string>;
+};
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
 
 // Types
 export type EnvVarValue = string | { 
-  value: string; 
-  metadata: { 
+  value: string | number | boolean; 
+  metadata?: { 
     isSecret: boolean 
   } 
 };
@@ -18,13 +25,16 @@ export type MCPManagerConfig = {
   disabled: boolean;
   autoApprove: string[];
   rootPath: string;
-  env: Record<string, EnvVarValue>
+  env: Record<string, any>
   _buildCommand: string;
   _installCommand: string;
 }
 
 export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
   transport: 'stdio';
+  command: string;
+  args: string[];
+  stderr: string;
 };
 
 export type MCPWebSocketConfig = MCPManagerConfig & {

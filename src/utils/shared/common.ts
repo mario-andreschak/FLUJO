@@ -11,5 +11,9 @@ export const SECRET_ENV_KEYWORDS = ['key', 'secret', 'token', 'password'];
 export const isSecretEnvVar = (key: string): boolean => 
   SECRET_ENV_KEYWORDS.some(keyword => key.toLowerCase().includes(keyword));
 
-
-export const toolBindingRegex = /\$\{_-_-_([\w-^}]+)_-_-_([\w-^}]+)\}/g;
+/**
+ * Regular expression to match tool binding patterns like ${tool-name}
+ * Matches simpler patterns with letters, numbers, and limited use of underscores and hyphens
+ * Does not match excessive use of special characters or complex patterns
+ */
+export const toolBindingRegex = /\$\{([a-zA-Z0-9][\w-]{0,20})\}/;
