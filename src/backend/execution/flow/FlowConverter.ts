@@ -108,14 +108,14 @@ export class FlowConverter {
 
           // Log the successors map for debugging
           if (sourceNode.successors instanceof Map) {
-            log.info(`Source node successors after connection:`, {
+            log.debug(`Source node successors after connection:`, {
               sourceNodeId: edge.source,
               successorsCount: sourceNode.successors.size,
               successorsKeys: Array.from(sourceNode.successors.keys()),
               hasTargetNode: sourceNode.successors.has(action)
             });
           } else {
-            log.info(`Source node successors is not a Map:`, {
+            log.warn(`Source node successors is not a Map:`, {
               sourceNodeId: edge.source,
               successorsType: typeof sourceNode.successors
             });

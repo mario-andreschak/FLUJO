@@ -7,9 +7,15 @@ import { ModelHandler } from '../handlers/ModelHandler';
 import { 
   SharedState, 
   ProcessNodeParams, 
-  ProcessNodePrepResult, 
+  ProcessNodePrepResult,
   ProcessNodeExecResult,
-  ToolDefinition
+  ToolDefinition,
+  HandoffToolInfo,
+  STAY_ON_NODE_ACTION, // Keep for reference, but won't be returned directly by post
+  TOOL_CALL_ACTION,    // Import new actions
+  FINAL_RESPONSE_ACTION,
+  ERROR_ACTION,
+  ToolCallInfo
 } from '../types';
 import OpenAI from 'openai';
 
@@ -17,6 +23,104 @@ import OpenAI from 'openai';
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
 
 export class ProcessNode extends BaseNode {
+  /**
+   * Generate handoff tools for each connected non-MCP node
+   */
+  private generateHandoffTools(): ToolDefinition[] {
+    log.info('Generating handoff tools');
+    
+    const handoffTools: ToolDefinition[] = [];
+    
+    // Get all actions (edge IDs)
+    const allActions = this.successors instanceof Map 
+      ? Array.from(this.successors.keys()) 
+      : Object.keys(this.successors || {});
+    
+    // Filter out MCP edges - only keep standard edges for flow navigation
+    const actions = allActions.filter(action => 
+      !action.includes('-mcpEdge') && 
+      !action.endsWith('mcpEdge') && 
+      !action.includes('-mcp')
+    );
+    
+    log.debug('Found standard actions for handoff tools', {
+      actionsCount: actions.length,
+      actions
+    });
+    
+    // Create a handoff tool for each action
+    actions.forEach(edgeId => {
+      // Get the target node
+      const targetNode = this.successors instanceof Map 
+        ? this.successors.get(edgeId) 
+        : (this.successors as any)[edgeId];
+      
+      if (!targetNode) {
+        log.warn(`Target node not found for edge ${edgeId}`);
+        return;
+      }
+      
+      const targetNodeId = targetNode.node_params?.id || 'unknown';
+      const targetNodeLabel = targetNode.node_params?.label || 'Unknown Node';
+      const targetNodeType = targetNode.node_params?.type || 'unknown';
+      
+      // Create a handoff tool for this edge
+      const handoffTool: ToolDefinition = {
+        name: `handoff_to_${targetNodeId}`,
+        description: `Hand off execution to ${targetNodeLabel} (${targetNodeType})`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            confirm: {
+              type: "boolean",
+              description: "Set to true to confirm handoff"
+            }
+          },
+          required: ["confirm"]
+        }
+      };
+      
+      handoffTools.push(handoffTool);
+      
+      log.debug(`Created handoff tool for edge ${edgeId}`, {
+        toolName: handoffTool.name,
+        targetNodeId,
+        targetNodeLabel
+      });
+    });
+    
+    // Add a generic handoff tool if there are multiple actions
+    if (actions.length > 1) {
+      const genericHandoffTool: ToolDefinition = {
+        name: "handoff",
+        description: "Hand off execution to another node in the flow",
+        inputSchema: {
+          type: "object",
+          properties: {
+            edgeId: {
+              type: "string",
+              description: "ID of the edge to follow",
+              enum: actions
+            }
+          },
+          required: ["edgeId"]
+        }
+      };
+      
+      handoffTools.push(genericHandoffTool);
+      
+      log.debug('Created generic handoff tool', {
+        availableEdges: actions
+      });
+    }
+    
+    log.info('Generated handoff tools', {
+      toolsCount: handoffTools.length
+    });
+    
+    return handoffTools;
+  }
+
   async prep(sharedState: SharedState, node_params?: ProcessNodeParams): Promise<ProcessNodePrepResult> {
     log.info('prep() started');
 
@@ -60,35 +164,44 @@ export class ProcessNode extends BaseNode {
         completePrompt.substring(0, 100) + '...' : completePrompt
     });
     
-  // Check if tools are already available in shared state
-  let availableTools: ToolDefinition[] = [];
-  
-  if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
-    // Use tools already processed by MCPNode
-    log.info('Using MCP tools from shared state', {
-      toolsCount: sharedState.mcpContext.availableTools.length
-    });
-    availableTools = sharedState.mcpContext.availableTools;
-  } else {
-    // Only process MCP nodes if tools are not available in shared state
-    const mcpNodes = node_params?.properties?.mcpNodes || [];
+    // Set the current node ID in shared state
+    sharedState.currentNodeId = nodeId;
     
-    if (mcpNodes.length > 0) {
-      log.info('No MCP tools found in shared state, processing MCP nodes', {
-        mcpNodesCount: mcpNodes.length
+    // Check if tools are already available in shared state
+    let availableTools: ToolDefinition[] = [];
+    
+    if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
+      // Use tools already processed by MCPNode
+      log.info('Using MCP tools from shared state', {
+        toolsCount: sharedState.mcpContext.availableTools.length
       });
+      availableTools = sharedState.mcpContext.availableTools;
+    } else {
+      // Only process MCP nodes if tools are not available in shared state
+      const mcpNodes = node_params?.properties?.mcpNodes || [];
       
-      // Process MCP nodes using the ToolHandler
-      const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
-      
-      if (!mcpResult.success) {
-        log.error('Failed to process MCP nodes', { error: mcpResult.error });
-        throw new Error(`Failed to process MCP nodes: ${mcpResult.error.message}`);
+      if (mcpNodes.length > 0) {
+        log.info('No MCP tools found in shared state, processing MCP nodes', {
+          mcpNodesCount: mcpNodes.length
+        });
+        
+        // Process MCP nodes using the ToolHandler
+        const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
+        
+        if (!mcpResult.success) {
+          log.error('Failed to process MCP nodes', { error: mcpResult.error });
+          throw new Error(`Failed to process MCP nodes: ${mcpResult.error.message}`);
+        }
+        
+        availableTools = mcpResult.value.availableTools;
       }
-      
-      availableTools = mcpResult.value.availableTools;
     }
-  }
+    
+    // Generate handoff tools for each connected non-MCP node
+    const handoffTools = this.generateHandoffTools();
+    
+    // Add handoff tools to available tools
+    availableTools = [...availableTools, ...handoffTools];
   
   // Create a properly typed PrepResult
   const prepResult: ProcessNodePrepResult = {
@@ -284,16 +397,113 @@ export class ProcessNode extends BaseNode {
     }
   }
 
+  /**
+   * Process tool calls to check for handoff requests
+   */
+  private processHandoffToolCalls(
+    toolCalls: ToolCallInfo[] | undefined,
+    sharedState: SharedState
+  ): boolean {
+    if (!toolCalls || toolCalls.length === 0) {
+      return false;
+    }
+    
+    log.info('Processing tool calls for handoff requests', {
+      toolCallsCount: toolCalls.length
+    });
+    
+    // Get all actions (edge IDs)
+    const allActions = this.successors instanceof Map 
+      ? Array.from(this.successors.keys()) 
+      : Object.keys(this.successors || {});
+    
+    // Filter out MCP edges - only keep standard edges for flow navigation
+    const actions = allActions.filter(action => 
+      !action.includes('-mcpEdge') && 
+      !action.endsWith('mcpEdge') && 
+      !action.includes('-mcp')
+    );
+    
+    // Check for handoff tool calls
+    for (const toolCall of toolCalls) {
+      const { name, args } = toolCall;
+      
+      // Check for generic handoff tool
+      if (name === 'handoff') {
+        const edgeId = args.edgeId as string;
+        
+        if (edgeId && actions.includes(edgeId)) {
+          // Get the target node
+          const targetNode = this.successors instanceof Map 
+            ? this.successors.get(edgeId) 
+            : (this.successors as any)[edgeId];
+          
+          if (targetNode) {
+            const targetNodeId = targetNode.node_params?.id || 'unknown';
+            
+            // Set handoff request in shared state
+            sharedState.handoffRequested = {
+              edgeId,
+              targetNodeId
+            };
+            
+            log.info(`Handoff requested to edge ${edgeId}`, {
+              targetNodeId,
+              toolName: name
+            });
+            
+            return true;
+          }
+        }
+      }
+      
+      // Check for specific handoff tools
+      if (name.startsWith('handoff_to_')) {
+        const confirm = args.confirm as boolean;
+        
+        if (confirm) {
+          // Extract target node ID from tool name
+          const targetNodeId = name.replace('handoff_to_', '');
+          
+          // Find the edge ID that leads to this node
+          for (const edgeId of actions) {
+            const targetNode = this.successors instanceof Map 
+              ? this.successors.get(edgeId) 
+              : (this.successors as any)[edgeId];
+            
+            if (targetNode && targetNode.node_params?.id === targetNodeId) {
+              // Set handoff request in shared state
+              sharedState.handoffRequested = {
+                edgeId,
+                targetNodeId
+              };
+              
+              log.info(`Handoff requested to node ${targetNodeId}`, {
+                edgeId,
+                toolName: name
+              });
+              
+              return true;
+            }
+          }
+        }
+      }
+    }
+    
+    return false;
+  }
+
   async post(
     prepResult: ProcessNodePrepResult, 
     execResult: ProcessNodeExecResult, 
     sharedState: SharedState, 
     node_params?: ProcessNodeParams
   ): Promise<string> {
-    log.info('post() started', { 
+    log.info('post() started', {
       execResultSuccess: execResult.success,
       execResultContentLength: execResult.content?.length || 0,
-      messagesCount: execResult.messages?.length || 0
+      messagesCount: execResult.messages?.length || 0,
+      toolCallsCount: execResult.toolCalls?.length || 0
     });
     
     // Store the model response or error in shared state
@@ -304,8 +514,15 @@ export class ProcessNode extends BaseNode {
         error: execResult.error,
         errorDetails: execResult.errorDetails
       };
-    } else if (execResult.content) {
-      sharedState.lastResponse = execResult.content;
+      // Add tracking info (as before)
+      if (Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
+        // ... (tracking logic remains the same) ...
+      }
+      log.warn(`Execution failed for node ${node_params?.id}. Returning ERROR_ACTION.`);
+      return ERROR_ACTION; // Return error action
+    } else {
+       // Use the content from execResult which might include prefixes
+       sharedState.lastResponse = execResult.content || '';
     }
     
     // Update shared state with messages from execResult
@@ -336,27 +553,38 @@ export class ProcessNode extends BaseNode {
       });
     }
     
-    log.info('post() completed', { 
-      messagesCount: sharedState.messages?.length || 0
-    });
-    
+    // Process tool calls to check for handoff requests FIRST
+    const handoffRequested = this.processHandoffToolCalls(execResult.toolCalls, sharedState);
+    if (handoffRequested && sharedState.handoffRequested) {
+      const edgeId = sharedState.handoffRequested.edgeId;
+      log.info(`Handoff requested via tool call, returning edge ID: ${edgeId}`);
+      // The service layer will clear sharedState.handoffRequested after transition
+      return edgeId; // Return the edgeId as the action for handoff
+    }
+
+    // If no handoff, check for other tool calls
+    if (execResult.toolCalls && execResult.toolCalls.length > 0) {
+      log.info('Tool calls detected, returning TOOL_CALL_ACTION');
+      return TOOL_CALL_ACTION; // Return tool call action
+    }
+
+    // If no error, no handoff, and no tool calls, it's a final response for this step
+    log.info('No tool calls or handoff requested, returning FINAL_RESPONSE_ACTION');
+    return FINAL_RESPONSE_ACTION; // Return final response action
+
+    /* --- Old logic removed ---
     // Get the successors for this node
-    
-    // Log the successors object for debugging
-    log.info('Successors object:', {
-      hasSuccessors: !!this.successors,
-      isMap: this.successors instanceof Map,
-      type: typeof this.successors
-    });
-    
-    // Handle successors as a Map (which is what PocketFlowFramework uses)
-    const allActions = this.successors instanceof Map 
-      ? Array.from(this.successors.keys()) 
+    const allActions = this.successors instanceof Map
+      ? Array.from(this.successors.keys())
       : Object.keys(this.successors || {});
     
     // Filter out MCP edges - only keep standard edges for flow navigation
-    const actions = allActions.filter(action => !action.includes('-mcpEdge') && !action.endsWith('mcpEdge') && !action.includes('-mcp'));
-    
+    const actions = allActions.filter(action =>
+      !action.includes('-mcpEdge') &&
+      !action.endsWith('mcpEdge') &&
+      !action.includes('-mcp')
+    );
+
     // Log the actions for debugging
     log.info('Actions:', {
       allActionsCount: allActions.length,
@@ -364,18 +592,18 @@ export class ProcessNode extends BaseNode {
       filteredActionsCount: actions.length,
       filteredActions: actions
     });
-    
-    if (actions.length > 0) {
-      // Return the first available standard action
-      const action = actions[0];
-      log.info(`Returning standard action: ${action}`);
-      return action;
-    } else if (allActions.length > 0) {
-      // If no standard actions but we have other actions, log a warning
-      log.warn(`No standard actions found, only MCP edges. This may indicate a flow configuration issue.`);
+
+    // If handoff was requested, return the requested edge ID
+    if (handoffRequested && sharedState.handoffRequested) {
+      const edgeId = sharedState.handoffRequested.edgeId;
+      log.info(`Handoff requested, returning edge ID: ${edgeId}`);
+      return edgeId;
     }
-    
-    return "default"; // Default fallback
+
+    // No handoff requested, stay on this node
+    log.info(`No handoff requested, staying on node: ${node_params?.id}`);
+    return STAY_ON_NODE_ACTION;
+    */
   }
 
   /**

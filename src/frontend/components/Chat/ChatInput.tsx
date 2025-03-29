@@ -18,7 +18,9 @@ import {
   DialogContent,
   DialogActions,
   Button,
-  Typography
+  Typography,
+  FormControlLabel, // Added for checkbox
+  Checkbox // Added for checkbox
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
@@ -31,9 +33,17 @@ import { Attachment } from './index';
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
   disabled?: boolean;
+  // Add callback and state for the approval toggle
+  requireApproval?: boolean;
+  onRequireApprovalChange?: (checked: boolean) => void;
 }
 
-const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled = false }) => {
+const ChatInput: React.FC<ChatInputProps> = ({
+  onSendMessage,
+  disabled = false,
+  requireApproval = false, // Default to false
+  onRequireApprovalChange
+}) => {
   const { settings } = useStorage();
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -402,12 +412,30 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled = false }
               <SendIcon />
             </IconButton>
           </Tooltip>
-        </Box>
-      </Paper>
-      
+        </Box> {/* End of Input area Box */}
+
+        {/* Tool Approval Checkbox */}
+        {onRequireApprovalChange && ( // Only show if callback is provided
+          <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start' }}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={requireApproval}
+                  onChange={(e) => onRequireApprovalChange(e.target.checked)}
+                  size="small"
+                  disabled={disabled}
+                />
+              }
+              label={<Typography variant="caption">Require Tool Approvals</Typography>}
+              sx={{ mr: 'auto' }} // Push to the left
+            />
+          </Box>
+        )} {/* End of Tool Approval Checkbox Box */}
+      </Paper> {/* End of main Paper component */}
+
       {/* Dialog for attachment preview/editing */}
-      <Dialog 
-        open={dialogOpen} 
+      <Dialog
+        open={dialogOpen}
         onClose={() => !isProcessing && setDialogOpen(false)}
         maxWidth="md"
         fullWidth

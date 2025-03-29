@@ -76,9 +76,21 @@ export async function verifyStorage(): Promise<void> {
 }
 
 export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
-  await ensureStorageDir();
+  // No longer call ensureStorageDir here, handle directory creation below
   const filePath = getFilePath(key);
-  await fs.writeFile(filePath, JSON.stringify(value, null, 2));
+  try {
+    // Ensure the directory for the specific file exists
+    const dirPath = path.dirname(filePath);
+    await fs.mkdir(dirPath, { recursive: true }); 
+    log.debug(`Ensured directory exists: ${dirPath}`);
+    
+    // Now write the file
+    await fs.writeFile(filePath, JSON.stringify(value, null, 2));
+    log.debug(`Successfully saved item to: ${filePath}`);
+  } catch (error) {
+    log.error(`Error saving item with key "${key}" to ${filePath}:`, error);
+    throw error; // Re-throw the error after logging
+  }
 }
 
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {

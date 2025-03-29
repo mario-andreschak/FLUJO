@@ -14,10 +14,10 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
-import { Conversation } from './index';
+import { ConversationListItem } from './index'; // Import ConversationListItem instead
 
 interface ChatHistoryProps {
-  conversations: Conversation[];
+  conversations: ConversationListItem[]; // Use ConversationListItem[]
   currentConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;

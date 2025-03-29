@@ -7,7 +7,7 @@ import {
   DialogContent,
   DialogActions,
   Button,
-  TextField,
+  TextField, // Keep TextField
   FormControl,
   InputLabel,
   Select,
@@ -66,8 +66,6 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
   } = useServerStatus();
   
   // State for the selected server
-  const [selectedServer, setSelectedServer] = useState<string>('');
-  
   // State for tracking which servers are being retried
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
   
@@ -77,7 +75,7 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
     isLoading: isLoadingTools, 
     error: toolsError,
     loadTools
-  } = useServerTools(selectedServer);
+  } = useServerTools(nodeData?.properties?.boundServer || ''); // Use derived value directly
 
   // Load node data when node changes
   useEffect(() => {
@@ -86,14 +84,14 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
         ...node.data,
         properties: { ...node.data.properties }
       });
-      
-      // If there's a bound server, set it as selected
-      if (node.data.properties?.boundServer) {
-        setSelectedServer(node.data.properties.boundServer);
-      }
+      // If there's a bound server, ensure it's part of the initial nodeData
+      // No need to call setSelectedServer here anymore
     }
   }, [node, open]);
-  
+
+  // Get selected server name from nodeData (can be used elsewhere if needed)
+  const selectedServer = nodeData?.properties?.boundServer || '';
+
   // Helper function to initialize enabled tools
   const initializeEnabledTools = (tools: any[]) => {
     if (!nodeData) return;
@@ -131,6 +129,17 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
           ...prev.properties,
           [key]: value,
         },
+      };
+    });
+  };
+
+  // Handle label change
+  const handleLabelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setNodeData((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        label: event.target.value,
       };
     });
   };
@@ -182,21 +191,24 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
 
   const handleServerSelect = (serverName: string) => {
     logger.debug(`Server selected: ${serverName}`);
-    setSelectedServer(serverName);
-    
+    logger.debug(`Server selected: ${serverName}`);
+    // Update selectedServer state if needed (though it's derived now)
+    // setSelectedServer(serverName); // No longer needed if derived
+
     setNodeData((prev) => {
       if (!prev) return null;
-      
-      // Find the selected server to use its name as the node label
-      const server = servers.find(s => s.name === serverName);
-      const newLabel = server ? server.name : prev.label;
-      
+      // Remove automatic label update
+      // const server = servers.find(s => s.name === serverName);
+      // const newLabel = server ? server.name : prev.label;
+
       return {
         ...prev,
-        label: newLabel, // Auto-derive label from server name
+        // label: newLabel, // REMOVED: Label is now manually controlled
         properties: {
           ...prev.properties,
           boundServer: serverName,
+          // Reset enabled tools when server changes? Consider this.
+          // enabledTools: [], // Optional: Reset tools on server change
         },
       };
     });
@@ -274,9 +286,20 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
       </DialogTitle>
       
       <Divider />
-      
+
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 3, overflow: 'auto' }}>
-        {/* Bind to MCP Server - Moved to the top */}
+        {/* Node Label Input */}
+        <TextField
+          fullWidth
+          label="Node Label"
+          value={nodeData.label || ''}
+          onChange={handleLabelChange}
+          margin="normal"
+          helperText="The display name for this node on the canvas"
+          sx={{ mb: 2 }} // Add some bottom margin
+        />
+
+        {/* Bind to MCP Server */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="subtitle1" gutterBottom>
             Bind to MCP Server

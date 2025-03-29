@@ -12,4 +12,8 @@ export const isSecretEnvVar = (key: string): boolean =>
   SECRET_ENV_KEYWORDS.some(keyword => key.toLowerCase().includes(keyword));
 
 
-export const toolBindingRegex = /\$\{_-_-_([\w-^}]+)_-_-_([\w-^}]+)\}/g;
+export const toolNameInternalRegex = /_-_-_([\w-^}]+)_-_-_([\w-^}]+)/g;
+
+// Construct the new regex using the source of the first one
+// Note the double backslashes needed to escape special characters for the RegExp constructor
+export const toolBindingRegex = new RegExp(`\\$\\{${toolNameInternalRegex.source}\\}`, 'g');

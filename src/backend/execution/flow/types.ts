@@ -93,6 +93,35 @@ export interface SharedState {
     lastResponse?: string | Record<string, unknown>;
     // MCP context for tool handling
     mcpContext?: MCPContext;
+    // Current node ID for stateful execution
+    currentNodeId?: string;
+    // Flag to indicate if handoff was requested
+    handoffRequested?: {
+        edgeId: string;
+        targetNodeId?: string;
+    };
+    // Conversation ID for tracking multiple conversations
+    conversationId?: string;
+    // Current status of the conversation execution
+    status?: 'running' | 'awaiting_tool_approval' | 'completed' | 'error';
+    // Tool calls awaiting user approval
+    pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+    // Flag to indicate if cancellation was requested
+    isCancelled?: boolean;
+    // --- Added fields for UI listing ---
+    title: string;
+    createdAt: number; // Timestamp (Date.now())
+    updatedAt: number; // Timestamp (Date.now())
+}
+
+// Special action to stay on the current node
+export const STAY_ON_NODE_ACTION = "STAY_ON_NODE";
+
+// Handoff tool information
+export interface HandoffToolInfo {
+    edgeId: string;
+    targetNodeId: string;
+    targetNodeLabel: string;
 }
 
 // Tool definition
@@ -204,3 +233,10 @@ export interface MCPNodeExecResult extends BaseExecResult {
 
 // Union type for all exec results
 export type ExecResult = StartNodeExecResult | ProcessNodeExecResult | FinishNodeExecResult | MCPNodeExecResult;
+
+// Action constants for flow control
+export const TOOL_CALL_ACTION = 'TOOL_CALL';
+export const FINAL_RESPONSE_ACTION = 'FINAL_RESPONSE';
+export const ERROR_ACTION = 'ERROR';
+// STAY_ON_NODE_ACTION is already defined above
+// Handoff action is the edgeId string itself

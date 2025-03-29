@@ -87,9 +87,10 @@ export class PromptRenderer {
       }
 
       completePrompt += `# GENERAL INFORMATION:\n`
-      completePrompt += `You are operating in a team with shared responsibilities.\n`
-      completePrompt += `The user message you will receive may contain instructions that are outside of your scope.\n`
-      completePrompt += `Focus on the parts of the user message that can be accomplished using the tools provided to you.\n\n`
+      completePrompt += `You are operating in a workflow with other agents, each with it's own responsibilities.\n`
+      completePrompt += `You will receive a message from the user which may contain tasks that are outside of your scope.\n`
+      completePrompt += `Focus on the part of the user-message that can be accomplished using the tools provided to you.\n\n`
+      completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff' or 'handoff_to_xxxx' tool.\n\n`
 
     }
 

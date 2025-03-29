@@ -1,14 +1,14 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
-import { SharedState, FinishNodeParams, FinishNodePrepResult, FinishNodeExecResult } from '../types';
+import { SharedState, FinishNodeParams, FinishNodePrepResult, FinishNodeExecResult, FINAL_RESPONSE_ACTION } from '../types'; // Import FINAL_RESPONSE_ACTION
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/FinishNode');
 
 export class FinishNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: FinishNodeParams): Promise<FinishNodePrepResult> {
-    log.info('prep() started');
+    log.debug('prep() started');
     
     // Create a properly typed PrepResult
     const prepResult: FinishNodePrepResult = {
@@ -17,7 +17,7 @@ export class FinishNode extends BaseNode {
       messages: sharedState.messages
     };
     
-    log.info('prep() completed', { 
+    log.debug('prep() completed', { 
       messagesCount: prepResult.messages.length,
       hasSystemPrompt: prepResult.messages.some(msg => msg.role === 'system')
     });
@@ -27,7 +27,7 @@ export class FinishNode extends BaseNode {
 
   async execCore(prepResult: FinishNodePrepResult, node_params?: FinishNodeParams): Promise<FinishNodeExecResult> {
     // Finish nodes don't typically perform operations
-    log.info('execCore() started', { 
+    log.debug('execCore() started', { 
       messagesCount: prepResult.messages.length
     });
     
@@ -112,11 +112,12 @@ export class FinishNode extends BaseNode {
       // Return the first available action
       const action = actions[0];
       log.info(`post() completed, returning action: ${action}`);
-      return action;
+      return action; // If there's an explicit successor, follow it
     }
-    
-    log.info('post() completed, returning default action');
-    return "default"; // Default fallback
+
+    // If there are no successors, this node signifies the end of the flow.
+    log.info('post() completed, returning FINAL_RESPONSE_ACTION');
+    return FINAL_RESPONSE_ACTION; // Use the constant
   }
 
   _clone(): BaseNode {

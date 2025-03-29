@@ -44,10 +44,11 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         setIsModelBound
     );
 
+    // Updated hook usage
     const {
-        connectedServers,
+        connectedMcpNodes, // Use connectedMcpNodes
         isLoadingServers,
-        selectedToolServer,
+        selectedToolServerNodeId, // Use selectedToolServerNodeId
         serverToolsMap,
         serverStatuses,
         isLoadingTools,
@@ -62,7 +63,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         log.debug('handleInsertToolBinding called with parameters', JSON.stringify({
             serverName,
             toolName,
-            selectedToolServer,
+            selectedToolServerNodeId, // Corrected variable name here
             promptTemplateLength: promptTemplate.length,
             promptBuilderRefExists: !!promptBuilderRef.current
         }));
@@ -227,16 +228,17 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
             <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
               <ServerTools
                 isLoadingServers={isLoadingServers}
-                connectedServers={connectedServers}
+                connectedMcpNodes={connectedMcpNodes} // Pass connectedMcpNodes
                 serverToolsMap={serverToolsMap}
                 serverStatuses={serverStatuses}
                 isLoadingTools={isLoadingTools}
-                handleSelectToolServer={handleSelectToolServer}
+                handleSelectToolServer={handleSelectToolServer} // Handler now expects nodeId
                 handleInsertToolBinding={handleInsertToolBinding}
-                selectedToolServer={selectedToolServer}
+                selectedToolServerNodeId={selectedToolServerNodeId} // Pass selectedToolServerNodeId
+                selectedNodeId={node?.id || null} // Pass the parent ProcessNode ID
                 isLoadingSelectedServerTools={isLoadingSelectedServerTools}
                 promptBuilderRef={promptBuilderRef}
-                flowNodes={flowNodes}
+                // flowNodes prop removed from ServerTools
               />
             </Box>
             <Box>

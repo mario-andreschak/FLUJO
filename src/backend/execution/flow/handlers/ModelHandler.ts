@@ -1,10 +1,11 @@
 import { createLogger } from '@/utils/logger';
 import { 
-  ModelCallInput, 
-  ModelCallResult, 
-  ToolCallProcessingInput, 
-  ToolCallProcessingResult 
+  ModelCallInput,
+  ModelCallResult,
+  ToolCallProcessingInput,
+  ToolCallProcessingResult
 } from '../types/modelHandler';
+import { ToolCallInfo } from '../types'; // Import ToolCallInfo from the main types file
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import OpenAI from 'openai';
@@ -15,11 +16,13 @@ const log = createLogger('backend/flow/execution/handlers/ModelHandler');
 
 export class ModelHandler {
   /**
-   * Call model with tool support - pure function that doesn't modify inputs
+   * Call model with tool support - performs a SINGLE API call.
+   * Does NOT handle tool execution loops internally.
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
-    const { modelId, prompt, messages, tools, iteration, maxIterations, nodeName } = input;
-    
+    // Remove iteration parameters as they are no longer handled here
+    const { modelId, prompt, messages, tools, nodeName } = input;
+
     // Fetch model information for display name
     let modelDisplayName = '';
     let modelTechnicalName = '';
@@ -33,33 +36,18 @@ export class ModelHandler {
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
-    
-    log.info(`callModel - Iteration ${iteration}/${maxIterations}`, {
+
+    log.info(`callModel - Single execution`, {
       modelId,
       messagesCount: messages.length,
-      toolsCount: tools?.length || 0
+      toolsCount: tools?.length || 0,
+      nodeName
     });
     
     // Add verbose logging of the entire input
     log.verbose('callModel input', JSON.stringify(input));
-    
-    // Check iteration limit
-    if (maxIterations > 0 && iteration > maxIterations) {
-      const result: Result<ModelCallResult> = {
-        success: true,
-        value: {
-          content: "Maximum tool call iterations reached. Some tool calls may not have been processed.",
-          messages: [...messages]
-        }
-      };
-      
-      // Add verbose logging of the result
-      log.verbose('callModel max iterations reached result', JSON.stringify(result));
-      
-      return result;
-    }
-    
-    // Call the model API
+
+    // Call generateCompletion ONCE
     const response = await this.generateCompletion(modelId, prompt, messages, tools);
     
     if (!response.success) {
@@ -75,112 +63,60 @@ export class ModelHandler {
     
     const modelResponse = response.value;
     const content = modelResponse.content || '';
-    const newMessages = [...messages];
-    
-    // Check for tool calls
-    const hasToolCalls = this.hasToolCalls(modelResponse);
-    
-    if (hasToolCalls && tools && tools.length > 0) {
-      // Process tool calls
-      const toolCallsResult = await this.processToolCalls({
-        toolCalls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls || []
-      });
-      
-      if (!toolCallsResult.success) {
-        // Ensure we're returning the complete error response with all details
-        log.verbose('Tool calls processing failed', JSON.stringify(toolCallsResult));
-        return {
-          success: false,
-          error: toolCallsResult.error
-        };
-      }
-      
-      // Format content with model prefix and node name
-      const prefixedContent = modelDisplayName 
-        ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${content}`
-        : content;
+    const finalMessages = [...messages]; // Start with input messages
 
-      // Add assistant message with tool calls
-      const assistantMessage: OpenAI.ChatCompletionMessageParam = {
-        role: 'assistant',
-        content: prefixedContent,
-        tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls
-      };
-      newMessages.push(assistantMessage);
-      
-      // Add tool call messages
-      const { toolCallMessages, processedToolCalls } = toolCallsResult.value;
-      toolCallMessages.forEach(message => newMessages.push(message));
-      
-      // Recursively call the model with updated messages
-      return this.callModel({
-        modelId,
-        prompt,
-        messages: newMessages,
-        tools,
-        iteration: iteration + 1,
-        maxIterations,
-        nodeName
-      });
-    } else {
-      // No tool calls, check for empty content with stop reason
-      let messageContent = content;
-      
-      // If content is empty and there's a stop reason, provide a helpful message
-      if (content === '' && modelResponse.fullResponse?.choices?.[0]?.finish_reason === 'stop') {
-        messageContent = "I decided to stop processing your request without further explanation by setting a stop_reason.";
-        log.info('Empty content with stop reason detected, using fallback message');
-      }
-      
-      // Format content with model prefix and node name
-      const prefixedContent = modelDisplayName 
-        ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${messageContent}`
-        : messageContent;
+    // Format content with prefix (as before)
+    const prefixedContent = modelDisplayName
+      ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${content}`
+      : content;
 
-      // Add the assistant message
-      const assistantMessage: OpenAI.ChatCompletionMessageParam = {
-        role: 'assistant',
-        content: prefixedContent
-      };
-      newMessages.push(assistantMessage);
-      
-      // Map tool calls to the correct format if they exist
-      const toolCalls = modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls?.map(toolCall => {
-        try {
-          return {
-            name: toolCall.function.name,
-            args: JSON.parse(toolCall.function.arguments),
-            id: toolCall.id,
-            result: '' // Empty result since these haven't been processed
-          };
-        } catch (e) {
-          return {
-            name: toolCall.function.name,
-            args: {},
-            id: toolCall.id,
-            result: ''
-          };
-        }
-      });
-      
-      // For the result, use the prefixed content
-      // Return the final result
-      const result: Result<ModelCallResult> = {
-        success: true,
-        value: {
-          content: typeof assistantMessage.content === 'string' ? assistantMessage.content : messageContent, // Use the prefixed content for the result, ensuring it's a string
-          messages: newMessages,
-          fullResponse: modelResponse.fullResponse,
-          toolCalls
-        }
-      };
-      
-      // Add verbose logging of the final result
-      log.verbose('callModel final result', JSON.stringify(result));
-      
-      return result;
-    }
+    // Create the assistant message
+    const assistantMessage: OpenAI.ChatCompletionMessageParam = {
+      role: 'assistant',
+      content: prefixedContent,
+      // IMPORTANT: Include tool_calls if they exist in the raw response
+      tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls
+    };
+    finalMessages.push(assistantMessage);
+
+    // Map tool calls for the result structure (if they exist)
+    // This provides structured info about requested calls, but doesn't execute them
+    const toolCalls = modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls?.map(tc => {
+       try {
+         return {
+           name: tc.function.name,
+           args: JSON.parse(tc.function.arguments),
+           id: tc.id,
+           result: '' // Result is empty as it's not processed here
+         };
+       } catch (e) {
+         log.warn(`Failed to parse tool arguments for call ${tc.id}`, { args: tc.function.arguments, error: e });
+         return {
+           name: tc.function.name,
+           args: {}, // Use empty object on parse failure
+           id: tc.id,
+           result: ''
+         };
+       }
+    }).filter(Boolean) as ToolCallInfo[] | undefined; // Ensure type safety and filter out potential nulls if parse fails badly
+
+
+    // Return the result of this single step
+    const result: Result<ModelCallResult> = {
+      success: true,
+      value: {
+        content: typeof assistantMessage.content === 'string' ? assistantMessage.content : content, // Use prefixed content
+        messages: finalMessages, // Include the new assistant message
+        fullResponse: modelResponse.fullResponse,
+        toolCalls // Pass the structured tool calls info
+      }
+    };
+
+    log.verbose('callModel single step result', JSON.stringify(result));
+    return result;
   }
+
+
   
   /**
    * Generate completion using model service - pure function
@@ -317,7 +253,7 @@ export class ModelHandler {
   /**
    * Process tool calls - pure function
    */
-  private static async processToolCalls(
+  public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
     const { toolCalls } = input;
@@ -357,11 +293,44 @@ export class ModelHandler {
         try {
           // Parse the arguments
           const args = JSON.parse(argsString);
+          log.info("trying to call tool", name)
+          // Check if it's a handoff tool
+          if (name.startsWith('handoff_to_') || name === 'handoff') {
+            // Process handoff tool directly
+            log.info(`Processing handoff tool: ${name}`);
+            
+            // Return success for handoff tools
+            const result = {
+              success: true,
+              data: { handoff: true, args }
+            };
+            
+            // Format the result
+            const resultContent = JSON.stringify(result.data);
+            
+            // Add tool result message
+            toolCallMessages.push({
+              role: "tool",
+              tool_call_id: id,
+              content: resultContent
+            });
+            
+            // Add to processed tool calls
+            processedToolCalls.push({
+              name,
+              args,
+              id,
+              result: resultContent
+            });
+            
+            // Skip to the next tool call
+            continue;
+          }
           
-          // Extract server and tool names from the formatted name
-          // Format is "_-_-_serverName_-_-_toolName"
+          // For MCP tools: Format is "_-_-_serverName_-_-_toolName"
           const parts = name.split('_-_-_');
           if (parts.length !== 3) {
+            log.error("invalid tool format", name)
             throw new Error(`Invalid tool name format: ${name}`);
           }
           

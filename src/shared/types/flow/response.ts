@@ -118,4 +118,6 @@ export interface FlowExecutionResponse extends FlowServiceResponse {
     id: string;
     result: string;
   }>;
+  // Conversation ID for stateful execution
+  conversationId?: string;
 }

@@ -17,7 +17,7 @@ const log = createLogger('backend/services/flow/index');
  * FlowService class provides a clean interface for flow-related operations
  * This is the core backend service that handles all flow operations
  */
-class FlowService {
+export class FlowService { // Add export keyword here
   private flowsCache: Flow[] | null = null;
 
   /**
@@ -293,4 +293,3 @@ class FlowService {
 
 // Export a singleton instance of the service
 export const flowService = new FlowService();
-

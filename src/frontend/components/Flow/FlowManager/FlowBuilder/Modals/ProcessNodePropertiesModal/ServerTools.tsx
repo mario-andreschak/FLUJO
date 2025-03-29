@@ -30,208 +30,129 @@ import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools');
 
+// Define the structure for connected MCP nodes passed as props
+interface ConnectedMcpNode {
+  nodeId: string;
+  serverName: string;
+  status: string;
+  enabledTools: string[];
+  // Add other relevant properties if needed
+}
+
 interface ServerToolsProps {
-  isLoadingServers: boolean;
-  connectedServers: any[];
-  serverToolsMap: Record<string, any[]>;
-  serverStatuses: Record<string, string>;
-  isLoadingTools: Record<string, boolean>;
-  handleSelectToolServer: (serverName: string) => void;
-  handleInsertToolBinding: (serverName: string, toolName: string) => void;
-  selectedToolServer: string | null;
-  selectedNodeId: string | null;
-  isLoadingSelectedServerTools: boolean;
+  isLoadingServers: boolean; // Keep for overall loading state if needed, or remove if handled per node
+  connectedMcpNodes: ConnectedMcpNode[]; // Use this instead of connectedServers
+  serverToolsMap: Record<string, any[]>; // Map tools by serverName (might need adjustment if tools are fetched per nodeId)
+  serverStatuses: Record<string, string>; // Map status by serverName (might need adjustment)
+  isLoadingTools: Record<string, boolean>; // Map loading by serverName (might need adjustment)
+  handleSelectToolServer: (nodeId: string) => void; // Pass nodeId instead of serverName
+  handleInsertToolBinding: (serverName: string, toolName: string) => void; // Keep serverName here for the binding string
+  selectedToolServerNodeId: string | null; // Use nodeId for selection state
+  selectedNodeId: string | null; // ID of the parent ProcessNode
+  isLoadingSelectedServerTools: boolean; // Keep or adjust based on loading logic
   promptBuilderRef: RefObject<PromptBuilderRef | null>;
-  handleRetryServer?: (serverName: string) => Promise<boolean>;
-  handleRestartServer?: (serverName: string) => Promise<boolean>;
-  // New props for filtering enabled tools
-  flowNodes: any[];
+  handleRetryServer?: (serverName: string) => Promise<boolean>; // Keep serverName for API call
+  handleRestartServer?: (serverName: string) => Promise<boolean>; // Keep serverName for API call
+  // flowNodes prop might not be needed here if enabledTools comes via connectedMcpNodes
+  // flowNodes: any[];
 }
 
 const ServerTools: React.FC<ServerToolsProps> = ({
   isLoadingServers,
-  connectedServers,
+  connectedMcpNodes, // Use connectedMcpNodes
   serverToolsMap,
   serverStatuses,
   isLoadingTools,
   handleSelectToolServer,
   handleInsertToolBinding,
-  selectedToolServer,
+  selectedToolServerNodeId, // Use selectedToolServerNodeId
   selectedNodeId,
   isLoadingSelectedServerTools,
   promptBuilderRef,
   handleRetryServer,
   handleRestartServer,
-  flowNodes
+  // flowNodes // Removed if not needed
 }) => {
-  // State to track selected server
-  const [selectedServer, setSelectedServer] = useState<string | null>(null);
-  // State to track retrying servers
+  // State to track selected server node ID
+  const [selectedServerNodeId, setSelectedServerNodeId] = useState<string | null>(null);
+  // State to track retrying servers (use serverName as key for API calls)
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
   // State to track search query
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Get enabled tools for each server from the corresponding MCP node
-  const getEnabledToolsForServer = (serverName: string): string[] => {
+  // Get enabled tools for a specific MCP node instance
+  const getEnabledToolsForNode = (nodeId: string): string[] => {
     try {
-      // Ensure flowNodes is defined and is an array
-      if (!flowNodes || !Array.isArray(flowNodes)) {
-        log.warn(`flowNodes is not available or not an array when getting enabled tools for ${serverName}`);
+      const mcpNode = connectedMcpNodes.find(node => node.nodeId === nodeId);
+      if (!mcpNode) {
+        log.warn(`Could not find connected MCP node with ID ${nodeId}`);
         return [];
       }
-      
-      // Find the connected server object for this server name
-      const connectedServer = connectedServers.find(server => server && server.name === serverName);
-      if (!connectedServer) {
-        log.debug(`No connected server found for ${serverName}`);
-        return [];
-      }
-      
-      // If the server has a nodeId, use it to find the specific MCP node
-      if (connectedServer.nodeId) {
-        const specificNode = flowNodes.find(node => 
-          node && 
-          node.id === connectedServer.nodeId && 
-          node.data && 
-          node.data.type === 'mcp'
-        );
-        
-        if (specificNode) {
-          const enabledTools = specificNode.data.properties.enabledTools;
-          log.info(`Using specific node ${specificNode.id} enabled tools: ${JSON.stringify(enabledTools)}`);
-          
-          if (!enabledTools || !Array.isArray(enabledTools)) {
-            log.debug(`No enabled tools found for specific node ${specificNode.id}`);
-            return [];
-          }
-          
-          return enabledTools;
-        }
-      }
-      
-      // If we couldn't find a specific node by ID, fall back to finding all nodes bound to this server
-      const mcpNodes = flowNodes.filter(node => 
-        node && 
-        node.data && 
-        node.data.type === 'mcp' && 
-        node.data.properties && 
-        node.data.properties.boundServer === serverName
-      );
-      
-      if (mcpNodes.length === 0) {
-        log.debug(`No MCP nodes found for server ${serverName}`);
-        return [];
-      }
-      
-      // If multiple nodes found for this server, try to find the one that's currently selected
-      if (mcpNodes.length > 1) {
-        // First, try to use the selectedNodeId if it's available and matches one of our nodes
-        if (selectedNodeId) {
-          const nodeWithSelectedId = mcpNodes.find(node => node.id === selectedNodeId);
-          if (nodeWithSelectedId) {
-            const enabledTools = nodeWithSelectedId.data.properties.enabledTools;
-            log.info(`Using node with selected ID ${nodeWithSelectedId.id} enabled tools: ${JSON.stringify(enabledTools)}`);
-            
-            if (!enabledTools || !Array.isArray(enabledTools)) {
-              log.debug(`No enabled tools found for node with ID ${nodeWithSelectedId.id}`);
-              return [];
-            }
-            
-            return enabledTools;
-          }
-        }
-        
-        // If the selected server matches this server, try to find a node that matches the selection
-        if (selectedServer === serverName) {
-          // Find the MCP node that's currently selected in the UI
-          const selectedNode = mcpNodes.find(node => {
-            // Try to match based on any identifying information we have
-            return node.id === selectedToolServer || 
-                  (node.data.properties.selectedInUI === true);
-          });
-          
-          if (selectedNode) {
-            const enabledTools = selectedNode.data.properties.enabledTools;
-            log.info(`Using selected node ${selectedNode.id} enabled tools: ${JSON.stringify(enabledTools)}`);
-            
-            if (!enabledTools || !Array.isArray(enabledTools)) {
-              log.debug(`No enabled tools found for selected node ${selectedNode.id}`);
-              return [];
-            }
-            
-            return enabledTools;
-          }
-        }
-      }
-      
-      // If only one node or we couldn't find a specific node, use the first one
-      const mcpNode = mcpNodes[0];
-      const enabledTools = mcpNode.data.properties.enabledTools;
-      
-      if (!enabledTools || !Array.isArray(enabledTools)) {
-        log.debug(`No enabled tools found for server ${serverName}`);
-        return [];
-      }
-      
-      log.info(`Using first node ${mcpNode.id} enabled tools: ${JSON.stringify(enabledTools)}`);
-      return enabledTools;
+      const enabledTools = mcpNode.enabledTools || [];
+      log.debug(`Enabled tools for node ${nodeId}: ${JSON.stringify(enabledTools)}`);
+      return Array.isArray(enabledTools) ? enabledTools : [];
     } catch (error) {
-      log.error(`Error getting enabled tools for server ${serverName}:`, error);
+      log.error(`Error getting enabled tools for node ${nodeId}:`, error);
       return [];
     }
   };
 
-  // Filter tools based on enabled status and search query
-  const getFilteredTools = (serverName: string, tools: any[]): any[] => {
+  // Filter tools based on enabled status for a specific node and search query
+  const getFilteredTools = (nodeId: string, serverName: string, allToolsForServer: any[]): any[] => {
     try {
-      // Ensure tools is defined and is an array
-      if (!tools || !Array.isArray(tools)) {
-        log.warn(`Tools is not available or not an array for server ${serverName}`);
+      // Ensure allToolsForServer is defined and is an array
+      if (!allToolsForServer || !Array.isArray(allToolsForServer)) {
+        log.warn(`Tools array is not available or not an array for server ${serverName}`);
         return [];
       }
-      
-      const enabledTools = getEnabledToolsForServer(serverName);
-      
-      // First filter by enabled tools if any are specified
-      let filteredTools = tools;
+
+      const enabledTools = getEnabledToolsForNode(nodeId);
+
+      // First filter by enabled tools if any are specified for this node
+      let filteredTools = allToolsForServer;
       if (enabledTools.length > 0) {
-        filteredTools = tools.filter(tool => tool && tool.name && enabledTools.includes(tool.name));
+        filteredTools = allToolsForServer.filter(tool => tool && tool.name && enabledTools.includes(tool.name));
+      } else {
+        // If no tools are explicitly enabled for this node, maybe show none or all?
+        // Current behavior: Show none if enabledTools is empty.
+        // If you want to show all when none are specified, remove this else block
+        // or change the logic in getEnabledToolsForNode.
+        log.debug(`No tools explicitly enabled for node ${nodeId}, showing none.`);
+        filteredTools = [];
       }
-      
+
       // Then filter by search query if one exists
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase().trim();
-        filteredTools = filteredTools.filter(tool => 
-          (tool.name && tool.name.toLowerCase().includes(query)) || 
+        filteredTools = filteredTools.filter(tool =>
+          (tool.name && tool.name.toLowerCase().includes(query)) ||
           (tool.description && tool.description.toLowerCase().includes(query)) ||
           (tool.inputSchema && JSON.stringify(tool.inputSchema).toLowerCase().includes(query))
         );
       }
-      
+
       return filteredTools;
     } catch (error) {
-      log.error(`Error filtering tools for server ${serverName}:`, error);
-      return tools; // Return all tools on error as a fallback
+      log.error(`Error filtering tools for node ${nodeId} (server ${serverName}):`, error);
+      return allToolsForServer || []; // Return all tools for the server on error as a fallback
     }
   };
 
-  // Handle server selection
-  const handleServerSelect = (serverName: string) => {
-    setSelectedServer(serverName);
-    handleSelectToolServer(serverName);
+  // Handle server tab selection (by nodeId)
+  const handleServerSelect = (nodeId: string) => {
+    setSelectedServerNodeId(nodeId);
+    handleSelectToolServer(nodeId); // Notify parent about the selected nodeId
   };
 
   // Handle retry server with better UI feedback
   const handleRetry = async (serverName: string, e: React.MouseEvent) => {
+    // Need serverName for the API call
     e.stopPropagation();
     log.debug(`Retry button clicked for server: ${serverName}`);
-    
-    // Set retrying state for this server
-    setRetryingServers(prev => ({
-      ...prev,
-      [serverName]: true
-    }));
-    
+
+    // Set retrying state using serverName as key
+    setRetryingServers(prev => ({ ...prev, [serverName]: true }));
+
     try {
       if (handleRetryServer) {
         await handleRetryServer(serverName);
@@ -239,25 +160,20 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     } finally {
       // Reset retrying state after a short delay
       setTimeout(() => {
-        setRetryingServers(prev => ({
-          ...prev,
-          [serverName]: false
-        }));
+        setRetryingServers(prev => ({ ...prev, [serverName]: false }));
       }, 500);
     }
   };
 
   // Handle restart server with better UI feedback
   const handleRestart = async (serverName: string, e: React.MouseEvent) => {
+    // Need serverName for the API call
     e.stopPropagation();
     log.debug(`Restart button clicked for server: ${serverName}`);
-    
-    // Set retrying state for this server
-    setRetryingServers(prev => ({
-      ...prev,
-      [serverName]: true
-    }));
-    
+
+    // Set retrying state using serverName as key
+    setRetryingServers(prev => ({ ...prev, [serverName]: true }));
+
     try {
       if (handleRestartServer) {
         await handleRestartServer(serverName);
@@ -265,10 +181,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     } finally {
       // Reset retrying state after a short delay
       setTimeout(() => {
-        setRetryingServers(prev => ({
-          ...prev,
-          [serverName]: false
-        }));
+        setRetryingServers(prev => ({ ...prev, [serverName]: false }));
       }, 500);
     }
   };
@@ -304,15 +217,23 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     );
   };
 
-  // Auto-select the first server when the component mounts
+
+  // Auto-select the first server node when the component mounts or nodes change
   useEffect(() => {
-    if (connectedServers.length > 0 && !selectedServer) {
-      setSelectedServer(connectedServers[0].name);
-      if (!selectedToolServer) {
-        handleSelectToolServer(connectedServers[0].name);
-      }
+    // Use selectedToolServerNodeId from props for initial check
+    if (connectedMcpNodes.length > 0 && !selectedToolServerNodeId && !selectedServerNodeId) {
+      const firstNodeId = connectedMcpNodes[0].nodeId;
+      setSelectedServerNodeId(firstNodeId);
+      handleSelectToolServer(firstNodeId); // Notify parent
+    } else if (selectedToolServerNodeId && selectedToolServerNodeId !== selectedServerNodeId) {
+      // Sync local state if prop changes
+      setSelectedServerNodeId(selectedToolServerNodeId);
     }
-  }, [connectedServers, selectedServer, selectedToolServer, handleSelectToolServer]);
+  }, [connectedMcpNodes, selectedToolServerNodeId, selectedServerNodeId, handleSelectToolServer]);
+
+  // Determine the currently selected node details
+  const currentSelectedMcpNode = connectedMcpNodes.find(node => node.nodeId === selectedServerNodeId);
+  const currentSelectedServerName = currentSelectedMcpNode?.serverName;
 
   return (
     <Box sx={{ mt: 4, display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -323,83 +244,89 @@ const ServerTools: React.FC<ServerToolsProps> = ({
       {isLoadingServers ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
-          <Typography color="text.secondary">Loading servers...</Typography>
+          <Typography color="text.secondary">Loading connected MCP nodes...</Typography>
         </Box>
-      ) : connectedServers.length === 0 ? (
+      ) : connectedMcpNodes.length === 0 ? (
         <Box sx={{ p: 2, border: '1px dashed rgba(0, 0, 0, 0.12)', borderRadius: 1 }}>
           <Typography color="text.secondary" align="center">
-            No MCP servers connected to this node.
+            No MCP nodes connected to this Process node.
           </Typography>
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
-            Connect MCP nodes to this Process node to access their tools.
-            <br />
-            Use the left or right handles of this Process node to create MCP connections.
+            Connect MCP nodes to this Process node using the side handles to access their tools.
           </Typography>
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, height: 'calc(100% - 40px)' }}>
-          {/* Server tabs */}
-          <Tabs 
-            value={selectedServer || connectedServers[0]?.name || ''} 
+          {/* Server tabs (using nodeId) */}
+          <Tabs
+            value={selectedServerNodeId || connectedMcpNodes[0]?.nodeId || ''}
             onChange={(_, value) => handleServerSelect(value)}
             variant="scrollable"
             scrollButtons="auto"
             sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
           >
-            {connectedServers.map((server: any) => {
-              if (!server || !server.name) {
+            {connectedMcpNodes.map((mcpNode: ConnectedMcpNode) => {
+              if (!mcpNode || !mcpNode.nodeId || !mcpNode.serverName) {
+                log.warn('Skipping invalid MCP node in tabs:', mcpNode);
                 return null;
               }
-              
-              const isRetrying = retryingServers[server.name] || isLoadingTools[server.name];
-              const enabledTools = getEnabledToolsForServer(server.name);
-              const toolCount = serverToolsMap[server.name]?.length || 0;
-              
+
+              const serverName = mcpNode.serverName;
+              const nodeId = mcpNode.nodeId;
+              const status = mcpNode.status; // Use status from the node object
+              const isRetrying = retryingServers[serverName]; // Retry state still keyed by serverName
+              const isLoadingNodeTools = isLoadingTools[serverName]; // Loading state keyed by serverName (adjust if needed)
+              const allToolsForServer = serverToolsMap[serverName] || [];
+              const enabledToolsForNode = getEnabledToolsForNode(nodeId);
+              const filteredToolCount = getFilteredTools(nodeId, serverName, allToolsForServer).length;
+
               return (
-                <Tab 
-                  key={server.name} 
-                  value={server.name}
+                <Tab
+                  key={nodeId} // Use unique nodeId
+                  value={nodeId} // Use unique nodeId
                   label={
                     <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                      <Typography 
+                      <Typography
                         variant="body2"
                         sx={{
-                          color: server.status === 'connected' ? 'success.main' :
-                            server.status === 'error' ? 'error.main' : 'text.secondary'
+                          color: status === 'connected' ? 'success.main' :
+                                 status === 'error' ? 'error.main' : 'text.secondary'
                         }}
                       >
-                        {server.name}
+                        {/* Maybe add part of nodeId if names are identical? */}
+                        {serverName}
                       </Typography>
-                      {toolCount > 0 && (
-                        <Badge 
-                          badgeContent={toolCount} 
-                          color="primary" 
+                      {/* Show count of *enabled* tools for this node */}
+                      {enabledToolsForNode.length > 0 && (
+                        <Badge
+                          badgeContent={enabledToolsForNode.length}
+                          color="primary"
                           sx={{ ml: 1 }}
                         />
                       )}
                     </Box>
                   }
-                  sx={{ 
+                  sx={{
                     textTransform: 'none',
                     minHeight: '48px',
-                    opacity: server.status !== 'connected' ? 0.7 : 1
+                    opacity: status !== 'connected' ? 0.7 : 1
                   }}
                 />
               );
             })}
           </Tabs>
-          
-          {/* Server actions */}
-          {selectedServer && (
+
+          {/* Server actions for the selected node */}
+          {currentSelectedMcpNode && currentSelectedServerName && (
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-              <Tooltip title="Retry connection">
+              <Tooltip title={`Retry connection for ${currentSelectedServerName}`}>
                 <span>
-                  <IconButton 
-                    size="small" 
-                    onClick={(e) => handleRetry(selectedServer, e)}
-                    disabled={retryingServers[selectedServer] || isLoadingTools[selectedServer]}
+                  <IconButton
+                    size="small"
+                    onClick={(e) => handleRetry(currentSelectedServerName, e)}
+                    disabled={retryingServers[currentSelectedServerName] || isLoadingTools[currentSelectedServerName]}
                   >
-                    {retryingServers[selectedServer] ? (
+                    {retryingServers[currentSelectedServerName] ? (
                       <CircularProgress size={16} />
                     ) : (
                       <RefreshIcon fontSize="small" />
@@ -407,14 +334,14 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                   </IconButton>
                 </span>
               </Tooltip>
-              
-              {serverStatuses[selectedServer] === 'connected' && (
-                <Tooltip title="Restart server">
+
+              {currentSelectedMcpNode.status === 'connected' && handleRestartServer && (
+                <Tooltip title={`Restart server ${currentSelectedServerName}`}>
                   <span>
-                    <IconButton 
-                      size="small" 
-                      onClick={(e) => handleRestart(selectedServer, e)}
-                      disabled={retryingServers[selectedServer]}
+                    <IconButton
+                      size="small"
+                      onClick={(e) => handleRestart(currentSelectedServerName, e)}
+                      disabled={retryingServers[currentSelectedServerName]}
                       sx={{ ml: 1 }}
                     >
                       <RestartAltIcon fontSize="small" />
@@ -424,10 +351,10 @@ const ServerTools: React.FC<ServerToolsProps> = ({
               )}
             </Box>
           )}
-          
+
           {/* Search input */}
           <TextField
-            placeholder="Search tools..."
+            placeholder="Search enabled tools..."
             variant="outlined"
             size="small"
             fullWidth
@@ -450,94 +377,92 @@ const ServerTools: React.FC<ServerToolsProps> = ({
               flexGrow: 1,
               overflow: 'auto', 
               p: 0,
-              height: 'calc(100% - 100px)' // Subtract the height of tabs and search field
+              height: 'calc(100% - 140px)' // Adjust height considering tabs, actions, search
             }}
           >
-            {connectedServers.map((server: any) => {
-              if (!server || !server.name || server.name !== (selectedServer || connectedServers[0]?.name)) {
-                return null;
-              }
-              
-              if (server.status !== 'connected') {
+            {/* Render tools for the selected MCP node */}
+            {currentSelectedMcpNode && currentSelectedServerName && (() => {
+              const nodeId = currentSelectedMcpNode.nodeId;
+              const serverName = currentSelectedMcpNode.serverName;
+              const status = currentSelectedMcpNode.status;
+
+              if (status !== 'connected') {
                 return (
-                  <Box key={server.name} sx={{ p: 2, textAlign: 'center' }}>
+                  <Box key={nodeId} sx={{ p: 2, textAlign: 'center' }}>
                     <Typography color="text.secondary">
-                      Server is not connected. Connect to view tools.
+                      Server '{serverName}' is not connected. Connect to view tools.
                     </Typography>
                   </Box>
                 );
               }
-              
-              if (isLoadingTools[server.name]) {
+
+              if (isLoadingTools[serverName]) {
                 return (
-                  <Box key={server.name} sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                  <Box key={nodeId} sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
                     <CircularProgress size={24} />
                   </Box>
                 );
               }
-              
-              const tools = (() => {
-                try {
-                  return getFilteredTools(server.name, serverToolsMap[server.name] || []);
-                } catch (error) {
-                  log.error(`Error getting filtered tools for ${server.name}:`, error);
-                  return [];
-                }
-              })();
-              
+
+              const allToolsForServer = serverToolsMap[serverName] || [];
+              const tools = getFilteredTools(nodeId, serverName, allToolsForServer);
+
               if (tools.length === 0) {
+                const enabledToolsCount = getEnabledToolsForNode(nodeId).length;
                 return (
-                  <Box key={server.name} sx={{ p: 2, textAlign: 'center' }}>
+                  <Box key={nodeId} sx={{ p: 2, textAlign: 'center' }}>
                     <Typography color="text.secondary">
-                      {searchQuery.trim() 
-                        ? `No tools match "${searchQuery}" for this server.` 
-                        : "No tools available for this server."}
+                      {searchQuery.trim()
+                        ? `No enabled tools match "${searchQuery}" for this node.`
+                        : enabledToolsCount === 0
+                        ? `No tools are enabled for this node instance. Enable tools in the MCP Node properties.`
+                        : "No tools available or enabled for this node instance."}
                     </Typography>
                   </Box>
                 );
               }
-              
+
               return (
-                <List key={server.name} disablePadding>
+                <List key={nodeId} disablePadding>
                   {tools.map((tool) => (
-                    <Card 
-                      key={tool.name} 
-                      variant="outlined" 
+                    <Card
+                      key={tool.name}
+                      variant="outlined"
                       onClick={() => {
-                        // First ensure the server is selected
-                        if (server.name !== selectedToolServer) {
-                          log.debug('Server not selected, selecting server first', { 
-                            serverName: server.name, 
-                            toolName: tool.name 
+                        // Ensure the correct node tab is selected before inserting
+                        if (nodeId !== selectedServerNodeId) {
+                          log.debug('Node tab not selected, selecting node first', {
+                            selectedNodeId: nodeId,
+                            serverName: serverName,
+                            toolName: tool.name
                           });
-                          handleSelectToolServer(server.name);
-                          // Don't insert the tool on first click, let the user click again
-                          // This prevents the "undefined undefined" issue
+                          handleServerSelect(nodeId); // Select the correct tab first
+                          // Don't insert on the first click
                         } else {
-                          // Server is already selected, check if tool name is defined before inserting
-                          if (server.name && tool.name) {
-                            log.debug('Inserting tool binding', { 
-                              serverName: server.name, 
-                              toolName: tool.name 
+                          // Node tab is selected, insert the binding
+                          if (serverName && tool.name) {
+                            log.debug('Inserting tool binding', {
+                              serverName: serverName, // Use the actual server name for the binding string
+                              toolName: tool.name
                             });
-                            handleInsertToolBinding(server.name, tool.name);
+                            handleInsertToolBinding(serverName, tool.name);
                           } else {
                             log.warn('Cannot insert tool binding, server or tool name is undefined', {
-                              serverName: server.name,
+                              serverName: serverName,
                               toolName: tool.name
                             });
                           }
                         }
                       }}
-                      sx={{ 
-                        mb: 1, 
-                        mx: 1, 
+                      sx={{
+                        mb: 1,
+                        mx: 1,
                         mt: 1,
                         cursor: 'pointer',
                         position: 'relative',
-                        '&:hover': { 
+                        '&:hover': {
                           boxShadow: 1,
-                          bgcolor: 'action.hover' 
+                          bgcolor: 'action.hover'
                         }
                       }}
                     >
@@ -548,23 +473,23 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                               <CodeIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} />
                               {tool.name}
                             </Typography>
-                            
+
                             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                               {tool.description || "No description available"}
                             </Typography>
-                            
+
                             {tool.inputSchema && formatParameterSchema(tool.inputSchema)}
                           </Box>
                         </Box>
                       </CardContent>
-                      <Tooltip title={`Add ${tool.name} to prompt`}>
+                      <Tooltip title={`Add ${tool.name} from ${serverName} to prompt`}>
                         <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
                       </Tooltip>
                     </Card>
                   ))}
                 </List>
               );
-            })}
+            })()}
           </Paper>
         </Box>
       )}

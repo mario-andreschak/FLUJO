@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
-import { parseRequestParameters, _logRequestDetails } from './requestParser';
+import { parseRequestParameters, _logRequestDetails, ChatCompletionRequest } from './requestParser'; // Import ChatCompletionRequest
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -97,10 +97,13 @@ async function handleRequest(request: NextRequest) {
     
     // Parse parameters from either query string or body
     log.debug('Parsing request parameters', { requestId });
-    const data = await parseRequestParameters(request);
-    
+    // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
+    const parsedData = await parseRequestParameters(request);
+    // Destructure all flags
+    const { flujo, conversation_id, requireApproval, ...completionData } = parsedData; 
+
     // Create a truncated version of the data for logging
-    const truncatedData = { ...data };
+    const truncatedData = { ...completionData };
     if (truncatedData.messages && Array.isArray(truncatedData.messages)) {
       truncatedData.messages = truncatedData.messages.map(msg => {
         if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
@@ -119,11 +122,20 @@ async function handleRequest(request: NextRequest) {
       messageCount: truncatedData.messages?.length || 0,
       stream: truncatedData.stream,
       temperature: truncatedData.temperature,
-      max_tokens: truncatedData.max_tokens
+      max_tokens: truncatedData.max_tokens,
+      flujo,
+      conversation_id,
+      requireApproval // Log the new flag
     });
-    
-    const response = await processChatCompletion(data);
-    
+
+    // Pass all flags to processChatCompletion
+    const response = await processChatCompletion(
+      completionData as ChatCompletionRequest, // Pass the remaining data
+      flujo,
+      requireApproval, // Pass the new flag
+      conversation_id
+    );
+
     const duration = Date.now() - startTime;
     log.info('Request processed successfully', {
       requestId,
