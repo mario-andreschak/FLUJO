@@ -296,7 +296,13 @@ export class MCPService {
     }
 
     try {
-      await client.close();
+      // Get the server config to pass to safelyCloseClient
+      const config = await this.getServerConfig(serverName);
+      
+      // Close the client and stop any Docker containers if needed
+      await safelyCloseClient(client, serverName, config || undefined);
+      
+      // Remove the client from our map
       this.clients.delete(serverName);
       
       // Remove from global recovery map
@@ -581,7 +587,7 @@ export class MCPService {
         // No stderr output available, try direct execution to capture error
         log.info(`getServerStatus: No stderr output available for ${serverName}, attempting direct execution to capture error`);
         
-        // Only attempt direct execution for stdio configs
+        // Handle different transport types
         if (config.transport === 'stdio') {
           try {
             // Generate a request ID for logging
@@ -613,6 +619,39 @@ export class MCPService {
           } catch (execError) {
             // If direct execution also fails, log but continue to default message
             log.warn(`getServerStatus: Direct execution failed for ${serverName}:`, execError);
+          }
+        } else if (config.transport === 'docker') {
+          try {
+            // For Docker transport, check if the container is running
+            const dockerConfig = config as import('@/shared/types/mcp/mcp').MCPDockerConfig;
+            const containerName = dockerConfig.containerName || `mcp-${dockerConfig.name}`;
+            
+            // Generate a request ID for logging
+            const requestId = uuidv4();
+            
+            // Check if the container is running
+            const result = await executeCommand({
+              savePath: process.cwd(),
+              command: 'docker',
+              args: ['ps', '-q', '-f', `name=${containerName}`],
+              env: {},
+              actionName: 'CheckDockerContainer',
+              requestId,
+              timeout: 5000 // 5 second timeout to avoid hanging
+            });
+            
+            // If the container is not running, return an error
+            if (!result.commandOutput || result.commandOutput.trim() === '') {
+              log.info(`getServerStatus: Docker container ${containerName} is not running`);
+              return {
+                status: 'error',
+                message: `Docker container ${containerName} is not running. The container may have crashed or been stopped.`,
+                stderrOutput: undefined
+              };
+            }
+          } catch (dockerError) {
+            // If Docker command fails, log but continue to default message
+            log.warn(`getServerStatus: Docker command failed for ${serverName}:`, dockerError);
           }
         }
         

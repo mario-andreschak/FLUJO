@@ -7,6 +7,7 @@ import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
 import SmitheryTab from './tabs/SmitheryTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
+import DockerTab from './tabs/DockerTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import {
   Dialog,
@@ -30,7 +31,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onUpdate,
   onRestartAfterUpdate
 }) => {
-  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'smithery' | 'reference'>('github');
+  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'smithery' | 'reference' | 'docker'>('github');
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
@@ -41,11 +42,13 @@ const ServerModal: React.FC<ServerModalProps> = ({
     local: boolean;
     smithery: boolean;
     reference: boolean;
+    docker: boolean;
   }>({
     github: false,
     local: false,
     smithery: false,
-    reference: false
+    reference: false,
+    docker: false
   });
 
   // Initialize fields only on first visit to each tab in add mode
@@ -58,7 +61,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery' | 'reference') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery' | 'reference' | 'docker') => {
     setActiveTab(newValue);
   };
   
@@ -125,6 +128,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               <Tab label="Local Server" value="local" />
               <Tab label="Install from Registry" value="smithery" />
               <Tab label="Reference Servers" value="reference" />
+              <Tab label="Docker Image" value="docker" />
             </Tabs>
           </Box>
         ) : null}
@@ -158,6 +162,12 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onClose={onClose}
               setActiveTab={setActiveTab}
               onUpdate={(config) => setParsedConfig(config)}
+            />
+          ) : activeTab === 'docker' ? (
+            <DockerTab
+              onAdd={onAdd}
+              onClose={onClose}
+              initialConfig={parsedConfig}
             />
           ) : (
             <SmitheryTab
