@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { TabProps, MessageState } from '../../types';
-import { MCPDockerConfig, MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { MCPDockerConfig, MCPServerConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
 import {
   Alert,
   Box,
@@ -26,6 +26,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/mcp/DockerTab');
@@ -58,7 +59,8 @@ const DockerTab: React.FC<TabProps> = ({
   const [message, setMessage] = useState<MessageState | null>(null);
   const [expandedSections, setExpandedSections] = useState({
     basic: true,
-    advanced: false
+    advanced: false,
+    env: false
   });
   const [volumes, setVolumes] = useState<string[]>(
     (initialConfig && initialConfig.transport === 'docker' && initialConfig.volumes) || []
@@ -70,6 +72,11 @@ const DockerTab: React.FC<TabProps> = ({
   // Handle form field changes
   const handleChange = (field: keyof MCPDockerConfig, value: any) => {
     setConfig(prev => ({ ...prev, [field]: value }));
+  };
+
+  // Handle environment variable changes
+  const handleEnvChange = (env: Record<string, EnvVarValue>) => {
+    setConfig(prev => ({ ...prev, env }));
   };
 
   // Handle volume changes
@@ -231,7 +238,7 @@ const DockerTab: React.FC<TabProps> = ({
                   onChange={e => handleChange('containerName', e.target.value)}
                   placeholder="my-mcp-container"
                   variant="outlined"
-                  helperText="Optional custom container name"
+                  helperText="Optional custom container name. If not provided, Docker will auto-generate a unique name (recommended for most cases)."
                 />
               </Box>
 
@@ -395,6 +402,48 @@ const DockerTab: React.FC<TabProps> = ({
                 </Button>
               </Box>
             </Stack>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Environment Variables Section */}
+        <Accordion 
+          expanded={expandedSections.env} 
+          onChange={handleAccordionChange('env')}
+          sx={{
+            border: 1,
+            borderColor: 'divider',
+            '&:before': { display: 'none' },
+            borderRadius: 1,
+            boxShadow: theme => theme.palette.mode === 'dark' ? 1 : 0,
+            mb: 2,
+            overflow: 'hidden'
+          }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="env-config-content"
+            id="env-config-header"
+            sx={{
+              '& .MuiAccordionSummary-content': {
+                alignItems: 'center'
+              },
+              minHeight: 56,
+              px: 2
+            }}
+          >
+            <Typography variant="h6" sx={{ fontWeight: 500 }}>
+              Environment Variables
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ px: 3, py: 2 }}>
+            <EnvEditor
+              serverName={config.name || 'Docker Server'}
+              initialEnv={config.env || {}}
+              onSave={async (updatedEnv) => {
+                handleEnvChange(updatedEnv);
+                return Promise.resolve();
+              }}
+            />
           </AccordionDetails>
         </Accordion>
       </Stack>

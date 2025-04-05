@@ -7,8 +7,14 @@ import * as os from 'os';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { ChildProcess, spawn } from 'child_process';
+// eslint-disable-next-line import/named
+import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('backend/services/mcp/connection');
+
+// Map to store Docker container IDs/names for each server
+// This allows us to track the actual container ID/name assigned by Docker
+export const dockerContainerMap = new Map<string, string>();
 
 interface StdioTransportParameters {
   command: string;
@@ -72,7 +78,9 @@ export function createDockerTransport(config: MCPServerConfig): StdioClientTrans
   const dockerConfig = config as import('@/shared/types/mcp/mcp').MCPDockerConfig;
   
   // Determine if we're using stdio or websocket for communication with the Docker container
-  if (dockerConfig.transportMethod === 'websocket') {
+  // Use explicit type check to satisfy TypeScript
+  const isWebsocketTransport = dockerConfig.transportMethod === 'websocket';
+  if (isWebsocketTransport) {
     // For WebSocket transport, we need to run the container and expose the WebSocket port
     const websocketPort = dockerConfig.websocketPort || 8080;
     const websocketUrl = `ws://localhost:${websocketPort}`;
@@ -85,20 +93,85 @@ export function createDockerTransport(config: MCPServerConfig): StdioClientTrans
     // Return a WebSocket transport
     return new WebSocketClientTransport(new URL(websocketUrl));
   } else {
-    // For stdio transport, we use Docker's attach capability
+    // For stdio transport, we run the container and use its stdio directly
     log.info(`Creating stdio transport for Docker container ${dockerConfig.name}`);
     
-    // Prepare the Docker command
-    const containerName = dockerConfig.containerName || `mcp-${dockerConfig.name}`;
+    // Prepare the run arguments - use -i but NOT -t for proper stdio handling
+    const runArgs = ['run', '-i', '--rm'];
     
-    // Start the Docker container if it's not already running
-    startDockerContainer(dockerConfig);
+    // Generate a deterministic container name
+    let containerName: string;
+    if (dockerConfig.containerName) {
+      containerName = dockerConfig.containerName;
+    } else {
+      containerName = generateContainerName(dockerConfig.name);
+      dockerContainerMap.set(dockerConfig.name, containerName);
+    }
     
-    // Create a stdio transport that attaches to the Docker container
+    // Add container name
+    runArgs.push('--name', containerName);
+    
+    // Add network mode if specified
+    if (dockerConfig.networkMode) {
+      runArgs.push('--network', dockerConfig.networkMode);
+    }
+    
+    // Add volumes if specified
+    if (dockerConfig.volumes && dockerConfig.volumes.length > 0) {
+      dockerConfig.volumes.forEach(volume => {
+        runArgs.push('-v', volume);
+      });
+    }
+    
+    // Add WebSocket port mapping if using WebSocket transport
+    if (isWebsocketTransport && dockerConfig.websocketPort) {
+      runArgs.push('-p', `${dockerConfig.websocketPort}:${dockerConfig.websocketPort}`);
+    }
+    
+    // Add extra arguments if specified
+    if (dockerConfig.extraArgs && dockerConfig.extraArgs.length > 0) {
+      runArgs.push(...dockerConfig.extraArgs);
+    }
+    
+    // Add environment variables
+    if (config.env) {
+      for (const [key, value] of Object.entries(config.env)) {
+        runArgs.push('-e', key);
+      }
+    }
+    
+    // Add the image name
+    runArgs.push(dockerConfig.image);
+    
+    log.info(`Starting Docker container for ${dockerConfig.name} with image ${dockerConfig.image}`);
+    log.debug(`Docker run command: docker ${runArgs.join(' ')}`);
+    
+  // Create a copy of the current process environment
+  // Use type assertion to ensure it's treated as Record<string, string>
+  const processEnv: Record<string, string> = { ...process.env as Record<string, string> };
+    
+    // Add the environment variables from the configuration to the process environment
+    if (config.env) {
+      for (const [key, envVar] of Object.entries(config.env)) {
+        // Extract the value from the environment variable
+        let value: string;
+        if (envVar && typeof envVar === 'object' && 'value' in envVar) {
+          value = (envVar as { value: string }).value;
+        } else {
+          value = envVar as string;
+        }
+        
+        // Add to the process environment
+        processEnv[key] = value;
+        log.debug(`Setting environment variable for Docker: ${key} (value hidden for security)`);
+      }
+    }
+    
+    // Create the transport that directly uses the docker run command
     const transport = new StdioClientTransport({
       command: 'docker',
-      args: ['attach', '--sig-proxy=false', containerName],
-      env: {},
+      args: runArgs,
+      env: processEnv,
       stderr: 'pipe',
     });
     
@@ -107,30 +180,96 @@ export function createDockerTransport(config: MCPServerConfig): StdioClientTrans
 }
 
 /**
- * Start a Docker container for an MCP server
+ * Generate a deterministic container name for Docker
+ */
+function generateContainerName(serverName: string): string {
+  // Generate a short UUID (first 8 characters)
+  const shortUuid = uuidv4().split('-')[0];
+  // Create a deterministic name with the format flujo_servername_uuid
+  return `flujo_${serverName}_${shortUuid}`;
+}
+
+/**
+ * Start a Docker container for an MCP server with WebSocket transport
+ * This is only used for WebSocket transport, as stdio transport now uses a direct approach
  */
 function startDockerContainer(config: import('@/shared/types/mcp/mcp').MCPDockerConfig, websocketPort?: number): void {
   log.debug('Entering startDockerContainer method');
   
-  const containerName = config.containerName || `mcp-${config.name}`;
-  
   // Check if the container is already running
   try {
-    const checkProcess = spawn('docker', ['ps', '-q', '-f', `name=${containerName}`]);
+    // Determine the container name to check for
+    let containerNameToCheck: string;
+    if (config.containerName) {
+      // If a custom container name is provided, use it
+      containerNameToCheck = config.containerName;
+    } else {
+      // Otherwise, generate a deterministic name
+      containerNameToCheck = generateContainerName(config.name);
+      // Store the container name in the map immediately
+      dockerContainerMap.set(config.name, containerNameToCheck);
+    }
+    
+    log.info(`Checking for existing Docker container with name: ${containerNameToCheck}`);
+    const checkProcess = spawn('docker', ['ps', '-a', '-q', '-f', `name=${containerNameToCheck}`]);
     
     let output = '';
     checkProcess.stdout.on('data', (data: Buffer) => {
       output += data.toString();
     });
     
-    checkProcess.on('close', (code: number) => {
+    checkProcess.on('close', async (code: number) => {
       if (code === 0 && output.trim() !== '') {
-        log.info(`Docker container ${containerName} is already running`);
-        return;
+        log.info(`Found existing Docker containers with name ${containerNameToCheck}`);
+        
+        // Get the container IDs
+        const containerIds = output.trim().split('\n');
+        
+        // Remove any existing containers with the same name
+        for (const containerId of containerIds) {
+          if (containerId.trim() === '') continue;
+          
+          try {
+            log.info(`Removing existing Docker container ${containerId}`);
+            
+            // First try to stop it if it's running
+            const stopProcess = spawn('docker', ['stop', containerId]);
+            await new Promise<void>((resolve) => {
+              stopProcess.on('close', () => {
+                resolve();
+              });
+            });
+            
+            // Then remove it
+            const rmProcess = spawn('docker', ['rm', containerId]);
+            await new Promise<void>((resolve) => {
+              rmProcess.on('close', () => {
+                resolve();
+              });
+            });
+            
+            log.info(`Successfully removed Docker container ${containerId}`);
+          } catch (error) {
+            log.warn(`Failed to remove Docker container ${containerId}:`, error);
+            // Continue with other containers even if one fails
+          }
+        }
       }
       
-      // Container is not running, start it
-      const runArgs = ['run', '-d', '--name', containerName];
+      // Start the container for WebSocket transport
+      // Prepare the run arguments - use -d for detached mode
+      const runArgs = ['run', '-d', '--rm'];
+      
+      // Generate a deterministic container name
+      let containerName: string;
+      if (config.containerName) {
+        containerName = config.containerName;
+      } else {
+        containerName = containerNameToCheck;
+      }
+      
+      // Add container name
+      runArgs.push('--name', containerName);
       
       // Add network mode if specified
       if (config.networkMode) {
@@ -144,8 +283,8 @@ function startDockerContainer(config: import('@/shared/types/mcp/mcp').MCPDocker
         });
       }
       
-      // Add WebSocket port mapping if using WebSocket transport
-      if (config.transportMethod === 'websocket' && websocketPort) {
+      // Add WebSocket port mapping
+      if (websocketPort) {
         runArgs.push('-p', `${websocketPort}:${websocketPort}`);
       }
       
@@ -157,23 +296,43 @@ function startDockerContainer(config: import('@/shared/types/mcp/mcp').MCPDocker
       // Add environment variables
       if (config.env) {
         for (const [key, value] of Object.entries(config.env)) {
-          const envValue = typeof value === 'object' && value !== null && 'value' in value
-            ? (value as { value: string }).value
-            : value as string;
-          
-          runArgs.push('-e', `${key}=${envValue}`);
+          runArgs.push('-e', key);
         }
       }
       
       // Add the image name
       runArgs.push(config.image);
       
-      log.info(`Starting Docker container ${containerName} with image ${config.image}`);
+      log.info(`Starting Docker container for ${config.name} with image ${config.image}`);
       log.debug(`Docker run command: docker ${runArgs.join(' ')}`);
       
-      const runProcess = spawn('docker', runArgs);
+      // Create a copy of the current process environment
+      const processEnv = { ...process.env };
       
+      // Add the environment variables from the configuration to the process environment
+      if (config.env) {
+        for (const [key, envVar] of Object.entries(config.env)) {
+          // Extract the value from the environment variable
+          let value: string;
+          if (envVar && typeof envVar === 'object' && 'value' in envVar) {
+            value = (envVar as { value: string }).value;
+          } else {
+            value = envVar as string;
+          }
+          
+          // Add to the process environment
+          processEnv[key] = value;
+          log.debug(`Setting environment variable for Docker: ${key} (value hidden for security)`);
+        }
+      }
+      
+      // Use the updated process environment when spawning the Docker process
+      const runProcess = spawn('docker', runArgs, { env: processEnv });
+      
+      let containerId = '';
       runProcess.stdout.on('data', (data: Buffer) => {
+        // Capture the container ID from stdout
+        containerId += data.toString().trim();
         log.debug(`Docker stdout: ${data.toString().trim()}`);
       });
       
@@ -182,15 +341,18 @@ function startDockerContainer(config: import('@/shared/types/mcp/mcp').MCPDocker
       });
       
       runProcess.on('close', (code: number) => {
-        if (code === 0) {
-          log.info(`Docker container ${containerName} started successfully`);
+        if (code === 0 && containerId) {
+          log.info(`Docker container started successfully with ID: ${containerId}`);
+          
+          // Store the container ID for this server
+          dockerContainerMap.set(config.name, containerId);
         } else {
-          log.error(`Failed to start Docker container ${containerName}, exit code: ${code}`);
+          log.error(`Failed to start Docker container for ${config.name}, exit code: ${code}`);
         }
       });
     });
   } catch (error) {
-    log.error(`Error starting Docker container ${containerName}:`, error);
+    log.error(`Error starting Docker container for ${config.name}:`, error);
     throw error;
   }
 }
@@ -363,23 +525,46 @@ export function shouldRecreateClient(
       }
       
       // Check if Docker command parameters have changed
-      const isDockerAttach = serverParams.command === 'docker' && 
-                            serverParams.args && 
-                            serverParams.args.length >= 2 && 
-                            serverParams.args[0] === 'attach';
+      // With the new approach, we're using 'docker run' directly
+      const isDockerRun = serverParams.command === 'docker' && 
+                          serverParams.args && 
+                          serverParams.args.length >= 2 && 
+                          serverParams.args[0] === 'run';
       
-      if (!isDockerAttach) {
+      if (!isDockerRun) {
         return {
           needsNewClient: true,
           reason: 'Docker command parameters changed',
         };
       }
       
-      // Check if container name has changed
-      const containerName = dockerConfig.containerName || `mcp-${dockerConfig.name}`;
-      const currentContainerName = serverParams.args && serverParams.args.length >= 3 ? serverParams.args[2] : '';
+      // Find the container name in the args (it should be after '--name')
+      let currentContainerName = '';
+      if (serverParams.args) {
+        for (let i = 0; i < serverParams.args.length - 1; i++) {
+          if (serverParams.args[i] === '--name') {
+            currentContainerName = serverParams.args[i + 1];
+            break;
+          }
+        }
+      }
       
-      if (currentContainerName !== containerName) {
+      // Get the expected container name
+      let expectedContainerName: string;
+      const mappedContainerName = dockerContainerMap.get(dockerConfig.name);
+      
+      if (mappedContainerName) {
+        // Use the mapped container name if available
+        expectedContainerName = mappedContainerName;
+      } else if (dockerConfig.containerName) {
+        // Use the custom container name if provided
+        expectedContainerName = dockerConfig.containerName;
+      } else {
+        // Generate a deterministic name as a fallback
+        expectedContainerName = generateContainerName(dockerConfig.name);
+      }
+      
+      if (currentContainerName !== expectedContainerName) {
         return {
           needsNewClient: true,
           reason: 'Docker container name changed',
@@ -413,8 +598,23 @@ export function shouldRecreateClient(
     const commandChanged = serverParams.command !== config.command;
     const argsChanged =
       JSON.stringify(serverParams.args) !== JSON.stringify(config.args);
+      
+    // Transform the env object to extract only the value part from each key for comparison
+    const transformedEnv: Record<string, string> = {};
+    if (config.env) {
+      for (const [key, envVar] of Object.entries(config.env)) {
+        // Check if the env variable is an object with a 'value' property
+        if (envVar && typeof envVar === 'object' && 'value' in (envVar as any)) {
+          transformedEnv[key] = (envVar as any).value;
+        } else {
+          // If it's already a simple value, use it as is
+          transformedEnv[key] = envVar as string;
+        }
+      }
+    }
+    
     const envChanged =
-      JSON.stringify(serverParams.env) !== JSON.stringify(config.env);
+      JSON.stringify(serverParams.env) !== JSON.stringify(transformedEnv);
 
     if (commandChanged || argsChanged || envChanged) {
       return {
@@ -434,6 +634,13 @@ async function stopDockerContainer(serverName: string, containerName: string): P
   log.debug(`Stopping Docker container ${containerName} for server ${serverName}`);
   
   try {
+    // Check if we have a container ID/name in the map
+    const mappedContainerName = dockerContainerMap.get(serverName);
+    if (mappedContainerName) {
+      log.info(`Using mapped container name for stopping: ${mappedContainerName}`);
+      containerName = mappedContainerName;
+    }
+    
     const stopProcess = spawn('docker', ['stop', containerName]);
     
     stopProcess.stdout.on('data', (data: Buffer) => {
@@ -448,6 +655,10 @@ async function stopDockerContainer(serverName: string, containerName: string): P
       stopProcess.on('close', (code: number) => {
         if (code === 0) {
           log.info(`Docker container ${containerName} stopped successfully`);
+          
+          // Remove the container from the map
+          dockerContainerMap.delete(serverName);
+          
           resolve();
         } else {
           const error = new Error(`Failed to stop Docker container ${containerName}, exit code: ${code}`);
@@ -470,8 +681,22 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
   try {
     // Check if this is a Docker-based MCP server
     if (config && config.transport === 'docker') {
-      const dockerConfig = config as import('@/shared/types/mcp/mcp').MCPDockerConfig;
-      const containerName = dockerConfig.containerName || `mcp-${dockerConfig.name}`;
+      // Get the container name from the map, or use the custom name if provided, or generate a deterministic name
+      let containerName: string;
+      const mappedContainerName = dockerContainerMap.get(serverName);
+      
+      if (mappedContainerName) {
+        // Use the mapped container name if available
+        containerName = mappedContainerName;
+      } else if (config.containerName) {
+        // Use the custom container name if provided
+        containerName = config.containerName;
+      } else {
+        // Generate a deterministic name as a fallback
+        containerName = generateContainerName(serverName);
+      }
+      
+      log.info(`Using container name for stopping: ${containerName}`);
       
       // Stop the Docker container
       try {

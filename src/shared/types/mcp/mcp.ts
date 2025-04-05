@@ -76,4 +76,5 @@ export type MCPServerState = MCPServerConfig & {
   }>;
   error?: string;
   stderrOutput?: string;
+  containerName?: string; // Docker container name (auto-generated or custom)
 };
