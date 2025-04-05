@@ -49,6 +49,7 @@ check_log_size() {
 }
 
 # Build Docker image
+echo "→ Preparing Docker-specific package.json..."
 echo "→ Building Docker image (tag: flujo:$TAG)..."
 if [ "$VERBOSE" = true ]; then
     if docker build -t flujo:$TAG .; then

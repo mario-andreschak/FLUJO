@@ -15,7 +15,7 @@
     "electron-pack": "npm run build && electron-builder --dir",
     "electron-dist": "npm run build && electron-builder",
     "electron-dist-all": "npm run build && electron-builder -mwl",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "node scripts/conditional-postinstall.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
