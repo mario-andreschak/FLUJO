@@ -87,6 +87,7 @@ const ServerList: React.FC<ServerListProps> = ({
             onEdit={() => onServerEdit(server)}
             error={server.error}
             stderrOutput={server.stderrOutput}
+            containerName={server.containerName}
           />
         </Grid>
       ))}
