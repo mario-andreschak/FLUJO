@@ -17,8 +17,9 @@ FROM node:20-alpine AS builder
 # Set working directory
 WORKDIR /app
 
-# Copy Docker-specific package.json and lock file
+# Copy Docker-specific package.json, lock file, and scripts
 COPY --from=prepare /app/package.json ./
+COPY --from=prepare /app/scripts ./scripts
 COPY package-lock.json ./
 
 # Install dependencies
