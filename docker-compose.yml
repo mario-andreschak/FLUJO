@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  flujo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flujo:latest
+    container_name: flujo
+    privileged: true  # Required for Docker-in-Docker
+    ports:
+      - "4200:4200"  # Flujo web interface
+    volumes:
+      - flujo-data:/app/data  # Persistent storage
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  flujo-data:  # Named volume for persistent storage
