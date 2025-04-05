@@ -4,7 +4,7 @@ set -e
 # Start the Docker daemon if not already running
 if ! docker info > /dev/null 2>&1; then
   echo "Starting Docker daemon..."
-  dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 &
+  dockerd --host=unix:///var/run/docker.sock &
   
   # Wait for Docker daemon to start
   echo "Waiting for Docker daemon to start..."
