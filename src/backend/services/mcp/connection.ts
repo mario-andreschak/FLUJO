@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
-import { ChildProcess } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -116,7 +116,6 @@ function startDockerContainer(config: import('@/shared/types/mcp/mcp').MCPDocker
   
   // Check if the container is already running
   try {
-    const { spawn } = require('child_process');
     const checkProcess = spawn('docker', ['ps', '-q', '-f', `name=${containerName}`]);
     
     let output = '';
@@ -260,7 +259,7 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  let cwd = config.rootPath || config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
+  const cwd = config.rootPath || config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 
@@ -435,7 +434,6 @@ async function stopDockerContainer(serverName: string, containerName: string): P
   log.debug(`Stopping Docker container ${containerName} for server ${serverName}`);
   
   try {
-    const { spawn } = require('child_process');
     const stopProcess = spawn('docker', ['stop', containerName]);
     
     stopProcess.stdout.on('data', (data: Buffer) => {
