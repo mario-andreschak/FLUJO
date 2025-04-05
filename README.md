@@ -145,6 +145,8 @@ Options for run-docker.sh:
 - `--no-privileged`: Run without privileged mode (not recommended)
 - `--port=<port>`: Specify the host port (default: 4200)
 
+For more detailed information about Docker support, including Docker-in-Docker capabilities, persistent storage, and troubleshooting, see [DOCKER.md](DOCKER.md).
+
 ### Electron Bundle
 - Download the Setup.exe here: https://github.com/mario-andreschak/FLUJO/releases/tag/preview
 
