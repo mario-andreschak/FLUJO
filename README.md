@@ -51,6 +51,7 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **Server Management**: Comprehensive interface for managing MCP servers
 - **Tool Inspection**: View and manage available tools from MCP servers
 - **Environment Binding**: Connect server environment variables to global storage
+- **Docker Support**: Run Docker-based MCP servers within Flujo
 
 ![MCP Server Installation](https://github.com/user-attachments/assets/4c4055fd-c769-4155-b48f-1350b689545f)
 ![MCP Server Management](https://github.com/user-attachments/assets/bd10b76f-aeb0-48c2-98e3-313e35ace50f)
@@ -97,6 +98,53 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **Dual-Mode Operation**: Use as a desktop app or headless server on edge devices
 
 ## 🚀 Getting Started
+
+### Docker Installation (Recommended)
+
+The easiest way to run FLUJO is using Docker, which provides a consistent environment and supports running Docker-based MCP servers.
+
+#### Prerequisites
+
+- Docker and Docker Compose installed on your system
+
+#### Using Docker Compose
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/mario-andreschak/FLUJO.git
+   cd FLUJO
+   ```
+
+2. Build and start the container:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. Access FLUJO in your browser:
+   ```
+   http://localhost:4200
+   ```
+
+#### Using Docker Scripts
+
+For more control over the Docker build and run process, you can use the provided scripts:
+
+1. Build the Docker image:
+   ```bash
+   ./scripts/build-docker.sh
+   ```
+
+2. Run the Docker container:
+   ```bash
+   ./scripts/run-docker.sh
+   ```
+
+Options for run-docker.sh:
+- `--tag=<tag>`: Specify the image tag (default: latest)
+- `--detached`: Run in detached mode
+- `--no-privileged`: Run without privileged mode (not recommended)
+- `--port=<port>`: Specify the host port (default: 4200)
+
 ### Electron Bundle
 - Download the Setup.exe here: https://github.com/mario-andreschak/FLUJO/releases/tag/preview
 
@@ -161,6 +209,16 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 2. Click "Add Server" to install a new MCP server
 3. Choose from GitHub repository or local filesystem
 4. Configure server settings and environment variables
+5. Start and manage your server
+
+#### Using Docker-based MCP Servers
+
+When running FLUJO in Docker, you can use Docker-based MCP servers:
+
+1. Go to the MCP page
+2. Click "Add Server" to install a new MCP server
+3. Choose "Docker" as the installation method
+4. Provide the Docker image name and any required environment variables
 5. Start and manage your server
 
 ### Creating Workflows
