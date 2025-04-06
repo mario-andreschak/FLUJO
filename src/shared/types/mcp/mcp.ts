@@ -32,7 +32,18 @@ export type MCPWebSocketConfig = MCPManagerConfig & {
   websocketUrl: string;
 };
 
-export type MCPServerConfig = MCPStdioConfig | MCPWebSocketConfig;
+export type MCPDockerConfig = MCPManagerConfig & {
+  transport: 'docker';
+  image: string;         // Docker image name (e.g., 'ghcr.io/github/github-mcp-server')
+  containerName?: string; // Optional custom container name
+  transportMethod: 'stdio' | 'websocket'; // How to communicate with the container
+  websocketPort?: number; // Port for websocket if using websocket transport
+  volumes?: string[];     // Optional volume mounts
+  networkMode?: string;   // Optional network mode
+  extraArgs?: string[];   // Additional docker run arguments
+};
+
+export type MCPServerConfig = MCPStdioConfig | MCPWebSocketConfig | MCPDockerConfig;
 
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
@@ -65,4 +76,5 @@ export type MCPServerState = MCPServerConfig & {
   }>;
   error?: string;
   stderrOutput?: string;
+  containerName?: string; // Docker container name (auto-generated or custom)
 };

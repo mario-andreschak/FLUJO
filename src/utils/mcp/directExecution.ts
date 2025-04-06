@@ -10,7 +10,7 @@ export type CommandExecutionOptions = {
   savePath: string;
   command: string;
   args?: string[];
-  env?: Record<string, string>;
+  env?: Record<string, string | { value: string; metadata?: { isSecret?: boolean; [key: string]: unknown } }>;
   actionName: string;
   requestId: string;
   timeout?: number;
@@ -73,7 +73,17 @@ export async function executeCommand({
         encoding: 'utf8', // Specify encoding to get string output directly
         env: {
           ...process.env,
-          ...env
+          // Transform env variables with metadata to simple string values
+          ...(env ? Object.fromEntries(
+            Object.entries(env).map(([key, value]) => {
+              // Check if the env variable is an object with a 'value' property
+              if (value && typeof value === 'object' && 'value' in value) {
+                return [key, value.value];
+              }
+              // If it's already a simple value, use it as is
+              return [key, value as string];
+            })
+          ) : {})
         }
       };
       

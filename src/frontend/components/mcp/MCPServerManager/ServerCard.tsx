@@ -43,6 +43,7 @@ interface ServerCardProps {
   onEdit: () => void;
   error?: string; // Optional error message
   stderrOutput?: string; // Optional stderr output
+  containerName?: string; // Optional Docker container name
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -57,6 +58,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onEdit,
   error,
   stderrOutput,
+  containerName,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
@@ -164,6 +166,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.875rem' }} noWrap title={path}>
           {path}
         </Typography>
+        
+        {containerName && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.875rem' }}>
+            <span style={{ fontWeight: 'medium' }}>Docker container:</span> {containerName}
+          </Typography>
+        )}
 
         {status === 'error' && (
           <Box sx={{ mt: 1, mb: 1 }}>
