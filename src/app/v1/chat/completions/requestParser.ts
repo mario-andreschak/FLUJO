@@ -26,7 +26,8 @@ export interface ChatCompletionRequest {
 export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest, 'metadata' | 'conversation_id'> { // Omit metadata and deprecated conversation_id
   flujo: boolean;
   conversation_id?: string; // Keep conversation_id here for the result
-  requireApproval: boolean; // Add requireApproval here
+  requireApproval: boolean;
+  flujodebug: boolean; // Add flujodebug here
 }
 
 // Parse request parameters from either query string or body
@@ -73,7 +74,8 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       max_tokens: isNaN(max_tokens) ? undefined : max_tokens,
       // Add flags for GET requests (always false as metadata isn't supported)
       flujo: false,
-      requireApproval: false // Always false for GET
+      requireApproval: false, // Always false for GET
+      flujodebug: false // Always false for GET
     };
 
     const duration = Date.now() - startTime;
@@ -98,7 +100,8 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const flujo = data.metadata?.flujo === "true";
       // Prefer conversationId (camelCase) from metadata, fallback to deprecated body field
       const conversationId = data.metadata?.conversationId || data.conversation_id;
-      const requireApproval = data.metadata?.requireApproval === "true"; // Default false
+      const requireApproval = data.metadata?.requireApproval === "true";
+      const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
 
       const duration = Date.now() - startTime;
       log.info('POST request body parsed successfully', {
@@ -111,14 +114,15 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         temperature: data.temperature,
         flujo,
         conversationId,
-        requireApproval // Log the new flag
+        requireApproval,
+        flujodebug // Log the new flag
       });
 
       // Remove metadata and deprecated conversation_id before returning
       const { metadata, conversation_id: deprecated_conv_id, ...restData } = data;
 
       // Return the rest of the data object along with the extracted flags
-      return { ...restData, flujo, conversation_id: conversationId, requireApproval };
+      return { ...restData, flujo, conversation_id: conversationId, requireApproval, flujodebug };
     } catch (error) {
       const duration = Date.now() - startTime;
       log.error('Error parsing request body', {

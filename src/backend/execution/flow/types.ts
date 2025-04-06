@@ -1,6 +1,31 @@
 import { NodeType } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
+import { FlujoChatMessage } from '@/shared/types/chat';
 import OpenAI from 'openai';
+
+// --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
+
+
+// --- Debugger Types ---
+
+/**
+ * Represents a single step in the execution trace for debugging.
+ */
+export interface DebugStep {
+  stepIndex: number; // Sequential index of the step
+  nodeId: string;
+  nodeType: NodeType;
+  nodeName: string;
+  timestamp: string; // ISO timestamp
+  actionTaken: string; // The action returned by the node's post method
+  // Snapshots of state and results for inspection
+  stateBefore: Partial<SharedState>; // Snapshot before node execution
+  stateAfter: Partial<SharedState>; // Snapshot after node execution
+  prepResultSnapshot: any; // Snapshot of the result from prep()
+  execResultSnapshot: any; // Snapshot of the result from execCore()
+}
+
+// --- Core Flow Types ---
 
 // Base node params interface with generic properties
 export interface BaseNodeParams<T = Record<string, unknown>> {
@@ -85,8 +110,8 @@ export interface SharedState {
         startTime: number;
         nodeExecutionTracker: NodeExecutionTrackerEntry[];
     };
-    // Messages as the single source of truth
-    messages: OpenAI.ChatCompletionMessageParam[];
+    // Messages as the single source of truth, now using our timestamped type
+    messages: FlujoChatMessage[];
     // Flow ID needed by some nodes
     flowId: string;
     // Last response from the model
@@ -103,7 +128,7 @@ export interface SharedState {
     // Conversation ID for tracking multiple conversations
     conversationId?: string;
     // Current status of the conversation execution
-    status?: 'running' | 'awaiting_tool_approval' | 'completed' | 'error';
+    status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
     // Tool calls awaiting user approval
     pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
     // Flag to indicate if cancellation was requested
@@ -112,10 +137,16 @@ export interface SharedState {
     title: string;
     createdAt: number; // Timestamp (Date.now())
     updatedAt: number; // Timestamp (Date.now())
+
+    // --- Debugger Fields ---
+    /** Indicates if the flow is currently running in debug mode. */
+    debugMode?: boolean;
+    /** Stores the sequence of steps taken during execution for debugging. */
+    executionTrace?: DebugStep[];
+    /** Stores the original requireApproval setting from the request that initiated the debug session. */
+    originalRequireApproval?: boolean;
 }
 
-// Special action to stay on the current node
-export const STAY_ON_NODE_ACTION = "STAY_ON_NODE";
 
 // Handoff tool information
 export interface HandoffToolInfo {
@@ -177,14 +208,14 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     modelDisplayName?: string;
     availableTools?: ToolDefinition[];
     mcpContext?: MCPContext;
-    messages: OpenAI.ChatCompletionMessageParam[];
+    messages: FlujoChatMessage[]; // Use timestamped type
     toolCalls?: ToolCallInfo[];
 }
 
 // FinishNode prep result
 export interface FinishNodePrepResult extends BasePrepResult {
     nodeType: 'finish';
-    messages: OpenAI.ChatCompletionMessageParam[];
+    messages: FlujoChatMessage[]; // Use timestamped type
 }
 
 // MCPNode prep result
@@ -215,7 +246,7 @@ export interface ProcessNodeExecResult extends BaseExecResult {
     errorDetails?: ErrorDetails;
     fullResponse?: OpenAI.ChatCompletion;
     toolCalls?: ToolCallInfo[];
-    messages?: OpenAI.ChatCompletionMessageParam[];
+    messages?: FlujoChatMessage[]; // Use timestamped type
 }
 
 // FinishNode exec result
@@ -238,5 +269,5 @@ export type ExecResult = StartNodeExecResult | ProcessNodeExecResult | FinishNod
 export const TOOL_CALL_ACTION = 'TOOL_CALL';
 export const FINAL_RESPONSE_ACTION = 'FINAL_RESPONSE';
 export const ERROR_ACTION = 'ERROR';
-// STAY_ON_NODE_ACTION is already defined above
+export const STAY_ON_NODE_ACTION = "STAY_ON_NODE";
 // Handoff action is the edgeId string itself

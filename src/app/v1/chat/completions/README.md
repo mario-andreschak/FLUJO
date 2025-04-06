@@ -10,26 +10,29 @@ This directory contains the implementation of an OpenAI-compatible Chat Completi
 - Rate limiting to prevent abuse
 - Detailed logging for monitoring and debugging
 - Error handling with appropriate status codes
-- Support for streaming responses using Server-Sent Events (SSE)
+- Support for streaming responses using Server-Sent Events (SSE) (Note: Streaming implementation needs review with current step-by-step logic)
 - Token usage tracking and reporting
+- Stateful conversation handling via `conversationId` in metadata
+- Optional tool call approval flow via `requireApproval` in metadata
+- Debugger support via `flujodebug` in metadata
 
 ## Architecture
 
-The Chat Completions API Bridge consists of four main components:
+The Chat Completions API Bridge consists of several main components:
 
 ```
 route.ts               - HTTP route handlers and rate limiting
-├── requestParser.ts   - Parses and validates incoming requests
-├── chatCompletionService.ts - Core service for processing requests
-└── FlowResponseParser.ts    - Formats flow execution results
+├── requestParser.ts   - Parses and validates incoming requests, including metadata flags
+└── chatCompletionService.ts - Core service for processing requests, managing state, and executing flow steps
 ```
+
+The service interacts with the `FlowExecutor` and backend storage (`db/conversations`) to manage and persist conversation state (`SharedState`).
 
 ### Component Responsibilities
 
 1. **route.ts**: Handles HTTP routing, rate limiting, and high-level error handling
-2. **requestParser.ts**: Parses and validates request parameters from both GET and POST requests
-3. **chatCompletionService.ts**: Processes chat completion requests, executes flows, and formats responses
-4. **FlowResponseParser.ts**: Parses and formats the results from flow executions
+2. **requestParser.ts**: Parses and validates request parameters from both GET and POST requests, extracting flags like `flujo`, `conversationId`, `requireApproval`, and `flujodebug` from the `metadata` object in POST requests.
+3. **chatCompletionService.ts**: Processes chat completion requests step-by-step using `FlowExecutor`. It handles state loading/saving, internal tool processing (if `flujo=true` and `requireApproval=false`), pausing for approval (if `flujo=true` and `requireApproval=true`), pausing for debugging (if `flujodebug=true`), and formatting the final OpenAI-compatible response or intermediate state responses.
 
 ## Usage
 
@@ -112,8 +115,14 @@ interface ChatCompletionRequest {
   max_tokens?: number;     // Optional: Maximum tokens to generate
   top_p?: number;          // Optional: Controls diversity via nucleus sampling
   frequency_penalty?: number; // Optional: Reduces repetition of token sequences
-  presence_penalty?: number;  // Optional: Reduces repetition of topics
-  user?: string;           // Optional: User identifier
+    presence_penalty?: number;  // Optional: Reduces repetition of topics
+    user?: string;           // Optional: User identifier
+    metadata?: {           // Optional: For Flujo-specific features
+      flujo?: "true";        // Indicates an internal call from the Flujo UI
+      conversationId?: string; // ID for resuming or continuing a conversation state
+      requireApproval?: "true"; // If true and flujo=true, pauses execution for tool approval
+      flujodebug?: "true";    // If true, enables step-by-step debugging mode
+    };
 }
 ```
 
@@ -150,8 +159,17 @@ interface ChatCompletionResponse {
     completion_tokens: number; // Number of tokens in the completion
     total_tokens: number;  // Total tokens used
   };
+
+  // --- Non-standard fields returned for internal (flujo=true) calls ---
+  messages?: Array<any>; // Full message history (including timestamps) from SharedState
+  conversation_id?: string; // The ID of the conversation state used/created
+  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Current execution status
+  pendingToolCalls?: Array<any>; // Tool calls awaiting approval (if status='awaiting_tool_approval')
+  debugState?: any; // Full SharedState object when paused for debugging (if status='paused_debug')
 }
 ```
+
+**Note:** The non-standard fields (`messages`, `conversation_id`, `status`, `pendingToolCalls`, `debugState`) are only returned when the `metadata.flujo` flag is set to `"true"` in the request. These are used by the Flujo frontend to manage the chat UI and state. External applications should primarily rely on the standard OpenAI fields (`id`, `choices`, `created`, `model`, `object`, `usage`).
 
 ### Streaming Response
 

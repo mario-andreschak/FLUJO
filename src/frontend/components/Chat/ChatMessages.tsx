@@ -34,8 +34,12 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
-import { ChatMessage } from './index';
+import { ChatMessage, Attachment } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
+import { FlujoChatMessage } from '@/shared/types/chat'; // Import shared type
+import { createLogger } from '@/utils/logger'; // Import the logger
+
+const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
@@ -45,6 +49,11 @@ interface ChatMessagesProps {
   onEditMessage?: (messageId: string, content: string) => void;
   onApproveToolCall?: (toolCallId: string) => void; // Add approve handler prop
   onRejectToolCall?: (toolCallId: string) => void; // Add reject handler prop
+}
+
+// Type guard to check if a message has tool_calls
+function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: OpenAI.ChatCompletionMessageToolCall[] } {
+  return message.role === 'assistant' && 'tool_calls' in message && Array.isArray(message.tool_calls);
 }
 
 const ChatMessages: React.FC<ChatMessagesProps> = ({
@@ -71,6 +80,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const [editContent, setEditContent] = React.useState<string>('');
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>, messageId: string) => {
+    // Log messageId directly
+    log.debug(`handleMenuOpen called with messageId: ${messageId}`);
     setMenuAnchorEl(event.currentTarget);
     setActiveMessageId(messageId);
   };
@@ -122,11 +133,23 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
 
   // Format timestamp
   const formatTime = (timestamp: number) => {
+    // Add a check for valid timestamp before formatting
+    if (typeof timestamp !== 'number' || isNaN(timestamp)) {
+      log.warn('formatTime received invalid timestamp:', timestamp);
+      return 'Invalid Date';
+    }
     return new Date(timestamp).toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit'
     });
   };
+
+  // Find the active message *before* rendering the Menu
+  // This avoids potential state timing issues within the IIFE
+  const activeMsgForMenu = useMemo(() => {
+    if (!activeMessageId) return null;
+    return messages.find(m => m.id === activeMessageId) || null;
+  }, [activeMessageId, messages]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -152,6 +175,18 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                     : 'System'} • {formatTime(message.timestamp)}
             </Typography>
 
+            {message.processNodeId && (
+              <Tooltip title={`Process Node ID: ${message.processNodeId}`}>
+                <Chip
+                  label={`Node: ${message.processNodeId.substring(0, 6)}...`}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
+                />
+              </Tooltip>
+            )}
+
             {message.disabled && (
               <Chip
                 label="Disabled"
@@ -164,7 +199,11 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
 
             <IconButton
               size="small"
-              onClick={(e) => handleMenuOpen(e, message.id)}
+              onClick={(e) => {
+                // Log message.id directly in the onClick handler
+                log.debug(`IconButton onClick - message.id: ${message.id}`);
+                handleMenuOpen(e, message.id);
+              }}
               sx={{ ml: 1 }}
             >
               <MoreVertIcon fontSize="small" />
@@ -285,7 +324,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   // Box removed
                 )}
                 {/* Fallback for non-string content (e.g., assistant message with only tool calls) */}
-                {message.role !== 'tool' && typeof message.content !== 'string' && !message.tool_calls && (
+                {message.role !== 'tool' && typeof message.content !== 'string' && !hasToolCalls(message) && (
                    <Typography variant="body2" fontStyle="italic" color="text.secondary">
                      [No text content]
                    </Typography>
@@ -293,8 +332,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               </>
             )}
 
-            {/* Display tool calls if any */}
-            {message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0 && (
+            {/* Display tool calls if any - use type guard */}
+            {hasToolCalls(message) && message.tool_calls.length > 0 && (
               <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
                 <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main', mb: 1 }}>
                   <HandymanIcon fontSize="small" sx={{ mr: 1 }} />
@@ -432,16 +471,48 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         open={Boolean(menuAnchorEl)}
         onClose={handleMenuClose}
       >
-        {activeMessageId && messages.find(m => m.id === activeMessageId)?.role === 'user' && onEditMessage && (
-          <MenuItem onClick={handleStartEditing}>
-            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Edit Message</ListItemText>
-          </MenuItem>
-        )}
+        {/* Use pre-calculated activeMsgForMenu */}
+        {activeMsgForMenu && (() => {
+          // Fix log: Pass activeMessageId correctly using JSON.stringify
+          log.debug('Entering menu item rendering logic', JSON.stringify({ activeMessageId: activeMessageId }));
+          // --- Added Detailed Logging ---
+          log.debug('Active message object for menu:', JSON.stringify(activeMsgForMenu));
+          log.debug('Active message role for menu:', activeMsgForMenu?.role);
+          // --- End Detailed Logging ---
+          try {
+            const hasOnEditMessageProp = !!onEditMessage;
+            const shouldShowEdit = activeMsgForMenu.role === 'user' && hasOnEditMessageProp;
+
+            // Fix log: Use JSON.stringify for the object
+            log.debug('Rendering Edit Message menu item check', JSON.stringify({
+              activeMessageId: activeMsgForMenu.id, // Use ID from the message object
+              messageRole: activeMsgForMenu.role,
+              onEditMessagePropType: typeof onEditMessage,
+              hasOnEditMessageProp: hasOnEditMessageProp,
+              shouldShowEdit
+            }));
+
+            if (shouldShowEdit) {
+              return (
+                <MenuItem onClick={handleStartEditing}>
+                  <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText>Edit Message</ListItemText>
+                </MenuItem>
+              );
+            }
+            return null;
+          } catch (error) {
+            log.error('Error rendering Edit Message menu item', { error });
+            return null; // Return null on error
+          }
+        })()}
+
+        {/* Other Menu Items - Use activeMsgForMenu if needed, or keep original logic if activeMessageId state is sufficient */}
         <MenuItem onClick={handleToggleDisabled}>
           <ListItemIcon><BlockIcon fontSize="small" /></ListItemIcon>
           <ListItemText>
-            {messages.find(m => m.id === activeMessageId)?.disabled ? 'Enable Message' : 'Disable Message'}
+            {/* Use activeMsgForMenu here as well for consistency */}
+            {activeMsgForMenu?.disabled ? 'Enable Message' : 'Disable Message'}
           </ListItemText>
         </MenuItem>
         <MenuItem onClick={handleSplitConversation}>
@@ -454,6 +525,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       <div ref={messagesEndRef} />
 
       {/* Display Pending Tool Calls for Approval */}
+      {/* Add null check for pendingToolCalls before accessing length */}
       {pendingToolCalls && pendingToolCalls.length > 0 && (
         <Paper
           elevation={2}

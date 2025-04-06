@@ -18,11 +18,13 @@ import { flowService } from '@/frontend/services/flow';
 interface FlowSelectorProps {
   selectedFlowId: string | null;
   onSelectFlow: (flowId: string) => void;
+  disabled?: boolean; // Add disabled prop
 }
 
-const FlowSelector: React.FC<FlowSelectorProps> = ({ 
-  selectedFlowId, 
-  onSelectFlow 
+const FlowSelector: React.FC<FlowSelectorProps> = ({
+  selectedFlowId,
+  onSelectFlow,
+  disabled = false // Default to false
 }) => {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -84,7 +86,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
           No flows available. Create some flows in the Flow Builder first.
         </Typography>
       ) : (
-        <FormControl fullWidth>
+        <FormControl fullWidth disabled={disabled}> {/* Apply disabled prop */}
           <InputLabel id="flow-select-label">Flow</InputLabel>
           <Select
             labelId="flow-select-label"
@@ -92,6 +94,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
             value={selectedFlowId || ''}
             label="Flow"
             onChange={handleFlowChange}
+            disabled={disabled} // Apply disabled prop
           >
             {flows.map((flow) => (
               <MenuItem key={flow.id} value={flow.id}>

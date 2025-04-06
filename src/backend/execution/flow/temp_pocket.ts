@@ -121,10 +121,12 @@ export abstract class BaseNode {
   abstract post(prepResult: any, execResult: any, sharedState: any, node_params?: any): Promise<string>;
 
     /**
-     *  Core run logic should not change from node to node implementation
+     * Core run logic should not change from node to node implementation.
+     * Returns an object containing the action to take next, and the results
+     * from the prep and execution phases for potential snapshotting.
      * @param sharedState Contextual state that is shared across nodes
      */
-  public async run(sharedState: any): Promise<string> {
+  public async run(sharedState: any): Promise<{ action: string, prepResult: any, execResult: any }> {
     log.debug(`run called with sharedState`, { sharedState });
     log.debug(`Current flow_params at start of run`, { flow_params: this.flow_params });
     
@@ -151,9 +153,9 @@ export abstract class BaseNode {
     log.debug(`run finished. Returning action: ${action}`);
     
     // Add verbose logging of the final action
-    log.verbose('run action result', JSON.stringify({ action }));
-    
-    return action;
+    log.verbose('run action result', JSON.stringify({ action, prepResult, execResult }));
+
+    return { action, prepResult, execResult };
   }
 }
 
@@ -344,11 +346,14 @@ export class Flow extends BaseNode {
       // Pass both flowParams (as general params) and node-specific params
       currentNode.setParams(paramsToSet, nodeParams ? nodeParams[currentNode.flow_params.id] : undefined);
       log.debug(`Params set for currentNode. Current flow_params`, { flow_params: currentNode.flow_params });
-      
-      const action = await currentNode.run(sharedState);
+
+      // Get the result object from run()
+      const runResult = await currentNode.run(sharedState);
+      const action = runResult.action; // Extract the action string
+      // prepResult and execResult are available in runResult if needed here, but currently not used by orchestrate directly
       log.debug(`currentNode.run finished. Action: ${action}`);
-      
-      // Check if we should stay on the current node
+
+      // Check if we should stay on the current node using the extracted action
       if (action === STAY_ON_NODE_ACTION) {
         log.info(`Staying on node ${currentNode.node_params?.id}`);
         
@@ -372,9 +377,10 @@ export class Flow extends BaseNode {
     sharedState.currentNodeId = undefined;
   }
 
-  async run(sharedState: any): Promise<string> {
+  // Update return type to match BaseNode
+  async run(sharedState: any): Promise<{ action: string, prepResult: any, execResult: any }> {
     log.debug(`Flow run called with sharedState`, { sharedState });
-    
+
     // Add verbose logging of the input parameters
     log.verbose('Flow run input', JSON.stringify({
       sharedState
@@ -393,10 +399,11 @@ export class Flow extends BaseNode {
     log.debug(`Flow postResult`, { postResult });
     
     // Add verbose logging of the post result
-    log.verbose('Flow run postResult', JSON.stringify({ postResult }));
-    
+    log.verbose('Flow run postResult', JSON.stringify({ postResult, prepResult }));
+
     log.debug(`Flow run finished`);
-    return postResult;
+    // Return the action from post, the prepResult, and undefined for execResult
+    return { action: postResult, prepResult, execResult: undefined };
   }
 
   async post(prepResult: any, execResult: any, sharedState: any, node_params?: any): Promise<string> {
@@ -434,9 +441,10 @@ export class BatchFlow extends Flow {
         return [];
     }
 
-    async run(sharedState: any): Promise<string> {
+    // Update return type to match BaseNode
+    async run(sharedState: any): Promise<{ action: string, prepResult: any, execResult: any }> {
         log.debug("BatchFlow -- run");
-        
+
         // Add verbose logging of the input parameters
         log.verbose('BatchFlow run input', JSON.stringify({
           sharedState
@@ -457,7 +465,9 @@ export class BatchFlow extends Flow {
         // Add verbose logging of the result list
         log.verbose('BatchFlow run resultList', JSON.stringify(resultList));
 
-        return this.post(prepResultList, resultList, sharedState);
+        const action = await this.post(prepResultList, resultList, sharedState);
+        // Return the action from post, the prepResult list, and the result list
+        return { action, prepResult: prepResultList, execResult: resultList };
     }
 
     async post(prepResultList: any[], resultList: any[], sharedState: any, node_params?: any): Promise<string> {

@@ -57,15 +57,22 @@ export async function GET(
 
     // 3. Handle based on whether state was found
     if (sharedState) {
+      // --- Ensure all messages have IDs before returning ---
+      const messagesWithIds = (sharedState.messages || []).map(msg => ({
+        ...msg,
+        id: msg.id || crypto.randomUUID() // Add ID if missing
+      }));
+      // --- End ID check ---
+
       // Use variable for logging
-      log.info(`Returning conversation state`, { requestId, conversationId, stateSource, messageCount: sharedState.messages.length, status: sharedState.status });
+      log.info(`Returning conversation state`, { requestId, conversationId, stateSource, messageCount: messagesWithIds.length, status: sharedState.status });
 
       // Construct the response object matching the structure expected by the frontend's Conversation type
       // Note: We are not explicitly typing with the frontend 'Conversation' type here to avoid backend importing frontend types.
       const conversationData = {
         id: sharedState.conversationId || conversationId, // Prefer state ID, fallback to param
         title: sharedState.title || 'Untitled Conversation',
-        messages: sharedState.messages || [],
+        messages: messagesWithIds, // Use messages with guaranteed IDs
         flowId: sharedState.flowId || null, // Ensure flowId is included
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing

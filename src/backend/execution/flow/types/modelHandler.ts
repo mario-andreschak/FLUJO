@@ -1,24 +1,26 @@
 import OpenAI from 'openai';
-import { 
-  ToolDefinition, 
-  ToolCallInfo 
+import {
+  ToolDefinition,
+  ToolCallInfo
 } from '../types';
+import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 
 // Input for model call
 export interface ModelCallInput {
   modelId: string;
   prompt: string;
-  messages: OpenAI.ChatCompletionMessageParam[];
+  messages: FlujoChatMessage[]; // Use FlujoChatMessage
   tools?: OpenAI.ChatCompletionTool[];
   iteration: number;
   maxIterations: number;
   nodeName: string; // Name of the process node for display purposes
+  nodeId: string; // ID of the process node
 }
 
 // Result of model call
 export interface ModelCallResult {
   content?: string;
-  messages: OpenAI.ChatCompletionMessageParam[];
+  messages: FlujoChatMessage[]; // Use FlujoChatMessage
   toolCalls?: ToolCallInfo[];
   fullResponse?: OpenAI.ChatCompletion;
 }
@@ -31,6 +33,9 @@ export interface ToolCallProcessingInput {
 
 // Tool call processing result
 export interface ToolCallProcessingResult {
-  toolCallMessages: OpenAI.ChatCompletionMessageParam[];
+  toolCallMessages: FlujoChatMessage[]; // Use FlujoChatMessage
   processedToolCalls: ToolCallInfo[];
 }
+
+// Ensure the file is treated as a module
+export {};

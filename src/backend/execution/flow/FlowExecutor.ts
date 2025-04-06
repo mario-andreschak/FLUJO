@@ -1,10 +1,14 @@
+// Remove duplicate import line
 import { Flow as PocketFlow, BaseNode } from './temp_pocket';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from './FlowConverter';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutionResponse, SuccessResult, ErrorResult } from '@/shared/types/flow/response';
-import { SharedState, FlowParams, STAY_ON_NODE_ACTION, TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, ERROR_ACTION } from './types'; // Import action constants
+import { SharedState, FlowParams, STAY_ON_NODE_ACTION, TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, ERROR_ACTION, DebugStep, PrepResult, ExecResult } from './types'; // Import action constants and DebugStep, PrepResult, ExecResult
+import { NodeType } from '@/shared/types/flow/flow'; // Import NodeType directly
+import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import OpenAI from 'openai';
+import cloneDeep from 'lodash/cloneDeep'; // Import cloneDeep for snapshots
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -112,6 +116,10 @@ export class FlowExecutor {
 
     let currentNode: BaseNode | undefined;
     let pocketFlow: PocketFlow;
+    // Declare stateBefore and prepResult here for access in catch block
+    let stateBefore: Partial<SharedState> | undefined = undefined;
+    let prepResult: PrepResult | undefined = undefined; // Use PrepResult union type
+    let execResult: ExecResult | undefined = undefined; // Use ExecResult union type
 
     try {
       pocketFlow = await this.loadAndConvertFlow(flowId);
@@ -127,9 +135,27 @@ export class FlowExecutor {
            log.info(`Resuming conversation ${conversationId} at node ${currentNodeId}`);
         }
       } else {
-        // Start from the beginning if no currentNodeId is set
-        currentNode = await pocketFlow.getStartNode();
-        log.info(`Starting conversation ${conversationId} from the beginning.`);
+        // Check if we should resume from a specific node based on the last message's processNodeId
+        const lastMessage = sharedState.messages.length > 0 ? 
+          sharedState.messages[sharedState.messages.length - 1] : null;
+        
+        if (lastMessage?.processNodeId) {
+          log.info(`Found processNodeId ${lastMessage.processNodeId} in last message. Attempting to resume from this node.`);
+          currentNode = await this.findNodeById(pocketFlow, lastMessage.processNodeId);
+          
+          if (currentNode) {
+            log.info(`Resuming conversation ${conversationId} from node ${lastMessage.processNodeId} based on last message.`);
+            // Update the currentNodeId in the shared state
+            sharedState.currentNodeId = lastMessage.processNodeId;
+          } else {
+            log.warn(`Could not find node ${lastMessage.processNodeId} from last message. Starting from beginning.`);
+            currentNode = await pocketFlow.getStartNode();
+          }
+        } else {
+          // Start from the beginning if no currentNodeId is set and no processNodeId in last message
+          currentNode = await pocketFlow.getStartNode();
+          log.info(`Starting conversation ${conversationId} from the beginning.`);
+        }
       }
 
       if (!currentNode) {
@@ -150,13 +176,51 @@ export class FlowExecutor {
       log.info(`Executing step for node ${nodeId} (${currentNode.constructor.name}) in conversation ${conversationId}`);
       sharedState.currentNodeId = nodeId; // Now guaranteed to be a string
 
-      // --- Execute the node's run method ---
-      const action = await currentNode.run(sharedState);
+      // --- Initialize trace if needed ---
+      if (!sharedState.executionTrace) {
+        sharedState.executionTrace = [];
+      }
+
+      // --- Capture state BEFORE execution ---
+      stateBefore = cloneDeep(sharedState); // Assign to the outer variable
+      // Remove potentially large/circular objects from snapshot if needed
+      if (stateBefore) {
+          delete stateBefore.executionTrace; // Avoid recursive trace in snapshot
+      }
+
+      // --- Execute the node's run method (expecting object return) ---
+      // NOTE: This requires BaseNode.run in temp_pocket.ts to be updated
+      // Assign results to outer variables
+      const runResult = await currentNode.run(sharedState);
+      const action = runResult.action;
+      prepResult = runResult.prepResult;
+      execResult = runResult.execResult;
       // --- Node execution finished ---
 
       log.info(`Node ${nodeId} finished with action: ${action} for conversation ${conversationId}`);
 
-      // Update state in map *after* successful execution
+      // --- Capture state AFTER execution ---
+      const stateAfter = cloneDeep(sharedState);
+      delete stateAfter.executionTrace; // Avoid recursive trace in snapshot
+
+      // --- Create and append DebugStep ---
+      const stepIndex = sharedState.executionTrace.length;
+      const debugStep: DebugStep = {
+        stepIndex,
+        nodeId: nodeId,
+        nodeType: currentNode.node_params?.type || 'unknown',
+        nodeName: currentNode.node_params?.label || 'Unknown Node',
+        timestamp: new Date().toISOString(),
+        actionTaken: action,
+        stateBefore,
+        stateAfter,
+        prepResultSnapshot: cloneDeep(prepResult), // Snapshot prep result
+        execResultSnapshot: cloneDeep(execResult), // Snapshot exec result
+      };
+      sharedState.executionTrace.push(debugStep);
+      log.debug(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
+
+      // Update state in map *after* successful execution and trace update
       this.conversationStates.set(conversationId, sharedState);
 
       return { sharedState, action };
@@ -172,7 +236,29 @@ export class FlowExecutor {
         errorDetails: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { message: String(error) }
       };
       // Assign the ID of the node that was *attempted* (which is stored in the scope's currentNodeId)
-      sharedState.currentNodeId = currentNodeId;
+      sharedState.currentNodeId = currentNodeId; // Keep track of where the error occurred
+
+      // --- Add error step to trace ---
+      if (sharedState.executionTrace) { // Check if trace was initialized
+        const stepIndex = sharedState.executionTrace.length;
+        const errorStep: DebugStep = {
+          stepIndex,
+          nodeId: nodeIdentifier,
+          nodeType: currentNode?.node_params?.type || 'unknown',
+          nodeName: currentNode?.node_params?.label || 'Unknown Node',
+          timestamp: new Date().toISOString(),
+          actionTaken: ERROR_ACTION,
+          // Use captured stateBefore if available, otherwise clone current state
+          stateBefore: stateBefore ? cloneDeep(stateBefore) : cloneDeep(sharedState),
+          stateAfter: cloneDeep(sharedState), // Current state reflects the error
+          // Use captured prepResult if available, otherwise null
+          prepResultSnapshot: prepResult ? cloneDeep(prepResult) : null,
+          // Snapshot the error result, ensure execResultSnapshot is defined
+          execResultSnapshot: { success: false, error: sharedState.lastResponse } as ExecResult,
+        };
+        sharedState.executionTrace.push(errorStep);
+        log.debug(`Appended ERROR step ${stepIndex} to execution trace for conversation ${conversationId}`);
+      }
 
       // Update state map with error state (conversationId is guaranteed to be a string here)
       this.conversationStates.set(conversationId, sharedState);
@@ -205,13 +291,32 @@ export class FlowExecutor {
      if (options?.conversationId && this.conversationStates.has(options.conversationId)) {
        sharedState = this.conversationStates.get(options.conversationId)!;
        // Simplified state update - real implementation would need more care
-       if (options?.messages) sharedState.messages.push(...options.messages);
+       if (options?.messages) {
+         // Convert OpenAI.ChatCompletionMessageParam[] to FlujoChatMessage[]
+         const flujoChatMessages: FlujoChatMessage[] = options.messages.map(msg => ({
+           ...msg,
+           id: crypto.randomUUID(),
+           timestamp: Date.now()
+         }));
+         sharedState.messages.push(...flujoChatMessages);
+       }
      } else {
+       // Convert OpenAI.ChatCompletionMessageParam[] to FlujoChatMessage[] if provided
+       const initialMessages: FlujoChatMessage[] = (options?.messages || []).map(msg => ({
+         ...msg,
+         id: crypto.randomUUID(),
+         timestamp: Date.now()
+       }));
+       
        sharedState = {
          trackingInfo: { executionId: crypto.randomUUID(), startTime: Date.now(), nodeExecutionTracker: [] },
-         messages: options?.messages || [],
+         messages: initialMessages,
          flowId: pocketFlow.node_params?.id || flowName, // Adjust as needed
          conversationId,
+         // Add missing fields for initialization
+         title: 'Deprecated Execution',
+         createdAt: Date.now(),
+         updatedAt: Date.now(),
        };
        this.conversationStates.set(conversationId, sharedState);
      }

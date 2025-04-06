@@ -36,13 +36,18 @@ interface ChatInputProps {
   // Add callback and state for the approval toggle
   requireApproval?: boolean;
   onRequireApprovalChange?: (checked: boolean) => void;
+  // Add callback and state for the debugger toggle
+  executeInDebugger?: boolean;
+  onExecuteInDebuggerChange?: (checked: boolean) => void;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   disabled = false,
-  requireApproval = false, // Default to false
-  onRequireApprovalChange
+  requireApproval = false,
+  onRequireApprovalChange,
+  executeInDebugger = false, // Default to false
+  onExecuteInDebuggerChange
 }) => {
   const { settings } = useStorage();
   const [message, setMessage] = useState('');
@@ -429,8 +434,23 @@ const ChatInput: React.FC<ChatInputProps> = ({
               label={<Typography variant="caption">Require Tool Approvals</Typography>}
               sx={{ mr: 'auto' }} // Push to the left
             />
+            {/* Debugger Checkbox */}
+            {onExecuteInDebuggerChange && ( // Only show if callback is provided
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={executeInDebugger}
+                    onChange={(e) => onExecuteInDebuggerChange(e.target.checked)}
+                    size="small"
+                    disabled={disabled}
+                  />
+                }
+                label={<Typography variant="caption">Execute in Debugger</Typography>}
+                sx={{ ml: 2 }} // Add some margin to separate from the other checkbox
+              />
+            )}
           </Box>
-        )} {/* End of Tool Approval Checkbox Box */}
+        )} {/* End of Checkboxes Box */}
       </Paper> {/* End of main Paper component */}
 
       {/* Dialog for attachment preview/editing */}

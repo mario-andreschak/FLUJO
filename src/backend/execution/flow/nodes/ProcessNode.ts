@@ -17,7 +17,9 @@ import {
   ERROR_ACTION,
   ToolCallInfo
 } from '../types';
+import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import OpenAI from 'openai';
+import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
@@ -214,21 +216,23 @@ export class ProcessNode extends BaseNode {
   };
     
     // Reorder messages to ensure system messages are at the top
-    // Extract non-system messages
-    const nonSystemMessages: OpenAI.ChatCompletionMessageParam[] = [];
+    // Extract non-system messages (already FlujoChatMessage type from sharedState)
+    const nonSystemMessages: FlujoChatMessage[] = [];
     
     // Copy and categorize messages
-    sharedState.messages.forEach(msg => {
+    sharedState.messages.forEach((msg: FlujoChatMessage) => { // Ensure msg is typed correctly
       if (msg.role !== 'system') {
         nonSystemMessages.push(msg);
       }
     });
     
-    // Create our own system message with the current prompt
-    const systemMessage = {
+    // Create our own system message with the current prompt as FlujoChatMessage
+    const systemMessage: FlujoChatMessage = {
+      id: uuidv4(), // Generate unique ID
       role: 'system',
-      content: completePrompt
-    } as OpenAI.ChatCompletionMessageParam;
+      content: completePrompt,
+      timestamp: Date.now() // Add timestamp
+    };
     
     log.info('Added system message from prompt template', {
       contentLength: completePrompt.length,
@@ -292,9 +296,10 @@ export class ProcessNode extends BaseNode {
         prompt: prepResult.currentPrompt,
         messages: prepResult.messages,
         tools,
-        iteration: 1,
-        maxIterations: 30,
-        nodeName // Pass the node name to be included in the response header
+        iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
+        maxIterations: 30, // Max iterations no longer handled by ModelHandler
+        nodeName, // Pass the node name to be included in the response header
+        nodeId: prepResult.nodeId // Pass the node ID
       });
       
     if (!modelResult.success) {
@@ -572,6 +577,21 @@ export class ProcessNode extends BaseNode {
     log.info('No tool calls or handoff requested, returning FINAL_RESPONSE_ACTION');
     return FINAL_RESPONSE_ACTION; // Return final response action
 
+    // // Removed logic above, let's try this instead: stay on the node to force it to do a hand-off or further tool calls
+    // log.info('No tool calls or handoff requested, returning STAY_ON_NODE_ACTION');
+    // return STAY_ON_NODE_ACTION; // Return STAY_ON_NODE_ACTION
+
+    // // this logic may need to be refined: It's worth to think about implementing a counter or a different failsafe option
+    // // to prevent infinite loops and also to enable a better user experience.
+
+
+
+
+
+
+
+
+
     /* --- Old logic removed ---
     // Get the successors for this node
     const allActions = this.successors instanceof Map
@@ -606,65 +626,7 @@ export class ProcessNode extends BaseNode {
     */
   }
 
-  /**
-   * Add message to state
-   */
-  private addMessageToState(
-    prepResult: ProcessNodePrepResult, 
-    role: string, 
-    content: string
-  ): void {
-    // Check if we already have a message with this role
-    const existingMessage = prepResult.messages?.find(
-      (msg: OpenAI.ChatCompletionMessageParam) => msg.role === role
-    );
-    
-    if (!existingMessage) {
-      // Add the message to prepResult.messages
-      if (!prepResult.messages) {
-        prepResult.messages = [];
-      }
-      
-      // Create a properly typed message based on role
-      let message: OpenAI.ChatCompletionMessageParam;
-      
-      switch (role) {
-        case 'system':
-          message = {
-            role: 'system',
-            content: content
-          };
-          break;
-        case 'user':
-          message = {
-            role: 'user',
-            content: content
-          };
-          break;
-        case 'assistant':
-          message = {
-            role: 'assistant',
-            content: content
-          };
-          break;
-        case 'tool':
-          // Tool messages require a tool_call_id
-          throw new Error("Tool messages require a tool_call_id");
-        default:
-          throw new Error(`Unsupported role: ${role}`);
-      }
-      
-      prepResult.messages.push(message);
-      
-      log.info(`Added ${role} message`, {
-        contentLength: content.length,
-        contentPreview: content.length > 100 ?
-          content.substring(0, 100) + '...' : content
-      });
-    } else {
-      log.info(`${role} message already exists, not adding again`);
-    }
-  }
+  // Removed unused addMessageToState method
 
   _clone(): BaseNode {
     return new ProcessNode();

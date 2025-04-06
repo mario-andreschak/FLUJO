@@ -20,7 +20,31 @@ export interface ChatCompletionMetadata {
    */
   requireApproval?: "true";
 
+  /**
+   * Indicates if the request should be executed in debug mode (step-by-step).
+   * Expected value: "true"
+   */
+  flujodebug?: "true";
+
   // Add other potential metadata fields here if needed in the future
 }
 
-// Add other shared chat-related types here if necessary
+import OpenAI from 'openai';
+
+/**
+ * Extends OpenAI's chat completion message parameter type to include additional fields
+ * needed for Flujo's chat functionality.
+ */
+export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
+  /** Unique identifier for the message */
+  id: string;
+  
+  /** Timestamp in milliseconds since epoch when the message was created/added */
+  timestamp: number;
+  
+  /** Flag to indicate if the message should be excluded from processing */
+  disabled?: boolean;
+  
+  /** The ID of the process node that generated or handled this message */
+  processNodeId?: string;
+};

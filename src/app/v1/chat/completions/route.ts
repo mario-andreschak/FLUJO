@@ -99,8 +99,8 @@ async function handleRequest(request: NextRequest) {
     log.debug('Parsing request parameters', { requestId });
     // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
     const parsedData = await parseRequestParameters(request);
-    // Destructure all flags
-    const { flujo, conversation_id, requireApproval, ...completionData } = parsedData; 
+    // Destructure all flags, including flujodebug
+    const { flujo, conversation_id, requireApproval, flujodebug, ...completionData } = parsedData;
 
     // Create a truncated version of the data for logging
     const truncatedData = { ...completionData };
@@ -125,14 +125,16 @@ async function handleRequest(request: NextRequest) {
       max_tokens: truncatedData.max_tokens,
       flujo,
       conversation_id,
-      requireApproval // Log the new flag
+      requireApproval,
+      flujodebug // Log the new flag
     });
 
     // Pass all flags to processChatCompletion
     const response = await processChatCompletion(
       completionData as ChatCompletionRequest, // Pass the remaining data
       flujo,
-      requireApproval, // Pass the new flag
+      requireApproval,
+      flujodebug, // Pass the new flag
       conversation_id
     );
 

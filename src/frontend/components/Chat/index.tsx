@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'; // Adde
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
+import { Grid } from '@mui/material'; // Import Grid for layout
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
@@ -13,8 +14,10 @@ import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
 import { flowService } from '@/frontend/services/flow';
 import { createLogger } from '@/utils/logger';
-import axios from 'axios'; // Import axios for polling
-import { ChatCompletionMetadata } from '@/shared/types'; // Import the shared type
+import axios, { AxiosResponse } from 'axios'; // Import axios for polling and AxiosResponse
+// Correctly import SharedState here
+import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
+import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -26,23 +29,10 @@ export interface Attachment {
   originalName?: string;
 }
 
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  timestamp: number;
+// Use the shared FlujoChatMessage type and extend it with UI-specific fields
+export type ChatMessage = FlujoChatMessage & {
   attachments?: Attachment[];
-  disabled?: boolean;
-  tool_call_id?: string;
-  tool_calls?: Array<{
-    id: string;
-    type: string;
-    function: {
-      name: string;
-      arguments: string;
-    };
-  }>;
-}
+};
 
 // Represents the full conversation details including messages
 export interface Conversation {
@@ -62,7 +52,7 @@ export interface ConversationListItem {
   flowId: string | null;
   createdAt: number;
   updatedAt: number;
-  status?: 'running' | 'awaiting_tool_approval' | 'completed' | 'error'; // Optional status from backend state
+  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
 }
 
 
@@ -91,7 +81,10 @@ const Chat: React.FC = () => {
   // Other states
   const [flows, setFlows] = useState<any[]>([]); // Consider typing this if possible
   const [requireApproval, setRequireApproval] = useState<boolean>(false);
+  const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
+  const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
+  const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
 
   // Refs
   const openaiRef = useRef<OpenAI | null>(null);
@@ -488,50 +481,123 @@ const Chat: React.FC = () => {
     }
   };
 
+  // Function to handle responses, including debug state
+  const handleApiResponse = useCallback((response: AxiosResponse<any>, conversationId: string) => {
+    const data = response.data;
+    log.verbose('Handling API response data', JSON.stringify(data));
+
+    // --- Check for Debug Paused State ---
+    if (data.status === 'paused_debug' && data.debugState) {
+      log.info('API Response: Paused for debugging', { conversationId });
+      setDebugState(data.debugState as SharedState);
+      setIsDebugPaused(true);
+      setIsLoading(false); // Stop general loading indicator
+      stopPolling(); // Stop any active polling
+      // Update detailed conversation from debug state if needed (e.g., messages)
+      setDetailedConversation(prev => {
+        if (prev?.id === conversationId && data.debugState.messages) {
+          // Avoid unnecessary updates if messages haven't changed
+          if (JSON.stringify(prev.messages) !== JSON.stringify(data.debugState.messages)) {
+             log.debug("Updating detailed conversation messages from debug state");
+             return { ...prev, messages: data.debugState.messages, updatedAt: data.debugState.updatedAt };
+          }
+        }
+        return prev;
+      });
+      // Update conversation list status with type assertion
+      setConversationList(prevList => prevList.map(c => c.id === conversationId ? { ...c, status: 'paused_debug' as ConversationListItem['status'], updatedAt: data.debugState.updatedAt } : c).sort((a, b) => b.updatedAt - a.updatedAt));
+      return true; // Indicate debug state was handled
+    } else if (data.status === 'completed' || data.status === 'error') {
+      // Only hide the debugger panel if the execution is definitively finished or errored
+      log.info(`API Response: Execution completed or errored (Status: ${data.status}). Hiding debugger panel.`, { conversationId });
+      setIsDebugPaused(false);
+      setDebugState(null);
+    } else {
+       // For other statuses ('running', 'awaiting_tool_approval'), keep the debugger panel state as is.
+       log.debug(`API Response: Status is '${data.status}'. Debugger panel visibility unchanged (currently ${isDebugPaused ? 'visible' : 'hidden'}).`, { conversationId });
+    }
+
+    // --- Handle Standard Completion/Polling Response ---
+    // Assuming 'data' might be a full Conversation object from polling or a completion response
+    if (data.messages && data.conversation_id === conversationId) {
+       // --- Timestamp Validation ---
+       const validatedMessages = data.messages.map((msg: any, index: number) => {
+         if (typeof msg.timestamp !== 'number' || isNaN(msg.timestamp)) {
+           log.warn(`Invalid timestamp found in message index ${index} from API response. Defaulting to Date.now().`, { conversationId, messageId: msg.id, invalidTimestamp: msg.timestamp });
+           return { ...msg, timestamp: Date.now() };
+         }
+         return msg;
+       });
+       // --- End Timestamp Validation ---
+
+       // Update detailed conversation state from standard response/polling
+       setDetailedConversation(prevDetailed => {
+         if (prevDetailed?.id === conversationId) {
+           // Compare validated messages
+           const messagesChanged = JSON.stringify(prevDetailed.messages) !== JSON.stringify(validatedMessages);
+           if (messagesChanged) {
+             log.info('API Response/Polling: Updating detailed conversation messages', { conversationId, newMessageCount: validatedMessages.length });
+             // Use updatedAt from response if available, otherwise keep existing
+             return { ...prevDetailed, messages: validatedMessages, updatedAt: data.updatedAt || prevDetailed.updatedAt }; // Use validated messages
+           }
+         }
+         return prevDetailed;
+       });
+    }
+
+    // Update pending tool calls based on standard response/polling data
+    if (data.status === 'awaiting_tool_approval') {
+      log.info('API Response/Polling: Pausing for tool approval', { conversationId });
+      setPendingToolCalls(data.pendingToolCalls || []);
+      setIsLoading(false); // Stop loading indicator
+      stopPolling();
+    } else if (data.status === 'completed' || data.status === 'error') {
+      log.info('API Response/Polling: Stopping due to final status', { conversationId, status: data.status });
+      stopPolling();
+      setIsLoading(false);
+      if (data.status === 'error') {
+         // Handle OpenAI compatible error structure
+         const errorMessage = data.error?.message || data.lastResponse?.error || 'Unknown error during execution';
+         setError(errorMessage);
+         log.error('API Response/Polling: Execution resulted in error', { conversationId, error: data.error || data.lastResponse });
+      }
+      // Fetch final state one last time for completed/error?
+      fetchDetailedConversation(conversationId);
+    } else if (data.status === 'running' && !isDebugPaused) {
+       // If status is running and we are NOT paused for debug, clear pending calls and continue polling/loading
+       setPendingToolCalls(null);
+       if (!pollingIntervalRef.current) { // Restart polling if it stopped
+          setIsLoading(true); // Ensure loading indicator is on
+       }
+    } else {
+       // Other statuses or conditions
+       setPendingToolCalls(null); // Clear pending calls for safety
+    }
+
+    // Update conversation list status from standard response/polling with type assertion
+    if (data.status && data.conversation_id === conversationId) {
+       setConversationList(prevList => prevList.map(c => c.id === conversationId ? { ...c, status: data.status as ConversationListItem['status'], updatedAt: data.updatedAt || c.updatedAt } : c).sort((a, b) => b.updatedAt - a.updatedAt));
+    }
+
+    return false; // Indicate standard response was handled
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation]);
+
+
   // Function to poll conversation state (Updates detailedConversation)
   const pollConversationState = useCallback(async (conversationId: string) => {
+    // Stop polling if debug mode is active and paused
+    if (isDebugPaused) {
+        log.debug("Polling skipped: Debugger is paused.");
+        stopPolling();
+        return;
+    }
     log.debug('Polling conversation state', { conversationId });
     try {
-      const response = await axios.get<Conversation>(`/v1/chat/conversations/${conversationId}`); // Expect full Conversation
-      const data = response.data;
-
-      log.verbose('Polling response data', JSON.stringify(data));
-
-      // Update the detailed conversation state
-      setDetailedConversation(prevDetailed => {
-         // Only update if the fetched data is for the currently selected conversation
-         if (prevDetailed?.id === conversationId) {
-            // Check if messages or status actually changed to avoid unnecessary re-renders
-            const messagesChanged = JSON.stringify(prevDetailed.messages) !== JSON.stringify(data.messages);
-            // const statusChanged = prevDetailed.status !== data.status; // Need status on Conversation type
-            // For now, update if messages changed
-            if (messagesChanged) {
-               log.info('Polling: Updating detailed conversation messages', { conversationId, newMessageCount: data.messages.length });
-               return data; // Replace with new data
-            }
-            return prevDetailed; // No change detected
-         }
-         return prevDetailed; // Not the current conversation, ignore
-      });
-
-      // Update pending tool calls based on polled data
-      // Assuming the backend response includes status and pendingToolCalls directly
-      const backendState = data as any; // Use 'any' carefully to access potential backend-specific fields
-      if (backendState.status === 'awaiting_tool_approval') {
-        log.info('Polling: Pausing for tool approval', { conversationId });
-        setPendingToolCalls(backendState.pendingToolCalls || []);
-        stopPolling();
-      } else if (backendState.status === 'completed' || backendState.status === 'error') {
-        log.info('Polling: Stopping due to final status', { conversationId, status: backendState.status });
-        stopPolling();
-        setIsLoading(false);
-        if (backendState.status === 'error' && backendState.lastResponse?.error) {
-          setError(`Error during execution: ${backendState.lastResponse.error}`);
-        }
-      } else {
-         // If status is running or something else, clear pending calls
-         setPendingToolCalls(null);
-      }
+      // Use the GET endpoint which now returns the full Conversation structure
+      const response = await axios.get<Conversation>(`/v1/chat/conversations/${conversationId}`);
+      // Use the common handler
+      handleApiResponse(response, conversationId);
     } catch (error: any) {
       log.error('Polling error:', error);
       stopPolling();
@@ -545,8 +611,7 @@ const Chat: React.FC = () => {
          setError('Connection error during update. Please retry.');
       }
     }
-     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [/* Include dependencies like setDetailedConversation if needed, but avoid conversations */]);
+  }, [handleApiResponse, isDebugPaused]); // Add isDebugPaused dependency
 
   // Function to stop polling
   const stopPolling = () => {
@@ -634,11 +699,14 @@ const Chat: React.FC = () => {
             const meta: ChatCompletionMetadata = {
                 flujo: "true",
                 requireApproval: requireApproval ? "true" : undefined,
+                flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
                 conversationId: conversation.id // Pass the correct ID
             };
-            const filteredMeta: Record<string, string> = {};
+            // Ensure only defined string values are included
+            const filteredMeta: { [key: string]: string } = {};
             if (meta.flujo) filteredMeta.flujo = meta.flujo;
             if (meta.requireApproval) filteredMeta.requireApproval = meta.requireApproval;
+            if (meta.flujodebug) filteredMeta.flujodebug = meta.flujodebug; // Include flujodebug
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
             return filteredMeta;
         })()
@@ -647,30 +715,38 @@ const Chat: React.FC = () => {
       log.debug('Chat completion initial response received', { completionId: completion.id });
       success = true; // API call itself succeeded
 
-      // Polling will handle message updates and final status.
-      // Start polling if not already started (handled by useEffect based on isLoading)
+      // --- Extract relevant data from completion and pass to handler ---
+      // The completion object itself is not an AxiosResponse. We need to simulate
+      // the structure handleApiResponse expects based on the completion data.
+      const responseDataForHandler = {
+          data: { // Simulate the 'data' property of AxiosResponse
+              ...(completion as any), // Spread the completion data (use 'any' carefully)
+              // Ensure essential fields for handleApiResponse are present
+              status: (completion as any).status || 'completed', // Infer status if needed
+              conversation_id: conversation.id,
+              messages: (completion as any).messages || conversation.messages, // Use messages from completion if available
+              pendingToolCalls: (completion as any).pendingToolCalls,
+              debugState: (completion as any).debugState,
+              error: (completion as any).error,
+              lastResponse: (completion as any).lastResponse,
+              updatedAt: (completion as any).updatedAt || Date.now() // Add timestamp if missing
+          },
+          // Simulate other AxiosResponse properties (likely not needed by handler)
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config: {}
+      } as AxiosResponse<any>; // Cast to AxiosResponse for the handler
 
-      // Check if the completion response *immediately* indicates an error
-      const responseData = completion as any;
-      if (responseData.status === 'error' && responseData.lastResponse?.error) {
-         log.warn('Completion response indicates error', { error: responseData.lastResponse.error });
-         setError(`Error during execution: ${responseData.lastResponse.error}`);
-         success = false; // Mark as failed if backend reports immediate error
-         stopPolling(); // Stop polling if backend says it errored
-         setIsLoading(false); // Stop loading indicator
-      } else if (responseData.status === 'awaiting_tool_approval') {
-         // If backend immediately requires approval, update state and stop polling
-         log.info('Completion response requires tool approval', { conversationId: conversation.id });
-         setPendingToolCalls(responseData.pendingToolCalls || []);
-         stopPolling(); // Stop polling as backend is paused
-         // Keep isLoading=true until user responds or polling confirms completion/error
-      } else if (responseData.status === 'completed') {
-         // If backend immediately completes, stop polling and loading
-         log.info('Completion response indicates immediate completion', { conversationId: conversation.id });
-         stopPolling();
-         setIsLoading(false);
-         // Fetch final state one last time? Polling might have missed the last update.
-         await fetchDetailedConversation(conversation.id);
+      const handledDebug = handleApiResponse(responseDataForHandler, conversation.id);
+
+      // If debug state was handled, polling is stopped by the handler
+      // If not handled (standard response), start polling if needed (isLoading is true)
+      if (!handledDebug && !pollingIntervalRef.current) {
+         log.debug("Starting polling after initial non-debug response.");
+         // Polling will be started by the useEffect based on isLoading=true
+      } else if (handledDebug) {
+         log.debug("Debug state handled, polling remains stopped.");
       }
 
     } catch (err: unknown) {
@@ -721,7 +797,7 @@ const Chat: React.FC = () => {
 
     } finally {
       // Don't set isLoading false here if polling might still be needed
-      // The polling useEffect or error handling should manage isLoading
+      // isLoading is managed by handleApiResponse or the polling useEffect
     }
     return success; // Return if the API call itself was successful
   };
@@ -847,7 +923,47 @@ const Chat: React.FC = () => {
     handleToolResponse('reject', toolCallId);
   };
 
-  // Handle Cancel Request
+  // --- Debugger Control Handlers ---
+  const handleDebugStep = async () => {
+    if (!currentConversationId || !isDebugPaused) return;
+    log.info('Handling debug step request', { conversationId: currentConversationId });
+    setIsLoading(true); // Show loading during step
+    setError(null);
+    try {
+      const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/step`);
+      handleApiResponse(response, currentConversationId); // Process the response (updates state, status)
+    } catch (err) {
+      log.error('Error during debug step API call', { conversationId: currentConversationId, err });
+      setError(err instanceof Error ? err.message : 'Failed to execute debug step.');
+      setIsLoading(false); // Stop loading on error
+      setIsDebugPaused(false); // Exit debug mode on error? Or just show error?
+      setDebugState(null);
+    } finally {
+       // setIsLoading(false); // Loading is stopped by handleApiResponse on success/final state
+    }
+  };
+
+  const handleDebugContinue = async () => {
+    if (!currentConversationId || !isDebugPaused) return;
+    log.info('Handling debug continue request', { conversationId: currentConversationId });
+    setIsLoading(true); // Show loading during continue
+    setError(null);
+    setIsDebugPaused(false); // Assume we are exiting explicit pause
+    setDebugState(null);
+    try {
+      const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/continue`);
+      handleApiResponse(response, currentConversationId); // Process the response
+      // Polling might restart via useEffect if status is 'running'
+    } catch (err) {
+      log.error('Error during debug continue API call', { conversationId: currentConversationId, err });
+      setError(err instanceof Error ? err.message : 'Failed to continue execution.');
+      setIsLoading(false); // Stop loading on error
+    } finally {
+       // setIsLoading(false); // Loading is stopped by handleApiResponse or polling
+    }
+  };
+
+  // Handle Cancel Request (Also used by Debugger)
   const handleCancelRequest = async () => {
     if (!currentConversationId) return;
     log.info('Cancelling request', { conversationId: currentConversationId });
@@ -866,6 +982,13 @@ const Chat: React.FC = () => {
       setError('Failed to send cancel request to the server.');
     }
   };
+
+  // --- Add logging for Edit button prop ---
+  log.debug('Rendering Chat component', {
+    currentConversationId,
+    isHandleEditMessageDefined: typeof handleEditMessage === 'function'
+  });
+  // --- End logging ---
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
@@ -896,15 +1019,19 @@ const Chat: React.FC = () => {
         )}
       </Box>
 
-      {/* Main chat area */}
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-        {/* Flow selector - Use summary data */}
-        <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-          <FlowSelector
-            selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
-            onSelectFlow={handleFlowSelect}
-          />
-        </Box>
+      {/* Main Content Area (Chat or Chat + Debugger) */}
+      <Grid container sx={{ flex: 1, height: '100%' }}>
+        {/* Chat Area */}
+        <Grid item xs={isDebugPaused ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: isDebugPaused ? 1 : 0, borderColor: 'divider' }}>
+          {/* Flow selector - Use summary data */}
+          <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+            <FlowSelector
+              // Remove duplicate selectedFlowId prop
+              selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+              onSelectFlow={handleFlowSelect}
+              disabled={isDebugPaused} // Disable flow selection when debugging
+            />
+          </Box>
 
         {/* Chat messages - Use detailed data */}
         <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
@@ -981,12 +1108,41 @@ const Chat: React.FC = () => {
           <ChatInput
             onSendMessage={handleSendMessage}
             // Disable if loading details, loading response, no flow selected (check both detailed and summary), OR awaiting approval
-            disabled={isLoadingDetails || isLoading || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls}
+            disabled={isLoadingDetails || isLoading || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused} // Also disable input when paused
             requireApproval={requireApproval}
             onRequireApprovalChange={setRequireApproval}
+            executeInDebugger={executeInDebugger} // Pass debugger state
+            onExecuteInDebuggerChange={setExecuteInDebugger} // Pass debugger handler
           />
         </Box>
-      </Box>
+        </Grid> {/* End Chat Area Grid */}
+
+        {/* Debugger Area (Conditional) */}
+        {isDebugPaused && debugState && currentConversationId && (
+          <Grid item xs={6} sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            {/* Placeholder for DebuggerCanvas */}
+            <Box sx={{ flex: 1, p: 2, overflow: 'auto', border: 1, borderColor: 'warning.main', borderRadius: 1, m: 1 }}>
+               <Typography variant="h6">Debugger View</Typography>
+               <Typography variant="body2">Conversation ID: {currentConversationId}</Typography>
+               <Typography variant="body2">Status: {debugState.status}</Typography>
+               <Typography variant="body2">Current Node: {debugState.currentNodeId}</Typography>
+               <Typography variant="body2">Trace Steps: {debugState.executionTrace?.length || 0}</Typography>
+               {/* Add Buttons */}
+               <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+                   <Button variant="outlined" size="small" onClick={handleDebugStep} disabled={isLoading}>Next Step</Button>
+                   <Button variant="contained" size="small" onClick={handleDebugContinue} disabled={isLoading}>Continue (Yolo)</Button>
+                   <Button variant="outlined" color="secondary" size="small" onClick={handleCancelRequest} disabled={isLoading}>Cancel</Button>
+                   {/* Add Previous button later */}
+               </Box>
+               {/* Add Trace List and Inspector later */}
+               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '400px', overflowY: 'auto', background: '#f0f0f0', padding: '8px', borderRadius: '4px', marginTop: '10px' }}>
+                   {JSON.stringify(debugState.executionTrace?.slice(-1)[0], null, 2)} {/* Show last trace step */}
+               </pre>
+            </Box>
+            {/* <DebuggerCanvas debugState={debugState} conversationId={currentConversationId} /> */}
+          </Grid>
+        )}
+      </Grid> {/* End Main Content Grid */}
     </Box>
   );
 };

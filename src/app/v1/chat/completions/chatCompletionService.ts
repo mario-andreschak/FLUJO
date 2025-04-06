@@ -5,6 +5,7 @@ import { ChatCompletionRequest } from './requestParser';
 import { FlowExecutionResponse, ErrorResult, SuccessResult } from '@/shared/types/flow/response';
 import OpenAI from 'openai';
 import { SharedState, TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, ERROR_ACTION, STAY_ON_NODE_ACTION, ErrorDetails } from '@/backend/execution/flow/types'; // Import types and actions
+import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage from shared types
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler'; // Import ModelHandler
 import { BaseNode, Flow as PocketFlow } from '@/backend/execution/flow/temp_pocket'; // Use Flow as PocketFlow
 import { toolNameInternalRegex } from '@/utils/shared/common'; // Import the regex
@@ -54,8 +55,9 @@ const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByNam
 // Process chat completion request with the new step-by-step logic
 export async function processChatCompletion(
   data: ChatCompletionRequest,
-  flujo: boolean,
-  requireApproval: boolean, // Add requireApproval flag
+  flujo: boolean, // Keep for existing logic (e.g., internal tool processing)
+  requireApproval: boolean,
+  flujodebug: boolean, // Add the new debug flag parameter
   conversationId?: string
 ) {
   const startTime = Date.now();
@@ -66,7 +68,8 @@ export async function processChatCompletion(
     messageCount: data.messages?.length || 0,
     stream: data.stream, // Note: Streaming logic needs separate adaptation later
     flujo,
-    requireApproval, // Log the new flag
+    requireApproval,
+    flujodebug, // Log the new flag
     conversationId
   });
 
@@ -120,9 +123,16 @@ export async function processChatCompletion(
       return NextResponse.json({ error: { message: `Flow not found: ${flowName}`, type: 'invalid_request_error', code: 'flow_not_found' } }, { status: 400 });
     }
 
+    // Ensure initial messages have timestamps and IDs
+    const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
+        ...msg,
+        id: crypto.randomUUID(), // Add unique ID to each message
+        timestamp: Date.now() // Add timestamp to initial messages
+    }));
+
     sharedState = {
       trackingInfo: { executionId: crypto.randomUUID(), startTime: Date.now(), nodeExecutionTracker: [] },
-      messages: data.messages || [],
+      messages: initialMessages, // Use timestamped initial messages
       flowId: reactFlow.id,
       conversationId: effectiveConvId, // Use the determined ID
       currentNodeId: undefined,
@@ -130,7 +140,11 @@ export async function processChatCompletion(
       // --- Initialize new fields ---
       title: 'New Conversation', // Default title
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      // --- Initialize Debugger Fields ---
+      debugMode: flujodebug, // Set debug mode based on the flag
+      executionTrace: flujodebug ? [] : undefined, // Initialize trace only if debugging
+      originalRequireApproval: flujodebug ? requireApproval : undefined // Store original setting if debugging
     };
     // Save the newly created state immediately
     try {
@@ -167,37 +181,102 @@ export async function processChatCompletion(
         const lastRequestMessage = data.messages[data.messages.length - 1];
         const lastStateMessage = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
 
-        // Add user message if it's new
+        // Add user message if it's new, ensuring it has a timestamp
         if (lastRequestMessage.role === 'user') {
           if (!lastStateMessage || lastStateMessage.role !== 'user' || lastStateMessage.content !== lastRequestMessage.content) {
             log.info(`Adding new user message to conversation ${sharedState.conversationId}`);
-            sharedState.messages.push(lastRequestMessage);
+            const userMessageWithTimestamp: FlujoChatMessage = {
+                ...lastRequestMessage,
+                id: crypto.randomUUID(), // Add unique ID
+                timestamp: Date.now()
+            };
+            sharedState.messages.push(userMessageWithTimestamp);
           } else {
             log.debug(`Duplicate user message detected for conv ${sharedState.conversationId}, skipping add.`);
           }
         }
-        // Add tool response if it's provided
+        // Add tool response if it's provided, ensuring it has a timestamp
         else if (lastRequestMessage.role === 'tool') {
            // Simple check: add if the last message isn't an identical tool response
            if (!lastStateMessage || lastStateMessage.role !== 'tool' || lastStateMessage.tool_call_id !== lastRequestMessage.tool_call_id || lastStateMessage.content !== lastRequestMessage.content) {
               log.info(`Adding new tool response message to conversation ${sharedState.conversationId}`);
-              sharedState.messages.push(lastRequestMessage);
+              const toolMessageWithTimestamp: FlujoChatMessage = {
+                  ...lastRequestMessage,
+                  id: crypto.randomUUID(), // Add unique ID
+                  timestamp: Date.now()
+              };
+              sharedState.messages.push(toolMessageWithTimestamp);
            } else {
               log.debug(`Duplicate tool response detected for conv ${sharedState.conversationId}, skipping add.`);
            }
         }
       }
+      // Ensure debugMode is set if resuming state
+      if (sharedState && sharedState.debugMode === undefined) {
+        sharedState.debugMode = flujodebug;
+        if (flujodebug) {
+            if (!sharedState.executionTrace) {
+                sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
+            }
+            // Store original requireApproval if resuming into debug mode and not already set
+            if (sharedState.originalRequireApproval === undefined) {
+                sharedState.originalRequireApproval = requireApproval;
+            }
+        }
+      }
   }
 
-  // --- 2. Main Execution Loop ---
+  // --- 2. Main Execution Logic ---
   let currentAction: string | undefined = undefined;
-  const MAX_INTERNAL_ITERATIONS = 15; // Safety break for flujo=true loop
+  const MAX_INTERNAL_ITERATIONS = 15; // Safety break for non-debug flujo=true loop
   let internalIterations = 0;
 
   try {
-    while (internalIterations < MAX_INTERNAL_ITERATIONS) {
-      internalIterations++;
-      log.info(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`);
+    // --- Debug Mode: Execute only one step ---
+    if (sharedState.debugMode) {
+      log.info(`[Debug Mode] Executing single step for Conv ${effectiveConvId}`);
+      // Check cancellation before the step
+      if (sharedState.isCancelled) {
+        log.info(`[Debug Mode] Cancellation detected before step for conv ${effectiveConvId}.`);
+        sharedState.status = 'error';
+        sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+        currentAction = ERROR_ACTION;
+      } else {
+        const stepResult = await FlowExecutor.executeStep(sharedState);
+        sharedState = stepResult.sharedState; // Update state
+        currentAction = stepResult.action;
+        // Set status to paused_debug unless it's an error or final response
+        if (currentAction !== ERROR_ACTION && currentAction !== FINAL_RESPONSE_ACTION) {
+          sharedState.status = 'paused_debug';
+        } else if (currentAction === FINAL_RESPONSE_ACTION) {
+          sharedState.status = 'completed'; // Mark as completed if the single step finished
+        } else {
+          sharedState.status = 'error'; // Mark as error if the single step errored
+        }
+        log.info(`[Debug Mode] Step completed for conv ${effectiveConvId}. Action: ${currentAction}, Status: ${sharedState.status}`);
+        // Save state after the single step
+        try {
+          sharedState.updatedAt = Date.now();
+          // Title update logic
+          if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+            const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+            if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+                sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+            }
+          }
+          await saveItemBackend(storageKey, sharedState);
+          log.debug(`[Debug Mode] Saved state after single step for conv ${effectiveConvId}`);
+        } catch (error) {
+          log.error(`[Debug Mode] Failed to save state after single step for conv ${effectiveConvId}:`, error);
+        }
+      }
+      // No loop needed in debug mode, exit after one step or cancellation check
+    }
+    // --- Normal Mode: Execute loop ---
+    else {
+      while (internalIterations < MAX_INTERNAL_ITERATIONS) {
+        internalIterations++;
+        log.info(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`);
 
       // Check for cancellation flag before executing the step
       if (sharedState.isCancelled) {
@@ -244,11 +323,11 @@ export async function processChatCompletion(
       log.verbose(`Shared state after step ${internalIterations}`, JSON.stringify(sharedState));
 
 
-      // 2b. Handle the action returned by the step
-      if (currentAction === ERROR_ACTION) {
-        log.error(`Error action received during step ${internalIterations} for conv ${effectiveConvId}`, { error: sharedState.lastResponse });
-        break; // Exit loop to return error
-      }
+        // 2b. Handle the action returned by the step
+        if (currentAction === ERROR_ACTION) {
+          log.error(`Error action received during step ${internalIterations} for conv ${effectiveConvId}`, { error: sharedState.lastResponse });
+          break; // Exit loop to return error
+        }
 
       if (currentAction === FINAL_RESPONSE_ACTION) {
         log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
@@ -299,9 +378,14 @@ export async function processChatCompletion(
                break; // Exit loop on tool processing error
             }
 
-            // Add tool results to messages
+            // Add tool results to messages, ensuring they have timestamps
             log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} tool result messages for conv ${effectiveConvId}`);
-            sharedState.messages.push(...toolProcessingResult.value.toolCallMessages);
+            const toolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+                ...msg,
+                id: crypto.randomUUID(), // Add unique ID
+                timestamp: Date.now()
+            }));
+            sharedState.messages.push(...toolResultMessagesWithTimestamp);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
               // State is updated, continue to the next iteration of the while loop
               log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
@@ -339,11 +423,16 @@ export async function processChatCompletion(
                  break; // Exit loop on tool processing error
               }
 
-              // Add tool results to messages
-              log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} internal tool result messages for conv ${effectiveConvId}`);
-              sharedState.messages.push(...toolProcessingResult.value.toolCallMessages);
-              FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
-              // State is updated, continue to the next iteration of the while loop
+            // Add tool results to messages, ensuring they have timestamps
+            log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} internal tool result messages for conv ${effectiveConvId}`);
+            const internalToolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+                ...msg,
+                id: crypto.randomUUID(), // Add unique ID
+                timestamp: Date.now()
+            }));
+            sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
+            // State is updated, continue to the next iteration of the while loop
               log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (flujo=false).`);
               continue; // Go to next loop iteration
 
@@ -409,13 +498,66 @@ export async function processChatCompletion(
          if (nextNode) {
             const nextNodeId = nextNode.node_params?.id;
             if (typeof nextNodeId === 'string' && nextNodeId.length > 0) {
+
+                // <<< --- START ADDED CODE --- >>>
+
+                // 1. Find the last assistant message and the handoff tool call
+                const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+                let handoffToolCallId: string | undefined = undefined;
+
+                if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
+                    // Find the tool call that corresponds to this handoff action.
+                    // Assume the first/only handoff tool call is the relevant one for now.
+                    const handoffToolCall = lastAssistantMsg.tool_calls.find(tc =>
+                        tc.type === 'function' &&
+                        (tc.function.name === 'handoff' || tc.function.name.startsWith('handoff_to_'))
+                    );
+
+                    if (handoffToolCall) {
+                        handoffToolCallId = handoffToolCall.id;
+                        log.debug(`Found handoff tool call ID: ${handoffToolCallId} for edge ${currentAction}`);
+
+                        // 2. Create the tool result message with timestamp
+                        const toolResultMessage: FlujoChatMessage = {
+                            id: crypto.randomUUID(), // Add unique ID
+                            role: 'tool',
+                            tool_call_id: handoffToolCallId,
+                            content: JSON.stringify({ status: "Handoff processed", targetNodeId: nextNodeId }), // Simple confirmation content
+                            timestamp: Date.now()
+                        };
+
+                        // 3. Append the tool result message to shared state
+                        sharedState.messages.push(toolResultMessage);
+                        log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
+
+                        // 4. Append the follow-up user message with timestamp
+                        const userHandoffConfirmation: FlujoChatMessage = {
+                            id: crypto.randomUUID(), // Add unique ID
+                            role: 'user',
+                            content: 'The handoff was successful. Continue',
+                            timestamp: Date.now()
+                        };
+                        sharedState.messages.push(userHandoffConfirmation);
+                        log.info(`Appended user confirmation message after handoff tool result.`);
+
+                    } else {
+                        log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);
+                        // Proceeding might lead to the same API error later. Logging a warning for now.
+                    }
+                } else {
+                     log.warn(`Handoff action received for edge ${currentAction}, but the last message was not an assistant message with tool calls.`);
+                }
+
+                // <<< --- END ADDED CODE --- >>>
+
+
+                // Original logic to update state and continue
                 sharedState.currentNodeId = nextNodeId;
-                sharedState.handoffRequested = undefined;
+                sharedState.handoffRequested = undefined; // Clear the request flag if it was set
                 log.info(`Transitioning conv ${effectiveConvId} to node ${sharedState.currentNodeId}`);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                // State updated, continue loop for the next step (automatic handoff)
                 log.info(`Continuing loop for conv ${effectiveConvId} after handoff.`);
-                continue;
+                continue; // Continue loop for the next step
             } else {
                  log.error(`Handoff failed for conv ${effectiveConvId}: Successor node for edge ${currentAction} has invalid ID.`);
                  sharedState.lastResponse = { success: false, error: `Handoff failed: Target node for edge ${currentAction} has invalid ID.` };
@@ -436,21 +578,22 @@ export async function processChatCompletion(
          break; // Exit loop, return current state
       }
 
-      // If action is unrecognized after checking handoffs, treat as error or final?
-      log.warn(`Unrecognized action '${currentAction}' received at step ${internalIterations} for conv ${effectiveConvId}. Treating as final response.`);
-      currentAction = FINAL_RESPONSE_ACTION;
-      break;
+        // If action is unrecognized after checking handoffs, treat as error or final?
+        log.warn(`Unrecognized action '${currentAction}' received at step ${internalIterations} for conv ${effectiveConvId}. Treating as final response.`);
+        currentAction = FINAL_RESPONSE_ACTION;
+        break;
 
-    } // --- End while loop ---
+      } // --- End while loop (Normal Mode) ---
 
-    // Safety break check
-    if (internalIterations >= MAX_INTERNAL_ITERATIONS) {
-       log.warn(`Max internal iterations (${MAX_INTERNAL_ITERATIONS}) reached for conv ${effectiveConvId}. Returning current state as error.`);
-       if (currentAction !== ERROR_ACTION) { // Avoid overwriting existing error
-          sharedState.lastResponse = { success: false, error: `Maximum internal iterations (${MAX_INTERNAL_ITERATIONS}) reached.` };
-          currentAction = ERROR_ACTION;
-       }
-    }
+      // Safety break check (Normal Mode)
+      if (internalIterations >= MAX_INTERNAL_ITERATIONS) {
+         log.warn(`Max internal iterations (${MAX_INTERNAL_ITERATIONS}) reached for conv ${effectiveConvId}. Returning current state as error.`);
+         if (currentAction !== ERROR_ACTION) { // Avoid overwriting existing error
+            sharedState.lastResponse = { success: false, error: `Maximum internal iterations (${MAX_INTERNAL_ITERATIONS}) reached.` };
+            currentAction = ERROR_ACTION;
+         }
+      }
+    } // --- End Normal Mode execution ---
 
   } catch (loopError) {
      // Catch errors originating from within the loop logic itself (e.g., state handling)
@@ -463,7 +606,9 @@ export async function processChatCompletion(
 
   // --- 3. Format and Return Response ---
   const finalExecutionTime = Date.now() - startTime;
-  log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}`, { duration: `${finalExecutionTime}ms` });
+  // Use status from sharedState if available, otherwise infer from action
+  const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
+  log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
   // Save final state before returning
   try {
@@ -484,8 +629,20 @@ export async function processChatCompletion(
   // Update state map one last time before returning
   FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
 
-  // Handle Error Response
-  if (currentAction === ERROR_ACTION) {
+  // --- Handle Debug Paused Response ---
+  if (sharedState.status === 'paused_debug') {
+    log.info(`Returning paused debug state for conv ${effectiveConvId}`);
+    // Return a custom structure indicating the paused state and include the full debug state
+    return NextResponse.json({
+      status: 'paused_debug',
+      conversation_id: sharedState.conversationId,
+      debugState: sharedState // Include the entire state with the trace
+    });
+  }
+
+  // --- Handle Error Response ---
+  // Check status first, then action as fallback
+  if (sharedState.status === 'error' || currentAction === ERROR_ACTION) {
     let errorMessage = 'Unknown error during execution';
     let errorDetails: ErrorDetails | undefined = undefined;
     let statusCode = 500;
@@ -536,11 +693,13 @@ export async function processChatCompletion(
 
     log.error(`Returning error response for conv ${effectiveConvId}`, { errorMessage, errorDetails, statusCode });
 
-    // Ensure status is set correctly on error
-    sharedState.status = 'error';
+    // Ensure status is set correctly on error if not already set
+    if (sharedState.status !== 'error') {
+        sharedState.status = 'error';
+    }
 
     return NextResponse.json({
-      error: {
+      error: { // OpenAI compatible error structure
         message: errorMessage,
         // Safely access properties of errorDetails
         type: errorDetails.type || 'api_error',
@@ -632,16 +791,19 @@ export async function processChatCompletion(
       finish_reason: finish_reason
     }],
     usage,
-    // Return all messages in the shared state for context
-    messages: sharedState.messages,
+    // --- Include additional context in the standard response ---
+    // Return all messages (now with timestamps) in the shared state for context
+    messages: sharedState.messages as FlujoChatMessage[], // Cast to ensure type correctness
     // Include conversation ID for stateful interactions
     conversation_id: sharedState.conversationId, // Ensure this uses the correct ID
-    // Include status and pending calls if relevant
-    status: sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'), // Infer status if not explicitly set
-    pendingToolCalls: sharedState.pendingToolCalls
+    // Include final status and pending calls if relevant
+    status: sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'), // Use finalStatus determined earlier
+    pendingToolCalls: sharedState.pendingToolCalls,
+    // Optionally include trace even in non-debug final responses? For now, exclude.
+    // executionTrace: sharedState.executionTrace
   };
 
-  log.info(`Returning success response for conv ${effectiveConvId}`, { action: currentAction, status: responseData.status, flujo, requireApproval, finish_reason });
+  log.info(`Returning success response for conv ${effectiveConvId}`, { action: currentAction, status: responseData.status, flujo, requireApproval, flujodebug, finish_reason });
   log.verbose(`Final response data for conv ${effectiveConvId}`, JSON.stringify(responseData));
 
   // TODO: Adapt streaming response logic if needed.
