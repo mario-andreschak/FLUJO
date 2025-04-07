@@ -200,16 +200,19 @@ const Element = (props: {
     const editor = useSlate();
     const toolRef = element as ToolReferenceElement;
     
+    // Check if this is a handoff tool reference
+    const isHandoff = toolRef.serverName === 'handoff';
+    
     return (
       <span 
         contentEditable={false}
-        className="tool-reference-container"
+        className={`tool-reference-container ${isHandoff ? 'handoff' : ''}`}
       >
-  <span className="tool-reference">
+  <span className={`tool-reference ${isHandoff ? 'handoff' : ''}`}>
     {`${'{_-_-_' + toolRef.serverName + '_-_-_' + toolRef.toolName + '}'}`}
   </span>
   <span
-    className="tool-reference-delete"
+    className={`tool-reference-delete ${isHandoff ? 'handoff' : ''}`}
     role="button"
     tabIndex={0}
     onClick={(e) => {
@@ -267,7 +270,8 @@ const Leaf = (props: {
   }
   
   if (leaf.code) {
-    formattedChildren = <code className={leaf['tool-reference'] ? 'tool-reference' : ''}>{formattedChildren}</code>;
+    const isHandoff = leaf['server-name'] === 'handoff';
+    formattedChildren = <code className={`${leaf['tool-reference'] ? 'tool-reference' : ''} ${isHandoff ? 'handoff' : ''}`}>{formattedChildren}</code>;
   }
   
   return <span {...attributes}>{formattedChildren}</span>;
@@ -275,6 +279,8 @@ const Leaf = (props: {
 
 // Preview component for rendering tool references
 const ToolReferencePreview = ({ serverName, toolName }: { serverName: string, toolName: string }) => {
+  // Check if this is a handoff tool reference
+  const isHandoff = serverName === 'handoff';
   const [toolInfo, setToolInfo] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   
@@ -306,11 +312,11 @@ const ToolReferencePreview = ({ serverName, toolName }: { serverName: string, to
   }, [serverName, toolName]);
   
   if (isLoading) {
-    return <span className="tool-reference-preview loading">{`tool:${serverName}:${toolName}`}</span>;
+    return <span className={`tool-reference-preview loading ${isHandoff ? 'handoff' : ''}`}>{`tool:${serverName}:${toolName}`}</span>;
   }
   
   if (!toolInfo) {
-    return <span className="tool-reference-preview not-found">{`tool:${serverName}:${toolName} (Tool not found)`}</span>;
+    return <span className={`tool-reference-preview not-found ${isHandoff ? 'handoff' : ''}`}>{`tool:${serverName}:${toolName} (Tool not found)`}</span>;
   }
   
   // Format parameters if available
@@ -319,8 +325,8 @@ const ToolReferencePreview = ({ serverName, toolName }: { serverName: string, to
     : '';
   
   return (
-    <span className="tool-reference-preview">
-      [The user is referencing a tool `tool:${serverName}:${toolName}` ({toolInfo.description || 'No description'}){paramsText}]
+    <span className={`tool-reference-preview ${isHandoff ? 'handoff' : ''}`}>
+      [The user is referencing a {isHandoff ? 'handoff' : 'tool'} `tool:${serverName}:${toolName}` ({toolInfo.description || 'No description'}){paramsText}]
     </span>
   );
 };
@@ -492,6 +498,12 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
           const toolName = parts[2];
           
           log.info(`Inserting tool reference: ${serverName}:${toolName}`);
+          
+          // Check if this is a handoff tool reference
+          const isHandoff = serverName === 'handoff';
+          if (isHandoff) {
+            log.debug(`This is a handoff tool reference`);
+          }
           
           const toolReference: ToolReferenceElement = {
             type: 'tool-reference',

@@ -16,7 +16,11 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
-  Button
+  Button,
+  FormControl,
+  InputLabel,
+  Select,
+  SelectChangeEvent
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -44,9 +48,10 @@ const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize
 interface ChatMessagesProps {
   messages: ChatMessage[];
   pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[] | null; // Add pending calls prop
+  availableNodes?: { id: string; label: string }[]; // Add available nodes for dropdown
   onToggleDisabled: (messageId: string) => void;
   onSplitConversation: (messageId: string) => void;
-  onEditMessage?: (messageId: string, content: string) => void;
+  onEditMessage?: (messageId: string, content: string, processNodeId?: string | null) => void;
   onApproveToolCall?: (toolCallId: string) => void; // Add approve handler prop
   onRejectToolCall?: (toolCallId: string) => void; // Add reject handler prop
 }
@@ -59,6 +64,7 @@ function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_cal
 const ChatMessages: React.FC<ChatMessagesProps> = ({
   messages,
   pendingToolCalls, // Destructure new prop
+  availableNodes = [], // Destructure with default empty array
   onToggleDisabled,
   onSplitConversation,
   onEditMessage,
@@ -78,6 +84,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [isEditing, setIsEditing] = React.useState<boolean>(false);
   const [editContent, setEditContent] = React.useState<string>('');
+  const [editNodeId, setEditNodeId] = React.useState<string | null>(null);
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>, messageId: string) => {
     // Log messageId directly
@@ -111,6 +118,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       // Ensure content is a string before setting it for editing
       if (message && message.role === 'user' && typeof message.content === 'string') {
         setEditContent(message.content);
+        setEditNodeId(message.processNodeId || null);
         setEditingMessageId(activeMessageId);
         setIsEditing(true);
       }
@@ -120,15 +128,22 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
 
   const handleSaveEdit = () => {
     if (editingMessageId && onEditMessage) {
-      onEditMessage(editingMessageId, editContent);
+      onEditMessage(editingMessageId, editContent, editNodeId);
       setIsEditing(false);
       setEditingMessageId(null);
+      setEditNodeId(null);
     }
   };
 
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditingMessageId(null);
+    setEditNodeId(null);
+  };
+
+  const handleNodeIdChange = (event: SelectChangeEvent) => {
+    // Convert empty string to null, otherwise use the string value
+    setEditNodeId(event.target.value === "" ? null : event.target.value);
   };
 
   // Format timestamp
@@ -254,7 +269,24 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                     color: 'black',
                   }}
                 />
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+                <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                  <InputLabel id="node-id-select-label">Process Node</InputLabel>
+                  <Select
+                    labelId="node-id-select-label"
+                    id="node-id-select"
+                    value={editNodeId || ""}
+                    label="Process Node"
+                    onChange={handleNodeIdChange}
+                  >
+                    <MenuItem value=""><em>None</em></MenuItem>
+                    {availableNodes.map((node) => (
+                      <MenuItem key={node.id} value={node.id}>
+                        {node.label || node.id.substring(0, 8)}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1 }}>
                   <Button
                     variant="outlined"
                     size="small"
@@ -279,13 +311,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                       components={{
-                        p: (props) => <Typography variant="body1" sx={{ mb: 1 }}>{props.children}</Typography>,
-                        h1: (props) => <Typography variant="h5" sx={{ mt: 2, mb: 1 }}>{props.children}</Typography>,
-                        h2: (props) => <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>{props.children}</Typography>,
-                        h3: (props) => <Typography variant="subtitle1" sx={{ mt: 1.5, mb: 1 }}>{props.children}</Typography>,
-                        h4: (props) => <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 1 }}>{props.children}</Typography>,
-                        h5: (props) => <Typography variant="body1" sx={{ mt: 1, mb: 1, fontWeight: 'bold' }}>{props.children}</Typography>,
-                        h6: (props) => <Typography variant="body2" sx={{ mt: 1, mb: 1, fontWeight: 'bold' }}>{props.children}</Typography>,
+                        p: (props) => <Typography variant="body1" sx={{ mb: 0.5 }}>{props.children}</Typography>,
+                        h1: (props) => <Typography variant="h5" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
+                        h2: (props) => <Typography variant="h6" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
+                        h3: (props) => <Typography variant="subtitle1" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
+                        h4: (props) => <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
+                        h5: (props) => <Typography variant="body1" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
+                        h6: (props) => <Typography variant="body2" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
                         ul: (props) => <Box component="ul" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
                         ol: (props) => <Box component="ol" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
                         li: (props) => <Box component="li" sx={{ mb: 0.5 }}>{props.children}</Box>,

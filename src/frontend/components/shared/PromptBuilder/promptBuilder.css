@@ -27,12 +27,23 @@
   white-space: nowrap;
 }
 
+/* Handoff tool reference container styles */
+.tool-reference-container.handoff {
+  background-color: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
 /* Tool reference text */
 .tool-reference {
   color: #1976d2;
   padding: 2px 6px;
   font-size: 0.9em;
   font-family: monospace;
+}
+
+/* Handoff tool reference text */
+.tool-reference.handoff {
+  color: rgba(0, 0, 0, 0.7);
 }
 
 /* Delete button */
@@ -50,6 +61,11 @@
   margin-right: 4px;
   border: none;
   padding: 0;
+}
+
+/* Handoff tool delete button */
+.tool-reference-delete.handoff {
+  color: rgba(0, 0, 0, 0.6);
 }
 
 .tool-reference-delete:hover {
@@ -78,6 +94,13 @@
   border: 1px solid #e0e0e0;
 }
 
+/* Handoff tool reference preview styles */
+.tool-reference-preview.handoff {
+  background-color: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.7);
+}
+
 .tool-reference-preview.loading {
   background-color: #fff8e1;
   border-color: #ffe082;
@@ -103,4 +126,10 @@ code.tool-reference {
   background-color: #e3f2fd;
   color: #1976d2;
   border: 1px solid #bbdefb;
+}
+
+code.tool-reference.handoff {
+  background-color: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }

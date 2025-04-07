@@ -9,7 +9,9 @@ import {
     IconButton,
     Divider,
     Grid,
-    Typography
+    Typography,
+    Tabs,
+    Tab
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
@@ -19,9 +21,11 @@ import { ProcessNodePropertiesModalProps } from './types';
 import useModelManagement from './hooks/useModelManagement';
 import useServerConnection from './hooks/useServerConnection';
 import useNodeData from './hooks/useNodeData';
+import useHandoffTools from './hooks/useHandoffTools';
 import NodeConfiguration from './NodeConfiguration';
 import ModelBinding from './ModelBinding/index';
 import ServerTools from './ServerTools';
+import AgentTools from './ServerTools/AgentTools';
 import PromptTemplateEditor from './PromptTemplateEditor';
 import NodeProperties from './NodeProperties';
 import { getNodeProperties } from './utils';
@@ -36,6 +40,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [isModelBound, setIsModelBound] = useState(false);
   const [excludeModelPrompt, setExcludeModelPrompt] = useState(false);
   const [excludeStartNodePrompt, setExcludeStartNodePrompt] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>('server');
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
     open,
@@ -46,10 +51,9 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   );
 
   const {
-    connectedServers,
+    connectedMcpNodes,
     isLoadingServers,
-    selectedToolServer,
-    selectedNodeId,
+    selectedToolServerNodeId,
     serverToolsMap,
     serverStatuses,
     isLoadingTools,
@@ -58,6 +62,9 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     handleRetryServer,
     handleRestartServer
   } = useServerConnection(open, node, flowEdges, flowNodes);
+  
+  // Get handoff tools for agent tab
+  const { handoffTools, isLoadingHandoffTools } = useHandoffTools(open, node, flowEdges, flowNodes);
 
     // Load prompt template and model binding status when node changes
   useEffect(() => {
@@ -81,7 +88,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
 
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
 
-  const handleInsertToolBinding = (serverName: string, toolName: string) => {
+  const handleInsertToolBinding = (serverName: string, toolName: string, toolType: string = 'server'): void => {
     // Log the parameters to help with debugging
     log.debug('handleInsertToolBinding called with:', JSON.stringify({ serverName, toolName }));
     
@@ -98,7 +105,10 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     const toolDescription = tool?.description || '';
     
     // Create the binding in the format that will be visually displayed as a pill
-    const binding = `\${_-_-_${serverName}_-_-_${toolName}}`;
+    // For handoff tools, use a different format to distinguish them
+    const binding = toolType === 'handoff' 
+      ? `\${_-_-_handoff_-_-_${toolName}}` 
+      : `\${_-_-_${serverName}_-_-_${toolName}}`;
     
     // Add a space before the binding if needed
     const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
@@ -203,22 +213,43 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               />
             </Box>
             <Box sx={{ mb: 3 }}>
-              <ServerTools
-                isLoadingServers={isLoadingServers}
-                connectedServers={connectedServers}
-                serverStatuses={serverStatuses}
-                serverToolsMap={serverToolsMap}
-                isLoadingTools={isLoadingTools}
-                handleInsertToolBinding={handleInsertToolBinding}
-                selectedToolServer={selectedToolServer}
-                selectedNodeId={selectedNodeId}
-                handleSelectToolServer={handleSelectToolServer}
-                isLoadingSelectedServerTools={isLoadingSelectedServerTools}
-                promptBuilderRef={promptBuilderRef}
-                flowNodes={flowNodes}
-                handleRetryServer={handleRetryServer}
-                handleRestartServer={handleRestartServer}
-              />
+              {/* Tabs for Server Tools and Agent Tools */}
+              <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+                <Tabs value={activeTab} onChange={(_, newValue: string) => setActiveTab(newValue)}>
+                  <Tab label="Server Tools" value="server" />
+                  <Tab label="Agent Tools" value="agent" />
+                </Tabs>
+              </Box>
+              
+              {/* Show Server Tools tab content */}
+              {activeTab === 'server' && (
+                <ServerTools
+                  isLoadingServers={isLoadingServers}
+                  connectedMcpNodes={connectedMcpNodes}
+                  serverStatuses={serverStatuses}
+                  serverToolsMap={serverToolsMap}
+                  isLoadingTools={isLoadingTools}
+                  handleInsertToolBinding={handleInsertToolBinding}
+                  selectedToolServerNodeId={selectedToolServerNodeId}
+                  selectedNodeId={node?.id || null}
+                  handleSelectToolServer={handleSelectToolServer}
+                  isLoadingSelectedServerTools={isLoadingSelectedServerTools}
+                  promptBuilderRef={promptBuilderRef}
+                  handleRetryServer={handleRetryServer}
+                  handleRestartServer={handleRestartServer}
+                />
+              )}
+              
+              {/* Show Agent Tools tab content */}
+              {activeTab === 'agent' && (
+                <AgentTools
+                  handoffTools={handoffTools}
+                  isLoadingHandoffTools={isLoadingHandoffTools}
+                  handleInsertToolBinding={(toolType: string, toolName: string) => handleInsertToolBinding(toolType, toolName, 'handoff')}
+                  promptBuilderRef={promptBuilderRef}
+                  selectedNodeId={node?.id || null}
+                />
+              )}
             </Box>
             <Box>
               <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
