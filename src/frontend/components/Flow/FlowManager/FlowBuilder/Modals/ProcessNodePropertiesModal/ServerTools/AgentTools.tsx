@@ -9,7 +9,9 @@ import {
   Card,
   CardContent,
   Tooltip,
-  List
+  List,
+  Button,
+  Divider
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
@@ -59,11 +61,20 @@ const AgentTools: React.FC<AgentToolsProps> = ({
   });
 
   // Format parameter schema for display
-  const formatParameterSchema = (inputSchema: any) => {
-    if (!inputSchema || !inputSchema.properties) {
-      return null;
+  const formatParameterSchema = (inputSchema: HandoffTool['inputSchema']) => {
+    // Check if inputSchema and properties exist and if there are any properties
+    if (!inputSchema || !inputSchema.properties || Object.keys(inputSchema.properties).length === 0) {
+      // If no properties, display "No parameters"
+      return (
+        <Box sx={{ mt: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+            No parameters required.
+          </Typography>
+        </Box>
+      );
     }
 
+    // If properties exist, display them as before
     return (
       <Box sx={{ mt: 1 }}>
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 'medium' }}>
@@ -74,7 +85,7 @@ const AgentTools: React.FC<AgentToolsProps> = ({
             <Box key={paramName} sx={{ mb: 0.5 }}>
               <Typography variant="caption" component="span" sx={{ fontWeight: 'medium' }}>
                 {paramName}
-                {inputSchema.required?.includes(paramName) && 
+                {inputSchema.required?.includes(paramName) &&
                   <Typography variant="caption" component="span" color="error.main"> *</Typography>
                 }
                 {': '}
@@ -115,6 +126,37 @@ const AgentTools: React.FC<AgentToolsProps> = ({
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
             Connect this Process node to other nodes to enable handoff tools.
           </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+            <Button 
+              variant="outlined" 
+              size="small"
+              onClick={() => {
+                // Create a debug handoff tool for testing
+                const debugTool: HandoffTool = {
+                  name: "debug_handoff_tool",
+                  description: "Debug handoff tool for testing",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      debug: {
+                        type: "boolean",
+                        description: "This is a debug tool"
+                      }
+                    },
+                    required: ["debug"]
+                  }
+                };
+                
+                // Insert the debug tool
+                handleInsertToolBinding('handoff', debugTool.name);
+                
+                // Log the action
+                log.debug('Inserted debug handoff tool', { toolName: debugTool.name });
+              }}
+            >
+              Insert Debug Tool
+            </Button>
+          </Box>
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, height: 'calc(100% - 40px)' }}>
@@ -136,6 +178,22 @@ const AgentTools: React.FC<AgentToolsProps> = ({
             }}
           />
           
+          {/* Debug info */}
+          <Box sx={{ mb: 2, p: 2, bgcolor: 'rgba(0, 0, 0, 0.02)', borderRadius: 1 }}>
+            <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
+              Debug Information:
+            </Typography>
+            <Typography variant="caption" component="div">
+              Node ID: {selectedNodeId || 'None'}
+            </Typography>
+            <Typography variant="caption" component="div">
+              Handoff Tools Count: {handoffTools.length}
+            </Typography>
+            <Typography variant="caption" component="div">
+              Tool Names: {handoffTools.map(t => t.name).join(', ')}
+            </Typography>
+          </Box>
+          
           {/* Tool list */}
           <Paper 
             variant="outlined" 
@@ -143,7 +201,7 @@ const AgentTools: React.FC<AgentToolsProps> = ({
               flexGrow: 1,
               overflow: 'auto', 
               p: 0,
-              height: 'calc(100% - 60px)'
+              height: 'calc(100% - 140px)' // Adjusted for debug info
             }}
           >
             {filteredTools.length === 0 ? (

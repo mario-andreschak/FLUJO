@@ -419,9 +419,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </Tooltip>
         </Box> {/* End of Input area Box */}
 
-        {/* Tool Approval Checkbox */}
+        {/* Tool Approval Checkbox - Hidden but still functional */}
         {onRequireApprovalChange && ( // Only show if callback is provided
-          <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start' }}>
+          <Box sx={{ mt: 1, display: 'none', justifyContent: 'flex-start' }}>
             <FormControlLabel
               control={
                 <Checkbox
