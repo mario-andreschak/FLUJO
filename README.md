@@ -2,7 +2,7 @@
 ====> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <====
 
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
--> Create a Github Issue or write on Discord (https://discord.gg/bW7amT5j) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
+-> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
 Here's a video guiding you through the whole thing - from installation to output! (15min)
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
