@@ -170,9 +170,11 @@ export const cloneRepository = async (
     if (blobMatch) {
       repoUrl = blobMatch[1];
     }
-    
-    const gitCloneUrl = repoUrl.endsWith('.git') ? repoUrl : `${repoUrl}.git`;
-    
+
+    const gitCloneUrl = repoUrl.endsWith('.git')
+      ? repoUrl 
+      : `${repoUrl.replace(/\/$/, '')}.git`;
+
     // Normalize path by replacing backslashes with forward slashes
     const normalizedPath = savePath.replace(/\\/g, '/');
     
