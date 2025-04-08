@@ -117,6 +117,34 @@ export async function processChatCompletion(
        log.warn(`Loaded state's internal conversationId (${sharedState.conversationId}) differs from effectiveConvId (${effectiveConvId}). Using effectiveConvId.`);
        sharedState.conversationId = effectiveConvId; // Correct the state object if needed
     }
+
+    // --- Handle processNodeId if provided ---
+    if (data.processNodeId && stateSource !== 'new') {
+      log.info(`Edit detected: Resetting currentNodeId for conversation ${effectiveConvId} to provided processNodeId: ${data.processNodeId}`);
+      
+      // Reset execution state
+      sharedState.currentNodeId = data.processNodeId;
+      sharedState.status = 'running'; // Reset status if it was completed/error
+      sharedState.lastResponse = undefined; // Clear previous final response
+      sharedState.pendingToolCalls = undefined; // Clear any pending calls from previous run
+      sharedState.handoffRequested = undefined; // Clear any pending handoff
+      
+      // Reset tracking info to start fresh from this node
+      sharedState.trackingInfo = {
+        executionId: crypto.randomUUID(), // New execution ID for the edited flow
+        startTime: Date.now(), // Reset start time
+        nodeExecutionTracker: [] // Clear previous node execution history
+      };
+      
+      // Clear execution trace if it exists
+      if (sharedState.executionTrace) {
+        sharedState.executionTrace = [];
+      }
+      
+      // Update the state in memory immediately
+      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      log.debug(`State updated in memory with reset currentNodeId: ${sharedState.currentNodeId}`);
+    }
   } else {
     // Create a new default state
     log.info(`Creating new conversation state object for ID: ${effectiveConvId}`);

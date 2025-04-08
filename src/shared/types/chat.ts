@@ -26,7 +26,11 @@ export interface ChatCompletionMetadata {
    */
   flujodebug?: "true";
 
-  // Add other potential metadata fields here if needed in the future
+  /**
+   * The ID of the process node to start execution from.
+   * Used when editing messages to resume execution from a specific node.
+   */
+  processNodeId?: string;
 }
 
 import OpenAI from 'openai';

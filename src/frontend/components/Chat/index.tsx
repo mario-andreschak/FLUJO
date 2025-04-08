@@ -18,6 +18,7 @@ import axios, { AxiosResponse } from 'axios'; // Import axios for polling and Ax
 // Correctly import SharedState here
 import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
+import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -79,7 +80,7 @@ const Chat: React.FC = () => {
   const [error, setError] = useState<string | null>(null); // General error display
 
   // Other states
-  const [flows, setFlows] = useState<any[]>([]); // Consider typing this if possible
+  const [flows, setFlows] = useState<Flow[]>([]); // Use the Flow type from shared types
   const [requireApproval, setRequireApproval] = useState<boolean>(false);
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
@@ -816,9 +817,9 @@ const Chat: React.FC = () => {
   };
 
   // Edit a message and re-send the conversation (operates on detailedConversation)
-  const handleEditMessage = async (messageId: string, newContent: string) => {
+  const handleEditMessage = async (messageId: string, newContent: string, processNodeId?: string | null) => {
     if (!detailedConversation) return;
-    log.debug('Editing message', { messageId, contentLength: newContent.length });
+    log.debug('Editing message', { messageId, contentLength: newContent.length, processNodeId });
 
     const messageIndex = detailedConversation.messages.findIndex(msg => msg.id === messageId);
     if (messageIndex === -1) return;
@@ -827,7 +828,8 @@ const Chat: React.FC = () => {
     const updatedMessage: ChatMessage = {
       ...messageToEdit,
       content: newContent,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      processNodeId: processNodeId || undefined // Add processNodeId to the message
     };
 
     const messagesUpToEdit = [
@@ -842,7 +844,86 @@ const Chat: React.FC = () => {
     updateDetailedConversationState(updatedDetailedConv); // Optimistic update
 
     if (updatedDetailedConv.flowId) {
-      await sendToChatCompletions(updatedDetailedConv); // Re-send truncated conversation
+      // Create metadata with processNodeId for the API call
+      const metadata: ChatCompletionMetadata = {
+        flujo: "true",
+        requireApproval: requireApproval ? "true" : undefined,
+        flujodebug: executeInDebugger ? "true" : undefined,
+        conversationId: updatedDetailedConv.id,
+        processNodeId: processNodeId || undefined // Add processNodeId to metadata
+      };
+
+      // Call the API with the updated metadata
+      if (!openaiRef.current) return;
+      try {
+        const flow = await flowService.getFlow(updatedDetailedConv.flowId);
+        if (!flow) {
+          throw new Error(`Flow with ID ${updatedDetailedConv.flowId} not found`);
+        }
+
+        // Prepare messages for the API
+        const messages = updatedDetailedConv.messages
+          .filter(msg => !msg.disabled)
+          .map(msg => {
+            let content = msg.content;
+            if (msg.attachments && msg.attachments.length > 0) {
+              content += '\n\n' + msg.attachments.map(att =>
+                `[${att.type.toUpperCase()}]: ${att.content}`
+              ).join('\n\n');
+            }
+            // Create properly typed message based on role
+            if (msg.role === 'user') return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam;
+            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls } as OpenAI.ChatCompletionAssistantMessageParam;
+            if (msg.role === 'system') return { role: 'system', content } as OpenAI.ChatCompletionSystemMessageParam;
+            if (msg.role === 'tool') {
+              if (!msg.tool_call_id) return { role: 'user', content: `Tool result: ${content}` } as OpenAI.ChatCompletionUserMessageParam;
+              return { role: 'tool', content, tool_call_id: msg.tool_call_id } as OpenAI.ChatCompletionToolMessageParam;
+            }
+            return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam; // Fallback
+          });
+
+        // Make the API call with processNodeId in metadata
+        const completion = await openaiRef.current.chat.completions.create({
+          model: `flow-${flow.name}`,
+          messages,
+          stream: false,
+          metadata: (() => {
+            // Filter out undefined values
+            const filteredMeta: { [key: string]: string } = {};
+            if (metadata.flujo) filteredMeta.flujo = metadata.flujo;
+            if (metadata.requireApproval) filteredMeta.requireApproval = metadata.requireApproval;
+            if (metadata.flujodebug) filteredMeta.flujodebug = metadata.flujodebug;
+            if (metadata.conversationId) filteredMeta.conversationId = metadata.conversationId;
+            if (metadata.processNodeId) filteredMeta.processNodeId = metadata.processNodeId;
+            return filteredMeta;
+          })()
+        });
+
+        // Handle the response using the existing handler
+        const responseDataForHandler = {
+          data: {
+            ...(completion as any),
+            status: (completion as any).status || 'completed',
+            conversation_id: updatedDetailedConv.id,
+            messages: (completion as any).messages || updatedDetailedConv.messages,
+            pendingToolCalls: (completion as any).pendingToolCalls,
+            debugState: (completion as any).debugState,
+            error: (completion as any).error,
+            updatedAt: (completion as any).updatedAt || Date.now()
+          },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config: {}
+        } as AxiosResponse<any>;
+
+        handleApiResponse(responseDataForHandler, updatedDetailedConv.id);
+
+      } catch (err) {
+        log.error('Error sending edited message:', err);
+        setError(err instanceof Error ? err.message : 'Failed to send edited message');
+        setIsLoading(false);
+      }
     }
   };
 
@@ -1046,6 +1127,10 @@ const Chat: React.FC = () => {
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
+                availableNodes={flows.find(f => f.id === detailedConversation.flowId)?.nodes?.map(node => ({
+                  id: node.id,
+                  label: node.data.label || node.id
+                })) || []} // Pass available nodes for the selected flow
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
                 onEditMessage={handleEditMessage}

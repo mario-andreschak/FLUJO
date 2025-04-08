@@ -20,6 +20,8 @@ export interface ChatCompletionRequest {
   conversation_id?: string;
   // Use the strict metadata type
   metadata?: ChatCompletionMetadata;
+  // Node ID to start processing from (for message edits)
+  processNodeId?: string;
 }
 
 // Define a new interface for the parsed result including the extracted flags
@@ -28,6 +30,7 @@ export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest,
   conversation_id?: string; // Keep conversation_id here for the result
   requireApproval: boolean;
   flujodebug: boolean; // Add flujodebug here
+  processNodeId?: string; // Add processNodeId for message edits
 }
 
 // Parse request parameters from either query string or body
@@ -121,8 +124,15 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       // Remove metadata and deprecated conversation_id before returning
       const { metadata, conversation_id: deprecated_conv_id, ...restData } = data;
 
-      // Return the rest of the data object along with the extracted flags
-      return { ...restData, flujo, conversation_id: conversationId, requireApproval, flujodebug };
+      // Return the rest of the data object along with the extracted flags and processNodeId
+      return { 
+        ...restData, 
+        flujo, 
+        conversation_id: conversationId, 
+        requireApproval, 
+        flujodebug,
+        processNodeId: data.processNodeId // Pass through processNodeId if provided
+      };
     } catch (error) {
       const duration = Date.now() - startTime;
       log.error('Error parsing request body', {
