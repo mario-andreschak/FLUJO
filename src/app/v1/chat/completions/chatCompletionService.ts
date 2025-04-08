@@ -176,11 +176,12 @@ export async function processChatCompletion(
     }
     sharedState.flowId = reactFlow.id; // Set flowId
 
-    // Ensure initial messages have timestamps and IDs
+    // Ensure initial messages have timestamps, IDs, and preserve processNodeId
     const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
         ...msg,
         id: crypto.randomUUID(), // Add unique ID to each message
-        timestamp: Date.now() // Add timestamp to initial messages
+        timestamp: Date.now(), // Add timestamp to initial messages
+        processNodeId: (msg as any).processNodeId || undefined // Explicitly preserve processNodeId if present
     }));
     sharedState.messages = initialMessages; // Set initial messages
 
@@ -207,13 +208,14 @@ export async function processChatCompletion(
   } else { // stateSource is 'storage' or 'memory'
     // State was loaded, replace messages with what the frontend sent
     if (data.messages && data.messages.length > 0) {
-      // Ensure messages have timestamps and IDs by converting to FlujoChatMessage
+      // Ensure messages have timestamps, IDs, and preserve processNodeId by converting to FlujoChatMessage
       sharedState.messages = data.messages.map(msg => {
           // Create a FlujoChatMessage with required properties
           const flujoMsg: FlujoChatMessage = {
               ...msg,
               id: (msg as any).id || crypto.randomUUID(), // Use type assertion to access optional id
-              timestamp: (msg as any).timestamp || Date.now() // Use type assertion to access optional timestamp
+              timestamp: (msg as any).timestamp || Date.now(), // Use type assertion to access optional timestamp
+              processNodeId: (msg as any).processNodeId || undefined // Explicitly preserve processNodeId if present
           };
           return flujoMsg;
       });

@@ -450,13 +450,56 @@ const Chat: React.FC = () => {
 
     log.debug('Sending message', { conversationId: detailedConversation.id, contentLength: content.length, attachmentsCount: attachments.length });
 
-    // Create user message
+    // Determine the appropriate processNodeId for the user message
+    let nodeIdToAssign: string | undefined = undefined;
+    const existingMessages = detailedConversation.messages;
+    const isFirstUserMessage = !existingMessages.some(msg => msg.role === 'user');
+    const currentFlowId = detailedConversation.flowId;
+
+    if (isFirstUserMessage) {
+      // For the first user message, use the start node ID from the current flow
+      const currentFlow = flows.find(f => f.id === currentFlowId);
+      // Assuming the first node in the array is the start node
+      // TODO: Consider a more reliable way to identify the start node (e.g., by type)
+      const startNode = currentFlow?.nodes?.[0];
+      if (startNode) {
+        nodeIdToAssign = startNode.id;
+        log.debug(`Assigning start node ID to first user message: ${nodeIdToAssign}`);
+      } else {
+        log.warn(`Could not find start node for flow ${currentFlowId}. User message will not have a processNodeId.`);
+      }
+    } else {
+      // For subsequent messages, use the processNodeId from the most recent assistant message
+      for (let i = existingMessages.length - 1; i >= 0; i--) {
+        const msg = existingMessages[i];
+        if (msg.role === 'assistant' && msg.processNodeId) {
+          nodeIdToAssign = msg.processNodeId;
+          log.debug(`Assigning last assistant node ID to user message: ${nodeIdToAssign}`);
+          break;
+        }
+      }
+
+      // Fallback: If no prior assistant message had a processNodeId, try to use the start node
+      if (!nodeIdToAssign) {
+        const currentFlow = flows.find(f => f.id === currentFlowId);
+        const startNode = currentFlow?.nodes?.[0];
+        if (startNode) {
+          nodeIdToAssign = startNode.id;
+          log.debug(`No prior assistant node ID found, falling back to start node ID: ${nodeIdToAssign}`);
+        } else {
+          log.warn(`Could not find start node for fallback in flow ${currentFlowId}. User message will not have a processNodeId.`);
+        }
+      }
+    }
+
+    // Create user message with the determined processNodeId
     const userMessage: ChatMessage = {
       id: uuidv4(),
       role: 'user',
       content,
       timestamp: Date.now(),
-      attachments: attachments.length > 0 ? attachments : undefined
+      attachments: attachments.length > 0 ? attachments : undefined,
+      processNodeId: nodeIdToAssign // Assign the determined processNodeId
     };
 
     // Optimistically update detailed conversation state
@@ -680,15 +723,55 @@ const Chat: React.FC = () => {
               `[${att.type.toUpperCase()}]: ${att.content}`
             ).join('\n\n');
           }
+          
+          // Include processNodeId in the message object if it exists
+          const processNodeId = msg.processNodeId;
+          
           // Create properly typed message based on role
-          if (msg.role === 'user') return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam;
-          if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls } as OpenAI.ChatCompletionAssistantMessageParam;
-          if (msg.role === 'system') return { role: 'system', content } as OpenAI.ChatCompletionSystemMessageParam;
-          if (msg.role === 'tool') {
-            if (!msg.tool_call_id) return { role: 'user', content: `Tool result: ${content}` } as OpenAI.ChatCompletionUserMessageParam;
-            return { role: 'tool', content, tool_call_id: msg.tool_call_id } as OpenAI.ChatCompletionToolMessageParam;
+          if (msg.role === 'user') {
+            // For user messages, include processNodeId as a custom property
+            return { 
+              role: 'user', 
+              content,
+              processNodeId // Include processNodeId if it exists
+            } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
           }
-          return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam; // Fallback
+          if (msg.role === 'assistant') {
+            return { 
+              role: 'assistant', 
+              content, 
+              tool_calls: msg.tool_calls,
+              processNodeId // Include processNodeId if it exists
+            } as OpenAI.ChatCompletionAssistantMessageParam & { processNodeId?: string };
+          }
+          if (msg.role === 'system') {
+            return { 
+              role: 'system', 
+              content,
+              processNodeId // Include processNodeId if it exists
+            } as OpenAI.ChatCompletionSystemMessageParam & { processNodeId?: string };
+          }
+          if (msg.role === 'tool') {
+            if (!msg.tool_call_id) {
+              return { 
+                role: 'user', 
+                content: `Tool result: ${content}`,
+                processNodeId // Include processNodeId if it exists
+              } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+            }
+            return { 
+              role: 'tool', 
+              content, 
+              tool_call_id: msg.tool_call_id,
+              processNodeId // Include processNodeId if it exists
+            } as OpenAI.ChatCompletionToolMessageParam & { processNodeId?: string };
+          }
+          // Fallback
+          return { 
+            role: 'user', 
+            content,
+            processNodeId // Include processNodeId if it exists
+          } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
         });
 
       // Call the API
