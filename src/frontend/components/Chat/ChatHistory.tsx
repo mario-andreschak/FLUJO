@@ -10,7 +10,8 @@ import {
   IconButton, 
   Typography, 
   Divider,
-  Button
+  Button,
+  Tooltip
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -40,6 +41,30 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  // Get color based on conversation status
+  const getStatusColor = (status?: ConversationListItem['status']) => {
+    switch (status) {
+      case 'running': return 'primary.main';
+      case 'awaiting_tool_approval': return 'warning.main';
+      case 'paused_debug': return 'secondary.main';
+      case 'completed': return 'success.main';
+      case 'error': return 'error.main';
+      default: return 'transparent';
+    }
+  };
+
+  // Get status description for tooltip
+  const getStatusDescription = (status?: ConversationListItem['status']) => {
+    switch (status) {
+      case 'running': return 'Processing';
+      case 'awaiting_tool_approval': return 'Waiting for tool approval';
+      case 'paused_debug': return 'Paused in debug mode';
+      case 'completed': return 'Completed';
+      case 'error': return 'Error';
+      default: return '';
+    }
   };
 
   return (
@@ -98,12 +123,33 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                   sx={{ pr: 7 }} // Make room for the delete button
                 >
                   <ListItemText 
-                    primary={conversation.title}
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {conversation.status && (
+                          <Tooltip title={getStatusDescription(conversation.status)}>
+                            <Box
+                              component="span"
+                              sx={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                bgcolor: getStatusColor(conversation.status),
+                                display: 'inline-block',
+                                flexShrink: 0
+                              }}
+                            />
+                          </Tooltip>
+                        )}
+                        <Typography
+                          component="span"
+                          noWrap
+                          fontWeight={conversation.id === currentConversationId ? 'bold' : 'normal'}
+                        >
+                          {conversation.title}
+                        </Typography>
+                      </Box>
+                    }
                     secondary={formatDate(conversation.updatedAt)}
-                    primaryTypographyProps={{
-                      noWrap: true,
-                      fontWeight: conversation.id === currentConversationId ? 'bold' : 'normal'
-                    }}
                   />
                 </ListItemButton>
               </ListItem>

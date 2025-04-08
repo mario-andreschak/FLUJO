@@ -238,7 +238,7 @@ export async function processChatCompletion(
 
   // --- 2. Main Execution Logic ---
   let currentAction: string | undefined = undefined;
-  const MAX_INTERNAL_ITERATIONS = 15; // Safety break for non-debug flujo=true loop
+  const MAX_INTERNAL_ITERATIONS = 150; // Safety break for non-debug flujo=true loop
   let internalIterations = 0;
 
   try {
@@ -284,22 +284,36 @@ export async function processChatCompletion(
     }
     // --- Normal Mode: Execute loop ---
     else {
-      while (internalIterations < MAX_INTERNAL_ITERATIONS) {
+      while (true) { // Loop indefinitely until a break condition is met
         internalIterations++;
         log.info(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`);
 
-      // Check for cancellation flag before executing the step
-      if (sharedState.isCancelled) {
-        log.info(`Cancellation flag detected for conv ${effectiveConvId}. Terminating execution.`);
+        // Check iteration limit *before* executing the step
+        if (internalIterations > MAX_INTERNAL_ITERATIONS) {
+           log.warn(`Max internal iterations (${MAX_INTERNAL_ITERATIONS}) reached for conv ${effectiveConvId}. Breaking loop.`);
+           if (currentAction !== ERROR_ACTION) { // Avoid overwriting existing error
+              sharedState.lastResponse = { success: false, error: `Maximum internal iterations (${MAX_INTERNAL_ITERATIONS}) reached.` };
+              currentAction = ERROR_ACTION;
+           }
+           break; // Exit loop *before* executing the step
+        }
+
+        // Check for cancellation flag before executing the step
+        if (sharedState.isCancelled) {
+           log.info(`Cancellation flag detected for conv ${effectiveConvId}. Terminating execution.`);
         // Optionally set a specific error state/message
         sharedState.status = 'error';
         sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
         currentAction = ERROR_ACTION; // Treat as error to ensure proper response formatting
-        break; // Exit the loop immediately
-      }
+           // Optionally set a specific error state/message
+           sharedState.status = 'error';
+           sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+           currentAction = ERROR_ACTION; // Treat as error to ensure proper response formatting
+           break; // Exit the loop immediately
+        }
 
-      // Log message history before executing step (for debugging tool call issues)
-      if (sharedState.messages.length > 0) {
+        // Log message history before executing step (for debugging tool call issues)
+        if (sharedState.messages.length > 0) {
         const lastFewMessages = sharedState.messages.slice(-3); // Log last 3 messages
         log.debug(`Message history before step ${internalIterations}`, JSON.stringify(lastFewMessages));
       } else {
@@ -543,15 +557,15 @@ export async function processChatCompletion(
                         sharedState.messages.push(toolResultMessage);
                         log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
 
-                        // // 4. Append the follow-up user message with timestamp
-                        // const userHandoffConfirmation: FlujoChatMessage = {
-                        //     id: crypto.randomUUID(), // Add unique ID
-                        //     role: 'user',
-                        //     content: 'The handoff was successful. Continue',
-                        //     timestamp: Date.now()
-                        // };
-                        // sharedState.messages.push(userHandoffConfirmation);
-                        // log.info(`Appended user confirmation message after handoff tool result.`);
+                        // 4. Append the follow-up user message with timestamp
+                        const userHandoffConfirmation: FlujoChatMessage = {
+                            id: crypto.randomUUID(), // Add unique ID
+                            role: 'user',
+                            content: 'The handoff was successful. Continue',
+                            timestamp: Date.now()
+                        };
+                        sharedState.messages.push(userHandoffConfirmation);
+                        log.info(`Appended user confirmation message after handoff tool result.`);
 
                     } else {
                         log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);
@@ -598,14 +612,7 @@ export async function processChatCompletion(
 
       } // --- End while loop (Normal Mode) ---
 
-      // Safety break check (Normal Mode)
-      if (internalIterations >= MAX_INTERNAL_ITERATIONS) {
-         log.warn(`Max internal iterations (${MAX_INTERNAL_ITERATIONS}) reached for conv ${effectiveConvId}. Returning current state as error.`);
-         if (currentAction !== ERROR_ACTION) { // Avoid overwriting existing error
-            sharedState.lastResponse = { success: false, error: `Maximum internal iterations (${MAX_INTERNAL_ITERATIONS}) reached.` };
-            currentAction = ERROR_ACTION;
-         }
-      }
+      // Safety break check is now handled at the beginning of the loop
     } // --- End Normal Mode execution ---
 
   } catch (loopError) {

@@ -2,6 +2,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
+import { toolNameInternalRegex } from '@/utils/shared';
 
 const log = createLogger('backend/utils/PromptRenderer');
 
@@ -90,7 +91,9 @@ export class PromptRenderer {
       completePrompt += `You are operating in a workflow with other agents, each with it's own responsibilities.\n`
       completePrompt += `You will receive a message from the user which may contain tasks that are outside of your scope.\n`
       completePrompt += `Focus on the part of the user-message that can be accomplished using the tools provided to you.\n\n`
-      completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff' or 'handoff_to_xxxx' tool.\n\n`
+      completePrompt += `You may do multiple tool calls.\n\n`
+      completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff_to_xxxx' tool.\n\n`
+      completePrompt += `The processing may be handed back to you as part of a loop. In this case repeat processing your instructions as if you were executing them for the first time. \n\n`
 
     }
 
@@ -276,6 +279,8 @@ export class PromptRenderer {
     renderMode: 'raw' | 'rendered',
     functionCallingSchema?: string | null
   ): Promise<string> {
+    renderMode = 'raw' // for now, lets keep it raw.
+
     log.debug(`Resolving tool pills in prompt`, { 
       renderMode,
       promptLength: prompt.length,
@@ -306,7 +311,7 @@ export class PromptRenderer {
     }
 
     // Regular expression to find tool pills: ${_-_-_serverName_-_-_toolName}
-    const toolPillRegex = /\${_-_-_([\w-^}]+)_-_-_([\w-^}]+)}/g;
+    const toolPillRegex = toolNameInternalRegex
 
     // Replace each tool pill with its description
     let resolvedPrompt = prompt;
