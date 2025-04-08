@@ -118,7 +118,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       // Ensure content is a string before setting it for editing
       if (message && message.role === 'user' && typeof message.content === 'string') {
         setEditContent(message.content);
-        setEditNodeId(message.processNodeId || null);
+        // Use existing processNodeId or first available node if any, never null
+        setEditNodeId(message.processNodeId || (availableNodes.length > 0 ? availableNodes[0].id : ""));
         setEditingMessageId(activeMessageId);
         setIsEditing(true);
       }
@@ -128,7 +129,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
 
   const handleSaveEdit = () => {
     if (editingMessageId && onEditMessage) {
-      onEditMessage(editingMessageId, editContent, editNodeId);
+      // Always pass the string value of editNodeId, never null
+      onEditMessage(editingMessageId, editContent, editNodeId || "");
       setIsEditing(false);
       setEditingMessageId(null);
       setEditNodeId(null);
@@ -142,8 +144,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   };
 
   const handleNodeIdChange = (event: SelectChangeEvent) => {
-    // Convert empty string to null, otherwise use the string value
-    setEditNodeId(event.target.value === "" ? null : event.target.value);
+    // Always use the string value, never null
+    setEditNodeId(event.target.value);
   };
 
   // Format timestamp
@@ -274,11 +276,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   <Select
                     labelId="node-id-select-label"
                     id="node-id-select"
-                    value={editNodeId || ""}
+                    value={editNodeId || (availableNodes.length > 0 ? availableNodes[0].id : "")}
                     label="Process Node"
                     onChange={handleNodeIdChange}
                   >
-                    <MenuItem value=""><em>None</em></MenuItem>
                     {availableNodes.map((node) => (
                       <MenuItem key={node.id} value={node.id}>
                         {node.label || node.id.substring(0, 8)}

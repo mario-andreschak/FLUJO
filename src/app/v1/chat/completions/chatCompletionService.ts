@@ -74,54 +74,79 @@ export async function processChatCompletion(
   });
 
   // --- 1. Initialize or Retrieve State ---
-  let sharedState: SharedState | undefined = undefined;
-  // Use the provided conversationId if it exists, otherwise generate a new one.
   const effectiveConvId = conversationId || crypto.randomUUID();
   const storageKey = `conversations/${effectiveConvId}` as StorageKey;
-  let stateSource: 'storage' | 'memory' | 'new' = 'new';
+  let stateSource: 'storage' | 'memory' | 'new' = 'new'; // Assume new initially
+  let loadedState: SharedState | undefined = undefined;
 
   log.info(`Effective Conversation ID for this request: ${effectiveConvId}`, { providedId: conversationId });
 
   // Try loading state using the effectiveConvId
   // Prioritize in-memory state
   if (FlowExecutor.conversationStates.has(effectiveConvId)) {
-    sharedState = FlowExecutor.conversationStates.get(effectiveConvId)!;
-    log.info(`Resuming conversation ${effectiveConvId} from memory`, { currentNodeId: sharedState.currentNodeId });
+    loadedState = FlowExecutor.conversationStates.get(effectiveConvId)!;
+    log.info(`Resuming conversation ${effectiveConvId} from memory`, { currentNodeId: loadedState.currentNodeId });
     stateSource = 'memory';
   }
   // If not in memory, try storage
   else {
     try {
-      sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
-      if (sharedState) {
+      loadedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+      if (loadedState) {
         log.info(`Loaded conversation state from storage: ${effectiveConvId}`);
         stateSource = 'storage';
         // Ensure it's in the memory map as well
-        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+        FlowExecutor.conversationStates.set(effectiveConvId, loadedState);
       } else {
-        log.info(`No state found in storage for conversation: ${effectiveConvId}.`);
-        // If a conversationId was provided but not found, should we error?
-        // For now, we proceed to create a new one, which might hide the frontend/backend ID mismatch.
-        // Consider adding a stricter check later if needed.
+        log.info(`No state found in storage for conversation: ${effectiveConvId}. Will create new state.`);
+        // stateSource remains 'new'
       }
     } catch (error) {
       log.warn(`Error loading conversation state from storage for ${effectiveConvId}:`, error);
       // Proceed to create new state if loading failed
-    } // Added missing catch block
+      // stateSource remains 'new'
+    }
   }
 
-  // If still no state found (neither in memory nor storage), create a new one
-  if (!sharedState) {
-    // This block should only run if conversationId was NOT provided,
-    // OR if it was provided but loading failed/returned nothing.
-    stateSource = 'new';
-    log.info(`Creating new conversation state for ID: ${effectiveConvId}`);
+  // Initialize sharedState: Use loaded state if available, otherwise create a default one
+  let sharedState: SharedState;
+  if (loadedState) {
+    sharedState = loadedState;
+    // Ensure the correct conversationId is used internally if loaded
+    if (sharedState.conversationId !== effectiveConvId) {
+       log.warn(`Loaded state's internal conversationId (${sharedState.conversationId}) differs from effectiveConvId (${effectiveConvId}). Using effectiveConvId.`);
+       sharedState.conversationId = effectiveConvId; // Correct the state object if needed
+    }
+  } else {
+    // Create a new default state
+    log.info(`Creating new conversation state object for ID: ${effectiveConvId}`);
+    sharedState = {
+      trackingInfo: { executionId: crypto.randomUUID(), startTime: Date.now(), nodeExecutionTracker: [] },
+      messages: [], // Start with empty messages, will be populated below
+      flowId: '', // Will be set below if state is new
+      conversationId: effectiveConvId,
+      currentNodeId: undefined,
+      status: 'running',
+      title: 'New Conversation',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      debugMode: flujodebug,
+      executionTrace: flujodebug ? [] : undefined,
+      originalRequireApproval: flujodebug ? requireApproval : undefined
+    };
+    // stateSource is already 'new'
+  }
+
+  // --- Configure State Based on Source ---
+  if (stateSource === 'new') {
+    // Get flow and set initial messages for the newly created state
     const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
     const reactFlow = await flowServiceWithGetByName.getFlowByName(flowName);
     if (!reactFlow) {
       log.error(`Flow not found: ${flowName}`);
       return NextResponse.json({ error: { message: `Flow not found: ${flowName}`, type: 'invalid_request_error', code: 'flow_not_found' } }, { status: 400 });
     }
+    sharedState.flowId = reactFlow.id; // Set flowId
 
     // Ensure initial messages have timestamps and IDs
     const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
@@ -129,28 +154,12 @@ export async function processChatCompletion(
         id: crypto.randomUUID(), // Add unique ID to each message
         timestamp: Date.now() // Add timestamp to initial messages
     }));
+    sharedState.messages = initialMessages; // Set initial messages
 
-    sharedState = {
-      trackingInfo: { executionId: crypto.randomUUID(), startTime: Date.now(), nodeExecutionTracker: [] },
-      messages: initialMessages, // Use timestamped initial messages
-      flowId: reactFlow.id,
-      conversationId: effectiveConvId, // Use the determined ID
-      currentNodeId: undefined,
-      status: 'running', // Initial status
-      // --- Initialize new fields ---
-      title: 'New Conversation', // Default title
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      // --- Initialize Debugger Fields ---
-      debugMode: flujodebug, // Set debug mode based on the flag
-      executionTrace: flujodebug ? [] : undefined, // Initialize trace only if debugging
-      originalRequireApproval: flujodebug ? requireApproval : undefined // Store original setting if debugging
-    };
-    // Save the newly created state immediately
+    // Save the newly configured state immediately
     try {
-      // --- Update timestamps before saving ---
       sharedState.updatedAt = Date.now();
-      // Title update logic (only needed if messages are present initially, unlikely but safe)
+      // Title update logic
       if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
         const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
         if (firstUserMessage && typeof firstUserMessage.content === 'string') {
@@ -166,64 +175,35 @@ export async function processChatCompletion(
     }
     // Ensure the state is in the memory map
     FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-  }
 
-  // If state was loaded or resumed (not new), handle potential updates
-  if (stateSource === 'storage' || stateSource === 'memory') {
-      // Ensure the correct conversationId is used internally
-      if (sharedState.conversationId !== effectiveConvId) {
-         log.warn(`State's internal conversationId (${sharedState.conversationId}) differs from effectiveConvId (${effectiveConvId}). Using effectiveConvId.`);
-         sharedState.conversationId = effectiveConvId; // Correct the state object if needed
-      }
-
-      // Add new messages from the current request to the existing state
-      if (data.messages && data.messages.length > 0) {
-        const lastRequestMessage = data.messages[data.messages.length - 1];
-        const lastStateMessage = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
-
-        // Add user message if it's new, ensuring it has a timestamp
-        if (lastRequestMessage.role === 'user') {
-          if (!lastStateMessage || lastStateMessage.role !== 'user' || lastStateMessage.content !== lastRequestMessage.content) {
-            log.info(`Adding new user message to conversation ${sharedState.conversationId}`);
-            const userMessageWithTimestamp: FlujoChatMessage = {
-                ...lastRequestMessage,
-                id: crypto.randomUUID(), // Add unique ID
-                timestamp: Date.now()
-            };
-            sharedState.messages.push(userMessageWithTimestamp);
-          } else {
-            log.debug(`Duplicate user message detected for conv ${sharedState.conversationId}, skipping add.`);
+  } else { // stateSource is 'storage' or 'memory'
+    // State was loaded, replace messages with what the frontend sent
+    if (data.messages && data.messages.length > 0) {
+      // Ensure messages have timestamps and IDs by converting to FlujoChatMessage
+      sharedState.messages = data.messages.map(msg => {
+          // Create a FlujoChatMessage with required properties
+          const flujoMsg: FlujoChatMessage = {
+              ...msg,
+              id: (msg as any).id || crypto.randomUUID(), // Use type assertion to access optional id
+              timestamp: (msg as any).timestamp || Date.now() // Use type assertion to access optional timestamp
+          };
+          return flujoMsg;
+      });
+      log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+    }
+    // Ensure debugMode is set correctly if resuming state
+    if (sharedState.debugMode === undefined) {
+      sharedState.debugMode = flujodebug;
+      if (flujodebug) {
+          if (!sharedState.executionTrace) {
+              sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
           }
-        }
-        // Add tool response if it's provided, ensuring it has a timestamp
-        else if (lastRequestMessage.role === 'tool') {
-           // Simple check: add if the last message isn't an identical tool response
-           if (!lastStateMessage || lastStateMessage.role !== 'tool' || lastStateMessage.tool_call_id !== lastRequestMessage.tool_call_id || lastStateMessage.content !== lastRequestMessage.content) {
-              log.info(`Adding new tool response message to conversation ${sharedState.conversationId}`);
-              const toolMessageWithTimestamp: FlujoChatMessage = {
-                  ...lastRequestMessage,
-                  id: crypto.randomUUID(), // Add unique ID
-                  timestamp: Date.now()
-              };
-              sharedState.messages.push(toolMessageWithTimestamp);
-           } else {
-              log.debug(`Duplicate tool response detected for conv ${sharedState.conversationId}, skipping add.`);
-           }
-        }
+          // Store original requireApproval if resuming into debug mode and not already set
+          if (sharedState.originalRequireApproval === undefined) {
+              sharedState.originalRequireApproval = requireApproval;
+          }
       }
-      // Ensure debugMode is set if resuming state
-      if (sharedState && sharedState.debugMode === undefined) {
-        sharedState.debugMode = flujodebug;
-        if (flujodebug) {
-            if (!sharedState.executionTrace) {
-                sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
-            }
-            // Store original requireApproval if resuming into debug mode and not already set
-            if (sharedState.originalRequireApproval === undefined) {
-                sharedState.originalRequireApproval = requireApproval;
-            }
-        }
-      }
+    }
   }
 
   // --- 2. Main Execution Logic ---
@@ -378,12 +358,13 @@ export async function processChatCompletion(
                break; // Exit loop on tool processing error
             }
 
-            // Add tool results to messages, ensuring they have timestamps
+            // Add tool results to messages, ensuring they have timestamps and processNodeId
             log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} tool result messages for conv ${effectiveConvId}`);
             const toolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
                 ...msg,
                 id: crypto.randomUUID(), // Add unique ID
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                processNodeId: sharedState.currentNodeId // Add current node ID
             }));
             sharedState.messages.push(...toolResultMessagesWithTimestamp);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
@@ -423,12 +404,13 @@ export async function processChatCompletion(
                  break; // Exit loop on tool processing error
               }
 
-            // Add tool results to messages, ensuring they have timestamps
+            // Add tool results to messages, ensuring they have timestamps and processNodeId
             log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} internal tool result messages for conv ${effectiveConvId}`);
             const internalToolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
                 ...msg,
                 id: crypto.randomUUID(), // Add unique ID
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                processNodeId: sharedState.currentNodeId // Add current node ID
             }));
             sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
@@ -517,28 +499,29 @@ export async function processChatCompletion(
                         handoffToolCallId = handoffToolCall.id;
                         log.debug(`Found handoff tool call ID: ${handoffToolCallId} for edge ${currentAction}`);
 
-                        // 2. Create the tool result message with timestamp
-                        const toolResultMessage: FlujoChatMessage = {
-                            id: crypto.randomUUID(), // Add unique ID
-                            role: 'tool',
-                            tool_call_id: handoffToolCallId,
-                            content: JSON.stringify({ status: "Handoff processed", targetNodeId: nextNodeId }), // Simple confirmation content
-                            timestamp: Date.now()
-                        };
+                // 2. Create the tool result message with timestamp and processNodeId
+                const toolResultMessage: FlujoChatMessage = {
+                    id: crypto.randomUUID(), // Add unique ID
+                    role: 'tool',
+                    tool_call_id: handoffToolCallId,
+                    content: JSON.stringify({ status: "Handoff processed", targetNodeId: nextNodeId }), // Simple confirmation content
+                    timestamp: Date.now(),
+                    processNodeId: sharedState.currentNodeId // Add current node ID
+                };
 
                         // 3. Append the tool result message to shared state
                         sharedState.messages.push(toolResultMessage);
                         log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
 
-                        // 4. Append the follow-up user message with timestamp
-                        const userHandoffConfirmation: FlujoChatMessage = {
-                            id: crypto.randomUUID(), // Add unique ID
-                            role: 'user',
-                            content: 'The handoff was successful. Continue',
-                            timestamp: Date.now()
-                        };
-                        sharedState.messages.push(userHandoffConfirmation);
-                        log.info(`Appended user confirmation message after handoff tool result.`);
+                        // // 4. Append the follow-up user message with timestamp
+                        // const userHandoffConfirmation: FlujoChatMessage = {
+                        //     id: crypto.randomUUID(), // Add unique ID
+                        //     role: 'user',
+                        //     content: 'The handoff was successful. Continue',
+                        //     timestamp: Date.now()
+                        // };
+                        // sharedState.messages.push(userHandoffConfirmation);
+                        // log.info(`Appended user confirmation message after handoff tool result.`);
 
                     } else {
                         log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);
