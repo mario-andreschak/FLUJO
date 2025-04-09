@@ -194,7 +194,53 @@ export class ModelHandler {
 
       // Add tools if available
       if (tools && tools.length > 0) {
-        requestParams.tools = tools;
+        // --- PATCH: Remove 'format' from imageUrl string parameters ---
+        // Gemini API only supports 'enum' and 'date-time' for string format.
+        // This removes any other potentially invalid format like 'url' or 'uri'.
+        const patchedTools = tools.map(tool => {
+          // Type guard for function tool with parameters and properties
+          if (tool.type === 'function' &&
+              tool.function.parameters &&
+              typeof tool.function.parameters === 'object' && // Ensure parameters is an object
+              tool.function.parameters.properties &&
+              typeof tool.function.parameters.properties === 'object') { // Ensure properties is an object
+
+            const params = tool.function.parameters; // Already checked existence
+            const props = params.properties as Record<string, any>; // Assert properties as Record after check
+
+            // Check specifically for imageUrl with string type and format
+            if (props.imageUrl &&
+                typeof props.imageUrl === 'object' && // Ensure imageUrl is an object
+                props.imageUrl.type === 'string' &&
+                props.imageUrl.format) {
+
+              // Create mutable copies safely after checks
+              const mutableParams = { ...params };
+              const mutableProps = { ...props }; // Safe to spread now
+              const mutableImageUrl = { ...props.imageUrl }; // Safe to spread now
+
+              // Delete the format property
+              delete mutableImageUrl.format;
+
+              // Update the mutable copies
+              mutableProps.imageUrl = mutableImageUrl;
+              mutableParams.properties = mutableProps;
+
+              // Return a new tool object with the modified parameters
+              return {
+                ...tool,
+                function: {
+                  ...tool.function,
+                  parameters: mutableParams
+                }
+              };
+            }
+          }
+          // Return the original tool if no modification was needed
+          return tool;
+        });
+        requestParams.tools = patchedTools;
+        // --- END PATCH ---
       }
 
 
