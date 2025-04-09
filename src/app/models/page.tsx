@@ -7,6 +7,8 @@ import Spinner from '@/frontend/components/shared/Spinner';
 
 const log = createLogger('app/models/page');
 
+export const dynamic = 'force-dynamic'; // Ensure dynamic rendering
+
 // Async server component
 async function ModelsPage() {
   log.debug('Rendering ModelsPage');
