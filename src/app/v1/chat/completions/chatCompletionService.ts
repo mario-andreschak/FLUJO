@@ -116,11 +116,23 @@ export async function processChatCompletion(
     if (sharedState.conversationId !== effectiveConvId) {
        log.warn(`Loaded state's internal conversationId (${sharedState.conversationId}) differs from effectiveConvId (${effectiveConvId}). Using effectiveConvId.`);
        sharedState.conversationId = effectiveConvId; // Correct the state object if needed
-    }
+     }
 
-    // --- Handle processNodeId if provided ---
-    if (data.processNodeId && stateSource !== 'new') {
-      log.info(`Edit detected: Resetting currentNodeId for conversation ${effectiveConvId} to provided processNodeId: ${data.processNodeId}`);
+     // --- Reset status if resuming a completed/errored conversation ---
+     // This handles both resuming after completion and retrying after error
+     if (stateSource !== 'new' && (sharedState.status === 'completed' || sharedState.status === 'error')) {
+        log.info(`Resuming completed/errored conversation ${effectiveConvId}. Resetting status to 'running'.`);
+        sharedState.status = 'running';
+        sharedState.lastResponse = undefined; // Clear previous final/error response
+        // Ensure it's updated in memory immediately if loaded from storage
+        if (stateSource === 'storage') {
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+        }
+     }
+
+     // --- Handle processNodeId if provided (for edits specifically) ---
+     if (data.processNodeId && stateSource !== 'new') {
+       log.info(`Edit detected: Resetting currentNodeId for conversation ${effectiveConvId} to provided processNodeId: ${data.processNodeId}`);
       
       // Reset execution state
       sharedState.currentNodeId = data.processNodeId;
