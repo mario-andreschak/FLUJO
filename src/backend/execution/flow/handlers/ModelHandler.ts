@@ -1,4 +1,4 @@
-import { createLogger } from '@/utils/logger';
+import { createLogger, LOG_LEVEL } from '@/utils/logger';
 import {
   ModelCallInput,
   ModelCallResult,
@@ -14,7 +14,9 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
-const log = createLogger('backend/flow/execution/handlers/ModelHandler');
+const log = createLogger('backend/flow/execution/handlers/ModelHandler'
+  // , LOG_LEVEL.VERBOSE // override for the current file
+);
 
 export class ModelHandler {
   /**
@@ -196,6 +198,7 @@ export class ModelHandler {
       }
 
 
+      log.debug(`calling chatcompletion`)
       log.verbose(`calling chatcompletion now with MODEL ${ JSON.stringify(requestParams.model)}`)
       log.verbose(`calling chatcompletion now with TEMP ${ JSON.stringify(requestParams.temperature)}`)
       log.verbose(`calling chatcompletion now with MESSAGES ${ JSON.stringify(requestParams.messages)}`)
@@ -205,13 +208,75 @@ export class ModelHandler {
       log.verbose(`chatcompletion returned`)
       log.verbose(`chatcompletion returned ${ JSON.stringify(chatCompletion)}`)
 
+      // --- Check for top-level error in the response ---
+      // Some providers (like OpenRouter for certain errors) might return a 200 OK
+      // with an error object in the body instead of throwing an HTTP error.
+      if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion && chatCompletion.error) {
+        log.warn('API call returned successfully but contained an error object:', JSON.stringify(chatCompletion.error));
+        const errorObj = chatCompletion.error as any; // Type assertion for easier access
+
+        // --- Attempt to extract detailed message from metadata.raw ---
+        let detailedMessage = errorObj.message || 'Provider returned an unspecified error in the response body.';
+        try {
+          if (errorObj.metadata?.raw) {
+            const rawErrorData = JSON.parse(errorObj.metadata.raw);
+            if (rawErrorData?.error?.message) {
+              detailedMessage = rawErrorData.error.message;
+              log.info('Extracted detailed error message from metadata.raw:', detailedMessage);
+            }
+          }
+        } catch (parseError) {
+          log.warn('Failed to parse metadata.raw for detailed error message:', parseError);
+        }
+        // --- End extraction attempt ---
+
+        const errorResult: Result<ModelCallResult> = {
+            success: false,
+            error: createModelError(
+                'api_error', // Treat as API error
+                detailedMessage, // Use the extracted detailed message
+                modelId,
+                undefined,
+                {
+                    // Extract details if available
+                    code: errorObj.code,
+                    type: errorObj.type,
+                    param: errorObj.param,
+                    // Include the raw error object for more context
+                    rawError: errorObj
+                }
+            )
+        };
+        log.verbose('generateCompletion returning error from response body', JSON.stringify(errorResult));
+        return errorResult;
+      }
+      // --- End error check ---
+
+
       // Create a standardized response with OpenAI-compatible structure
+      // Ensure choices exist before accessing them
+      const choice = chatCompletion?.choices?.[0];
+      if (!choice) {
+        log.error('API response missing choices array or first choice.', { response: JSON.stringify(chatCompletion) });
+        return {
+          success: false,
+          error: createModelError(
+            'api_error',
+            'Invalid response structure from API: Missing choices.',
+            modelId,
+            undefined,
+            { rawResponse: chatCompletion }
+          )
+        };
+      }
+
       const result: Result<ModelCallResult> = {
         success: true,
+        // Use the validated choice object
         value: {
-          content: chatCompletion.choices[0]?.message?.content || '',
+          content: choice.message?.content || '',
           messages: [...messages], // Return original messages with timestamps
-          fullResponse: chatCompletion
+          fullResponse: chatCompletion // Return the full original response
         }
       };
 
@@ -220,7 +285,25 @@ export class ModelHandler {
 
       return result;
     } catch (error) {
-      log.debug(`chatcompletion raised exception ${JSON.stringify(error)}`)
+      // --- Enhanced Error Logging ---
+      log.error('--- Error during openai.chat.completions.create ---');
+      if (error instanceof Error) {
+        log.error(`Error Name: ${error.name}`);
+        log.error(`Error Message: ${error.message}`);
+        log.error(`Error Stack: ${error.stack}`);
+      } else {
+        log.error('Caught non-Error object:', error); // Log the raw object if it's not an Error instance
+      }
+      if (error instanceof OpenAI.APIError) {
+        log.error(`API Error Status: ${error.status}`);
+        log.error(`API Error Type: ${error.type}`);
+        log.error(`API Error Code: ${error.code}`);
+        log.error(`API Error Param: ${error.param}`);
+        log.error(`API Error Headers: ${JSON.stringify(error.headers)}`);
+      }
+      log.error('--- End Error Details ---');
+      // --- End Enhanced Error Logging ---
+
       // Handle API errors
       if (error instanceof OpenAI.APIError) {
         const errorResult: Result<ModelCallResult> = {
@@ -234,7 +317,9 @@ export class ModelHandler {
               status: error.status,
               type: error.type,
               code: error.code,
-              param: error.param
+              param: error.param,
+              // Include stack trace if available
+              stack: error.stack
             }
           )
         };
@@ -251,7 +336,12 @@ export class ModelHandler {
         error: createModelError(
           'unknown_error',
           error instanceof Error ? error.message : String(error),
-          modelId
+          modelId,
+          undefined,
+          {
+            // Include stack trace if available
+            stack: error instanceof Error ? error.stack : undefined
+          }
         )
       };
 
