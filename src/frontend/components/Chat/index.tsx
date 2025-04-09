@@ -100,6 +100,7 @@ const Chat: React.FC = () => {
       baseURL,
       apiKey: 'FLUJO', // Replace with actual key if needed, though likely handled by backend proxy
       dangerouslyAllowBrowser: true,
+      maxRetries: 0, // Add this line to disable automatic retries
     });
   }, []);
 
@@ -548,8 +549,18 @@ const Chat: React.FC = () => {
         }
         return prev;
       });
-      // Update conversation list status with type assertion
-      setConversationList(prevList => prevList.map(c => c.id === conversationId ? { ...c, status: 'paused_debug' as ConversationListItem['status'], updatedAt: data.debugState.updatedAt } : c).sort((a, b) => b.updatedAt - a.updatedAt));
+      // Update conversation list status, title, and flowId from debug state
+      setConversationList(prevList => prevList.map(c =>
+        c.id === conversationId
+          ? {
+              ...c,
+              title: data.debugState.title ?? c.title, // Use debug state title if available
+              flowId: data.debugState.flowId ?? c.flowId, // Use debug state flowId if available
+              status: 'paused_debug' as ConversationListItem['status'], // Set status specifically
+              updatedAt: data.debugState.updatedAt // Use debug state timestamp
+            }
+          : c
+      ).sort((a, b) => b.updatedAt - a.updatedAt)); // Re-sort
       return true; // Indicate debug state was handled
     } else if (data.status === 'completed' || data.status === 'error') {
       // Only hide the debugger panel if the execution is definitively finished or errored
@@ -576,16 +587,23 @@ const Chat: React.FC = () => {
 
        // Update detailed conversation state from standard response/polling
        setDetailedConversation(prevDetailed => {
+         let newState = prevDetailed; // Start with the previous state
          if (prevDetailed?.id === conversationId) {
            // Compare validated messages
            const messagesChanged = JSON.stringify(prevDetailed.messages) !== JSON.stringify(validatedMessages);
            if (messagesChanged) {
              log.info('API Response/Polling: Updating detailed conversation messages', { conversationId, newMessageCount: validatedMessages.length });
              // Use updatedAt from response if available, otherwise keep existing
-             return { ...prevDetailed, messages: validatedMessages, updatedAt: data.updatedAt || prevDetailed.updatedAt }; // Use validated messages
+             newState = { ...prevDetailed, messages: validatedMessages, updatedAt: data.updatedAt || prevDetailed.updatedAt }; // Use validated messages
            }
          }
-         return prevDetailed;
+         // Log *after* determining the newState, whether it changed or not
+         log.debug('Polling: setDetailedConversation callback executed.', {
+           conversationId,
+           messagesChanged: newState !== prevDetailed, // Log if the state object reference changed
+           newMessageCount: newState?.messages?.length ?? 'N/A' // Log the message count of the state being set
+         });
+         return newState; // Return the determined state (either old or new)
        });
     }
 
@@ -618,10 +636,22 @@ const Chat: React.FC = () => {
        setPendingToolCalls(null); // Clear pending calls for safety
     }
 
-    // Update conversation list status from standard response/polling with type assertion
-    if (data.status && data.conversation_id === conversationId) {
-       setConversationList(prevList => prevList.map(c => c.id === conversationId ? { ...c, status: data.status as ConversationListItem['status'], updatedAt: data.updatedAt || c.updatedAt } : c).sort((a, b) => b.updatedAt - a.updatedAt));
+    // Update conversation list status, title, and flowId from standard response/polling with type assertion
+    if (data.conversation_id === conversationId) { // Update if the ID matches, regardless of status presence
+       setConversationList(prevList => prevList.map(c =>
+         c.id === conversationId
+           ? {
+               ...c,
+               // Update fields from the response data if they exist
+               title: data.title ?? c.title, // Use new title if available, else keep old
+               flowId: data.flowId ?? c.flowId, // Use new flowId if available, else keep old
+               status: data.status as ConversationListItem['status'] ?? c.status, // Use new status if available, else keep old
+               updatedAt: data.updatedAt || c.updatedAt // Always update timestamp
+             }
+           : c
+       ).sort((a, b) => b.updatedAt - a.updatedAt)); // Re-sort based on potentially new timestamp
     }
+
 
     return false; // Indicate standard response was handled
      // eslint-disable-next-line react-hooks/exhaustive-deps
