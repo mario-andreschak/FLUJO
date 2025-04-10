@@ -20,7 +20,9 @@ import {
   FormControl,
   InputLabel,
   Select,
-  SelectChangeEvent
+  SelectChangeEvent,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -85,6 +87,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const [isEditing, setIsEditing] = React.useState<boolean>(false);
   const [editContent, setEditContent] = React.useState<string>('');
   const [editNodeId, setEditNodeId] = React.useState<string | null>(null);
+  // State to manage raw view toggle for each tool message
+  const [showRawToolResult, setShowRawToolResult] = React.useState<Record<string, boolean>>({});
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>, messageId: string) => {
     // Log messageId directly
@@ -437,33 +441,110 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                         size="small" color="default" variant="outlined"
                         sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
                       />
+                      {/* Add Toggle Switch */}
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            size="small"
+                            checked={!!showRawToolResult[message.id]}
+                            onChange={(e) => setShowRawToolResult(prev => ({ ...prev, [message.id]: e.target.checked }))}
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion toggle on switch click
+                          />
+                        }
+                        label="Raw"
+                        sx={{ mr: 1, ml: 'auto', '& .MuiTypography-root': { fontSize: '0.75rem' } }}
+                        onClick={(e) => e.stopPropagation()} // Prevent accordion toggle on label click
+                      />
                     </Box>
                   </AccordionSummary>
-                  {/* Add overflow: hidden to AccordionDetails */}
-                  <AccordionDetails sx={{ overflow: 'hidden' }}>
-                    {/* Re-introduce Box with width, minWidth, and wrapping styles */}
-                    <Box sx={{ width: '100%', minWidth: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                      {/* Ensure content is string before rendering */}
-                      {typeof message.content === 'string' ? (() => {
-                        // Use simpler rendering logic, relying on Box styles
-                        try {
-                          const parsedContent = JSON.parse(message.content);
-                          if (typeof parsedContent.content === 'string') {
-                            // Render the 'content' field if it exists (structured result)
-                            return <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsedContent.content}</ReactMarkdown>;
+                  <AccordionDetails sx={{ pt: 0, pb: 1, overflow: 'hidden' }}>
+                    {showRawToolResult[message.id] ? (
+                      // Show Raw Content
+                      <Box
+                        component="pre"
+                        sx={{
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                          fontSize: '0.8rem',
+                          p: 1,
+                          borderRadius: 1,
+                          border: 1,
+                          borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
+                          bgcolor: 'action.hover',
+                          color: (theme) => theme.palette.text.primary,
+                          overflow: 'auto',
+                          maxHeight: '300px', // Limit height
+                        }}
+                      >
+                        {typeof message.content === 'string' ? message.content : '[Invalid tool content]'}
+                      </Box>
+                    ) : (
+                      // Show Rendered Content
+                      <Box sx={{ width: '100%', minWidth: 0 }}>
+                        {typeof message.content === 'string' ? (() => {
+                          try {
+                            const parsedContent = JSON.parse(message.content);
+                            // Check for MCP content structure (nested under 'data')
+                            if (parsedContent && parsedContent.data && Array.isArray(parsedContent.data.content)) {
+                              return (
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                  {parsedContent.data.content.map((item: any, index: number) => {
+                                    if (item.type === 'text') {
+                                      return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
+                                    } else if (item.type === 'image' && item.data && item.mimeType) {
+                                      return (
+                                        <img
+                                          key={index}
+                                          src={`data:${item.mimeType};base64,${item.data}`}
+                                          alt={`Tool Result Image ${index + 1}`}
+                                          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }}
+                                        />
+                                      );
+                                    } else if (item.type === 'audio' && item.data && item.mimeType) {
+                                      return (
+                                        <audio
+                                          key={index}
+                                          controls
+                                          src={`data:${item.mimeType};base64,${item.data}`}
+                                          style={{ width: '100%', marginTop: '8px' }}
+                                        >
+                                          Your browser does not support the audio element.
+                                        </audio>
+                                      );
+                                    } else {
+                                      // Fallback for unknown content types
+                                      return (
+                                        <Box
+                                          key={index}
+                                          component="pre"
+                                          sx={{
+                                            whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', p: 1,
+                                            borderRadius: 1, border: 1, borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
+                                            bgcolor: 'action.hover', color: (theme) => theme.palette.text.primary, overflow: 'auto', mt: 1
+                                          }}
+                                        >
+                                          {`Unsupported content type: ${item.type}\n${JSON.stringify(item, null, 2)}`}
+                                        </Box>
+                                      );
+                                    }
+                                  })}
+                                </Box>
+                              );
+                            } else {
+                              // If JSON doesn't match expected structure (e.g., missing data or content array), render as formatted JSON
+                              return <ReactMarkdown remarkPlugins={[remarkGfm]}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
+                            }
+                          } catch (e) {
+                            // If parsing fails, render original string content as markdown
+                            return <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>;
                           }
-                          // Otherwise, render the stringified JSON
-                          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
-                        } catch (e) {
-                          // If parsing fails, render original string content as markdown
-                          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>;
-                        }
-                      })() : (
-                         <Typography variant="body2" fontStyle="italic" color="text.secondary">
-                         [Invalid tool content]
-                       </Typography>
+                        })() : (
+                          <Typography variant="body2" fontStyle="italic" color="text.secondary">
+                            [Invalid tool content]
+                          </Typography>
+                        )}
+                      </Box>
                     )}
-                    </Box> {/* Add missing closing Box tag */}
                   </AccordionDetails>
                 </Accordion>
               </Box>

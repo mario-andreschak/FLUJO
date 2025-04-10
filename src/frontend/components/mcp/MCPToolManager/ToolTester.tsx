@@ -10,8 +10,12 @@ import {
   Select, 
   MenuItem, 
   Alert,
-  LinearProgress
+  LinearProgress,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { createLogger } from '@/utils/logger';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { useServerEvents } from '@/frontend/hooks/useServerEvents';
@@ -54,7 +58,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const [progress, setProgress] = useState<{ current: number, total?: number } | null>(null);
   const [activeProgressToken, setActiveProgressToken] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
-  
+  const [showRawResult, setShowRawResult] = useState(false); // State for toggling raw/rendered view
+
   // Subscribe to server events to catch errors and progress updates
   const { lastEvent } = useServerEvents(serverName);
   
@@ -456,19 +461,29 @@ const ToolTester: React.FC<ToolTesterProps> = ({
       )}
 
       {result && (
-        <Paper 
-          sx={{ 
-            mt: 2, 
-            p: 2, 
+        <Paper
+          sx={{
+            mt: 2,
+            p: 2,
             bgcolor: (theme) => theme.palette.mode === 'dark' ? '#1a1a1a' : '#f9fafb'
           }}
         >
-          <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 'medium' }}>Result:</Typography>
-          {result.success ? (
-            <Box 
-              component="pre" 
-              sx={{ 
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 'medium' }}>Result:</Typography>
+            <FormControlLabel
+              control={<Switch checked={showRawResult} onChange={(e) => setShowRawResult(e.target.checked)} size="small" />}
+              label="Show Raw"
+              sx={{ mr: 0 }}
+            />
+          </Box>
+
+          {showRawResult ? (
+            // Show raw output
+            <Box
+              component="pre"
+              sx={{
                 whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
                 fontSize: '0.875rem',
                 p: 1,
                 borderRadius: 1,
@@ -476,15 +491,103 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                 borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
                 bgcolor: (theme) => theme.palette.background.paper,
                 color: (theme) => theme.palette.text.primary,
-                overflow: 'auto'
+                overflow: 'auto',
+                maxHeight: '400px', // Limit height for raw view
               }}
             >
-              {result.output}
+              {result.success ? result.output : `Error: ${result.error}`}
             </Box>
           ) : (
-            <Typography color="error.main">
-              Error: {result.error}
-            </Typography>
+            // Show rendered output or error
+            result.success ? (
+              (() => {
+                try {
+                  const parsedOutput = JSON.parse(result.output);
+                  // Check if it has the expected MCP content structure (nested under 'data')
+                  if (parsedOutput && parsedOutput.data && Array.isArray(parsedOutput.data.content)) {
+                    return (
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {parsedOutput.data.content.map((item: any, index: number) => {
+                          if (item.type === 'text') {
+                            return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
+                          } else if (item.type === 'image' && item.data && item.mimeType) {
+                            return (
+                              <img
+                                key={index}
+                                src={`data:${item.mimeType};base64,${item.data}`}
+                                alt={`Tool Result Image ${index + 1}`}
+                                style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
+                              />
+                            );
+                          } else if (item.type === 'audio' && item.data && item.mimeType) {
+                            return (
+                              <audio
+                                key={index}
+                                controls
+                                src={`data:${item.mimeType};base64,${item.data}`}
+                                style={{ width: '100%' }}
+                              >
+                                Your browser does not support the audio element.
+                              </audio>
+                            );
+                          } else {
+                            // Fallback for unknown content types or structure
+                            return (
+                              <Box
+                                key={index}
+                                component="pre"
+                                sx={{
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-all',
+                                  fontSize: '0.875rem',
+                                  p: 1,
+                                  borderRadius: 1,
+                                  border: 1,
+                                  borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
+                                  bgcolor: (theme) => theme.palette.background.paper,
+                                  color: (theme) => theme.palette.text.primary,
+                                  overflow: 'auto'
+                                }}
+                              >
+                                {JSON.stringify(item, null, 2)}
+                              </Box>
+                            );
+                          }
+                        })}
+                      </Box>
+                    );
+                  } else {
+                    // If JSON doesn't match expected structure (e.g., missing data or content array), show raw JSON
+                    throw new Error("Output is valid JSON but not in the expected MCP 'data.content' format.");
+                  }
+                } catch (e) {
+                  // If output is not valid JSON or doesn't match structure, display as plain text
+                  return (
+                    <Box
+                      component="pre"
+                      sx={{
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-all', // Ensure long strings wrap
+                        fontSize: '0.875rem',
+                        p: 1,
+                        borderRadius: 1,
+                        border: 1,
+                        borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
+                        bgcolor: (theme) => theme.palette.background.paper,
+                        color: (theme) => theme.palette.text.primary,
+                        overflow: 'auto'
+                      }}
+                    >
+                      {result.output}
+                    </Box>
+                  );
+                }
+              })()
+            ) : (
+              <Typography color="error.main">
+                Error: {result.error}
+              </Typography>
+            )
           )}
         </Paper>
       )}
