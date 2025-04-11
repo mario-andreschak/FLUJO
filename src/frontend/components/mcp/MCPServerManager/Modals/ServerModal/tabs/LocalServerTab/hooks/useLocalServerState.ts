@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 
 // Type guards
@@ -146,7 +146,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
   };
 
   // Handle environment variable changes
-  const handleEnvChange = (env: Record<string, string>) => {
+  const handleEnvChange = (env: Record<string, EnvVarValue>) => {
     setLocalConfig(prev => {
       // Create a copy of the previous config with the updated env
       const updatedConfig = { ...prev, env };

@@ -484,11 +484,11 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                         {typeof message.content === 'string' ? (() => {
                           try {
                             const parsedContent = JSON.parse(message.content);
-                            // Check for MCP content structure (nested under 'data')
-                            if (parsedContent && parsedContent.data && Array.isArray(parsedContent.data.content)) {
+                            // Check for MCP content structure (directly under parsed object)
+                            if (parsedContent && Array.isArray(parsedContent.content)) {
                               return (
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                                  {parsedContent.data.content.map((item: any, index: number) => {
+                                  {parsedContent.content.map((item: any, index: number) => {
                                     if (item.type === 'text') {
                                       return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
                                     } else if (item.type === 'image' && item.data && item.mimeType) {
@@ -531,7 +531,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                                 </Box>
                               );
                             } else {
-                              // If JSON doesn't match expected structure (e.g., missing data or content array), render as formatted JSON
+                              // If JSON doesn't match expected structure (e.g., missing content array), render as formatted JSON
                               return <ReactMarkdown remarkPlugins={[remarkGfm]}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
                             }
                           } catch (e) {

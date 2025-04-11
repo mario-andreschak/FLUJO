@@ -399,23 +399,20 @@ export async function POST(request: NextRequest) {
           log.error(`Missing file path [${requestId}]`);
           return NextResponse.json({ error: 'Missing file path' }, { status: 400 });
         }
-        
-        let fullFilePath;
-        if (savePath.endsWith('README.md')) {
-          // Extract the server name from the path (first directory)
-          const serverName = savePath.split('/')[0];
-          fullFilePath = path.join(REPOS_BASE_DIR, serverName, 'README.md');
-          log.debug(`Looking for README.md in server root: ${fullFilePath} [${requestId}]`);
-        }
+
+        // Construct the full path by joining the base directory and the relative path provided
+        // The 'savePath' parameter from the frontend should be the relative path within REPOS_BASE_DIR
+        const fullFilePath = path.join(REPOS_BASE_DIR, savePath);
+        log.debug(`Constructed full file path: ${fullFilePath} [${requestId}]`);
         
         try {
           // Check if file exists
-          log.debug(`Checking if file exists [${requestId}]`);
-          await fs.access(fullFilePath || savePath);
+          log.debug(`Checking if file exists: ${fullFilePath} [${requestId}]`);
+          await fs.access(fullFilePath);
           log.debug(`File exists, reading content [${requestId}]`);
           
           // Read the file content
-          const content = await fs.readFile(fullFilePath || savePath, 'utf-8');
+          const content = await fs.readFile(fullFilePath, 'utf-8');
           log.debug(`File content read successfully [${requestId}]`, {
             contentLength: content.length,
             contentPreview: content.substring(0, 200) + (content.length > 200 ? '...' : '')

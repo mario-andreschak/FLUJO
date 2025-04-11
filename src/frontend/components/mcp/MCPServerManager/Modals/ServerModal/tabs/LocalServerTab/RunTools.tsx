@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import { MessageState } from '../../types';
+import { EnvVarValue } from '@/shared/types/mcp/mcp';
 import {
   Alert,
   Box,
@@ -15,9 +16,6 @@ import {
   Typography
 } from '@mui/material';
 
-// Define the complex env value type
-type EnvValue = string | { value: string; metadata: { isSecret: boolean } };
-
 interface RunToolsProps {
   command: string;
   setCommand: (command: string) => void;
@@ -28,8 +26,8 @@ interface RunToolsProps {
   onRun: () => Promise<void>;
   isRunning: boolean;
   runCompleted: boolean;
-  env: Record<string, string>;
-  onEnvChange: (env: Record<string, string>) => void;
+  env: Record<string, EnvVarValue>;
+  onEnvChange: (env: Record<string, EnvVarValue>) => void;
   serverName: string;
   consoleOutput: string;
   message: MessageState | null;
@@ -151,18 +149,7 @@ const RunTools: React.FC<RunToolsProps> = ({
           serverName={serverName}
           initialEnv={env}
           onSave={async (updatedEnv) => {
-            // Convert complex env values to simple string values if needed
-            const simpleEnv: Record<string, string> = {};
-            
-            Object.entries(updatedEnv).forEach(([key, value]) => {
-              if (typeof value === 'string') {
-                simpleEnv[key] = value;
-              } else if (value && typeof value === 'object' && 'value' in value) {
-                simpleEnv[key] = value.value;
-              }
-            });
-            
-            onEnvChange(simpleEnv);
+            onEnvChange(updatedEnv);
             return Promise.resolve();
           }}
         />

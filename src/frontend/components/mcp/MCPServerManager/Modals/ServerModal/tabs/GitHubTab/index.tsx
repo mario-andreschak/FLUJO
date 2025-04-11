@@ -10,7 +10,7 @@ import { parseEnvVariables } from '../../utils/configUtils';
 import { detectRepositoryConfig } from '../../utils/configDetection';
 import { createEmptyConfigWarningMessage } from '../../utils/errorHandling';
 import { MCPServerState } from '@/shared/types';
-import { MCPServerConfig } from '@/utils/mcp';
+import { MCPServerConfig, parseServerConfig } from '@/utils/mcp'; // Import parseServerConfig
 import path from 'path';
 import { Box, Paper, Stack, Typography } from '@mui/material';
 
@@ -136,49 +136,107 @@ const GitHubTab: React.FC<TabProps> = ({
       );
       
       // Update message with detection result
-      setMessage(detectionResult.message);
-      
-      if (detectionResult.success && detectionResult.config) {
-        // Merge env variables from detection and .env.example (with .env.example taking precedence)
-        const configWithEnv = {
-          ...detectionResult.config,
-          rootPath: repoPath, // Ensure rootPath is set
+        // Update message with initial detection result (might be overwritten by README parsing)
+        setMessage(detectionResult.message);
+        
+        let finalConfig: Partial<MCPServerConfig> = {};
+        let finalMessage: MessageState | null = detectionResult.message;
+
+        if (detectionResult.success && detectionResult.config) {
+          console.log('GitHubTab: Initial detection successful. Merging config.');
+          // Merge env variables from detection and .env.example (with .env.example taking precedence)
+          finalConfig = {
+            ...detectionResult.config,
+            rootPath: repoPath, // Ensure rootPath is set
           env: {
             ...(detectionResult.config.env || {}),
             ...envFromExample // .env.example values override detected values
           }
         };
+        finalMessage = detectionResult.message; // Keep the success message from detection
         
-        // Store the parsed config in state
-        setParsedConfig(configWithEnv);
-        
-        // Pass the config to the parent component before switching tabs
-        if (onUpdate) {
-          onUpdate(configWithEnv as MCPServerConfig);
-        }
       } else {
-        // Create a default config if detection failed
-        const defaultConfig: MCPServerConfig = {
+        console.log('GitHubTab: Initial detection failed. Attempting README parsing fallback.');
+        // Initial detection failed, try parsing README.md as a fallback
+        const defaultConfig: Partial<MCPServerConfig> = {
           name: repoInfo.repo,
           transport: 'stdio',
           command: '',
           args: [],
-          env: envFromExample,
+          env: envFromExample, // Start with env from .env.example
           disabled: false,
           autoApprove: [],
           rootPath: repoPath,
           _buildCommand: '',
           _installCommand: '',
         };
-        
-        // Store the default config in state
-        setParsedConfig(defaultConfig);
-        
-        // Set a warning message
-        setMessage(createEmptyConfigWarningMessage(detectionResult.language));
+
+        try {
+          // Construct the relative path for README.md
+          const readmeRelativePath = path.join(repoInfo.repo, 'README.md');
+          console.log(`GitHubTab: Reading README.md from relative path: ${readmeRelativePath}`);
+          
+          // Fetch README content
+          const readmeResponse = await fetch('/api/git', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'readFile',
+              savePath: readmeRelativePath // Use relative path
+            })
+          });
+          
+          const readmeData = await readmeResponse.json();
+          
+          if (readmeData.success && readmeData.content) {
+            console.log('GitHubTab: README.md read successfully. Parsing content.');
+            // Parse the README content
+            const readmeParseResult = parseServerConfig(readmeData.content, true, repoInfo.repo);
+            
+            console.log('GitHubTab: README parse result:', readmeParseResult);
+            
+            // Merge default config, README config, and .env.example
+            finalConfig = {
+              ...defaultConfig,
+              ...readmeParseResult.config, // Parsed config from README
+              rootPath: repoPath, // Ensure rootPath is correct
+              env: { // Merge env: default -> readme -> .env.example
+                ...(defaultConfig.env || {}),
+                ...(readmeParseResult.config?.env || {}),
+                ...envFromExample 
+              },
+              // Ensure build/install commands from README override defaults
+              _buildCommand: readmeParseResult.config?._buildCommand || defaultConfig._buildCommand,
+              _installCommand: readmeParseResult.config?._installCommand || defaultConfig._installCommand,
+            };
+            
+            // Update message based on README parsing result - use 'warning' if only partially extracted
+            finalMessage = readmeParseResult.message || { type: 'warning', text: 'Configuration partially extracted from README.md. Please review.' };
+            
+          } else {
+            console.log('GitHubTab: Failed to read or parse README.md. Using default config.');
+            // Failed to read README, use the default config and original warning
+            finalConfig = defaultConfig;
+            finalMessage = createEmptyConfigWarningMessage(detectionResult.language);
+          }
+        } catch (readmeError) {
+          console.error('GitHubTab: Error reading or parsing README.md:', readmeError);
+          // Error during README processing, use default config and show error
+          finalConfig = defaultConfig;
+          finalMessage = { type: 'error', text: `Error processing README.md: ${readmeError instanceof Error ? readmeError.message : 'Unknown error'}` };
+        }
       }
       
-      // Always switch to the local tab so the user can install and build the repository
+      // Store the final config (either from detection or README fallback)
+      setParsedConfig(finalConfig);
+      setMessage(finalMessage); // Set the final message state
+
+      // Pass the config to the parent component before switching tabs
+      if (onUpdate && finalConfig.name) { // Ensure name is present before updating
+        onUpdate(finalConfig as MCPServerConfig);
+      }
+      
+      // Always switch to the local tab
       if (setActiveTab) {
         setActiveTab('local');
       }
