@@ -19,6 +19,13 @@ export async function checkFileExists(
   try {
     log.debug(`Checking if file exists: ${repoPath}/${filePath}`);
     
+    // Construct the path - avoid double slashes if repoPath already ends with a slash
+    const fullPath = repoPath.endsWith('/') || repoPath.endsWith('\\') 
+      ? `${repoPath}${filePath}` 
+      : `${repoPath}/${filePath}`;
+    
+    log.debug(`Constructed full path: ${fullPath}`);
+    
     // Call the server-side API to check if the file exists
     const response = await fetch('/api/git', {
       method: 'POST',
@@ -27,7 +34,7 @@ export async function checkFileExists(
       },
       body: JSON.stringify({
         action: 'readFile',
-        savePath: `${repoPath}/${filePath}`,
+        savePath: fullPath,
       }),
     });
     

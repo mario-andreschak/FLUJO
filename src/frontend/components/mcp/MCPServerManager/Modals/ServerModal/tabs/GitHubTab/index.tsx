@@ -33,6 +33,7 @@ const GitHubTab: React.FC<TabProps> = ({
   const [clonedRepoPath, setClonedRepoPath] = useState<string>('');
   const [parsedConfig, setParsedConfig] = useState<Partial<MCPServerConfig> | null>(null);
   const [mcpServersDir, setMcpServersDir] = useState<string>('');
+  const [repoExists, setRepoExists] = useState<boolean>(false);
   
   // Fetch the current working directory and mcp-servers directory when component mounts
   useEffect(() => {
@@ -57,6 +58,7 @@ const GitHubTab: React.FC<TabProps> = ({
   const handleValidate = async () => {
     setIsValidating(true);
     setMessage(null);
+    setRepoExists(false);
     
     const result = await validateGitHubUrl(githubUrl);
     
@@ -76,6 +78,9 @@ const GitHubTab: React.FC<TabProps> = ({
             // Set default save path with the dynamically fetched path
             const repoPath = path.join(data.mcpServersDir, result.repoInfo.repo);
             setSavePath(repoPath);
+            
+            // Check if repository already exists
+            await checkRepoExists(repoPath);
           } else {
             console.error('Failed to get mcp-servers directory:', data.error);
             // Fallback to a relative path if API fails
@@ -90,6 +95,9 @@ const GitHubTab: React.FC<TabProps> = ({
         // Use the already fetched mcpServersDir
         const repoPath = path.join(mcpServersDir, result.repoInfo.repo);
         setSavePath(repoPath);
+        
+        // Check if repository already exists
+        await checkRepoExists(repoPath);
       }
       
       setParseCompleted(true);
@@ -97,19 +105,50 @@ const GitHubTab: React.FC<TabProps> = ({
     
     setIsValidating(false);
   };
+  
+  // Check if repository already exists
+  const checkRepoExists = async (repoPath: string) => {
+    try {
+      const response = await fetch('/api/git', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'exists',
+          savePath: repoPath
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (result.success && result.exists) {
+        setRepoExists(true);
+        setMessage({
+          type: 'warning',
+          text: `Repository already exists at ${repoPath}. You can re-clone to get the latest version.`
+        });
+      } else {
+        setRepoExists(false);
+      }
+    } catch (error) {
+      console.error('Error checking if repository exists:', error);
+      setRepoExists(false);
+    }
+  };
 
-  const handleClone = async () => {
+  const handleClone = async (forceClone: boolean = false) => {
     if (!repoInfo) return;
     
     setIsCloning(true);
     setMessage({
       type: 'success',
-      text: 'Cloning repository...'
+      text: forceClone ? 'Re-cloning repository...' : 'Cloning repository...'
     });
     
     try {
       // Clone the repository
-      const cloneResult = await cloneRepository(githubUrl, repoInfo, savePath);
+      const cloneResult = await cloneRepository(githubUrl, repoInfo, savePath, forceClone);
       
       if (!cloneResult.success || !cloneResult.clonedRepoPath) {
         setMessage(cloneResult.message);
@@ -275,6 +314,7 @@ const GitHubTab: React.FC<TabProps> = ({
           isCloning={isCloning}
           cloneCompleted={cloneCompleted}
           repoInfo={repoInfo}
+          repoExists={repoExists}
           onClone={handleClone}
         />
 

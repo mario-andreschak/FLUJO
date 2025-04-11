@@ -292,6 +292,10 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: 'Missing save path' }, { status: 400 });
         }
 
+        // Get the forceClone parameter from the request
+        const forceClone = requestBody.forceClone === true;
+        log.debug(`Force clone parameter: ${forceClone} [${requestId}]`);
+
         // Ensure the parent directory exists
         log.debug(`Ensuring parent directory exists: ${path.dirname(savePath)} [${requestId}]`);
         await fs.mkdir(path.dirname(savePath), { recursive: true });
@@ -302,7 +306,24 @@ export async function POST(request: NextRequest) {
           log.debug(`Checking if directory already exists [${requestId}]`);
           await fs.access(savePath);
           directoryExists = true;
-          log.debug(`Directory already exists at ${savePath}, continuing with existing repository [${requestId}]`);
+          
+          // If forceClone is true, remove the existing directory
+          if (forceClone) {
+            log.info(`Force clone requested, removing existing directory at ${savePath} [${requestId}]`);
+            try {
+              // Use rimraf-like recursive removal with fs.rm
+              await fs.rm(savePath, { recursive: true, force: true });
+              log.info(`Existing directory removed successfully [${requestId}]`);
+              directoryExists = false;
+            } catch (rmError) {
+              log.error(`Error removing existing directory [${requestId}]`, rmError);
+              return NextResponse.json({ 
+                error: `Failed to remove existing directory: ${rmError instanceof Error ? rmError.message : 'Unknown error'}` 
+              }, { status: 500 });
+            }
+          } else {
+            log.debug(`Directory already exists at ${savePath}, continuing with existing repository [${requestId}]`);
+          }
         } catch {
           log.debug(`Directory does not exist, will clone repository [${requestId}]`);
           // Directory doesn't exist, which is what we want
@@ -400,10 +421,12 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: 'Missing file path' }, { status: 400 });
         }
 
-        // Construct the full path by joining the base directory and the relative path provided
-        // The 'savePath' parameter from the frontend should be the relative path within REPOS_BASE_DIR
-        const fullFilePath = path.join(REPOS_BASE_DIR, savePath);
-        log.debug(`Constructed full file path: ${fullFilePath} [${requestId}]`);
+        // Determine if the savePath is absolute or relative
+        const isAbsolutePath = path.isAbsolute(savePath);
+        
+        // Construct the full path - if savePath is absolute, use it directly; otherwise join with base dir
+        const fullFilePath = isAbsolutePath ? savePath : path.join(REPOS_BASE_DIR, savePath);
+        log.debug(`Constructed full file path: ${fullFilePath} [${requestId}] (path is ${isAbsolutePath ? 'absolute' : 'relative'})`);
         
         try {
           // Check if file exists

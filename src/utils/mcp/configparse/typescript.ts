@@ -171,9 +171,19 @@ async function determineArgs(packageJson: any, repoPath: string): Promise<string
     const startScript = scripts.start;
     
     // Check if it's a direct node command
-    const nodeCommandMatch = startScript.match(/node\s+([^\s]+)/);
+    // Enhanced regex to handle more variations of the node command
+    const nodeCommandMatch = startScript.match(/node\s+(?:--[^\s]+=?[^\s]*\s+)*([^\s]+)/);
     if (nodeCommandMatch && nodeCommandMatch[1]) {
+      log.debug(`Extracted entry point from start script: ${nodeCommandMatch[1]}`);
       args.push(nodeCommandMatch[1]);
+      return args;
+    }
+    
+    // Alternative approach: just look for .js files in the start script
+    const jsFileMatch = startScript.match(/\b((?:\.\/)?(?:[\w\-\.\/]+)\.js)\b/);
+    if (jsFileMatch && jsFileMatch[1]) {
+      log.debug(`Found .js file in start script: ${jsFileMatch[1]}`);
+      args.push(jsFileMatch[1]);
       return args;
     }
     
