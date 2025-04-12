@@ -328,19 +328,40 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                       <Box component="span" sx={{ color: 'error.main', ml: 0.5 }}>*</Box>
                     )}
                   </Typography>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    value={params[key] !== undefined ? String(params[key]) : ''}
-                    onChange={(e) => handleParamChange(key, e.target.value, schema)}
-                    placeholder={schema.description || ''}
-                    sx={{
-                      bgcolor: (theme) => theme.palette.background.paper,
-                      '& .MuiOutlinedInput-notchedOutline': {
-                        borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+                  
+                  {schema.type === 'boolean' ? (
+                    // Switch for boolean parameters
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={params[key] === true}
+                          onChange={(e) => {
+                            setParams((prev) => ({
+                              ...prev,
+                              [key]: e.target.checked,
+                            }));
+                          }}
+                          size="small"
+                        />
                       }
-                    }}
-                  />
+                      label={schema.description || ''}
+                    />
+                  ) : (
+                    // TextField for other parameter types
+                    <TextField
+                      fullWidth
+                      size="small"
+                      value={params[key] !== undefined ? String(params[key]) : ''}
+                      onChange={(e) => handleParamChange(key, e.target.value, schema)}
+                      placeholder={schema.description || ''}
+                      sx={{
+                        bgcolor: (theme) => theme.palette.background.paper,
+                        '& .MuiOutlinedInput-notchedOutline': {
+                          borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
+                        }
+                      }}
+                    />
+                  )}
                 </Box>
               )
             )}
