@@ -5,11 +5,13 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 -> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
 Here's a video guiding you through the whole thing - from installation to output! (15min)
+
+Sorry for the bad audio, a new Video is coming soon!
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
  
 
 # IMPORTANT SECURITY NOTE
-FLUJO has currently EXTENSIVE logging enabled by default! This **will expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
+FLUJO has currently EXTENSIVE logging enabled by default! This **may expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
 
 ![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
 
@@ -99,57 +101,6 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 
 ## 🚀 Getting Started
 
-### Docker Installation (Recommended)
-
-The easiest way to run FLUJO is using Docker, which provides a consistent environment and supports running Docker-based MCP servers.
-
-#### Prerequisites
-
-- Docker and Docker Compose installed on your system
-
-#### Using Docker Compose
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/mario-andreschak/FLUJO.git
-   cd FLUJO
-   ```
-
-2. Build and start the container:
-   ```bash
-   docker-compose up -d
-   ```
-
-3. Access FLUJO in your browser:
-   ```
-   http://localhost:4200
-   ```
-
-#### Using Docker Scripts
-
-For more control over the Docker build and run process, you can use the provided scripts:
-
-1. Build the Docker image:
-   ```bash
-   ./scripts/build-docker.sh
-   ```
-
-2. Run the Docker container:
-   ```bash
-   ./scripts/run-docker.sh
-   ```
-
-Options for run-docker.sh:
-- `--tag=<tag>`: Specify the image tag (default: latest)
-- `--detached`: Run in detached mode
-- `--no-privileged`: Run without privileged mode (not recommended)
-- `--port=<port>`: Specify the host port (default: 4200)
-
-For more detailed information about Docker support, including Docker-in-Docker capabilities, persistent storage, and troubleshooting, see [DOCKER.md](DOCKER.md).
-
-### Electron Bundle
-- Download the Setup.exe here: https://github.com/mario-andreschak/FLUJO/releases/tag/preview
-
 ### Manual installation:
 ### Prerequisites
 
@@ -198,6 +149,11 @@ For more detailed information about Docker support, including Docker-in-Docker c
 
 ## 📖 Usage
 
+### Setting up often used API keys
+
+1. Navigate to Settings
+2. Save your API Keys globally to secure them
+
 ### Setting Up Models
 
 1. Navigate to the Models page
@@ -213,6 +169,14 @@ For more detailed information about Docker support, including Docker-in-Docker c
 4. Configure server settings and environment variables
 5. Start and manage your server
 
+### Using official Reference servers
+
+1. Go to the MCP page
+2. Click "Add Server" to install a new MCP server
+3. Go to the "Reference Servers" Tab
+4. (First time executing:) Click "Refresh" and waaaaaaait.
+5. Click a server of your choice, wait for the screen to change, click "Save" / "Update Server" at the bottom.
+   
 #### Using Docker-based MCP Servers
 
 When running FLUJO in Docker, you can use Docker-based MCP servers:
@@ -227,25 +191,39 @@ When running FLUJO in Docker, you can use Docker-based MCP servers:
 
 1. Visit the Flows page
 2. Click "Create Flow" to start a new workflow
-3. Add processing nodes and connect them
+3. Add processing nodes and connect them 
 4. Configure each node with models and tools
 5. Save your flow
+
+![Screenshot 2025-04-12 123657](https://github.com/user-attachments/assets/06b40a36-a906-44d5-b53a-9eaa125acb74)
+
+
+### Branching
+
+1. Connect one MCP node to multiple subsequent ones
+![Screenshot 2025-04-07 094237](https://github.com/user-attachments/assets/73be3153-5dea-4729-bf10-40657b2a12c4)
+2. Define the branching in the prompt, using the handoff-tools on the "Agent Tools" tab
+![Screenshot 2025-04-07 095433](https://github.com/user-attachments/assets/d3bc188f-8a7a-4fb0-830c-e4d85a9a37bf)
+
+### Loops
+
+1. Same as branching, but connect back to a previous node
+![Screenshot 2025-04-08 165640](https://github.com/user-attachments/assets/3c026812-a895-4c3a-a37d-fe51550b273b)
+
+### Orchestration
+
+1. Same as loops but with multiple ones
+![Screenshot 2025-04-08 180631](https://github.com/user-attachments/assets/0a3abfe9-8e83-49ea-a8da-bede3bed31e3)
+
+
 
 ### Using the Chat Interface
 
 1. Go to the Chat page
 2. Select a flow to interact with
 3. Start chatting with your configured workflow
-4. Attach files or audio as needed
-5. Manage conversation context by disabling messages or splitting conversations
+![Screenshot 2025-04-07 095653](https://github.com/user-attachments/assets/efcb78ba-9a85-401e-a4c7-df5ec7458b26)
 
-### Using the Desktop Application
-
-1. Run FLUJO as a desktop application using `npm run electron-dev` or `npm run electron-dist`
-2. Access all features through the desktop interface
-3. Configure network access in Settings > Desktop Application to make FLUJO accessible from other devices
-4. Minimize to system tray by closing the window (the application will continue running)
-5. Access the application from the system tray icon
 
 ## 🔄 MCP Integration
 
@@ -256,6 +234,56 @@ FLUJO provides comprehensive support for the Model Context Protocol (MCP), allow
 - Connect MCP servers to your workflows
 - Reference tools directly in prompts
 - Bind environment variables to your global encrypted storage
+![image](https://github.com/user-attachments/assets/4c638f0d-a6cb-4f4f-a3c0-cc1e3a369297)
+
+### Docker Installation
+
+The easiest way to run FLUJO is using Docker, which provides a consistent environment and supports running Docker-based MCP servers.
+
+#### Prerequisites
+
+- Docker and Docker Compose installed on your system
+
+#### Using Docker Compose
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/mario-andreschak/FLUJO.git
+   cd FLUJO
+   ```
+
+2. Build and start the container:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. Access FLUJO in your browser:
+   ```
+   http://localhost:4200
+   ```
+
+#### Using Docker Scripts
+
+For more control over the Docker build and run process, you can use the provided scripts:
+
+1. Build the Docker image:
+   ```bash
+   ./scripts/build-docker.sh
+   ```
+
+2. Run the Docker container:
+   ```bash
+   ./scripts/run-docker.sh
+   ```
+
+Options for run-docker.sh:
+- `--tag=<tag>`: Specify the image tag (default: latest)
+- `--detached`: Run in detached mode
+- `--no-privileged`: Run without privileged mode (not recommended)
+- `--port=<port>`: Specify the host port (default: 4200)
+
+For more detailed information about Docker support, including Docker-in-Docker capabilities, persistent storage, and troubleshooting, see [DOCKER.md](DOCKER.md).
+
 
 ## 📄 License
 
@@ -286,6 +314,7 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 ## 📬 Contact
 
 - GitHub: [mario-andreschak](https://github.com/mario-andreschak)
+- LinkedIn: https://www.linkedin.com/in/mario-andreschak-674033299/
 
 ## Notes:
 - You can add ~FLUJO=HTML, ~FLUJO=MARKDOWN, ~FLUJO=JSON, ~FLUJO=TEXT in your message to format the response, this will give varying results in different tools where you integrate FLUJO.
