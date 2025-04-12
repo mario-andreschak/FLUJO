@@ -77,13 +77,11 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 ### 💬 Chat Interface
 
 - **Flow Interaction**: Interact with your flows through a chat interface
-- **Message Management**: Disable messages or split conversations to reduce context size
-- **File Attachments**: Attach documents or audio for LLM processing
-- **Transcription**: Process audio inputs with automatic transcription
-
-![Chat Interface](https://github.com/user-attachments/assets/ce6b5f15-c500-4129-a1f7-131517a65f14)
-![Message Management](https://github.com/user-attachments/assets/625b90d6-73e2-4afe-9ec4-5814b0bbf302)
-![File Attachments](https://github.com/user-attachments/assets/3f7f737a-170c-48e8-b9b1-3969da50d8e0)
+- **Message Management**: Edit or disable messages or split conversations to reduce context size 
+- **File Attachments**: Attach documents or audio for LLM processing (really bad atm, because for this you should use mcp!)
+- **Transcription**: Process audio inputs with automatic transcription (really bad atm, see roadmap)
+  
+![Screenshot 2025-04-05 210835](https://github.com/user-attachments/assets/c9738f5b-01c7-4b18-b816-2323ebc2a94a)
 
 ### 🔄 External Tool Integration
 
