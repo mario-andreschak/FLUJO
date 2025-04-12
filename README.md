@@ -5,8 +5,9 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 -> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
 Here's a video guiding you through the whole thing - from installation to output! (15min)
-
 Sorry for the bad audio, a new Video is coming soon!
+
+
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
  
 
