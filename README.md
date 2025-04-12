@@ -88,15 +88,8 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 - **OpenAI Compatible Endpoint**: Integrate with tools like CLine or Roo
 - **Seamless Connection**: Use FLUJO as a backend for other AI applications
 
-![CLine Integration](https://github.com/user-attachments/assets/4e528d28-a317-4326-8da6-6c6dc4a6232b)
-![Roo Integration](https://github.com/user-attachments/assets/d8d8fe98-f08e-40eb-9ad8-a494aad32826)
-
-### 🖥️ Desktop Application
-
-- **Electron Integration**: Run FLUJO as a native desktop application
-- **System Tray**: Minimize to system tray for quick access
-- **Network Mode**: Configure the application to be accessible from other devices
-- **Dual-Mode Operation**: Use as a desktop app or headless server on edge devices
+![Screenshot 2025-03-27 130144](https://github.com/user-attachments/assets/7ba68655-2a38-48b1-8d52-c0e2c217e506)
+![Screenshot 2025-03-26 213657](https://github.com/user-attachments/assets/43add66a-ba69-4651-9722-f920c4ef746b)
 
 ## 🚀 Getting Started
 
