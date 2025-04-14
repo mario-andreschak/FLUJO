@@ -1,14 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-// import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '@/temp/typescript-sdk/dist/esm/client/streamableHttp.js'
+import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport, SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
+import { HttpSseClientTransport } from '@/utils/mcp/httpSse';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '@/utils/logger';
-import { MCPHttpSseConfig, MCPServerConfig, MCPStreamableHttpConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { ChildProcess, spawn } from 'child_process';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
@@ -54,25 +54,26 @@ export function createNewClient(config: MCPServerConfig): Client {
 /**
  * Create a transport for the MCP client
  */
-export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
+export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport | HttpSseClientTransport {
   log.debug('Entering createTransport method');
   
   switch (config.transport) {
-    case 'stdio':
-      return createStdioTransport(config);
-
     case 'websocket':
       log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
       return new WebSocketClientTransport(new URL(config.websocketUrl));
       
-    case 'sse-stream':
-      log.info(`Creating Streamable HTTP transport for server ${config.name} with endpoint ${(config as MCPStreamableHttpConfig).url}`);
-      return new StreamableHTTPClientTransport(config.url, (config as MCPStreamableHttpConfig));
+    case 'streamableHttp':
+      log.info(`Creating Streamable HTTP transport for server ${config.name} with endpoint ${(config as any).endpoint}`);
+      return new StreamableHTTPClientTransport(new URL((config as any).endpoint));
       
-    case 'sse-legacy':
-      log.info(`Creating HTTP+SSE transport for server ${config.name} with endpoint ${(config as MCPHttpSseConfig).url}`);
-      return new SSEClientTransport(config.url, (config as SSEClientTransportOptions));
-        
+    case 'httpSse':
+      log.info(`Creating HTTP+SSE transport for server ${config.name}`);
+      // For HTTP+SSE (legacy), we use our custom HttpSseClientTransport
+      return new HttpSseClientTransport(
+        new URL((config as any).sseEndpoint),
+        new URL((config as any).messageEndpoint)
+      );
+      
     case 'docker':
       log.info(`Creating Docker transport for server ${config.name}`);
       return createDockerTransport(config);
@@ -514,7 +515,7 @@ export function shouldRecreateClient(
     // if (transport._url?.toString() !== config.websocketUrl) { // Property '_url' is private and only accessible within class 'WebSocketClientTransport'.
     //   return { needsNewClient: true, reason: 'WebSocket URL changed' };
     // }
-  } else if (config.transport === 'sse-stream') {
+  } else if (config.transport === 'streamableHttp') {
     if (!(client.transport instanceof StreamableHTTPClientTransport)) {
       return {
         needsNewClient: true,
@@ -525,8 +526,8 @@ export function shouldRecreateClient(
     // Check if endpoint has changed
     // We can't directly access private properties, but we can assume if the transport type
     // is the same but the endpoint is different, we need to recreate the client
-  } else if (config.transport === 'sse-legacy') {
-    if (!(client.transport instanceof SSEClientTransport)) {
+  } else if (config.transport === 'httpSse') {
+    if (!(client.transport instanceof HttpSseClientTransport)) {
       return {
         needsNewClient: true,
         reason: 'Transport type changed to httpSse',
@@ -750,7 +751,7 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
     // Handle different transport types
     else if (client.transport instanceof StreamableHTTPClientTransport || 
              client.transport instanceof SSEClientTransport ||
-             client.transport instanceof WebSocketClientTransport) {
+             client.transport instanceof HttpSseClientTransport) {
       // For HTTP-based transports, just close the client normally
       // No special cleanup needed
       log.info(`Closing HTTP-based transport for ${serverName}`);
