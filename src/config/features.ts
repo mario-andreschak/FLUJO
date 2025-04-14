@@ -22,7 +22,7 @@ export const FEATURES = {
    * 
    * Only log messages with a level greater than or equal to this value will be displayed
    */
-  LOG_LEVEL: 0, // VERBOSE level for debugging
+  LOG_LEVEL: 3, // VERBOSE level for debugging
   
   /**
    * Controls whether tool calls are included in the response
