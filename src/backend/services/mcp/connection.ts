@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 // import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '../../../temp/typescript-sdk/dist/esm/client/streamableHttp.js'
+import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '@/temp/typescript-sdk/dist/esm/client/streamableHttp.js'
 import { SSEClientTransport, SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import * as fs from 'fs';
 import * as path from 'path';
