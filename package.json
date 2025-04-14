@@ -21,7 +21,7 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@isomorphic-git/lightning-fs": "^4.6.0",
-    "@modelcontextprotocol/sdk": "^1.9.0",
+    "@modelcontextprotocol/sdk": "^1.6.0",
     "@mui/icons-material": "^6.4.5",
     "@mui/material": "^6.4.5",
     "@types/crypto-js": "^4.2.2",

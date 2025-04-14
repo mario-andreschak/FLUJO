@@ -48,12 +48,6 @@ const LocalServerTab: React.FC<TabProps> = ({
     setLocalConfig,
     websocketUrl,
     setWebsocketUrl,
-    endpoint,
-    setEndpoint,
-    sseEndpoint,
-    setSseEndpoint,
-    messageEndpoint,
-    setMessageEndpoint,
     buildCommand,
     setBuildCommand,
     installCommand,
@@ -128,10 +122,7 @@ const LocalServerTab: React.FC<TabProps> = ({
       onAdd,
       onUpdate,
       initialConfig,
-      onClose,
-      endpoint,
-      sseEndpoint,
-      messageEndpoint
+      onClose
     );
   };
 
@@ -221,10 +212,7 @@ const LocalServerTab: React.FC<TabProps> = ({
       setConsoleOutput,
       setIsConsoleVisible,
       setMessage,
-      setRunCompleted,
-      endpoint,
-      sseEndpoint,
-      messageEndpoint
+      setRunCompleted
     );
   };
 
@@ -487,16 +475,10 @@ const LocalServerTab: React.FC<TabProps> = ({
                         });
                       }
                     }}
-                    transport={localConfig.transport as 'stdio' | 'websocket' | 'streamableHttp' | 'httpSse'}
+                    transport={localConfig.transport as 'stdio' | 'websocket'}
                     setTransport={handleTransportChange}
                     websocketUrl={websocketUrl}
                     setWebsocketUrl={setWebsocketUrl}
-                    endpoint={endpoint}
-                    setEndpoint={setEndpoint}
-                    sseEndpoint={sseEndpoint}
-                    setSseEndpoint={setSseEndpoint}
-                    messageEndpoint={messageEndpoint}
-                    setMessageEndpoint={setMessageEndpoint}
                     onRun={onRun}
                     isRunning={isRunning}
                     runCompleted={runCompleted}

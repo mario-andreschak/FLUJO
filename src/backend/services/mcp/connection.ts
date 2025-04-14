@@ -1,9 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import { StreamableHTTPClientTransport, StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { SSEClientTransport, SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
-import { HttpSseClientTransport } from '@/utils/mcp/httpSse';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -54,34 +51,17 @@ export function createNewClient(config: MCPServerConfig): Client {
 /**
  * Create a transport for the MCP client
  */
-export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport | HttpSseClientTransport {
+export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport {
   log.debug('Entering createTransport method');
-  
-  switch (config.transport) {
-    case 'websocket':
-      log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
-      return new WebSocketClientTransport(new URL(config.websocketUrl));
-      
-    case 'streamableHttp':
-      log.info(`Creating Streamable HTTP transport for server ${config.name} with endpoint ${(config as any).endpoint}`);
-      return new StreamableHTTPClientTransport(new URL((config as any).endpoint));
-      
-    case 'httpSse':
-      log.info(`Creating HTTP+SSE transport for server ${config.name}`);
-      // For HTTP+SSE (legacy), we use our custom HttpSseClientTransport
-      return new HttpSseClientTransport(
-        new URL((config as any).sseEndpoint),
-        new URL((config as any).messageEndpoint)
-      );
-      
-    case 'docker':
-      log.info(`Creating Docker transport for server ${config.name}`);
-      return createDockerTransport(config);
-      
-    default:
-      // Default to stdio transport
-      return createStdioTransport(config);
+  if (config.transport === 'websocket') {
+    log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
+    return new WebSocketClientTransport(new URL(config.websocketUrl));
+  } else if (config.transport === 'docker') {
+    log.info(`Creating Docker transport for server ${config.name}`);
+    return createDockerTransport(config);
   }
+
+  return createStdioTransport(config);
 }
 
 /**
@@ -515,28 +495,6 @@ export function shouldRecreateClient(
     // if (transport._url?.toString() !== config.websocketUrl) { // Property '_url' is private and only accessible within class 'WebSocketClientTransport'.
     //   return { needsNewClient: true, reason: 'WebSocket URL changed' };
     // }
-  } else if (config.transport === 'streamableHttp') {
-    if (!(client.transport instanceof StreamableHTTPClientTransport)) {
-      return {
-        needsNewClient: true,
-        reason: 'Transport type changed to streamableHttp',
-      };
-    }
-    
-    // Check if endpoint has changed
-    // We can't directly access private properties, but we can assume if the transport type
-    // is the same but the endpoint is different, we need to recreate the client
-  } else if (config.transport === 'httpSse') {
-    if (!(client.transport instanceof HttpSseClientTransport)) {
-      return {
-        needsNewClient: true,
-        reason: 'Transport type changed to httpSse',
-      };
-    }
-    
-    // Check if endpoints have changed
-    // We can't directly access private properties, but we can assume if the transport type
-    // is the same but the endpoints are different, we need to recreate the client
   } else if (config.transport === 'docker') {
     // For Docker transport, we need to check if the Docker-specific parameters have changed
     const dockerConfig = config as import('@/shared/types/mcp/mcp').MCPDockerConfig;
@@ -747,14 +705,6 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
         log.warn(`Error stopping Docker container for ${serverName}:`, dockerError);
         // Continue with client close even if Docker stop fails
       }
-    }
-    // Handle different transport types
-    else if (client.transport instanceof StreamableHTTPClientTransport || 
-             client.transport instanceof SSEClientTransport ||
-             client.transport instanceof HttpSseClientTransport) {
-      // For HTTP-based transports, just close the client normally
-      // No special cleanup needed
-      log.info(`Closing HTTP-based transport for ${serverName}`);
     }
     // Check if the transport is stdio
     else if (client.transport instanceof StdioClientTransport) {

@@ -1,16 +1,10 @@
 'use client';
 
-import { 
-  MCPServerConfig, 
-  MCPStdioConfig, 
-  MCPWebSocketConfig, 
-  MCPStreamableHttpConfig, 
-  MCPHttpSseConfig 
-} from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 import { parseConfigFromClipboard, parseConfigFromReadme, parseEnvFromClipboard, parseEnvFromFile } from '../../../utils/configUtils';
 import { installDependencies, buildServer } from '../../../utils/buildUtils';
-import { isStdioConfig, isWebSocketConfig, isStreamableHttpConfig, isHttpSseConfig } from '../hooks/useLocalServerState';
+import { isStdioConfig, isWebSocketConfig } from '../hooks/useLocalServerState';
 
 // Function to get the MCP servers directory from the CWD API
 export const getMCPServersDir = async (): Promise<string> => {
@@ -40,10 +34,7 @@ export const handleSubmit = (
   onAdd: (config: MCPServerConfig) => void,
   onUpdate?: (config: MCPServerConfig) => void,
   initialConfig?: MCPServerConfig | null,
-  onClose?: () => void,
-  endpoint?: string,
-  sseEndpoint?: string,
-  messageEndpoint?: string
+  onClose?: () => void
 ) => {
   e.preventDefault();
   if (!localConfig.name || (isStdioConfig(localConfig) && !localConfig.command)) {
@@ -54,23 +45,11 @@ export const handleSubmit = (
     return;
   }
   
-  // Validate transport-specific fields
+  // For websocket transport, validate the websocket URL
   if (localConfig.transport === 'websocket' && !websocketUrl) {
     setMessage({
       type: 'error',
       text: 'Please enter a valid WebSocket URL'
-    });
-    return;
-  } else if (localConfig.transport === 'streamableHttp' && !endpoint) {
-    setMessage({
-      type: 'error',
-      text: 'Please enter a valid HTTP endpoint'
-    });
-    return;
-  } else if (localConfig.transport === 'httpSse' && (!sseEndpoint || !messageEndpoint)) {
-    setMessage({
-      type: 'error',
-      text: 'Please enter both SSE and message endpoints'
     });
     return;
   }
@@ -78,52 +57,23 @@ export const handleSubmit = (
   // Create the final config based on transport type
   let finalConfig: MCPServerConfig;
   
-  // Common properties for all config types
-  const commonConfig = {
-    name: localConfig.name,
-    disabled: localConfig.disabled,
-    autoApprove: localConfig.autoApprove,
-    rootPath: localConfig.rootPath,
-    env: localConfig.env,
-    _buildCommand: buildCommand,
-    _installCommand: installCommand
-  };
-  
-  switch (localConfig.transport) {
-    case 'websocket':
-      finalConfig = {
-        ...commonConfig,
-        transport: 'websocket',
-        websocketUrl
-      } as MCPWebSocketConfig;
-      break;
-      
-    case 'streamableHttp':
-      finalConfig = {
-        ...commonConfig,
-        transport: 'streamableHttp',
-        endpoint: endpoint || ''
-      } as MCPStreamableHttpConfig;
-      break;
-      
-    case 'httpSse':
-      finalConfig = {
-        ...commonConfig,
-        transport: 'httpSse',
-        sseEndpoint: sseEndpoint || '',
-        messageEndpoint: messageEndpoint || ''
-      } as MCPHttpSseConfig;
-      break;
-      
-    default:
-      // Default to stdio transport
-      finalConfig = {
-        ...commonConfig,
-        transport: 'stdio',
-        command: isStdioConfig(localConfig) ? localConfig.command : '',
-        args: isStdioConfig(localConfig) ? localConfig.args || [] : []
-      } as MCPStdioConfig;
-      break;
+  if (localConfig.transport === 'websocket') {
+    // For websocket transport
+    finalConfig = {
+      ...localConfig,
+      transport: 'websocket',
+      websocketUrl,
+      _buildCommand: buildCommand,
+      _installCommand: installCommand
+    } as MCPWebSocketConfig;
+  } else {
+    // For stdio transport (default)
+    finalConfig = {
+      ...localConfig,
+      transport: 'stdio',
+      _buildCommand: buildCommand,
+      _installCommand: installCommand
+    } as MCPStdioConfig;
   }
   
   if (initialConfig && onUpdate) {
@@ -553,10 +503,7 @@ export const handleRun = async (
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
   setIsConsoleVisible: (isVisible: boolean) => void,
   setMessage: (message: MessageState | null) => void,
-  setRunCompleted: (completed: boolean) => void,
-  endpoint?: string,
-  sseEndpoint?: string,
-  messageEndpoint?: string
+  setRunCompleted: (completed: boolean) => void
 ) => {
   if (!localConfig.name) {
     setMessage({
@@ -566,29 +513,19 @@ export const handleRun = async (
     return;
   }
   
-  // Validate transport-specific fields
   if (isStdioConfig(localConfig) && !localConfig.command) {
     setMessage({
       type: 'error',
       text: 'Please specify a run command first'
     });
     return;
-  } else if (localConfig.transport === 'websocket' && !websocketUrl) {
+  }
+  
+  // For websocket transport, validate the websocket URL
+  if (localConfig.transport === 'websocket' && !websocketUrl) {
     setMessage({
       type: 'error',
       text: 'Please enter a valid WebSocket URL'
-    });
-    return;
-  } else if (localConfig.transport === 'streamableHttp' && !endpoint) {
-    setMessage({
-      type: 'error',
-      text: 'Please enter a valid HTTP endpoint'
-    });
-    return;
-  } else if (localConfig.transport === 'httpSse' && (!sseEndpoint || !messageEndpoint)) {
-    setMessage({
-      type: 'error',
-      text: 'Please enter both SSE and message endpoints'
     });
     return;
   }
