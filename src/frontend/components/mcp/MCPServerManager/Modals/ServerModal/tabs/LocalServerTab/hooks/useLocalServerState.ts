@@ -1,7 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
+import { 
+  MCPServerConfig, 
+  MCPStdioConfig, 
+  MCPWebSocketConfig, 
+  MCPStreamableHttpConfig, 
+  MCPHttpSseConfig, 
+  EnvVarValue 
+} from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 
 // Type guards
@@ -11,6 +18,14 @@ export const isStdioConfig = (config: MCPServerConfig): config is MCPStdioConfig
 
 export const isWebSocketConfig = (config: MCPServerConfig): config is MCPWebSocketConfig => {
   return config.transport === 'websocket';
+};
+
+export const isStreamableHttpConfig = (config: MCPServerConfig): config is MCPStreamableHttpConfig => {
+  return config.transport === 'streamableHttp';
+};
+
+export const isHttpSseConfig = (config: MCPServerConfig): config is MCPHttpSseConfig => {
+  return config.transport === 'httpSse';
 };
 
 interface UseLocalServerStateProps {
@@ -69,35 +84,61 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
     }));
   };
 
+  // State for HTTP endpoints
+  const [endpoint, setEndpoint] = useState<string>('');
+  const [sseEndpoint, setSseEndpoint] = useState<string>('');
+  const [messageEndpoint, setMessageEndpoint] = useState<string>('');
+
   // Handle transport type change
-  const handleTransportChange = (transport: 'stdio' | 'websocket') => {
-    if (transport === 'websocket') {
-      // Convert to websocket config
-      setLocalConfig(prev => ({
-        name: prev.name,
-        disabled: prev.disabled,
-        autoApprove: prev.autoApprove,
-        rootPath: prev.rootPath,
-        env: prev.env,
-        _buildCommand: prev._buildCommand,
-        _installCommand: prev._installCommand,
-        transport: 'websocket',
-        websocketUrl: websocketUrl
-      } as MCPWebSocketConfig));
-    } else {
-      // Convert to stdio config
-      setLocalConfig(prev => ({
-        name: prev.name,
-        command: isStdioConfig(prev) ? prev.command : '',
-        args: isStdioConfig(prev) ? prev.args : [],
-        disabled: prev.disabled,
-        autoApprove: prev.autoApprove,
-        rootPath: prev.rootPath,
-        env: prev.env,
-        _buildCommand: prev._buildCommand,
-        _installCommand: prev._installCommand,
-        transport: 'stdio'
-      } as MCPStdioConfig));
+  const handleTransportChange = (transport: 'stdio' | 'websocket' | 'streamableHttp' | 'httpSse') => {
+    const commonConfig = {
+      name: localConfig.name,
+      disabled: localConfig.disabled,
+      autoApprove: localConfig.autoApprove,
+      rootPath: localConfig.rootPath,
+      env: localConfig.env,
+      _buildCommand: localConfig._buildCommand,
+      _installCommand: localConfig._installCommand,
+    };
+
+    switch (transport) {
+      case 'websocket':
+        // Convert to websocket config
+        setLocalConfig({
+          ...commonConfig,
+          transport: 'websocket',
+          websocketUrl: websocketUrl
+        } as MCPWebSocketConfig);
+        break;
+      
+      case 'streamableHttp':
+        // Convert to streamable HTTP config
+        setLocalConfig({
+          ...commonConfig,
+          transport: 'streamableHttp',
+          endpoint: endpoint
+        } as MCPStreamableHttpConfig);
+        break;
+      
+      case 'httpSse':
+        // Convert to HTTP+SSE config
+        setLocalConfig({
+          ...commonConfig,
+          transport: 'httpSse',
+          sseEndpoint: sseEndpoint,
+          messageEndpoint: messageEndpoint
+        } as MCPHttpSseConfig);
+        break;
+      
+      default:
+        // Convert to stdio config (default)
+        setLocalConfig({
+          ...commonConfig,
+          transport: 'stdio',
+          command: isStdioConfig(localConfig) ? localConfig.command : '',
+          args: isStdioConfig(localConfig) ? localConfig.args : []
+        } as MCPStdioConfig);
+        break;
     }
   };
 
@@ -196,11 +237,28 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         setBuildCommand(initialConfig._buildCommand || '');
         setInstallCommand(initialConfig._installCommand || '');
         
-        // Set websocketUrl if the transport is 'websocket'
+        // Set transport-specific fields based on the transport type
         if (initialConfig.transport === 'websocket') {
           setWebsocketUrl((initialConfig as MCPWebSocketConfig).websocketUrl || '');
-        } else {
+          setEndpoint('');
+          setSseEndpoint('');
+          setMessageEndpoint('');
+        } else if (initialConfig.transport === 'streamableHttp') {
           setWebsocketUrl('');
+          setEndpoint((initialConfig as MCPStreamableHttpConfig).endpoint || '');
+          setSseEndpoint('');
+          setMessageEndpoint('');
+        } else if (initialConfig.transport === 'httpSse') {
+          setWebsocketUrl('');
+          setEndpoint('');
+          setSseEndpoint((initialConfig as MCPHttpSseConfig).sseEndpoint || '');
+          setMessageEndpoint((initialConfig as MCPHttpSseConfig).messageEndpoint || '');
+        } else {
+          // Default to stdio
+          setWebsocketUrl('');
+          setEndpoint('');
+          setSseEndpoint('');
+          setMessageEndpoint('');
         }
       } else {
         // Reset to default values if no initialConfig
@@ -236,6 +294,12 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
     setLocalConfig,
     websocketUrl,
     setWebsocketUrl,
+    endpoint,
+    setEndpoint,
+    sseEndpoint,
+    setSseEndpoint,
+    messageEndpoint,
+    setMessageEndpoint,
     buildCommand,
     setBuildCommand,
     installCommand,

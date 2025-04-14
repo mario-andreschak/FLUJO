@@ -19,10 +19,16 @@ import {
 interface RunToolsProps {
   command: string;
   setCommand: (command: string) => void;
-  transport: 'stdio' | 'websocket';
-  setTransport: (transport: 'stdio' | 'websocket') => void;
+  transport: 'stdio' | 'websocket' | 'streamableHttp' | 'httpSse';
+  setTransport: (transport: 'stdio' | 'websocket' | 'streamableHttp' | 'httpSse') => void;
   websocketUrl: string;
   setWebsocketUrl: (url: string) => void;
+  endpoint?: string;
+  setEndpoint?: (endpoint: string) => void;
+  sseEndpoint?: string;
+  setSseEndpoint?: (endpoint: string) => void;
+  messageEndpoint?: string;
+  setMessageEndpoint?: (endpoint: string) => void;
   onRun: () => Promise<void>;
   isRunning: boolean;
   runCompleted: boolean;
@@ -41,6 +47,12 @@ const RunTools: React.FC<RunToolsProps> = ({
   setTransport,
   websocketUrl,
   setWebsocketUrl,
+  endpoint,
+  setEndpoint,
+  sseEndpoint,
+  setSseEndpoint,
+  messageEndpoint,
+  setMessageEndpoint,
   onRun,
   isRunning,
   runCompleted,
@@ -92,9 +104,13 @@ const RunTools: React.FC<RunToolsProps> = ({
           value={transport} 
           onChange={(e, newValue) => setTransport(newValue)}
           sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
+          variant="scrollable"
+          scrollButtons="auto"
         >
           <Tab label="Standard IO" value="stdio" />
           <Tab label="WebSocket" value="websocket" />
+          <Tab label="Streamable HTTP" value="streamableHttp" />
+          <Tab label="HTTP+SSE (Legacy)" value="httpSse" />
         </Tabs>
       </Box>
 
@@ -116,6 +132,61 @@ const RunTools: React.FC<RunToolsProps> = ({
             helperText={!isWebsocketUrlValid && "Please enter a valid WebSocket URL (starting with ws:// or wss://)"}
           />
         </Box>
+      )}
+
+      {/* Streamable HTTP endpoint input */}
+      {transport === 'streamableHttp' && (
+        <Box>
+          <Typography variant="subtitle2" gutterBottom>
+            HTTP Endpoint
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={endpoint || ''}
+            onChange={e => setEndpoint && setEndpoint(e.target.value)}
+            placeholder="http://localhost:3000/mcp"
+            variant="outlined"
+            required
+            helperText="The HTTP endpoint for the Streamable HTTP transport"
+          />
+        </Box>
+      )}
+
+      {/* HTTP+SSE (Legacy) endpoints input */}
+      {transport === 'httpSse' && (
+        <>
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>
+              SSE Endpoint
+            </Typography>
+            <TextField
+              fullWidth
+              size="small"
+              value={sseEndpoint || ''}
+              onChange={e => setSseEndpoint && setSseEndpoint(e.target.value)}
+              placeholder="http://localhost:3000/sse"
+              variant="outlined"
+              required
+              helperText="The SSE endpoint for receiving messages"
+            />
+          </Box>
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>
+              Message Endpoint
+            </Typography>
+            <TextField
+              fullWidth
+              size="small"
+              value={messageEndpoint || ''}
+              onChange={e => setMessageEndpoint && setMessageEndpoint(e.target.value)}
+              placeholder="http://localhost:3000/messages"
+              variant="outlined"
+              required
+              helperText="The HTTP endpoint for sending messages"
+            />
+          </Box>
+        </>
       )}
 
       <Box>
