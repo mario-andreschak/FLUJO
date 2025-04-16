@@ -9,9 +9,10 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 
 Here's a video guiding you through the whole thing - from installation to output! (15min)
 Sorry for the bad audio, a new Video is coming soon!
+
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
  
-FLUJO animated Short #1
+FLUJO animated Short #1 - "A sad song about MCP"
 [![image](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
 
 # IMPORTANT SECURITY NOTE
