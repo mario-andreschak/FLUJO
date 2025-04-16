@@ -1,15 +1,18 @@
 # DISCLAIMER
-====> FLUJO is still an early preview! Expect it to break at some points, but improve rapidly! <====
+FLUJO is still an early preview! Here's a 30 second video to show it off:
+[![image](https://github.com/user-attachments/assets/8d71d291-74a3-486d-a8f5-c8976aedba0f)](https://www.youtube.com/watch?v=D63e1XUGbi4)
+
 
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
 -> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
+
 Here's a video guiding you through the whole thing - from installation to output! (15min)
 Sorry for the bad audio, a new Video is coming soon!
-
-
 [![How to install & Run your first Flow](https://img.youtube.com/vi/YIREFCAAdxg/0.jpg)](https://www.youtube.com/watch?v=YIREFCAAdxg)
  
+FLUJO animated Short #1
+[![image](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
 
 # IMPORTANT SECURITY NOTE
 FLUJO has currently EXTENSIVE logging enabled by default! This **may expose your encrypted API-Keys to the terminal output!**. Be VERY careful when grabbing videos or streaming and showing the terminal output!
