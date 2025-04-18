@@ -4,33 +4,11 @@ const next = require('next');
 const fs = require('fs');
 const path = require('path');
 
-// Check if we're running in Electron
-const isElectron = process.versions.hasOwnProperty('electron');
-
 // Default port
 const port = parseInt(process.env.PORT || '4200', 10);
 
 // Determine if we should bind to all interfaces or just localhost
 let networkMode = false;
-
-// Try to read config file if running in Electron
-if (isElectron) {
-  try {
-    const userDataPath = process.env.APPDATA || 
-      (process.platform === 'darwin' ? 
-        path.join(process.env.HOME, 'Library', 'Application Support') : 
-        path.join(process.env.HOME, '.config'));
-    
-    const configPath = path.join(userDataPath, 'FLUJO', 'config.json');
-    
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      networkMode = config.networkMode === true;
-    }
-  } catch (error) {
-    console.error('Error reading config:', error);
-  }
-}
 
 // Override with environment variable if set
 if (process.env.FLUJO_NETWORK_MODE === '1' || process.env.FLUJO_NETWORK_MODE === 'true') {

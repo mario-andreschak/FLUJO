@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * This script conditionally runs electron-builder install-app-deps
- * only if we're not in a Docker environment.
+ * This script detects if we're running in a Docker environment.
+ * Previously used for Electron-related tasks, now kept for Docker detection.
  */
 
 // Check if we're in a Docker environment
@@ -43,16 +43,8 @@ const isDocker = () => {
   }
 };
 
-// If we're not in Docker, run electron-builder
-if (!isDocker()) {
-  console.log('Not in Docker environment, running electron-builder install-app-deps');
-  const { execSync } = require('child_process');
-  try {
-    execSync('electron-builder install-app-deps', { stdio: 'inherit' });
-  } catch (error) {
-    console.error('Failed to run electron-builder:', error.message);
-    process.exit(1);
-  }
-} else {
-  console.log('In Docker environment, skipping electron-builder install-app-deps');
-}
+// Check and log Docker environment status
+const inDocker = isDocker();
+console.log(`Running in Docker environment: ${inDocker ? 'Yes' : 'No'}`);
+
+// This script previously ran Electron-related tasks, which have been removed
