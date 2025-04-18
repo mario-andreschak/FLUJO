@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
+import { FEATURES } from '@/config/features'; // Import feature flags
 import {
   SharedState,
   ProcessNodeParams,
@@ -480,7 +481,7 @@ export class ProcessNode extends BaseNode {
     }
 
     // Add tracking information for the ProcessNode itself
-    if (Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
+    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
       sharedState.trackingInfo.nodeExecutionTracker.push({
         nodeType: 'ProcessNode',
         nodeId: node_params?.id || 'unknown',
@@ -517,8 +518,6 @@ export class ProcessNode extends BaseNode {
     log.info('No tool calls or handoff requested, returning FINAL_RESPONSE_ACTION');
     return FINAL_RESPONSE_ACTION; // Return final response action
   }
-
-  // Removed unused addMessageToState method
 
   _clone(): BaseNode {
     return new ProcessNode();

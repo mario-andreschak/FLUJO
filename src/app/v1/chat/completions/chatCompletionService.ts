@@ -2,12 +2,10 @@ import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ChatCompletionRequest } from './requestParser';
-import { FlowExecutionResponse, ErrorResult, SuccessResult } from '@/shared/types/flow/response';
 import OpenAI from 'openai';
 import { SharedState, TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, ERROR_ACTION, STAY_ON_NODE_ACTION, ErrorDetails } from '@/backend/execution/flow/types'; // Import types and actions
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage from shared types
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler'; // Import ModelHandler
-import { BaseNode, Flow as PocketFlow } from '@/backend/execution/flow/temp_pocket'; // Use Flow as PocketFlow
 import { toolNameInternalRegex } from '@/utils/shared/common'; // Import the regex
 // Import the flowService instance and the FlowService class type directly
 import { flowService } from '@/backend/services/flow/index';
@@ -16,6 +14,7 @@ import { Flow } from '@/shared/types/flow'; // Import Flow type
 // Import backend storage functions directly
 import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend'; 
 import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -147,7 +146,7 @@ export async function processChatCompletion(
       sharedState.trackingInfo = {
         executionId: crypto.randomUUID(), // New execution ID for the edited flow
         startTime: Date.now(), // Reset start time
-        nodeExecutionTracker: [] // Clear previous node execution history
+        nodeExecutionTracker: [] // Always include the array, but it will only be used if the feature is enabled
       };
       
       // Clear execution trace if it exists
@@ -163,7 +162,11 @@ export async function processChatCompletion(
     // Create a new default state
     log.info(`Creating new conversation state object for ID: ${effectiveConvId}`);
     sharedState = {
-      trackingInfo: { executionId: crypto.randomUUID(), startTime: Date.now(), nodeExecutionTracker: [] },
+      trackingInfo: { 
+        executionId: crypto.randomUUID(), 
+        startTime: Date.now(), 
+        nodeExecutionTracker: FEATURES.ENABLE_EXECUTION_TRACKER ? [] : [] // Always provide array but it will be empty if disabled
+      },
       messages: [], // Start with empty messages, will be populated below
       flowId: '', // Will be set below if state is new
       conversationId: effectiveConvId,

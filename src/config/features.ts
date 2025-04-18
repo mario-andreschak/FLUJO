@@ -24,4 +24,11 @@ export const FEATURES = {
    * When set to false, tool calls will be processed but not included in the response
    */
   INCLUDE_TOOL_CALLS_IN_RESPONSE: true,
+  
+  /**
+   * Controls whether the execution tracker is enabled
+   * When true, node execution history will be tracked in sharedState.trackingInfo.nodeExecutionTracker
+   * When false, the nodeExecutionTracker array will not be created or updated
+   */
+  ENABLE_EXECUTION_TRACKER: false, // Enabled by default
 };
