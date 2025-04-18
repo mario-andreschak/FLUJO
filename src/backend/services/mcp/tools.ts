@@ -9,6 +9,50 @@ import { v4 as uuidv4 } from 'uuid';
 const log = createLogger('backend/services/mcp/tools');
 
 /**
+ * Normalize tool arguments to ensure we don't pass undefined values to MCP servers
+ * This function replaces undefined/null values with appropriate defaults based on expected types
+ */
+function normalizeToolArguments(args: Record<string, unknown>, toolName: string): Record<string, unknown> {
+  if (!args) return {};
+  
+  const normalizedArgs: Record<string, unknown> = {};
+  
+  // Process each argument
+  for (const key in args) {
+    const value = args[key];
+    
+    // Handle undefined or null values
+    if (value === undefined || value === null) {
+      log.debug(`Normalizing undefined/null value for parameter '${key}' in tool '${toolName}'`);
+      
+      // Try to infer the type from the key name
+      if (key.includes('number') || key.endsWith('Count') || key.endsWith('Id') || key.endsWith('Limit')) {
+        normalizedArgs[key] = 0;
+        log.debug(`Using default value 0 for likely number parameter: ${key}`);
+      } else if (key.includes('bool') || key.startsWith('is') || key.startsWith('has') || key.startsWith('should')) {
+        normalizedArgs[key] = false;
+        log.debug(`Using default value false for likely boolean parameter: ${key}`);
+      } else if (key.includes('array') || key.endsWith('s') || key.endsWith('List') || key.endsWith('Items')) {
+        normalizedArgs[key] = [];
+        log.debug(`Using empty array for likely array parameter: ${key}`);
+      } else if (key.includes('object') || key.endsWith('Options') || key.endsWith('Config') || key.endsWith('Settings')) {
+        normalizedArgs[key] = {};
+        log.debug(`Using empty object for likely object parameter: ${key}`);
+      } else {
+        // Default to empty string for unknown types
+        normalizedArgs[key] = '';
+        log.debug(`Using empty string for parameter with unknown type: ${key}`);
+      }
+    } else {
+      // For non-undefined/null values, keep the original value
+      normalizedArgs[key] = value;
+    }
+  }
+  
+  return normalizedArgs;
+}
+
+/**
  * List tools available from an MCP server
  */
 export async function listServerTools(client: Client | undefined, serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
@@ -68,7 +112,16 @@ export async function callTool(
     // Resolve any global variable references in the arguments
     log.debug(`Original args for tool ${toolName}:`, args);
     const resolvedArgs = await resolveGlobalVars(args);
-    log.debug(`Resolved args for tool ${toolName}:`, resolvedArgs);
+    
+    // Ensure resolvedArgs is a record before normalizing
+    const argsRecord = (typeof resolvedArgs === 'object' && resolvedArgs !== null) 
+      ? resolvedArgs as Record<string, unknown> 
+      : {};
+    
+    // Normalize undefined/null values based on parameter types
+    // This ensures we don't pass undefined values to MCP servers
+    const normalizedArgs = normalizeToolArguments(argsRecord, toolName);
+    log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
     
     // Generate a progress token for tracking this tool call
     const progressToken = uuidv4();
@@ -77,7 +130,7 @@ export async function callTool(
     // Add metadata to the tool call for progress tracking
     const toolCallParams = {
       name: toolName,
-      arguments: resolvedArgs as Record<string, unknown>,
+      arguments: normalizedArgs as Record<string, unknown>,
       _meta: {
         progressToken
       }
@@ -240,4 +293,3 @@ export async function cancelToolExecution(client: Client, requestId: string, rea
     throw error;
   }
 }
-

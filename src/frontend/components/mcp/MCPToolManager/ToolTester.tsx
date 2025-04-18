@@ -83,25 +83,52 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const handleParamChange = (key: string, value: string, schema: any) => {
     let parsedValue: any;
 
-    if (schema.type === 'number') {
-      parsedValue = parseFloat(value);
-      if (isNaN(parsedValue)) {
-        // Handle invalid number input, perhaps with a warning message
-        log.warn(`Invalid number input for ${key}: ${value}`);
-        // Keep the previous value or set to a default number
-        return;
-      }
-    } else if (schema.type === 'boolean') {
-      parsedValue = value.toLowerCase() === 'true';
-    } else if (schema.type === 'object' || schema.type === 'array') {
-      try {
-        parsedValue = JSON.parse(value);
-      } catch (error) {
-        log.warn(`Invalid JSON input for ${key}: ${value}`);
-        return;
+    // Handle empty values based on parameter type
+    if (value === '') {
+      if (schema.type === 'number') {
+        // Use 0 for empty number fields
+        parsedValue = 0;
+        log.debug(`Using default value 0 for empty number parameter: ${key}`);
+      } else if (schema.type === 'boolean') {
+        // Use false for empty boolean fields
+        parsedValue = false;
+        log.debug(`Using default value false for empty boolean parameter: ${key}`);
+      } else if (schema.type === 'object') {
+        // Use empty object for empty object fields
+        parsedValue = {};
+        log.debug(`Using empty object for empty object parameter: ${key}`);
+      } else if (schema.type === 'array') {
+        // Use empty array for empty array fields
+        parsedValue = [];
+        log.debug(`Using empty array for empty array parameter: ${key}`);
+      } else {
+        // For string and other types, use empty string
+        parsedValue = '';
+        log.debug(`Using empty string for empty parameter: ${key}`);
       }
     } else {
-      parsedValue = value;
+      // Handle non-empty values
+      if (schema.type === 'number') {
+        parsedValue = parseFloat(value);
+        if (isNaN(parsedValue)) {
+          // Handle invalid number input
+          log.warn(`Invalid number input for ${key}: ${value}`);
+          // Use 0 as default for invalid numbers instead of returning early
+          parsedValue = 0;
+        }
+      } else if (schema.type === 'boolean') {
+        parsedValue = value.toLowerCase() === 'true';
+      } else if (schema.type === 'object' || schema.type === 'array') {
+        try {
+          parsedValue = JSON.parse(value);
+        } catch (error) {
+          log.warn(`Invalid JSON input for ${key}: ${value}`);
+          // Use appropriate default instead of returning early
+          parsedValue = schema.type === 'array' ? [] : {};
+        }
+      } else {
+        parsedValue = value;
+      }
     }
 
     setParams((prev) => ({
