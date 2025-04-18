@@ -149,8 +149,8 @@ export async function processChatCompletion(
         nodeExecutionTracker: [] // Always include the array, but it will only be used if the feature is enabled
       };
       
-      // Clear execution trace if it exists
-      if (sharedState.executionTrace) {
+      // Clear execution trace if it exists (only if feature is enabled)
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
         sharedState.executionTrace = [];
       }
       
@@ -176,7 +176,7 @@ export async function processChatCompletion(
       createdAt: Date.now(),
       updatedAt: Date.now(),
       debugMode: flujodebug,
-      executionTrace: flujodebug ? [] : undefined,
+      executionTrace: (flujodebug && FEATURES.ENABLE_EXECUTION_TRACKER) ? [] : undefined,
       originalRequireApproval: flujodebug ? requireApproval : undefined
     };
     // stateSource is already 'new'
@@ -242,7 +242,7 @@ export async function processChatCompletion(
     if (sharedState.debugMode === undefined) {
       sharedState.debugMode = flujodebug;
       if (flujodebug) {
-          if (!sharedState.executionTrace) {
+          if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
               sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
           }
           // Store original requireApproval if resuming into debug mode and not already set

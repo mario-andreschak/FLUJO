@@ -2,6 +2,7 @@
 import { createLogger } from '@/utils/logger';
 import { ProcessNodeUtility } from '../util/ProcessNodeUtility';
 import { parseToolCalls } from '../util/ProcessNodeParsingUtility';
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/handlers/ProcessNodeModelHandler');
@@ -104,7 +105,7 @@ export class ProcessNodeModelHandler {
       }));
       
       // Add to tracking info
-      if (Array.isArray(prepResult.nodeExecutionTracker)) {
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(prepResult.nodeExecutionTracker)) {
         prepResult.nodeExecutionTracker.push({
           nodeType: 'ModelError',
           error: response.error,
@@ -205,7 +206,7 @@ export class ProcessNodeModelHandler {
       });
       
       // Add to tracking info
-      if (Array.isArray(prepResult.nodeExecutionTracker) && response.fullResponse?.choices?.[0]?.message?.tool_calls) {
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(prepResult.nodeExecutionTracker) && response.fullResponse?.choices?.[0]?.message?.tool_calls) {
         prepResult.nodeExecutionTracker.push({
           nodeType: 'AssistantMessageWithToolCalls',
           content: typeof content === 'string' ?
@@ -241,7 +242,7 @@ export class ProcessNodeModelHandler {
           };
           
           // Add to tracking info
-          if (Array.isArray(prepResult.nodeExecutionTracker)) {
+          if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(prepResult.nodeExecutionTracker)) {
             prepResult.nodeExecutionTracker.push({
               nodeType: 'ToolCall',
               toolName: toolCallInfo.name,
@@ -306,7 +307,7 @@ export class ProcessNodeModelHandler {
       });
       
       // Add to tracking info
-      if (Array.isArray(prepResult.nodeExecutionTracker)) {
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(prepResult.nodeExecutionTracker)) {
         prepResult.nodeExecutionTracker.push({
           nodeType: 'AssistantMessage',
           content: typeof content === 'string' ?
@@ -362,7 +363,7 @@ export class ProcessNodeModelHandler {
       });
       
       // Add to tracking info
-      if (Array.isArray(sharedState.nodeExecutionTracker)) {
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.nodeExecutionTracker)) {
         sharedState.nodeExecutionTracker.push({
           nodeType: nodeType,
           content: content.substring(0, 100) + 
@@ -386,7 +387,7 @@ export class ProcessNodeModelHandler {
     log.verbose('addNodeExecutionTracking input', JSON.stringify({
       nodeParams
     }));
-    if (!Array.isArray(sharedState.nodeExecutionTracker)) {
+    if (!Array.isArray(sharedState.nodeExecutionTracker) || !FEATURES.ENABLE_EXECUTION_TRACKER) {
       return;
     }
 

@@ -3,6 +3,7 @@ import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
 import { MCPHandler } from '../handlers/MCPHandler';
 import { SharedState, MCPNodeParams, MCPNodePrepResult, MCPNodeExecResult } from '../types';
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/MCPNode');
@@ -116,7 +117,7 @@ export class MCPNode extends BaseNode {
     }));
     
     // Add tracking information
-    if (Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
+    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
       sharedState.trackingInfo.nodeExecutionTracker.push({
         nodeType: 'MCPNode',
         nodeId: node_params?.id || 'unknown',

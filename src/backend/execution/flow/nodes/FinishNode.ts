@@ -2,6 +2,7 @@
 import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
 import { SharedState, FinishNodeParams, FinishNodePrepResult, FinishNodeExecResult, FINAL_RESPONSE_ACTION } from '../types'; // Import FINAL_RESPONSE_ACTION
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/FinishNode');
@@ -65,7 +66,7 @@ export class FinishNode extends BaseNode {
     }));
     
     // Add tracking information
-    if (Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
+    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
       sharedState.trackingInfo.nodeExecutionTracker.push({
         nodeType: 'FinishNode',
         nodeId: node_params?.id || 'unknown',

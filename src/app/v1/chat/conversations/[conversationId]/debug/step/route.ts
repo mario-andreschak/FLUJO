@@ -4,6 +4,7 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { SharedState, ERROR_ACTION, FINAL_RESPONSE_ACTION } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/step/route');
 
@@ -79,7 +80,7 @@ export async function POST(
         conversationId,
         status: sharedState.status,
         currentNodeId: sharedState.currentNodeId,
-        traceLength: sharedState.executionTrace?.length || 0
+        traceLength: FEATURES.ENABLE_EXECUTION_TRACKER ? (sharedState.executionTrace?.length || 0) : 'disabled'
     });
 
 

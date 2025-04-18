@@ -3,6 +3,8 @@ import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
 import { SharedState, StartNodeParams, StartNodePrepResult, StartNodeExecResult } from '../types';
 import OpenAI from 'openai';
+import { FEATURES } from '@/config/features'; // Import feature flags
+import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 
 // Create a logger instance for this file
 const log = createLogger('execution/nodes/StartNode.ts');
@@ -65,7 +67,7 @@ export class StartNode extends BaseNode {
     }));
     
     // Add tracking information
-    if (Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
+    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
       sharedState.trackingInfo.nodeExecutionTracker.push({
         nodeType: 'StartNode',
         nodeId: node_params?.id || 'unknown',
@@ -77,9 +79,11 @@ export class StartNode extends BaseNode {
     
     // Add system message to messages array if it doesn't exist
     if (prepResult.systemPrompt) {
-      const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
+      const systemMessage: FlujoChatMessage = {
         role: 'system',
-        content: prepResult.systemPrompt
+        content: prepResult.systemPrompt,
+        id: crypto.randomUUID(),
+        timestamp: Date.now()
       };
       
       // Check if we already have a system message

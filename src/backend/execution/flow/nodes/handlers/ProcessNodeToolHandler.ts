@@ -1,6 +1,7 @@
 // Tool handling functionality for ProcessNode
 import { createLogger } from '@/utils/logger';
 import { MCPNodeUtility } from '../util/MCPNodeUtility';
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/handlers/ProcessNodeToolHandler');
@@ -225,7 +226,7 @@ export class ProcessNodeToolHandler {
       nodeExecutionTrackerLength: nodeExecutionTracker?.length || 0
     }));
     
-    if (!Array.isArray(toolCalls) || !Array.isArray(nodeExecutionTracker)) {
+    if (!Array.isArray(toolCalls) || !Array.isArray(nodeExecutionTracker) || !FEATURES.ENABLE_EXECUTION_TRACKER) {
       return;
     }
 

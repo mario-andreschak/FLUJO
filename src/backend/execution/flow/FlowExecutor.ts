@@ -9,6 +9,7 @@ import { NodeType } from '@/shared/types/flow/flow'; // Import NodeType directly
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import OpenAI from 'openai';
 import cloneDeep from 'lodash/cloneDeep'; // Import cloneDeep for snapshots
+import { FEATURES } from '@/config/features'; // Import feature flags
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -176,8 +177,8 @@ export class FlowExecutor {
       log.info(`Executing step for node ${nodeId} (${currentNode.constructor.name}) in conversation ${conversationId}`);
       sharedState.currentNodeId = nodeId; // Now guaranteed to be a string
 
-      // --- Initialize trace if needed ---
-      if (!sharedState.executionTrace) {
+      // --- Initialize trace if needed (only if debug mode is enabled) ---
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
         sharedState.executionTrace = [];
       }
 
@@ -203,22 +204,24 @@ export class FlowExecutor {
       const stateAfter = cloneDeep(sharedState);
       delete stateAfter.executionTrace; // Avoid recursive trace in snapshot
 
-      // --- Create and append DebugStep ---
-      const stepIndex = sharedState.executionTrace.length;
-      const debugStep: DebugStep = {
-        stepIndex,
-        nodeId: nodeId,
-        nodeType: currentNode.node_params?.type || 'unknown',
-        nodeName: currentNode.node_params?.label || 'Unknown Node',
-        timestamp: new Date().toISOString(),
-        actionTaken: action,
-        stateBefore,
-        stateAfter,
-        prepResultSnapshot: cloneDeep(prepResult), // Snapshot prep result
-        execResultSnapshot: cloneDeep(execResult), // Snapshot exec result
-      };
-      sharedState.executionTrace.push(debugStep);
-      log.debug(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
+      // --- Create and append DebugStep (only if debug mode is enabled) ---
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
+        const stepIndex = sharedState.executionTrace.length;
+        const debugStep: DebugStep = {
+          stepIndex,
+          nodeId: nodeId,
+          nodeType: currentNode.node_params?.type || 'unknown',
+          nodeName: currentNode.node_params?.label || 'Unknown Node',
+          timestamp: new Date().toISOString(),
+          actionTaken: action,
+          stateBefore,
+          stateAfter,
+          prepResultSnapshot: cloneDeep(prepResult), // Snapshot prep result
+          execResultSnapshot: cloneDeep(execResult), // Snapshot exec result
+        };
+        sharedState.executionTrace.push(debugStep);
+        log.debug(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
+      }
 
       // Update state in map *after* successful execution and trace update
       this.conversationStates.set(conversationId, sharedState);
@@ -238,8 +241,8 @@ export class FlowExecutor {
       // Assign the ID of the node that was *attempted* (which is stored in the scope's currentNodeId)
       sharedState.currentNodeId = currentNodeId; // Keep track of where the error occurred
 
-      // --- Add error step to trace ---
-      if (sharedState.executionTrace) { // Check if trace was initialized
+      // --- Add error step to trace (only if debug mode is enabled) ---
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) { // Check if trace was initialized
         const stepIndex = sharedState.executionTrace.length;
         const errorStep: DebugStep = {
           stepIndex,
