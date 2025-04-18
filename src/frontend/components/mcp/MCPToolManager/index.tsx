@@ -4,7 +4,6 @@ import React, { useEffect } from 'react';
 import ToolTester from './ToolTester';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
-import { useServerEvents } from '@/frontend/hooks/useServerEvents';
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { useThemeUtils } from '@/frontend/utils/theme';
@@ -27,8 +26,6 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName }) => {
     testTool
   } = useServerTools(serverName);
 
-  const { lastEvent, isSubscribed } = useServerEvents(serverName);
-
   // Handle tool testing
   const handleTestTool = async (toolName: string, params: Record<string, any>, timeout?: number) => {
     log.debug(`Testing tool ${toolName} with params:`, params);
@@ -38,17 +35,21 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName }) => {
     return await testTool(toolName, params, timeout);
   };
 
-  // Reload tools when we receive a toolsUpdate event
+  // Set up a periodic refresh for tools
   useEffect(() => {
-    if (lastEvent && lastEvent.type === 'toolsUpdate') {
-      log.debug('Received toolsUpdate event, reloading tools');
-      // Clear cache first to ensure we get fresh data
-      if (serverName) {
+    if (serverName) {
+      // Set up a periodic refresh every 30 seconds
+      const intervalId = setInterval(() => {
+        log.debug('Periodic tool refresh');
+        // Clear cache first to ensure we get fresh data
         mcpService.clearToolsCache(serverName);
-      }
-      loadTools(true); // Force reload
+        loadTools(true); // Force reload
+      }, 30000);
+      
+      // Clean up on unmount
+      return () => clearInterval(intervalId);
     }
-  }, [lastEvent, loadTools, serverName]);
+  }, [loadTools, serverName]);
 
   const { getThemeValue } = useThemeUtils();
   

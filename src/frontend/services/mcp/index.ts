@@ -267,42 +267,7 @@ class MCPService {
     }
   }
 
-  /**
-   * Subscribe to server events
-   */
-  subscribeToServerEvents(serverName: string, callback: (event: any) => void) {
-    // Check if SSE is enabled
-    if (!FEATURES.SSE_ENABLED) {
-      log.info(`SSE functionality disabled via feature flag - ignoring subscription for ${serverName}`);
-      return () => {}; // Return a no-op cleanup function
-    }
-
-    try {
-      // Create the SSE connection
-      const eventSource = new EventSource(`/api/sse?serverName=${encodeURIComponent(serverName)}`);
-      
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          callback(data);
-        } catch(error) {
-          log.warn(`Error parsing SSE data for ${serverName}:`, error);
-        }
-      };
-      
-      eventSource.onerror = (error) => {
-        log.warn(`Error for server ${serverName}:`, error);
-      };
-      
-      // Return cleanup function
-      return () => {
-        eventSource.close();
-      };
-    } catch (error) {
-      log.warn(`Error setting up SSE connection for ${serverName}:`, error);
-      return () => {}; // Return a no-op cleanup function
-    }
-  }
+  // Server events functionality has been removed
 }
 
 export const mcpService = new MCPService();

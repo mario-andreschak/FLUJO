@@ -6,12 +6,6 @@
  */
 export const FEATURES = {
   /**
-   * Controls whether Server-Sent Events (SSE) functionality is enabled
-   * When set to false, no SSE connections will be established
-   */
-  SSE_ENABLED: false, // Set to false to disable SSE
-
-  /**
    * Controls the application's logging level
    * Possible values:
    * - -1: VERBOSE (most verbose)

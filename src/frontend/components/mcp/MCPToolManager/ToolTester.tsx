@@ -18,7 +18,6 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createLogger } from '@/utils/logger';
 import Spinner from '@/frontend/components/shared/Spinner';
-import { useServerEvents } from '@/frontend/hooks/useServerEvents';
 import { useThemeUtils } from '@/frontend/utils/theme';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
@@ -59,59 +58,6 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const [activeProgressToken, setActiveProgressToken] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
   const [showRawResult, setShowRawResult] = useState(false); // State for toggling raw/rendered view
-
-  // Subscribe to server events to catch errors and progress updates
-  const { lastEvent } = useServerEvents(serverName);
-  
-  // Handle events from the server (errors and progress updates)
-  useEffect(() => {
-    if (!lastEvent) return;
-    
-    // Handle error events
-    if (lastEvent.type === 'error') {
-      log.warn(`Error event received:`, lastEvent);
-      
-      let errorMessage = '';
-      
-      // Format the error message based on the source
-      if (lastEvent.source === 'timeout') {
-        errorMessage = `Timeout Error: ${lastEvent.message || 'Tool execution timed out'}`;
-        // If we're currently loading, stop the loading state
-        if (isLoading) {
-          setIsLoading(false);
-          // Update the result with the timeout error
-          setResult({
-            success: false,
-            output: '',
-            error: errorMessage
-          });
-        }
-      } else if (lastEvent.source === 'stderr') {
-        errorMessage = `Server Error: ${lastEvent.message || 'Unknown error from server'}`;
-      } else {
-        errorMessage = `Error: ${lastEvent.message || 'Unknown error occurred'}`;
-      }
-      
-      // Set the error notification
-      setErrorNotification(errorMessage);
-      
-      // Clear the notification after 5 seconds
-      const timer = setTimeout(() => {
-        setErrorNotification(null);
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    }
-    
-    // Handle progress events
-    if (lastEvent.method === 'notifications/progress' && lastEvent.progressToken === activeProgressToken) {
-      log.debug(`Progress event received:`, lastEvent);
-      setProgress({
-        current: lastEvent.progress,
-        total: lastEvent.total
-      });
-    }
-  }, [lastEvent, isLoading, activeProgressToken]);
 
   const handleToolSelect = (toolName: string) => {
     setSelectedTool(toolName);
