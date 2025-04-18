@@ -14,8 +14,6 @@ import ThemeSettings from './ThemeSettings';
 import GlobalEnvSettings from './GlobalEnvSettings';
 import BackupSettings from './BackupSettings';
 import SpeechRecognitionSettings from './SpeechRecognitionSettings';
-import ElectronSettings from './ElectronSettings';
-import { isElectron } from '@/utils/shared';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -111,21 +109,6 @@ export default function Settings() {
           </AccordionDetails>
         </Accordion>
 
-        <Accordion
-          expanded={expanded === 'electron'}
-          onChange={handleChange('electron')}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon />}
-            aria-controls="electron-content"
-            id="electron-header"
-          >
-            <Typography variant="h6">Desktop Application</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            <ElectronSettings />
-          </AccordionDetails>
-        </Accordion>
       </Box>
     </Box>
   );

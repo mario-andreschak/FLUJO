@@ -2,7 +2,6 @@
 
 /**
  * This script detects if we're running in a Docker environment.
- * Previously used for Electron-related tasks, now kept for Docker detection.
  */
 
 // Check if we're in a Docker environment
