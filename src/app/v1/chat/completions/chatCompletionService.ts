@@ -124,6 +124,7 @@ export async function processChatCompletion(
         log.info(`Resuming completed/errored conversation ${effectiveConvId}. Resetting status to 'running'.`);
         sharedState.status = 'running';
         sharedState.lastResponse = undefined; // Clear previous final/error response
+        sharedState.isCancelled = false; // Reset cancellation flag to prevent immediate error
         // Ensure it's updated in memory immediately if loaded from storage
         if (stateSource === 'storage') {
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
@@ -140,6 +141,7 @@ export async function processChatCompletion(
       sharedState.lastResponse = undefined; // Clear previous final response
       sharedState.pendingToolCalls = undefined; // Clear any pending calls from previous run
       sharedState.handoffRequested = undefined; // Clear any pending handoff
+      sharedState.isCancelled = false; // Reset cancellation flag to prevent immediate error
       
       // Reset tracking info to start fresh from this node
       sharedState.trackingInfo = {
@@ -264,6 +266,8 @@ export async function processChatCompletion(
         sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
         currentAction = ERROR_ACTION;
       } else {
+        // Reset cancellation flag if it was previously set but not detected above
+        sharedState.isCancelled = false;
         const stepResult = await FlowExecutor.executeStep(sharedState);
         sharedState = stepResult.sharedState; // Update state
         currentAction = stepResult.action;
