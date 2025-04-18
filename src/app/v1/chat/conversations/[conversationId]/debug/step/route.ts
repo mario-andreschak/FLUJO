@@ -48,27 +48,6 @@ export async function POST(
       }
     }
 
-    // This check is now redundant due to the one below, removing duplication.
-    // if (!sharedState) {
-    //   log.warn(`Conversation state not found for debug step (source: ${stateSource})`, { requestId, conversationId });
-    //   return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-    // }
-
-    // Log current state details before stepping (Moved this check down after the main !sharedState check)
-    // log.debug("State details before debug step", {
-    //     requestId,
-    //     conversationId,
-    //     status: sharedState.status,
-    //     currentNodeId: sharedState.currentNodeId,
-    //     traceLength: sharedState.executionTrace?.length || 0
-    // });
-
-    // 2. Check if the state is actually paused in debug mode
-        // This block was duplicated, removing it.
-    //     FlowExecutor.conversationStates.set(conversationId, sharedState); // Add to memory map
-    //   }
-    // }
-
     if (!sharedState) {
       log.warn(`Conversation state not found for debug step (source: ${stateSource})`, { requestId, conversationId }); // Keep the primary check
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
