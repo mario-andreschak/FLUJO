@@ -165,6 +165,18 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 4. Configure server settings and environment variables
 5. Start and manage your server
 
+### Using SSE MCP-Servers
+1. Got to the MCP Page
+2. Click "Add Server" to install a new MCP server
+3. Select "Local Server"
+4. Enter a Server Name, enter "/" as Server Root Path
+5. Leave Build Command and Install Command empty
+6. Enter "npx" as Run Command
+7. Add 1. Argument "mcp-remote"
+8. Add 2. Argument "(your MCP SSE-Url here)"
+   ![image](https://github.com/user-attachments/assets/f5c97c26-72c6-4ba9-a9d2-a34e3f34ec19)
+
+
 ### Using official Reference servers
 
 1. Go to the MCP page
@@ -173,7 +185,7 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 4. (First time executing:) Click "Refresh" and waaaaaaait.
 5. Click a server of your choice, wait for the screen to change, click "Save" / "Update Server" at the bottom.
    
-#### Using Docker-based MCP Servers
+### Using Docker-based MCP Servers
 
 When running FLUJO in Docker, you can use Docker-based MCP servers:
 
