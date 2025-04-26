@@ -245,7 +245,7 @@ export class ProcessNode extends BaseNode {
 
     try {
       // Prepare tools if available
-      let tools = undefined;
+      let tools: OpenAI.ChatCompletionTool[] | undefined = undefined; // Initialize tools
 
       if (prepResult.availableTools && prepResult.availableTools.length > 0) {
         const toolsResult = ToolHandler.prepareTools({
@@ -263,22 +263,62 @@ export class ProcessNode extends BaseNode {
       // Get the node name for display
       const nodeName = node_params?.label || node_params?.properties?.name || 'Process Node';
 
-      // Call the model with tool support
-      const modelResult = await ModelHandler.callModel({
+      // --- Log before calling the model ---
+      const lastMessage = prepResult.messages && prepResult.messages.length > 0 ? prepResult.messages[prepResult.messages.length - 1] : null;
+      log.debug(`[ProcessNode ${prepResult.nodeId}] Calling ModelHandler.callModel`, {
         modelId: prepResult.boundModel,
-        prompt: prepResult.currentPrompt,
+        messageCount: prepResult.messages?.length || 0,
+        toolCount: tools?.length || 0,
+        lastMessageType: lastMessage?.role,
+        lastMessageToolCallId: lastMessage?.role === 'tool' ? lastMessage.tool_call_id : undefined,
+        lastMessageContentPreview: typeof lastMessage?.content === 'string' ? lastMessage.content.substring(0, 100) + '...' : '(non-string content)'
+      });
+
+      let modelResult;
+      try {
+        // Call the model with tool support
+        modelResult = await ModelHandler.callModel({
+          modelId: prepResult.boundModel,
+          prompt: prepResult.currentPrompt,
         messages: prepResult.messages,
         tools,
         iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
         maxIterations: 30, // Max iterations no longer handled by ModelHandler
-        nodeName, // Pass the node name to be included in the response header
-        nodeId: prepResult.nodeId // Pass the node ID
-      });
+          nodeName, // Pass the node name to be included in the response header
+          nodeId: prepResult.nodeId // Pass the node ID
+        });
 
-    if (!modelResult.success) {
-      log.error('Model execution error', { error: modelResult.error });
+        // --- Log successful model call result (check success first) ---
+        if (modelResult.success) {
+          log.debug(`[ProcessNode ${prepResult.nodeId}] ModelHandler.callModel returned successfully`, {
+            success: true, // Already checked
+            hasContent: !!modelResult.value?.content,
+            contentLength: modelResult.value?.content?.length || 0,
+            toolCallsCount: modelResult.value?.toolCalls?.length || 0
+          });
+        } else {
+           // Log failure if somehow success check failed here (should be caught later)
+           log.warn(`[ProcessNode ${prepResult.nodeId}] ModelHandler.callModel returned failure state unexpectedly here`, { success: false, error: modelResult.error });
+        }
 
-      // CHANGE: Instead of returning an error result, throw a custom error
+
+      } catch (modelCallError) {
+        // --- Log error during model call ---
+        log.error(`[ProcessNode ${prepResult.nodeId}] Error calling ModelHandler.callModel`, { error: modelCallError });
+        // Re-throw the error to be handled by the outer catch block
+        throw modelCallError;
+      } finally {
+        // --- Log that the model call attempt finished ---
+        log.debug(`[ProcessNode ${prepResult.nodeId}] Finished attempt to call ModelHandler.callModel`);
+      }
+
+      // --- Process the result (if successful) ---
+      if (!modelResult || !modelResult.success) {
+        // This case should ideally be caught by the try/catch, but handle defensively
+        const errorDetails = modelResult?.error || { message: 'Unknown model execution error after call attempt.' };
+        log.error('Model execution error after call attempt', { error: errorDetails });
+
+        // CHANGE: Instead of returning an error result, throw a custom error
       const modelError = new Error(`Model execution failed: ${modelResult.error.message}`);
 
       // Add properties to the error object
@@ -444,6 +484,9 @@ export class ProcessNode extends BaseNode {
     sharedState: SharedState,
     node_params?: ProcessNodeParams
   ): Promise<string> {
+    // --- Log start of post method ---
+    log.debug(`[ProcessNode ${node_params?.id}] post() method started.`);
+
     log.info('post() started', {
       execResultSuccess: execResult.success,
       execResultContentLength: execResult.content?.length || 0,

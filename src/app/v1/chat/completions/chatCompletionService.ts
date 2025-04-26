@@ -29,12 +29,12 @@ export type TokenUsage = OpenAI.CompletionUsage;
 
 // isRetryableError - Keep as is
 export function isRetryableError(error: any): boolean {
-  log.debug('Checking if error is retryable', { errorType: typeof error, status: error.status, code: error.code, message: error.message });
+  log.verbose('Checking if error is retryable', { errorType: typeof error, status: error.status, code: error.code, message: error.message }); // Changed to verbose
   if (error.status === 429) return true;
   if (error.status >= 500 && error.status < 600) return true;
   if (error.message?.includes('timeout') || error.code === 'ETIMEDOUT') return true;
   if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') return true;
-  log.debug('Error is not retryable', { error });
+  log.verbose('Error is not retryable', { error }); // Changed to verbose
   return false;
 }
 
@@ -151,14 +151,14 @@ export async function processChatCompletion(
       
       // Clear execution trace if it exists (only if feature is enabled)
       if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
-        sharedState.executionTrace = [];
-      }
-      
-      // Update the state in memory immediately
-      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-      log.debug(`State updated in memory with reset currentNodeId: ${sharedState.currentNodeId}`);
+      sharedState.executionTrace = [];
     }
-  } else {
+
+    // Update the state in memory immediately
+    FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    log.verbose(`State updated in memory with reset currentNodeId: ${sharedState.currentNodeId}`); // Changed to verbose
+  }
+} else {
     // Create a new default state
     log.info(`Creating new conversation state object for ID: ${effectiveConvId}`);
     sharedState = {
@@ -210,11 +210,11 @@ export async function processChatCompletion(
         const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
         if (firstUserMessage && typeof firstUserMessage.content === 'string') {
             sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-            log.debug(`Updated conversation title for ${effectiveConvId} during init to: ${sharedState.title}`);
+            log.verbose(`Updated conversation title for ${effectiveConvId} during init to: ${sharedState.title}`); // Changed to verbose
         }
       }
       await saveItemBackend(storageKey, sharedState);
-      log.info(`Saved initial state for new conversation ${effectiveConvId} to storage.`);
+      log.debug(`Saved initial state for new conversation ${effectiveConvId} to storage.`); // Changed to debug
     } catch (error) {
       log.error(`Failed to save initial state for new conversation ${effectiveConvId}:`, error);
       // Decide if this is a critical error - maybe return 500? For now, log and continue.
@@ -291,21 +291,21 @@ export async function processChatCompletion(
             const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
             if (firstUserMessage && typeof firstUserMessage.content === 'string') {
                 sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-            }
-          }
-          await saveItemBackend(storageKey, sharedState);
-          log.debug(`[Debug Mode] Saved state after single step for conv ${effectiveConvId}`);
-        } catch (error) {
-          log.error(`[Debug Mode] Failed to save state after single step for conv ${effectiveConvId}:`, error);
         }
+      }
+      await saveItemBackend(storageKey, sharedState);
+      log.verbose(`[Debug Mode] Saved state after single step for conv ${effectiveConvId}`); // Changed to verbose
+    } catch (error) {
+      log.error(`[Debug Mode] Failed to save state after single step for conv ${effectiveConvId}:`, error);
+    }
       }
       // No loop needed in debug mode, exit after one step or cancellation check
     }
-    // --- Normal Mode: Execute loop ---
+      // --- Normal Mode: Execute loop ---
     else {
       while (true) { // Loop indefinitely until a break condition is met
         internalIterations++;
-        log.info(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`);
+        log.debug(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`); // Changed to debug
 
         // Check iteration limit *before* executing the step
         if (internalIterations > MAX_INTERNAL_ITERATIONS) {
@@ -324,19 +324,15 @@ export async function processChatCompletion(
         sharedState.status = 'error';
         sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
         currentAction = ERROR_ACTION; // Treat as error to ensure proper response formatting
-           // Optionally set a specific error state/message
-           sharedState.status = 'error';
-           sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
-           currentAction = ERROR_ACTION; // Treat as error to ensure proper response formatting
            break; // Exit the loop immediately
         }
 
         // Log message history before executing step (for debugging tool call issues)
         if (sharedState.messages.length > 0) {
         const lastFewMessages = sharedState.messages.slice(-3); // Log last 3 messages
-        log.debug(`Message history before step ${internalIterations}`, JSON.stringify(lastFewMessages));
+        log.verbose(`Message history before step ${internalIterations}`, JSON.stringify(lastFewMessages)); // Changed to verbose
       } else {
-        log.debug(`No messages in history before step ${internalIterations}`);
+        log.verbose(`No messages in history before step ${internalIterations}`); // Changed to verbose
       }
 
 
@@ -353,11 +349,11 @@ export async function processChatCompletion(
             const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
             if (firstUserMessage && typeof firstUserMessage.content === 'string') {
                 sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-                log.debug(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
+                log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`); // Changed to verbose
             }
         }
         await saveItemBackend(storageKey, sharedState);
-        log.debug(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`);
+        log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`); // Changed to verbose
       } catch (error) {
         log.error(`Failed to save state after step ${internalIterations} for conv ${effectiveConvId}:`, error);
       }
@@ -365,19 +361,24 @@ export async function processChatCompletion(
       log.info(`Step ${internalIterations} completed for conv ${effectiveConvId}. Action: ${currentAction}`, { currentNodeId: sharedState.currentNodeId });
       log.verbose(`Shared state after step ${internalIterations}`, JSON.stringify(sharedState));
 
+      // --- Log the action before handling ---
+      log.debug(`[Action Handling] Step ${internalIterations}: Received action "${currentAction}" for conv ${effectiveConvId}`);
 
         // 2b. Handle the action returned by the step
         if (currentAction === ERROR_ACTION) {
+          log.info(`[Action Handling] Step ${internalIterations}: Handling ERROR_ACTION for conv ${effectiveConvId}`);
           log.error(`Error action received during step ${internalIterations} for conv ${effectiveConvId}`, { error: sharedState.lastResponse });
           break; // Exit loop to return error
         }
 
       if (currentAction === FINAL_RESPONSE_ACTION) {
+        log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
         log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
         break; // Exit loop to return final response
       }
 
       if (currentAction === TOOL_CALL_ACTION) {
+        log.info(`[Action Handling] Step ${internalIterations}: Handling TOOL_CALL_ACTION for conv ${effectiveConvId}`);
         log.info(`Tool call action received at step ${internalIterations} for conv ${effectiveConvId}`);
         const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
 
@@ -400,11 +401,11 @@ export async function processChatCompletion(
                     const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
                     if (firstUserMessage && typeof firstUserMessage.content === 'string') {
                         sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-                        log.debug(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`);
+                        log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`); // Changed to verbose
                     }
                 }
                 await saveItemBackend(storageKey, sharedState);
-                log.debug(`Saved state before pausing for approval for conv ${effectiveConvId}`);
+                log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`); // Changed to verbose
               } catch (error) {
                 log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
               }
@@ -443,14 +444,14 @@ export async function processChatCompletion(
             const externalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
 
             // Reset the regex state before each test
-            toolNameInternalRegex.lastIndex = 0; 
+            toolNameInternalRegex.lastIndex = 0;
             allToolCalls.forEach(tc => {
               if (tc.type === 'function' && toolNameInternalRegex.test(tc.function.name)) {
-                log.debug("tool is internal:", tc.function.name)
+                log.verbose("tool is internal:", tc.function.name) // Changed to verbose
                 internalTools.push(tc);
                 toolNameInternalRegex.lastIndex = 0; // Reset after successful test
               } else {
-                log.debug("tool is external:", tc.function.name)
+                log.verbose("tool is external:", tc.function.name) // Changed to verbose
                 externalTools.push(tc);
               }
             });
@@ -538,6 +539,7 @@ export async function processChatCompletion(
       const currentNode = sharedState.currentNodeId ? await FlowExecutor['findNodeById'](pocketFlow, sharedState.currentNodeId) : undefined;
 
       if (currentNode && currentAction && currentNode.successors.has(currentAction)) {
+         log.info(`[Action Handling] Step ${internalIterations}: Handling Handoff Action (Edge ID) for conv ${effectiveConvId}`);
          log.info(`Handoff action received for conv ${effectiveConvId}. Edge: ${currentAction}`);
          const nextNode = currentNode.getSuccessor(currentAction);
          if (nextNode) {
@@ -620,6 +622,7 @@ export async function processChatCompletion(
 
       // Handle STAY_ON_NODE or other potential actions
       if (currentAction === STAY_ON_NODE_ACTION) {
+         log.info(`[Action Handling] Step ${internalIterations}: Handling STAY_ON_NODE_ACTION for conv ${effectiveConvId}`);
          log.info(`Stay on node action received for conv ${effectiveConvId} at step ${internalIterations}`);
          break; // Exit loop, return current state
       }
@@ -657,11 +660,11 @@ export async function processChatCompletion(
         const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
         if (firstUserMessage && typeof firstUserMessage.content === 'string') {
             sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-            log.debug(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
+            log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`); // Changed to verbose
         }
     }
     await saveItemBackend(storageKey, sharedState);
-    log.info(`Saved final state for conversation ${effectiveConvId} before returning response.`);
+    log.debug(`Saved final state for conversation ${effectiveConvId} before returning response.`); // Changed to debug
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
   }
@@ -797,8 +800,8 @@ export async function processChatCompletion(
   if (sharedState.status === 'awaiting_tool_approval') {
       // Although we paused, from the API perspective, it stopped to wait.
       // The frontend relies on polling status, not this reason.
-      finish_reason = 'stop'; 
-      log.debug(`Setting finish_reason to 'stop' for awaiting_tool_approval status`);
+      finish_reason = 'stop';
+      log.verbose(`Setting finish_reason to 'stop' for awaiting_tool_approval status`); // Changed to verbose
   } else if (externalToolsXml) {
       finish_reason = 'stop'; // We wrapped tools in content, so it's a stop from the API's perspective
   } else if (currentAction === TOOL_CALL_ACTION && responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {

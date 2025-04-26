@@ -30,7 +30,7 @@ export class FlowExecutor {
       return this.pocketFlowCache.get(flowId)!.clone() as PocketFlow;
     }
 
-    log.debug(`Loading and converting flow for flowId: ${flowId}`);
+    log.verbose(`Loading and converting flow for flowId: ${flowId}`); // Changed to verbose
     const reactFlow = await flowService.getFlow(flowId);
     if (!reactFlow) {
       log.error(`Flow not found for flowId: ${flowId}`);
@@ -45,7 +45,7 @@ export class FlowExecutor {
 
     const pocketFlow = FlowConverter.convert(reactFlow);
     this.pocketFlowCache.set(flowId, pocketFlow); // Cache the converted flow
-    log.debug(`Flow ${flowId} converted and cached.`);
+    log.verbose(`Flow ${flowId} converted and cached.`); // Changed to verbose
     // Return a clone for execution
     return pocketFlow.clone() as PocketFlow;
   }
@@ -55,7 +55,7 @@ export class FlowExecutor {
    * Expects a valid string nodeId as it's checked before calling.
    */
   private static async findNodeById(flow: PocketFlow, nodeId: string): Promise<BaseNode | undefined> { // Signature already expects string
-    log.debug(`Searching for node ${nodeId} in flow ${flow.node_params?.id}`);
+    log.verbose(`Searching for node ${nodeId} in flow ${flow.node_params?.id}`); // Changed to verbose
     const startNode = await flow.getStartNode();
     const queue: BaseNode[] = [startNode];
     const visited = new Set<string>();
@@ -74,7 +74,7 @@ export class FlowExecutor {
       const currentId = currentNode.node_params?.id;
 
       if (currentId === nodeId) {
-        log.debug(`Found node ${nodeId}`);
+        log.verbose(`Found node ${nodeId}`); // Changed to verbose
         return currentNode;
       }
 
@@ -176,6 +176,8 @@ export class FlowExecutor {
       }
       log.info(`Executing step for node ${nodeId} (${currentNode.constructor.name}) in conversation ${conversationId}`);
       sharedState.currentNodeId = nodeId; // Now guaranteed to be a string
+      const nodeType = currentNode.constructor.name;
+      log.info(`Executing step for node ${nodeId} (${nodeType}) in conversation ${conversationId}`);
 
       // --- Initialize trace if needed (only if debug mode is enabled) ---
       if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
@@ -189,6 +191,9 @@ export class FlowExecutor {
           delete stateBefore.executionTrace; // Avoid recursive trace in snapshot
       }
 
+      // --- Log before executing the node ---
+      log.debug(`[FlowExecutor] Calling run() on node ${nodeId} (${nodeType}) for conv ${conversationId}`);
+
       // --- Execute the node's run method (expecting object return) ---
       // NOTE: This requires BaseNode.run in temp_pocket.ts to be updated
       // Assign results to outer variables
@@ -198,7 +203,10 @@ export class FlowExecutor {
       execResult = runResult.execResult;
       // --- Node execution finished ---
 
-      log.info(`Node ${nodeId} finished with action: ${action} for conversation ${conversationId}`);
+      // --- Log the action returned by the node ---
+      log.debug(`[FlowExecutor] Node ${nodeId} (${nodeType}) returned action: "${action}" for conv ${conversationId}`);
+
+      log.debug(`Node ${nodeId} finished with action: ${action} for conversation ${conversationId}`); // Changed to debug
 
       // --- Capture state AFTER execution ---
       const stateAfter = cloneDeep(sharedState);
@@ -220,12 +228,14 @@ export class FlowExecutor {
           execResultSnapshot: cloneDeep(execResult), // Snapshot exec result
         };
         sharedState.executionTrace.push(debugStep);
-        log.debug(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
+        log.verbose(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`); // Changed to verbose
       }
 
       // Update state in map *after* successful execution and trace update
       this.conversationStates.set(conversationId, sharedState);
 
+      // --- Return the result ---
+      log.debug(`[FlowExecutor] Returning from executeStep for node ${nodeId} with action: "${action}"`);
       return { sharedState, action };
 
     } catch (error) {
@@ -260,7 +270,7 @@ export class FlowExecutor {
           execResultSnapshot: { success: false, error: sharedState.lastResponse } as ExecResult,
         };
         sharedState.executionTrace.push(errorStep);
-        log.debug(`Appended ERROR step ${stepIndex} to execution trace for conversation ${conversationId}`);
+        log.verbose(`Appended ERROR step ${stepIndex} to execution trace for conversation ${conversationId}`); // Changed to verbose
       }
 
       // Update state map with error state (conversationId is guaranteed to be a string here)

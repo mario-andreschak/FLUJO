@@ -35,10 +35,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Action is required' }, { status: 400 });
     }
 
-    // Handle different actions
+      // Handle different actions
     switch (action) {
       case 'initialize':
-        log.debug(`Processing initialize action`, { requestId });
+        log.info(`Processing initialize action`, { requestId }); // Keep as info
         if (!password) {
           log.error(`Missing password parameter`, { requestId });
           return NextResponse.json({ error: 'Password is required' }, { status: 400 });
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true });
         
       case 'initialize_default':
-        log.debug(`Processing initialize_default action`, { requestId });
+        log.info(`Processing initialize_default action`, { requestId }); // Keep as info
         const defaultInitialized = await initializeDefaultEncryption();
         if (!defaultInitialized) {
           log.error(`Failed to initialize default encryption`, { requestId });
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true });
         
       case 'change_password':
-        log.debug(`Processing change_password action`, { requestId });
+        log.info(`Processing change_password action`, { requestId }); // Keep as info
         if (!oldPassword || !newPassword) {
           log.error(`Missing password parameters`, { requestId });
           return NextResponse.json({ error: 'Old and new passwords are required' }, { status: 400 });
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true });
         
       case 'authenticate':
-        log.debug(`Processing authenticate action`, { requestId });
+        log.info(`Processing authenticate action`, { requestId }); // Keep as info
         if (!password) {
           log.error(`Missing password parameter`, { requestId });
           return NextResponse.json({ error: 'Password is required' }, { status: 400 });
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, token: authToken });
         
       case 'logout':
-        log.debug(`Processing logout action`, { requestId });
+        log.info(`Processing logout action`, { requestId }); // Keep as info
         if (!token) {
           log.error(`Missing token parameter`, { requestId });
           return NextResponse.json({ error: 'Token is required' }, { status: 400 });
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: loggedOut });
         
       case 'encrypt':
-        log.debug(`Processing encrypt action`, { requestId, hasToken: !!token, hasPassword: !!password });
+        log.debug(`Processing encrypt action`, { requestId, hasToken: !!token, hasPassword: !!password }); // Keep as debug for start
         if (!data) {
           log.error(`Missing data parameter for encryption`, { requestId });
           return NextResponse.json({ error: 'Data is required' }, { status: 400 });
@@ -129,39 +129,39 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'Failed to encrypt data' }, { status: 500 });
         }
         
-        log.info(`Data encrypted successfully`, { requestId });
+        log.debug(`Data encrypted successfully`, { requestId }); // Changed to debug
         return NextResponse.json({ result: encrypted });
         
       case 'verify_password':
-        log.debug(`Processing verify_password action`, { requestId });
+        log.debug(`Processing verify_password action`, { requestId }); // Keep as debug for start
         if (!password) {
           log.error(`Missing password parameter`, { requestId });
           return NextResponse.json({ error: 'Password is required' }, { status: 400 });
         }
         
         const verifyResult = await verifyPassword(password);
-        log.info(`Password verification completed`, { requestId, valid: verifyResult.valid });
+        log.debug(`Password verification completed`, { requestId, valid: verifyResult.valid }); // Changed to debug
         return NextResponse.json({ 
           valid: verifyResult.valid,
           token: verifyResult.token // Return the token if password is valid
         });
         
       case 'check_initialized':
-        log.debug(`Processing check_initialized action`, { requestId });
+        log.debug(`Processing check_initialized action`, { requestId }); // Keep as debug for start
         const isInitialized = await isEncryptionInitialized();
-        log.debug(`Initialization check completed`, { requestId, isInitialized });
+        log.debug(`Initialization check completed`, { requestId, isInitialized }); // Keep as debug
         return NextResponse.json({ initialized: isInitialized });
         
       case 'check_user_encryption':
-        log.debug(`Processing check_user_encryption action`, { requestId });
+        log.debug(`Processing check_user_encryption action`, { requestId }); // Keep as debug for start
         const isUserEnabled = await isUserEncryptionEnabled();
-        log.debug(`User encryption check completed`, { requestId, isUserEnabled });
+        log.debug(`User encryption check completed`, { requestId, isUserEnabled }); // Keep as debug
         return NextResponse.json({ userEncryption: isUserEnabled });
         
       case 'get_encryption_type':
-        log.debug(`Processing get_encryption_type action`, { requestId });
+        log.debug(`Processing get_encryption_type action`, { requestId }); // Keep as debug for start
         const encryptionType = await getEncryptionType();
-        log.debug(`Encryption type check completed`, { requestId, encryptionType });
+        log.debug(`Encryption type check completed`, { requestId, encryptionType }); // Keep as debug
         return NextResponse.json({ type: encryptionType });
         
       default:

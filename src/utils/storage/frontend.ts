@@ -9,13 +9,13 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('utils/storage/frontend.ts');
 
 export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void, boolean] {
-  log.debug('useLocalStorage: Entering method');
+  log.verbose('useLocalStorage: Entering method'); // Changed to verbose
   const [storedValue, setStoredValue] = useState<T>(initialValue);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const loadValue = async () => {
-      log.debug('loadValue: Entering method');
+      log.verbose('loadValue: Entering method'); // Changed to verbose
       try {
         const response = await fetch(`/api/storage?key=${encodeURIComponent(key)}&defaultValue=${encodeURIComponent(JSON.stringify(initialValue))}`);
         const data = await response.json();
@@ -33,7 +33,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T)
   }, [key]); // Remove initialValue from dependencies to prevent infinite loop
 
   const setValue = async (value: T) => {
-    log.debug('setValue: Entering method');
+    log.verbose('setValue: Entering method'); // Changed to verbose
     try {
       const valueToStore = value instanceof Function ? value(storedValue) : value;
       setStoredValue(valueToStore);
@@ -61,7 +61,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T)
 }
 
 export const saveItem = async <T,>(key: StorageKey, value: T): Promise<void> => {
-  log.debug('saveItem: Entering method');
+  log.verbose('saveItem: Entering method'); // Changed to verbose
   try {
     const response = await fetch('/api/storage', {
       method: 'POST',
@@ -84,7 +84,7 @@ export const saveItem = async <T,>(key: StorageKey, value: T): Promise<void> => 
 };
 
 export const loadItem = async <T,>(key: StorageKey, defaultValue: T): Promise<T> => {
-  log.debug('loadItem: Entering method');
+  log.verbose('loadItem: Entering method'); // Changed to verbose
   try {
     const response = await fetch(`/api/storage?key=${encodeURIComponent(key)}&defaultValue=${encodeURIComponent(JSON.stringify(defaultValue))}`);
     if (!response.ok) {
@@ -99,7 +99,7 @@ export const loadItem = async <T,>(key: StorageKey, defaultValue: T): Promise<T>
 };
 
 export const clearItem = async (key: StorageKey): Promise<void> => {
-  log.debug('clearItem: Entering method');
+  log.verbose('clearItem: Entering method'); // Changed to verbose
   try {
     const response = await fetch(`/api/storage?key=${encodeURIComponent(key)}`, {
       method: 'DELETE',
@@ -115,11 +115,11 @@ export const clearItem = async (key: StorageKey): Promise<void> => {
 };
 
 export const setEncryptionKey = async (key: string): Promise<void> => {
-  log.debug('setEncryptionKey: Entering method');
+  log.verbose('setEncryptionKey: Entering method'); // Changed to verbose
   await saveItem(StorageKey.ENCRYPTION_KEY, key);
 };
 
 export const getEncryptionKey = async (): Promise<string | null> => {
-  log.debug('getEncryptionKey: Entering method');
+  log.verbose('getEncryptionKey: Entering method'); // Changed to verbose
   return await loadItem<string | null>(StorageKey.ENCRYPTION_KEY, null);
 };
