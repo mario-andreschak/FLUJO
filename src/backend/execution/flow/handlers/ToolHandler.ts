@@ -15,6 +15,50 @@ const log = createLogger('backend/flow/execution/handlers/ToolHandler');
 
 export class ToolHandler {
   /**
+   * Sanitizes a JSON Schema to ensure compatibility with all LLM providers
+   * Specifically removes unsupported 'format' fields from string properties
+   */
+  static sanitizeSchema(schema: any): any {
+    if (!schema || typeof schema !== 'object') return schema;
+    
+    // Make a deep copy to avoid modifying the original
+    const result = JSON.parse(JSON.stringify(schema));
+    
+    // Handle string type with format
+    if (result.type === 'string' && result.format) {
+      // Only keep enum and date-time formats as they're universally supported
+      if (result.format !== 'enum' && result.format !== 'date-time') {
+        // Save the format info in the description
+        if (!result.description) result.description = '';
+        result.description += ` (format: ${result.format})`;
+        
+        // Remove the unsupported format
+        delete result.format;
+      }
+    }
+    
+    // Process properties recursively
+    if (result.properties) {
+      Object.keys(result.properties).forEach(key => {
+        result.properties[key] = ToolHandler.sanitizeSchema(result.properties[key]);
+      });
+    }
+    
+    // Process array items
+    if (result.items) {
+      result.items = ToolHandler.sanitizeSchema(result.items);
+    }
+    
+    // Process oneOf, anyOf, allOf
+    ['oneOf', 'anyOf', 'allOf'].forEach(key => {
+      if (Array.isArray(result[key])) {
+        result[key] = result[key].map((item: any) => ToolHandler.sanitizeSchema(item));
+      }
+    });
+    
+    return result;
+  }
+  /**
    * Prepare tools for model - pure function
    * 
    * Note: This method is a pure function that formats tools for the model without reconnecting to servers.
@@ -64,13 +108,13 @@ export class ToolHandler {
         }
       }
       
-      // Map tools to OpenAI format
+      // Map tools to OpenAI format with sanitized schemas
       const tools: OpenAI.ChatCompletionTool[] = availableTools.map(tool => ({
         type: "function",
         function: {
           name: tool.name,
           description: tool.description || `Tool: ${tool.name}`,
-          parameters: tool.inputSchema
+          parameters: ToolHandler.sanitizeSchema(tool.inputSchema)
         }
       }));
       

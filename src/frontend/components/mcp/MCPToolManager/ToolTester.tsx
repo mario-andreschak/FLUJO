@@ -138,7 +138,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   };
 
   const handleTest = async () => {
-    log.debug(`Testing tool: ${selectedTool} with params:`, params);
+    log.debug(`Testing tool: ${selectedTool} with params:`, JSON.stringify(params));
     log.debug(`Timeout: ${timeoutValue} seconds`);
     
     // Reset progress and result
@@ -147,11 +147,41 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     setIsLoading(true);
     
     try {
-      const result = await onTestTool(selectedTool, params, timeoutValue);
-      log.debug(`Test result:`, result);
+      // Ensure parameters are correctly typed according to the schema before sending
+      const typedParams: Record<string, any> = {};
+      const selectedToolData = toolsArray.find((t) => t.name === selectedTool);
+      
+      if (selectedToolData?.inputSchema?.properties) {
+        // Process each parameter according to its schema type
+        Object.entries(params).forEach(([key, value]) => {
+          const schema = selectedToolData.inputSchema.properties[key];
+          if (!schema) {
+            typedParams[key] = value;
+            return;
+          }
+          
+          if (schema.type === 'number' || schema.type === 'integer') {
+            // Ensure number parameters are actually numbers, not strings
+            const numValue = typeof value === 'string' ? parseFloat(value) : value;
+            typedParams[key] = isNaN(numValue as number) ? 0 : numValue;
+          } else if (schema.type === 'boolean') {
+            // Ensure boolean parameters are actually booleans
+            typedParams[key] = Boolean(value);
+          } else {
+            typedParams[key] = value;
+          }
+        });
+      } else {
+        // If no schema is available, use params as is
+        Object.assign(typedParams, params);
+      }
+      
+      log.debug(`Sending typed params:`, JSON.stringify(typedParams));
+      const result = await onTestTool(selectedTool, typedParams, timeoutValue);
+      log.debug(`Test result:`, JSON.stringify(result));
       
       // Store the progress token if available
-      if (result.progressToken) {
+      if (result && result.progressToken) {
         setActiveProgressToken(result.progressToken);
       }
       

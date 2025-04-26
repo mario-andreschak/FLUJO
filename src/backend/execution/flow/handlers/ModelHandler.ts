@@ -194,53 +194,24 @@ export class ModelHandler {
 
       // Add tools if available
       if (tools && tools.length > 0) {
-        // --- PATCH: Remove 'format' from imageUrl string parameters ---
-        // Gemini API only supports 'enum' and 'date-time' for string format.
-        // This removes any other potentially invalid format like 'url' or 'uri'.
-        const patchedTools = tools.map(tool => {
-          // Type guard for function tool with parameters and properties
-          if (tool.type === 'function' &&
-              tool.function.parameters &&
-              typeof tool.function.parameters === 'object' && // Ensure parameters is an object
-              tool.function.parameters.properties &&
-              typeof tool.function.parameters.properties === 'object') { // Ensure properties is an object
-
-            const params = tool.function.parameters; // Already checked existence
-            const props = params.properties as Record<string, any>; // Assert properties as Record after check
-
-            // Check specifically for imageUrl with string type and format
-            if (props.imageUrl &&
-                typeof props.imageUrl === 'object' && // Ensure imageUrl is an object
-                props.imageUrl.type === 'string' &&
-                props.imageUrl.format) {
-
-              // Create mutable copies safely after checks
-              const mutableParams = { ...params };
-              const mutableProps = { ...props }; // Safe to spread now
-              const mutableImageUrl = { ...props.imageUrl }; // Safe to spread now
-
-              // Delete the format property
-              delete mutableImageUrl.format;
-
-              // Update the mutable copies
-              mutableProps.imageUrl = mutableImageUrl;
-              mutableParams.properties = mutableProps;
-
-              // Return a new tool object with the modified parameters
-              return {
-                ...tool,
-                function: {
-                  ...tool.function,
-                  parameters: mutableParams
-                }
-              };
-            }
+        // Use the sanitizeSchema function from ToolHandler to ensure compatibility with all LLM providers
+        // This handles all string properties with unsupported format values, not just specific properties
+        const { ToolHandler } = require('../handlers/ToolHandler');
+        
+        const sanitizedTools = tools.map(tool => {
+          if (tool.type === 'function' && tool.function.parameters) {
+            return {
+              ...tool,
+              function: {
+                ...tool.function,
+                parameters: ToolHandler.sanitizeSchema(tool.function.parameters)
+              }
+            };
           }
-          // Return the original tool if no modification was needed
           return tool;
         });
-        requestParams.tools = patchedTools;
-        // --- END PATCH ---
+        
+        requestParams.tools = sanitizedTools;
       }
 
 
@@ -249,10 +220,18 @@ export class ModelHandler {
       log.verbose(`calling chatcompletion now with TEMP ${ JSON.stringify(requestParams.temperature)}`)
       log.verbose(`calling chatcompletion now with MESSAGES ${ JSON.stringify(requestParams.messages)}`)
       log.verbose(`calling chatcompletion now with TOOLS ${ JSON.stringify(requestParams.tools)}`)
+
+      // --- Log the exact request being sent ---
+      log.debug('[ModelHandler.generateCompletion] Sending request to OpenAI API', { requestParams: JSON.stringify(requestParams) }); // Use debug level
+
       // Make the API request using the OpenAI client
       const chatCompletion = await openai.chat.completions.create(requestParams);
-      log.verbose(`chatcompletion returned`)
-      log.verbose(`chatcompletion returned ${ JSON.stringify(chatCompletion)}`)
+
+      // --- Log the raw response received ---
+      log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: JSON.stringify(chatCompletion) }); // Use debug level
+
+      log.verbose(`chatcompletion returned`) // Keep verbose for backward compatibility if needed
+      log.verbose(`chatcompletion returned ${ JSON.stringify(chatCompletion)}`) // Keep verbose
 
       // --- Check for top-level error in the response ---
       // Some providers (like OpenRouter for certain errors) might return a 200 OK
@@ -331,6 +310,9 @@ export class ModelHandler {
 
       return result;
     } catch (error) {
+      // --- Log the raw error object caught ---
+      log.error('[ModelHandler.generateCompletion] Caught error during OpenAI API call', { rawError: error });
+
       // --- Enhanced Error Logging ---
       log.error('--- Error during openai.chat.completions.create ---');
       if (error instanceof Error) {
