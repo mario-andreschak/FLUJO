@@ -915,6 +915,7 @@ export function createStreamingResponse(
     async start(controller) {
       let lastState: any = null;
       let lastAssistantContent: string = '';
+      let lastAssistantId: string | undefined = undefined;
       let retryCount = 0;
       
       // Send initial response with role
@@ -954,14 +955,24 @@ export function createStreamingResponse(
               
               if (lastAssistantMsg && typeof lastAssistantMsg.content === 'string') {
                 const currentContent = lastAssistantMsg.content;
+                const currentAssistantId = lastAssistantMsg.id;
                 
-                // If content has changed, calculate the delta (new content)
-                if (currentContent !== lastAssistantContent && currentContent.length > lastAssistantContent.length) {
-                  // Get the new content that was added
-                  const newContent = currentContent.slice(lastAssistantContent.length);
+                // Check if this is a new message or an update to an existing one
+                const isNewMessage = currentAssistantId !== lastAssistantId;
+                
+                // If it's a new message, send the entire content
+                // If it's an existing message with changed content, send only the delta
+                if (isNewMessage) {
+                  log.debug(`New assistant message detected with ID: ${currentAssistantId}`);
+                  lastAssistantId = currentAssistantId;
+                  lastAssistantContent = currentContent;
                   
-                  // Send the new content as a delta
-                  const deltaChunk = JSON.stringify({
+                  // For a new message, send the entire content as the delta
+                  // This ensures we don't miss any content
+                  const newContent = currentContent;
+                  
+                  // Send a unified chunk with both content and conversation state
+                  const unifiedChunk = JSON.stringify({
                     id: chunkId,
                     object: "chat.completion.chunk",
                     created: createdTimestamp,
@@ -969,35 +980,76 @@ export function createStreamingResponse(
                     choices: [{
                       index: 0,
                       delta: {
-                        content: newContent
+                        content: newContent,
+                        conversation: currentState
                       },
                       finish_reason: null
                     }]
                   });
-                  controller.enqueue(encoder.encode(`data: ${deltaChunk}\n\n`));
+                  controller.enqueue(encoder.encode(`data: ${unifiedChunk}\n\n`));
+                } 
+                // If content has changed and it's longer than before, calculate the delta
+                else if (currentContent !== lastAssistantContent && currentContent.length > lastAssistantContent.length) {
+                  // Get the new content that was added
+                  const newContent = currentContent.slice(lastAssistantContent.length);
+                  
+                  // Send a unified chunk with both content delta and conversation state
+                  const unifiedChunk = JSON.stringify({
+                    id: chunkId,
+                    object: "chat.completion.chunk",
+                    created: createdTimestamp,
+                    model: model,
+                    choices: [{
+                      index: 0,
+                      delta: {
+                        content: newContent,
+                        conversation: currentState
+                      },
+                      finish_reason: null
+                    }]
+                  });
+                  controller.enqueue(encoder.encode(`data: ${unifiedChunk}\n\n`));
                   
                   // Update the last assistant content
                   lastAssistantContent = currentContent;
                 }
+                // If the state changed but the content didn't, still send the state update
+                else if (currentContent === lastAssistantContent) {
+                  // Send a unified chunk with empty content delta but updated conversation state
+                  const stateOnlyChunk = JSON.stringify({
+                    id: chunkId,
+                    object: "chat.completion.chunk",
+                    created: createdTimestamp,
+                    model: model,
+                    choices: [{
+                      index: 0,
+                      delta: {
+                        content: "",
+                        conversation: currentState
+                      },
+                      finish_reason: null
+                    }]
+                  });
+                  controller.enqueue(encoder.encode(`data: ${stateOnlyChunk}\n\n`));
+                }
+              } else {
+                // No assistant message found, but state changed - send state update only
+                const stateOnlyChunk = JSON.stringify({
+                  id: chunkId,
+                  object: "chat.completion.chunk",
+                  created: createdTimestamp,
+                  model: model,
+                  choices: [{
+                    index: 0,
+                    delta: {
+                      content: "",
+                      conversation: currentState
+                    },
+                    finish_reason: null
+                  }]
+                });
+                controller.enqueue(encoder.encode(`data: ${stateOnlyChunk}\n\n`));
               }
-              
-              // Also include the full conversation state in a separate field for client-side use
-              // This maintains backward compatibility while adding OpenAI standard format
-              const stateChunk = JSON.stringify({
-                id: chunkId,
-                object: "chat.completion.chunk",
-                created: createdTimestamp,
-                model: model,
-                choices: [{
-                  index: 0,
-                  delta: {
-                    // Include the entire conversation state in a separate field
-                    conversation: currentState
-                  },
-                  finish_reason: null
-                }]
-              });
-              controller.enqueue(encoder.encode(`data: ${stateChunk}\n\n`));
             }
             
             // Check if processing is complete by checking the status in FlowExecutor.conversationStates
@@ -1006,8 +1058,25 @@ export function createStreamingResponse(
             const status = memoryState?.status || 'running';
             
             if (status === 'completed' || status === 'error') {
-              // Send final chunk
+              // Send final chunk with both empty delta and the final conversation state
               const finalChunk = JSON.stringify({
+                id: chunkId,
+                object: "chat.completion.chunk",
+                created: createdTimestamp,
+                model: model,
+                choices: [{
+                  index: 0,
+                  delta: {
+                    content: "",
+                    conversation: currentState
+                  },
+                  finish_reason: status === 'error' ? "error" : "stop"
+                }]
+              });
+              controller.enqueue(encoder.encode(`data: ${finalChunk}\n\n`));
+              
+              // Send standard OpenAI empty delta chunk
+              const openAiFinalChunk = JSON.stringify({
                 id: chunkId,
                 object: "chat.completion.chunk",
                 created: createdTimestamp,
@@ -1018,7 +1087,7 @@ export function createStreamingResponse(
                   finish_reason: status === 'error' ? "error" : "stop"
                 }]
               });
-              controller.enqueue(encoder.encode(`data: ${finalChunk}\n\n`));
+              controller.enqueue(encoder.encode(`data: ${openAiFinalChunk}\n\n`));
               
               // Send [DONE] to indicate end of stream
               controller.enqueue(encoder.encode('data: [DONE]\n\n'));
@@ -1042,15 +1111,32 @@ export function createStreamingResponse(
             // Wait 5 seconds before retry
             await new Promise(resolve => setTimeout(resolve, 5000));
           } else {
-            // Send error and close stream after retry fails
+            // Send error with unified format
             const errorChunk = JSON.stringify({
+              id: chunkId,
+              object: "chat.completion.chunk",
+              created: createdTimestamp,
+              model: model,
+              choices: [{
+                index: 0,
+                delta: {
+                  content: "Error during streaming: " + (error instanceof Error ? error.message : "Unknown error"),
+                  conversation: { error: error instanceof Error ? error.message : "Unknown error" }
+                },
+                finish_reason: "error"
+              }]
+            });
+            controller.enqueue(encoder.encode(`data: ${errorChunk}\n\n`));
+            
+            // Also send standard OpenAI error format for compatibility
+            const openAiErrorChunk = JSON.stringify({
               error: {
                 message: error instanceof Error ? error.message : "Unknown error during streaming",
                 type: "streaming_error",
                 code: "streaming_failed"
               }
             });
-            controller.enqueue(encoder.encode(`data: ${errorChunk}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${openAiErrorChunk}\n\n`));
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             break;
           }
