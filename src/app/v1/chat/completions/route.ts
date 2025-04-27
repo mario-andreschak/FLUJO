@@ -5,6 +5,13 @@ import { parseRequestParameters, _logRequestDetails, ChatCompletionRequest } fro
 
 const log = createLogger('app/v1/chat/completions/route');
 
+// CORS headers for all responses - Allow all headers and methods for local development
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': '*',
+  'Access-Control-Allow-Headers': '*'
+};
+
 // Rate limiting - simple implementation
 const RATE_LIMIT = 6000; // requests per minute
 const requestCounts = new Map<string, { count: number, resetTime: number }>();
@@ -80,8 +87,7 @@ async function handleRequest(request: NextRequest) {
         ip,
         duration: `${duration}ms`
       });
-      // Return OpenAI-compatible rate limit error
-      // https://platform.openai.com/docs/guides/error-codes/api-errors
+      // Return OpenAI-compatible rate limit error with CORS headers
       return NextResponse.json(
         {
           error: {
@@ -91,7 +97,10 @@ async function handleRequest(request: NextRequest) {
             param: null
           }
         },
-        { status: 429 }
+        { 
+          status: 429,
+          headers: corsHeaders
+        }
       );
     }
     
@@ -145,7 +154,17 @@ async function handleRequest(request: NextRequest) {
       status: response?.status || 'unknown'
     });
     
-    return response;
+    // Clone the response and add CORS headers
+    const responseWithCors = new NextResponse(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: {
+        ...Object.fromEntries(response.headers.entries()),
+        ...corsHeaders
+      }
+    });
+    
+    return responseWithCors;
   } catch (error) {
     const duration = Date.now() - startTime;
     log.error('Error handling request', {
@@ -158,8 +177,7 @@ async function handleRequest(request: NextRequest) {
       duration: `${duration}ms`
     });
     
-    // Return OpenAI-compatible error format
-    // https://platform.openai.com/docs/guides/error-codes/api-errors
+    // Return OpenAI-compatible error format with CORS headers
     return NextResponse.json(
       {
         error: {
@@ -169,9 +187,31 @@ async function handleRequest(request: NextRequest) {
           param: null
         }
       },
-      { status: 500 }
+      { 
+        status: 500,
+        headers: corsHeaders
+      }
     );
   }
+}
+
+// Handle OPTIONS requests for CORS preflight
+export async function OPTIONS(request: NextRequest) {
+  const requestId = `options-${Date.now()}`;
+  log.info('OPTIONS request received (CORS preflight)', {
+    requestId,
+    url: request.url,
+    origin: request.headers.get('origin') || 'unknown'
+  });
+  
+  // Return a 204 No Content response with CORS headers
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders,
+      'Access-Control-Max-Age': '86400' // 24 hours
+    }
+  });
 }
 
 // Handle GET requests
