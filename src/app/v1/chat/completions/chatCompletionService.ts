@@ -51,12 +51,12 @@ if (!(flowService as any).getFlowByName) {
 const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByName: (name: string) => Promise<Flow | null> };
 
 
-// Process chat completion request with the new step-by-step logic
-export async function processChatCompletion(
+// Internal function that contains the core processing logic
+async function processChatCompletionInternal(
   data: ChatCompletionRequest,
-  flujo: boolean, // Keep for existing logic (e.g., internal tool processing)
+  flujo: boolean,
   requireApproval: boolean,
-  flujodebug: boolean, // Add the new debug flag parameter
+  flujodebug: boolean,
   conversationId?: string
 ) {
   const startTime = Date.now();
@@ -374,6 +374,9 @@ export async function processChatCompletion(
       if (currentAction === FINAL_RESPONSE_ACTION) {
         log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
         log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
+        // Set status to completed when final response is received
+        sharedState.status = 'completed';
+        log.info(`Setting conversation status to 'completed' for conv ${effectiveConvId}`);
         break; // Exit loop to return final response
       }
 
@@ -848,39 +851,219 @@ export async function processChatCompletion(
   log.info(`Returning success response for conv ${effectiveConvId}`, { action: currentAction, status: responseData.status, flujo, requireApproval, flujodebug, finish_reason });
   log.verbose(`Final response data for conv ${effectiveConvId}`, JSON.stringify(responseData));
 
-  // TODO: Adapt streaming response logic if needed.
-  // The current logic assumes non-streaming. Streaming would require yielding chunks
-  // during the loop, especially for content generation and tool calls.
-  if (data.stream === true) {
-     log.warn('Streaming requested but not fully implemented with new loop logic. Returning non-streaming response.');
-     // Fallback to non-streaming for now
-     // return createStreamingResponse(data.model, responseContent, usage, sharedState.messages, sharedState.conversationId);
-  }
-
   return NextResponse.json(responseData);
 }
 
-// Create a streaming response using Server-Sent Events (SSE) - Needs adaptation for the new loop
-export function createStreamingResponse(
-  modelParam: string,
-  content: string,
-  usage: TokenUsage,
-  messages?: OpenAI.ChatCompletionMessageParam[],
+// Main entry point for chat completion processing
+export async function processChatCompletion(
+  data: ChatCompletionRequest,
+  flujo: boolean,
+  requireApproval: boolean,
+  flujodebug: boolean,
   conversationId?: string
 ) {
-  // ... (Existing streaming implementation - needs significant changes to work with the new step-by-step logic)
-  log.warn("createStreamingResponse needs adaptation for the new step-by-step execution loop.");
-  // Placeholder implementation returning an error or simple stream
+  // Handle streaming requests differently
+  if (data.stream === true) {
+    // Generate a conversation ID if not provided
+    const effectiveConvId = conversationId || crypto.randomUUID();
+    log.info(`Streaming requested for conversation ${effectiveConvId}. Starting async processing.`);
+    
+    // Start processing asynchronously (don't await)
+    // The reference in FlowExecutor.conversationStates will prevent garbage collection
+    processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId)
+      .catch(error => {
+        // Log any errors that occur during processing
+        log.error(`Error in background processing for conversation ${effectiveConvId}:`, error);
+        
+        // Ensure the conversation state reflects the error
+        const errorState = FlowExecutor.conversationStates.get(effectiveConvId);
+        if (errorState) {
+          errorState.status = 'error';
+          errorState.lastResponse = { 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          };
+          FlowExecutor.conversationStates.set(effectiveConvId, errorState);
+          
+          // Also save to storage
+          const storageKey = `conversations/${effectiveConvId}` as StorageKey;
+          saveItemBackend(storageKey, errorState).catch(storageError => {
+            log.error(`Failed to save error state for conversation ${effectiveConvId}:`, storageError);
+          });
+        }
+      });
+    
+    // Return streaming response immediately
+    return createStreamingResponse(data.model, effectiveConvId);
+  } else {
+    // Non-streaming path - use the internal function directly
+    return processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId);
+  }
+}
+
+// Create a streaming response using Server-Sent Events (SSE)
+export function createStreamingResponse(
+  model: string,
+  conversationId: string
+) {
   const encoder = new TextEncoder();
+  const chunkId = `chatcmpl-${Date.now()}`; // Use the same ID for all chunks in this stream
+  const createdTimestamp = Math.floor(Date.now() / 1000);
+  log.debug(`create streaming response`)
+  // Create a ReadableStream for SSE
   const stream = new ReadableStream({
-      start(controller) {
-          const errorChunk = { error: { message: "Streaming not fully implemented with new logic." } };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          controller.close();
+    async start(controller) {
+      let lastState: any = null;
+      let lastAssistantContent: string = '';
+      let retryCount = 0;
+      
+      // Send initial response with role
+      const initialChunk = JSON.stringify({
+        id: chunkId,
+        object: "chat.completion.chunk",
+        created: createdTimestamp,
+        model: model,
+        choices: [{
+          index: 0,
+          delta: { role: "assistant", content: "" },
+          finish_reason: null
+        }]
+      });
+      controller.enqueue(encoder.encode(`data: ${initialChunk}\n\n`));
+      
+      // Poll until processing is complete
+      while (true) {
+        try {
+          // Fetch current conversation state
+          const response = await fetch(`http://localhost:4200/v1/chat/conversations/${conversationId}`);
+          
+          if (!response.ok) {
+            log.error(`Failed to fetch conversation: ${response.status}`)
+            throw new Error(`Failed to fetch conversation: ${response.status}`);
+          }
+          
+          const currentState = await response.json();
+          
+          // Calculate and send delta if we have a previous state
+          if (lastState) {
+            // Check if the state has changed
+            if (JSON.stringify(lastState) !== JSON.stringify(currentState)) {
+              // Find the last assistant message to extract content
+              const messages = currentState.messages || [];
+              const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
+              
+              if (lastAssistantMsg && typeof lastAssistantMsg.content === 'string') {
+                const currentContent = lastAssistantMsg.content;
+                
+                // If content has changed, calculate the delta (new content)
+                if (currentContent !== lastAssistantContent && currentContent.length > lastAssistantContent.length) {
+                  // Get the new content that was added
+                  const newContent = currentContent.slice(lastAssistantContent.length);
+                  
+                  // Send the new content as a delta
+                  const deltaChunk = JSON.stringify({
+                    id: chunkId,
+                    object: "chat.completion.chunk",
+                    created: createdTimestamp,
+                    model: model,
+                    choices: [{
+                      index: 0,
+                      delta: {
+                        content: newContent
+                      },
+                      finish_reason: null
+                    }]
+                  });
+                  controller.enqueue(encoder.encode(`data: ${deltaChunk}\n\n`));
+                  
+                  // Update the last assistant content
+                  lastAssistantContent = currentContent;
+                }
+              }
+              
+              // Also include the full conversation state in a separate field for client-side use
+              // This maintains backward compatibility while adding OpenAI standard format
+              const stateChunk = JSON.stringify({
+                id: chunkId,
+                object: "chat.completion.chunk",
+                created: createdTimestamp,
+                model: model,
+                choices: [{
+                  index: 0,
+                  delta: {
+                    // Include the entire conversation state in a separate field
+                    conversation: currentState
+                  },
+                  finish_reason: null
+                }]
+              });
+              controller.enqueue(encoder.encode(`data: ${stateChunk}\n\n`));
+            }
+            
+            // Check if processing is complete by checking the status in FlowExecutor.conversationStates
+            // This is more reliable than checking the conversation endpoint which might not have the latest status
+            const memoryState = FlowExecutor.conversationStates.get(conversationId);
+            const status = memoryState?.status || 'running';
+            
+            if (status === 'completed' || status === 'error') {
+              // Send final chunk
+              const finalChunk = JSON.stringify({
+                id: chunkId,
+                object: "chat.completion.chunk",
+                created: createdTimestamp,
+                model: model,
+                choices: [{
+                  index: 0,
+                  delta: {},
+                  finish_reason: status === 'error' ? "error" : "stop"
+                }]
+              });
+              controller.enqueue(encoder.encode(`data: ${finalChunk}\n\n`));
+              
+              // Send [DONE] to indicate end of stream
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              break;
+            }
+          }
+          
+          // Update last state and reset retry count
+          lastState = currentState;
+          retryCount = 0;
+          
+          // Wait 1 second before next poll
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          log.error(`Error during streaming for conversation ${conversationId}:`, error);
+          
+          // Handle error with retry
+          if (retryCount < 1) {
+            retryCount++;
+            log.info(`Retrying after error (attempt ${retryCount}) for conversation ${conversationId}`);
+            // Wait 5 seconds before retry
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          } else {
+            // Send error and close stream after retry fails
+            const errorChunk = JSON.stringify({
+              error: {
+                message: error instanceof Error ? error.message : "Unknown error during streaming",
+                type: "streaming_error",
+                code: "streaming_failed"
+              }
+            });
+            controller.enqueue(encoder.encode(`data: ${errorChunk}\n\n`));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            break;
+          }
+        }
       }
+      
+      // Close the stream
+      controller.close();
+    }
   });
-   return new Response(stream, {
+  
+  // Return the stream as a Response
+  return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
