@@ -1,10 +1,10 @@
 'use client';
 
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 import { parseConfigFromClipboard, parseConfigFromReadme, parseEnvFromClipboard, parseEnvFromFile } from '../../../utils/configUtils';
 import { installDependencies, buildServer } from '../../../utils/buildUtils';
-import { isStdioConfig, isWebSocketConfig } from '../hooks/useLocalServerState';
+import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } from '../hooks/useLocalServerState';
 
 // Function to get the MCP servers directory from the CWD API
 export const getMCPServersDir = async (): Promise<string> => {
@@ -28,6 +28,7 @@ export const handleSubmit = (
   e: React.FormEvent,
   localConfig: MCPServerConfig,
   websocketUrl: string,
+  serverUrl: string,
   buildCommand: string,
   installCommand: string,
   setMessage: (message: MessageState | null) => void,
@@ -45,11 +46,19 @@ export const handleSubmit = (
     return;
   }
   
-  // For websocket transport, validate the websocket URL
+  // Validate URLs based on transport type
   if (localConfig.transport === 'websocket' && !websocketUrl) {
     setMessage({
       type: 'error',
       text: 'Please enter a valid WebSocket URL'
+    });
+    return;
+  }
+  
+  if ((localConfig.transport === 'sse' || localConfig.transport === 'streamable') && !serverUrl) {
+    setMessage({
+      type: 'error',
+      text: 'Please enter a valid Server URL'
     });
     return;
   }
@@ -66,6 +75,24 @@ export const handleSubmit = (
       _buildCommand: buildCommand,
       _installCommand: installCommand
     } as MCPWebSocketConfig;
+  } else if (localConfig.transport === 'sse') {
+    // For SSE transport
+    finalConfig = {
+      ...localConfig,
+      transport: 'sse',
+      serverUrl,
+      _buildCommand: buildCommand,
+      _installCommand: installCommand
+    } as MCPSSEConfig;
+  } else if (localConfig.transport === 'streamable') {
+    // For Streamable transport
+    finalConfig = {
+      ...localConfig,
+      transport: 'streamable',
+      serverUrl,
+      _buildCommand: buildCommand,
+      _installCommand: installCommand
+    } as MCPStreamableConfig;
   } else {
     // For stdio transport (default)
     finalConfig = {
@@ -214,10 +241,39 @@ export const handleParseEnvClipboard = async (
     
     if (result.env && Object.keys(result.env).length > 0) {
       // Merge with existing env variables
-      setLocalConfig({
-        ...localConfig,
-        env: { ...localConfig.env, ...result.env }
-      });
+      const mergedEnv = { ...localConfig.env, ...result.env };
+      
+      // Create a new config with the merged env
+      let updatedConfig: MCPServerConfig;
+      
+      if (isStdioConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPStdioConfig;
+      } else if (isWebSocketConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPWebSocketConfig;
+      } else if (isSSEConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPSSEConfig;
+      } else if (isStreamableConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPStreamableConfig;
+      } else {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        };
+      }
+      
+      setLocalConfig(updatedConfig);
     }
   } catch (error) {
     console.error('Error parsing env variables from clipboard:', error);
@@ -259,10 +315,39 @@ export const handleParseEnvExample = async (
     
     if (result.env && Object.keys(result.env).length > 0) {
       // Merge with existing env variables
-      setLocalConfig({
-        ...localConfig,
-        env: { ...localConfig.env, ...result.env }
-      });
+      const mergedEnv = { ...localConfig.env, ...result.env };
+      
+      // Create a new config with the merged env
+      let updatedConfig: MCPServerConfig;
+      
+      if (isStdioConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPStdioConfig;
+      } else if (isWebSocketConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPWebSocketConfig;
+      } else if (isSSEConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPSSEConfig;
+      } else if (isStreamableConfig(localConfig)) {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        } as MCPStreamableConfig;
+      } else {
+        updatedConfig = {
+          ...localConfig,
+          env: mergedEnv
+        };
+      }
+      
+      setLocalConfig(updatedConfig);
     }
   } catch (error) {
     console.error('Error parsing .env.example file:', error);
@@ -498,6 +583,7 @@ export const handleBuild = async (
 export const handleRun = async (
   localConfig: MCPServerConfig,
   websocketUrl: string,
+  serverUrl: string,
   setIsRunning: (isRunning: boolean) => void,
   setConsoleTitle: (title: string) => void,
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
@@ -521,11 +607,19 @@ export const handleRun = async (
     return;
   }
   
-  // For websocket transport, validate the websocket URL
+  // Validate URLs based on transport type
   if (localConfig.transport === 'websocket' && !websocketUrl) {
     setMessage({
       type: 'error',
       text: 'Please enter a valid WebSocket URL'
+    });
+    return;
+  }
+  
+  if ((localConfig.transport === 'sse' || localConfig.transport === 'streamable') && !serverUrl) {
+    setMessage({
+      type: 'error',
+      text: 'Please enter a valid Server URL'
     });
     return;
   }
@@ -553,7 +647,7 @@ export const handleRun = async (
         savePath: serverPath,
         runCommand: isStdioConfig(localConfig) ? localConfig.command : '',
         args: isStdioConfig(localConfig) ? localConfig.args || [] : [],
-        env: isStdioConfig(localConfig) ? localConfig.env || [] : []
+        env: isStdioConfig(localConfig) ? localConfig.env || {} : {}
       }),
     });
     

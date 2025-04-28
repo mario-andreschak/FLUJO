@@ -1,7 +1,7 @@
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -28,7 +28,32 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
         _installCommand: ''
       };
       
-      if (transport === 'websocket') {
+      if (transport === 'streamable') {
+        // Create streamable config with defaults
+        return {
+          ...defaults,
+          ...serverConfig,
+          name, // Ensure name is set correctly
+          authProvider: serverConfig.authProvider || '',
+          requestInit: serverConfig.requestInit || '',
+          reconnectionOptions: serverConfig.reconnectionOptions || '',
+          sessionId: serverConfig.sessionId || ''
+        } as MCPStreamableConfig;
+
+
+      } else if (transport === 'sse') {
+        // Create sse config with defaults
+        return {
+          ...defaults,
+          ...serverConfig,
+          name, // Ensure name is set correctly
+          authProvider: serverConfig.authProvider || '',
+          eventSourceInit: serverConfig.eventSourceInit || '',
+          requestInit: serverConfig.requestInit || ''
+        } as MCPSSEConfig;
+
+
+      } else if (transport === 'websocket') {
         // Create WebSocket config with defaults
         return {
           ...defaults,
@@ -36,6 +61,8 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           name, // Ensure name is set correctly
           websocketUrl: serverConfig.websocketUrl || ''
         } as MCPWebSocketConfig;
+
+
       } else {
         // Create Stdio config with defaults
         return {

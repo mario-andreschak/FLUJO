@@ -1,6 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StdioClientTransport, StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
+import { StreamableHTTPClientTransportOptions, StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransportOptions, SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -51,17 +53,41 @@ export function createNewClient(config: MCPServerConfig): Client {
 /**
  * Create a transport for the MCP client
  */
-export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport {
+export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
   log.debug('Entering createTransport method');
-  if (config.transport === 'websocket') {
+
+
+  if (config.transport === 'streamable') {
+    log.info(`Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`);
+    const transportoptions: StreamableHTTPClientTransportOptions = {
+      ...config
+    }
+    return new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions );
+
+
+  } else if  (config.transport === 'sse') {
+    log.info(`Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`);
+    const transportoptions: SSEClientTransportOptions = {
+      ...config
+    }
+    return new SSEClientTransport(new URL(config.serverUrl), transportoptions );
+
+
+  } else if (config.transport === 'websocket') {
     log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
     return new WebSocketClientTransport(new URL(config.websocketUrl));
+
+
   } else if (config.transport === 'docker') {
     log.info(`Creating Docker transport for server ${config.name}`);
     return createDockerTransport(config);
+
+
+  } else {
+    return createStdioTransport(config);
+
   }
 
-  return createStdioTransport(config);
 }
 
 /**
@@ -453,14 +479,14 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   }
   
   log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
-  
-  const transport = new StdioClientTransport({
-    command: command,
-    args: args,
-    env: transformedEnv,
-    cwd: cwd, // Set working directory to the server's directory
-    stderr: 'pipe', // Pipe stderr so we can capture it
-  });
+  const transportoptions : StdioServerParameters = {
+    command : command, 
+    args : args,
+    env : transformedEnv,
+    cwd : cwd, 
+    stderr : 'pipe'};
+
+  const transport = new StdioClientTransport(transportoptions);
 
   // Check if stderr is available
   if (transport.stderr) {

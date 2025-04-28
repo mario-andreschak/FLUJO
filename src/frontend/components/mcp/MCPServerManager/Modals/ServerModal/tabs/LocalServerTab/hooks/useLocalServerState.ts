@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPSSEConfig, MCPStreamableConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 
 // Type guards
@@ -11,6 +11,14 @@ export const isStdioConfig = (config: MCPServerConfig): config is MCPStdioConfig
 
 export const isWebSocketConfig = (config: MCPServerConfig): config is MCPWebSocketConfig => {
   return config.transport === 'websocket';
+};
+
+export const isSSEConfig = (config: MCPServerConfig): config is MCPSSEConfig => {
+  return config.transport === 'sse';
+};
+
+export const isStreamableConfig = (config: MCPServerConfig): config is MCPStreamableConfig => {
+  return config.transport === 'streamable';
 };
 
 interface UseLocalServerStateProps {
@@ -40,8 +48,9 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
     _installCommand: ''
   } as MCPStdioConfig);
   
-  // State for websocket URL (only used when transport is 'websocket')
+  // State for URLs
   const [websocketUrl, setWebsocketUrl] = useState<string>('');
+  const [serverUrl, setServerUrl] = useState<string>('');
   
   const [buildCommand, setBuildCommand] = useState<string>('');
   const [installCommand, setInstallCommand] = useState<string>('');
@@ -70,7 +79,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
   };
 
   // Handle transport type change
-  const handleTransportChange = (transport: 'stdio' | 'websocket') => {
+  const handleTransportChange = (transport: 'stdio' | 'websocket' | 'sse' | 'streamable') => {
     if (transport === 'websocket') {
       // Convert to websocket config
       setLocalConfig(prev => ({
@@ -84,6 +93,32 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         transport: 'websocket',
         websocketUrl: websocketUrl
       } as MCPWebSocketConfig));
+    } else if (transport === 'sse') {
+      // Convert to SSE config
+      setLocalConfig(prev => ({
+        name: prev.name,
+        disabled: prev.disabled,
+        autoApprove: prev.autoApprove,
+        rootPath: prev.rootPath,
+        env: prev.env,
+        _buildCommand: prev._buildCommand,
+        _installCommand: prev._installCommand,
+        transport: 'sse',
+        serverUrl: serverUrl
+      } as MCPSSEConfig));
+    } else if (transport === 'streamable') {
+      // Convert to Streamable config
+      setLocalConfig(prev => ({
+        name: prev.name,
+        disabled: prev.disabled,
+        autoApprove: prev.autoApprove,
+        rootPath: prev.rootPath,
+        env: prev.env,
+        _buildCommand: prev._buildCommand,
+        _installCommand: prev._installCommand,
+        transport: 'streamable',
+        serverUrl: serverUrl
+      } as MCPStreamableConfig));
     } else {
       // Convert to stdio config
       setLocalConfig(prev => ({
@@ -196,11 +231,16 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         setBuildCommand(initialConfig._buildCommand || '');
         setInstallCommand(initialConfig._installCommand || '');
         
-        // Set websocketUrl if the transport is 'websocket'
+        // Set URLs based on transport type
         if (initialConfig.transport === 'websocket') {
           setWebsocketUrl((initialConfig as MCPWebSocketConfig).websocketUrl || '');
+          setServerUrl('');
+        } else if (initialConfig.transport === 'sse' || initialConfig.transport === 'streamable') {
+          setServerUrl((initialConfig as MCPSSEConfig | MCPStreamableConfig).serverUrl || '');
+          setWebsocketUrl('');
         } else {
           setWebsocketUrl('');
+          setServerUrl('');
         }
       } else {
         // Reset to default values if no initialConfig
@@ -236,6 +276,8 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
     setLocalConfig,
     websocketUrl,
     setWebsocketUrl,
+    serverUrl,
+    setServerUrl,
     buildCommand,
     setBuildCommand,
     installCommand,

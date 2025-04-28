@@ -48,6 +48,8 @@ const LocalServerTab: React.FC<TabProps> = ({
     setLocalConfig,
     websocketUrl,
     setWebsocketUrl,
+    serverUrl,
+    setServerUrl,
     buildCommand,
     setBuildCommand,
     installCommand,
@@ -116,6 +118,7 @@ const LocalServerTab: React.FC<TabProps> = ({
       e,
       localConfig,
       websocketUrl,
+      serverUrl,
       buildCommand,
       installCommand,
       setMessage,
@@ -207,6 +210,7 @@ const LocalServerTab: React.FC<TabProps> = ({
     await handleRun(
       localConfig,
       websocketUrl,
+      serverUrl,
       setIsRunning,
       setConsoleTitle,
       setConsoleOutput,
@@ -475,10 +479,12 @@ const LocalServerTab: React.FC<TabProps> = ({
                         });
                       }
                     }}
-                    transport={localConfig.transport as 'stdio' | 'websocket'}
+                    transport={localConfig.transport as 'stdio' | 'websocket' | 'sse' | 'streamable'}
                     setTransport={handleTransportChange}
                     websocketUrl={websocketUrl}
                     setWebsocketUrl={setWebsocketUrl}
+                    serverUrl={serverUrl}
+                    setServerUrl={setServerUrl}
                     onRun={onRun}
                     isRunning={isRunning}
                     runCompleted={runCompleted}

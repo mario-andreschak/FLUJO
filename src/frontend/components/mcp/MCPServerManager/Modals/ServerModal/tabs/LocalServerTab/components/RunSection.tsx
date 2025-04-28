@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 import RunTools from '../RunTools';
 import ArgumentsManager from '../ArgumentsManager';
@@ -11,15 +11,17 @@ interface RunSectionProps {
   localConfig: MCPServerConfig;
   command: string;
   setCommand: (command: string) => void;
-  transport: 'stdio' | 'websocket';
-  setTransport: (transport: 'stdio' | 'websocket') => void;
+  transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
+  setTransport: (transport: 'stdio' | 'websocket' | 'sse' | 'streamable') => void;
   websocketUrl: string;
   setWebsocketUrl: (url: string) => void;
+  serverUrl: string;
+  setServerUrl: (url: string) => void;
   onRun: () => Promise<void>;
   isRunning: boolean;
   runCompleted: boolean;
-  env: Record<string, string>;
-  onEnvChange: (env: Record<string, string>) => void;
+  env: Record<string, EnvVarValue>;
+  onEnvChange: (env: Record<string, EnvVarValue>) => void;
   serverName: string;
   consoleOutput: string;
   message: MessageState | null;
@@ -43,6 +45,8 @@ const RunSection: React.FC<RunSectionProps> = ({
   setTransport,
   websocketUrl,
   setWebsocketUrl,
+  serverUrl,
+  setServerUrl,
   onRun,
   isRunning,
   runCompleted,
@@ -96,6 +100,8 @@ const RunSection: React.FC<RunSectionProps> = ({
             setTransport={setTransport}
             websocketUrl={websocketUrl}
             setWebsocketUrl={setWebsocketUrl}
+            serverUrl={serverUrl}
+            setServerUrl={setServerUrl}
             onRun={onRun}
             isRunning={isRunning}
             runCompleted={runCompleted}

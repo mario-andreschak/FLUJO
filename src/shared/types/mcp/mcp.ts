@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
@@ -27,6 +29,16 @@ export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
   transport: 'stdio';
 };
 
+export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
+  transport: 'sse';
+  serverUrl: string
+};
+
+export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
+  transport: 'streamable';
+  serverUrl: string
+};
+
 export type MCPWebSocketConfig = MCPManagerConfig & {
   transport: 'websocket';
   websocketUrl: string;
@@ -43,7 +55,7 @@ export type MCPDockerConfig = MCPManagerConfig & {
   extraArgs?: string[];   // Additional docker run arguments
 };
 
-export type MCPServerConfig = MCPStdioConfig | MCPWebSocketConfig | MCPDockerConfig;
+export type MCPServerConfig = MCPStdioConfig | MCPWebSocketConfig | MCPDockerConfig | MCPSSEConfig | MCPStreamableConfig;
 
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
