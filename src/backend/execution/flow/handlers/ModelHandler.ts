@@ -70,13 +70,15 @@ export class ModelHandler {
     const content = modelResponse.content || '';
     const finalMessages: FlujoChatMessage[] = [...messages]; // Start with input messages (already FlujoChatMessage)
 
-    // Check if content already starts with a heading pattern like "## ... says:"
-    const hasHeadingPattern = /^## .+says:\s*\n\n/i.test(content);
+    // // Check if content already starts with a heading pattern like "## ... says:"
+    // const hasHeadingPattern = /^## .+says:\s*\n\n/i.test(content);
     
-    // Format content with prefix only if it doesn't already have a heading pattern
-    const prefixedContent = modelDisplayName && !hasHeadingPattern
-      ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${content}`
-      : content;
+    // // Format content with prefix only if it doesn't already have a heading pattern
+    // const prefixedContent = modelDisplayName && !hasHeadingPattern
+    //   ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${content}`
+    //   : content;
+    
+    const prefixedContent = content;
 
     // Create the assistant message with timestamp and ID
     const assistantMessage: FlujoChatMessage = {
