@@ -98,17 +98,38 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
     await ensureStorageDir();
     const filePath = getFilePath(key);
     const content = await fs.readFile(filePath, 'utf-8');
-    const parsedContent = JSON.parse(content);
-    log.verbose(`Successfully loaded item from: ${filePath}`); // Added verbose log
-    return parsedContent;
-  } catch (error) {
-    // Log only if the error is NOT file not found (ENOENT)
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        log.warn(`Error loading item with key "${key}" from ${getFilePath(key)}, returning default:`, error);
-    } else {
-        log.verbose(`Item with key "${key}" not found at ${getFilePath(key)}, returning default.`); // Verbose for non-existent file
+    
+    try {
+      const parsedContent = JSON.parse(content);
+      log.verbose(`Successfully loaded item from: ${filePath}`);
+      return parsedContent;
+    } catch (error) {
+      // If JSON parsing fails, this is a critical error - don't return default
+      const parseError = error as Error;
+      log.error(`CRITICAL: Failed to parse JSON from ${filePath}:`, parseError);
+      
+      // Create a backup of the corrupted file before throwing
+      const backupPath = `${filePath}.corrupted.${Date.now()}.bak`;
+      try {
+        await fs.writeFile(backupPath, content);
+        log.info(`Created backup of corrupted file at: ${backupPath}`);
+      } catch (backupError) {
+        log.error(`Failed to create backup of corrupted file:`, backupError);
+      }
+      
+      // Throw a more descriptive error
+      throw new Error(`Failed to parse JSON from ${filePath}. A backup has been created at ${backupPath}. Original error: ${parseError.message}`);
     }
-    return defaultValue;
+  } catch (error) {
+    // Only return default if the file doesn't exist (ENOENT)
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      log.verbose(`Item with key "${key}" not found at ${getFilePath(key)}, returning default.`);
+      return defaultValue;
+    }
+    
+    // For all other errors (file access issues, parsing errors, etc.), log and throw
+    log.error(`CRITICAL: Error loading item with key "${key}" from ${getFilePath(key)}:`, error);
+    throw error; // Re-throw the error instead of returning default
   }
 }
 
