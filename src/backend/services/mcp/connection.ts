@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, execSync, spawn } from 'child_process';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
@@ -384,6 +384,53 @@ function startDockerContainer(config: import('@/shared/types/mcp/mcp').MCPDocker
 }
 
 /**
+ * Get the absolute path to the Node.js executable from NVM
+ * This helps ensure child processes use the correct Node.js version
+ */
+function getAbsoluteNodePath(nodeCommand: string = 'node'): string {
+  if (nodeCommand !== 'node') return nodeCommand;
+  
+  try {
+    // First try using the current process's executable path
+    if (process.execPath && process.execPath !== 'node') {
+      log.debug(`Using current process Node.js path: ${process.execPath}`);
+      return process.execPath;
+    }
+    
+    // Try using which command to get the full path
+    const nodePath = execSync('which node').toString().trim();
+    if (nodePath && nodePath !== 'node') {
+      log.debug(`Found Node.js path using which command: ${nodePath}`);
+      return nodePath;
+    }
+    
+    // Try common NVM paths as fallback
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+    if (homeDir) {
+      // Try current version symlink
+      const nvmCurrentPath = `${homeDir}/.nvm/current/bin/node`;
+      if (fs.existsSync(nvmCurrentPath)) {
+        log.debug(`Using NVM current version path: ${nvmCurrentPath}`);
+        return nvmCurrentPath;
+      }
+      
+      // Try NVM versions directory with current Node version
+      const nodeVersion = process.version; // e.g., "v16.14.0"
+      const nvmVersionPath = `${homeDir}/.nvm/versions/node/${nodeVersion}/bin/node`;
+      if (fs.existsSync(nvmVersionPath)) {
+        log.debug(`Using NVM version-specific path: ${nvmVersionPath}`);
+        return nvmVersionPath;
+      }
+    }
+    log.debug('Could not determine absolute Node.js path, using default command');
+  } catch (error) {
+    log.debug('Error determining Node.js path:', error);
+  }
+  
+  return nodeCommand;
+}
+
+/**
  * Create a stdio transport for the MCP client
  */
 export function createStdioTransport(config: MCPServerConfig): StdioClientTransport {
@@ -443,6 +490,11 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
       args = ['/c', command, ...args];
       command = 'cmd.exe';
     }
+  }
+
+  if (command === 'node') {
+    command = getAbsoluteNodePath(command);
+    log.debug(`Absolute path to Node.js: ${command}`);
   }
 
   log.debug(`Final command: ${command}`);
