@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Box, Button, Alert } from '@mui/material';
 import { v4 as uuidv4 } from 'uuid';
@@ -9,7 +9,8 @@ import ModelList from '@/frontend/components/models/list/ModelList';
 import ModelModal from '@/frontend/components/models/modal';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
-import { modelService, ModelResult } from '@/frontend/services/model';
+import { getModelService, ModelResult } from '@/frontend/services/model';
+import Spinner from '@/frontend/components/shared/Spinner';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -23,6 +24,38 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const [models, setModels] = useState(initialModels);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [serviceReady, setServiceReady] = useState(false);
+
+  // Ensure service is ready before using it
+  useEffect(() => {
+    try {
+      const service = getModelService();
+      if (service && typeof service.loadModels === 'function') {
+        setServiceReady(true);
+        log.debug('Model service is ready');
+      }
+    } catch (error) {
+      log.warn('Model service not ready, retrying...', error);
+      const timer = setTimeout(() => {
+        try {
+          const service = getModelService();
+          if (service && typeof service.loadModels === 'function') {
+            setServiceReady(true);
+            log.debug('Model service is now ready');
+          }
+        } catch (retryError) {
+          log.warn('Model service still not ready', retryError);
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  // Show loading spinner if service is not ready
+  if (!serviceReady) {
+    log.debug('Waiting for model service to be ready...');
+    return <Spinner />;
+  }
 
   // Get modal state from URL
   const modelId = searchParams.get('edit');
@@ -35,10 +68,11 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     setIsLoading(true);
     try {
       log.debug('Updating existing model');
-      const result = await modelService.updateModel(model);
+      const service = getModelService();
+      const result = await service.updateModel(model);
       if (result.success) {
         // Refresh models list
-        const updatedModels = await modelService.loadModels();
+        const updatedModels = await service.loadModels();
         setModels(updatedModels);
 
         // Close modal by removing query param
@@ -73,14 +107,15 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
         id: uuidv4(),
         name: '',
         displayName: '',
-        encryptedApiKey: '',
+        ApiKey: '',
         provider: 'openai'
       };
       
-      const result = await modelService.addModel(preliminaryModel);
+      const service = getModelService();
+      const result = await service.addModel(preliminaryModel);
       if (result.success && result.model) {
         // Update models list
-        const updatedModels = await modelService.loadModels();
+        const updatedModels = await service.loadModels();
         setModels(updatedModels);
 
         // Open modal with the new model's ID
@@ -104,10 +139,11 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     log.info('Deleting model', { modelId });
     setIsLoading(true);
     try {
-      await modelService.deleteModel(modelId);
+      const service = getModelService();
+      await service.deleteModel(modelId);
       
       // Refresh models list
-      const updatedModels = await modelService.loadModels();
+      const updatedModels = await service.loadModels();
       setModels(updatedModels);
       
     } catch (error) {
@@ -123,9 +159,10 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     if (modelId && currentModel && !currentModel.name) {
       log.info('Cleaning up unsaved preliminary model', { modelId });
       try {
-        await modelService.deleteModel(modelId);
+        const service = getModelService();
+        await service.deleteModel(modelId);
         // Refresh models list
-        const updatedModels = await modelService.loadModels();
+        const updatedModels = await service.loadModels();
         setModels(updatedModels);
       } catch (error) {
         log.warn('Failed to cleanup preliminary model', JSON.stringify(error));

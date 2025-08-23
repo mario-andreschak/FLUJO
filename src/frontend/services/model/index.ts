@@ -387,4 +387,24 @@ class ModelService {
   }
 }
 
-export const modelService = new ModelService();
+// Lazy initialization to prevent SSR issues
+let _modelService: ModelService | null = null;
+
+export const getModelService = (): ModelService => {
+  if (typeof window === 'undefined') {
+    throw new Error('ModelService can only be used in browser environment');
+  }
+  
+  if (!_modelService) {
+    _modelService = new ModelService();
+  }
+  
+  return _modelService;
+};
+
+// For backward compatibility, export a getter that throws helpful error
+export const modelService = new Proxy({} as ModelService, {
+  get(target, prop) {
+    throw new Error('Use getModelService() instead of direct modelService access to avoid SSR issues');
+  }
+});
