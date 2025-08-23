@@ -1,9 +1,14 @@
 import { Suspense } from 'react';
+import dynamicImport from 'next/dynamic';
 import { Box, Typography } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import * as serverAdapter from '@/app/api/model/backend-model-adapter';
-import ModelClient from './ModelClient';
 import Spinner from '@/frontend/components/shared/Spinner';
+
+// Use dynamic import to prevent SSR issues with client-side code
+const ModelClient = dynamicImport(() => import('./ModelClient'), {
+  loading: () => <Spinner />
+});
 
 const log = createLogger('app/models/page');
 
