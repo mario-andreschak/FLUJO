@@ -18,7 +18,7 @@ if (typeof global.__mcp_recovery === 'undefined') {
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
 import {
@@ -50,6 +50,8 @@ export class MCPService {
   private stderrLogs: Map<string, string[]> = new Map(); // Store stderr logs for each server
   private isBackendStartingUp: boolean = true; // Flag to track backend startup state - true by default
   private recover_attempted: boolean = false; // Flag to track if recovery has been attempted
+  private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
+  private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
   
   /**
    * Constructor - attempt to recover clients from global recovery map
@@ -100,6 +102,90 @@ export class MCPService {
       global.__mcp_recovery.delete(serverName);
       log.debug(`Removed client for server ${serverName} from global recovery map`);
     }
+  }
+
+  /**
+   * Clear retry timer for a server
+   */
+  private clearRetryTimer(serverName: string): void {
+    const timer = this.connectionRetryTimers.get(serverName);
+    if (timer) {
+      clearTimeout(timer);
+      this.connectionRetryTimers.delete(serverName);
+      log.debug(`Cleared retry timer for server ${serverName}`);
+    }
+  }
+
+  /**
+   * Schedule connection retry with exponential backoff
+   */
+  private scheduleConnectionRetry(serverName: string, config: MCPServerConfig): void {
+    // Clear any existing timer
+    this.clearRetryTimer(serverName);
+    
+    // Get current retry attempt count
+    const currentAttempts = this.connectionRetryAttempts.get(serverName) || 0;
+    const maxAttempts = 5; // Maximum retry attempts
+    
+    if (currentAttempts >= maxAttempts) {
+      log.warn(`Maximum retry attempts (${maxAttempts}) reached for server ${serverName}, stopping retries`);
+      this.connectionRetryAttempts.delete(serverName);
+      return;
+    }
+    
+    // Calculate delay with exponential backoff: 2^attempt * 5000ms, max 5 minutes
+    const baseDelay = 5000; // 5 seconds
+    const maxDelay = 300000; // 5 minutes
+    const delay = Math.min(Math.pow(2, currentAttempts) * baseDelay, maxDelay);
+    
+    log.info(`Scheduling connection retry for server ${serverName} in ${delay}ms (attempt ${currentAttempts + 1}/${maxAttempts})`);
+    
+    const timer = setTimeout(async () => {
+      log.info(`Attempting to reconnect server ${serverName} (attempt ${currentAttempts + 1}/${maxAttempts})`);
+      
+      // Check current server configuration before attempting retry
+      const currentConfig = await this.getServerConfig(serverName);
+      if (!currentConfig) {
+        log.info(`Server ${serverName} configuration not found, stopping retry attempts`);
+        this.connectionRetryAttempts.delete(serverName);
+        return;
+      }
+      
+      // Check if server is now disabled
+      if (currentConfig.disabled) {
+        log.info(`Server ${serverName} is now disabled, stopping retry attempts`);
+        this.connectionRetryAttempts.delete(serverName);
+        return;
+      }
+      
+      // Increment retry count
+      this.connectionRetryAttempts.set(serverName, currentAttempts + 1);
+      
+      try {
+        const result = await this.connectServer(currentConfig);
+        if (result.success) {
+          log.info(`Successfully reconnected server ${serverName} after ${currentAttempts + 1} attempts`);
+          // Reset retry count on successful connection
+          this.connectionRetryAttempts.delete(serverName);
+        } else {
+          log.warn(`Failed to reconnect server ${serverName}: ${result.error}`);
+          // Don't retry if authentication is required
+          if (result.requiresAuthentication) {
+            log.info(`Server ${serverName} requires authentication, stopping retry attempts`);
+            this.connectionRetryAttempts.delete(serverName);
+            return;
+          }
+          // Schedule another retry if we haven't reached max attempts
+          this.scheduleConnectionRetry(serverName, currentConfig);
+        }
+      } catch (error) {
+        log.error(`Error during retry connection for server ${serverName}:`, error);
+        // Schedule another retry if we haven't reached max attempts
+        this.scheduleConnectionRetry(serverName, currentConfig);
+      }
+    }, delay);
+    
+    this.connectionRetryTimers.set(serverName, timer);
   }
   
   /**
@@ -257,14 +343,92 @@ export class MCPService {
 
       transport.onclose = () => {
         log.warn(`connectServer: Connection closed for server ${config.name}`);
-        this.clients.delete(config.name);
         
-        // Remove from global recovery map when connection is closed
+        // Check if server is still enabled before processing
+        this.getServerConfig(config.name).then(currentConfig => {
+          if (!currentConfig || currentConfig.disabled) {
+            log.info(`Server ${config.name} is now disabled, skipping reconnection logic`);
+            return;
+          }
+          
+          // Only schedule reconnection if server is still enabled
+          log.info(`Connection closed for enabled server ${config.name}, scheduling reconnection`);
+          this.scheduleConnectionRetry(config.name, currentConfig);
+        }).catch(error => {
+          log.warn(`Error checking server config for ${config.name} during onclose:`, error);
+        });
+        
+        // Always clean up client references
+        this.clients.delete(config.name);
         this.removeFromGlobalRecovery(config.name);
       };
 
       transport.onerror = (error) => {
-        log.error(`connectServer: Transport error for server ${config.name}:`, error);
+        // Enhanced error logging to capture more details about transport errors
+        log.error(`connectServer: Transport error for server ${config.name}:`);
+        
+        // Log error details in multiple ways to capture as much information as possible
+        if (error instanceof Error) {
+          log.error(`Error name: ${error.name}`);
+          log.error(`Error message: ${error.message}`);
+          log.error(`Error stack: ${error.stack}`);
+        } else if (error && typeof error === 'object') {
+          // Try to log individual properties of the error object
+          log.error(`Error type: ${typeof error}`);
+          log.error(`Error constructor: ${(error as any).constructor?.name || 'Unknown'}`);
+          
+          // Log all enumerable properties
+          const errorProps = Object.getOwnPropertyNames(error);
+          if (errorProps.length > 0) {
+            log.error(`Error properties: ${errorProps.join(', ')}`);
+            errorProps.forEach(prop => {
+              try {
+                const value = (error as any)[prop];
+                log.error(`  ${prop}: ${typeof value === 'function' ? '[Function]' : JSON.stringify(value)}`);
+              } catch (propError) {
+                log.error(`  ${prop}: [Unable to serialize: ${propError}]`);
+              }
+            });
+          } else {
+            log.error(`Error object has no enumerable properties`);
+          }
+          
+          // Try JSON.stringify as fallback
+          try {
+            const jsonError = JSON.stringify(error);
+            log.error(`JSON stringified error: ${jsonError}`);
+          } catch (jsonError) {
+            log.error(`Cannot JSON stringify error: ${jsonError}`);
+          }
+        } else {
+          log.error(`Error value: ${String(error)} (type: ${typeof error})`);
+        }
+        
+        // Store more detailed error information
+        const errorLogs = this.stderrLogs.get(config.name) || [];
+        const errorMessage = error instanceof Error ? error.message : 
+                           (error && typeof error === 'object') ? JSON.stringify(error) : 
+                           String(error);
+        errorLogs.push(`Transport error: ${errorMessage}`);
+        this.stderrLogs.set(config.name, errorLogs);
+        
+        // Always clean up client references first
+        this.clients.delete(config.name);
+        this.removeFromGlobalRecovery(config.name);
+        
+        // Check if server is still enabled before scheduling reconnection
+        this.getServerConfig(config.name).then(currentConfig => {
+          if (!currentConfig || currentConfig.disabled) {
+            log.info(`Server ${config.name} is now disabled, skipping reconnection after transport error`);
+            return;
+          }
+          
+          // Only schedule reconnection if server is still enabled
+          log.info(`Transport error for enabled server ${config.name}, scheduling reconnection`);
+          this.scheduleConnectionRetry(config.name, currentConfig);
+        }).catch(error => {
+          log.warn(`Error checking server config for ${config.name} during onerror:`, error);
+        });
       };
 
       // Store the new client
@@ -277,9 +441,42 @@ export class MCPService {
       return { success: true };
     } catch (error) {
       log.error(`connectServer: Failed to connect to server ${config.name}:`, error);
+      
+      // Check if this is an OAuth authentication error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = error instanceof Error ? error.name : '';
+      
+      if (errorMessage.includes('OAuth authentication required') || errorName === 'OAuthAuthenticationRequired') {
+        log.info(`OAuth authentication required for server ${config.name}`);
+        
+        // Store the authorization URL if available
+        if (config.transport === 'streamable') {
+          const streamableConfig = config as MCPStreamableConfig;
+          if (streamableConfig.authorizationUrl) {
+            log.info(`Authorization URL available for ${config.name}: ${streamableConfig.authorizationUrl}`);
+          }
+        }
+        
+        return { 
+          success: false, 
+          error: errorMessage,
+          requiresAuthentication: true 
+        };
+      }
+      
+      // Check for other OAuth-related errors
+      if (errorMessage.includes('UnauthorizedError') || errorMessage.includes('invalid_token') || errorMessage.includes('token_expired')) {
+        log.info(`OAuth token error for server ${config.name}: ${errorMessage}`);
+        return { 
+          success: false, 
+          error: 'OAuth authentication failed or tokens have expired. Please re-authenticate.',
+          requiresAuthentication: true 
+        };
+      }
+      
       const stderrLogs = this.stderrLogs.get(config.name) || [];
-      const errorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
-      return { success: false, error: errorMessage };
+      const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
+      return { success: false, error: enhancedErrorMessage };
     }
   }
 
@@ -288,6 +485,10 @@ export class MCPService {
    */
   async disconnectServer(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`disconnectServer: Entering method for server ${serverName}`);
+    
+    // Clear any retry timers for this server
+    this.clearRetryTimer(serverName);
+    this.connectionRetryAttempts.delete(serverName);
     
     const client = this.clients.get(serverName);
     if (!client) {
@@ -482,8 +683,44 @@ export class MCPService {
       // If the server should be enabled but isn't connected, connect it
       log.info(`handleConnectionStateChange: Connecting previously disabled server ${serverName}`);
       await this.connectServer(config);
+    } else if (!shouldBeConnected) {
+      // If server should be disabled, also clear any pending retry timers
+      log.info(`handleConnectionStateChange: Clearing retry timers for disabled server ${serverName}`);
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
     }
     // No reconnection logic for already connected servers
+  }
+
+  /**
+   * Clear all retry timers for disabled servers
+   */
+  private async clearRetryTimersForDisabledServers(): Promise<void> {
+    log.debug('clearRetryTimersForDisabledServers: Checking for disabled servers with active retry timers');
+    
+    try {
+      // Load current configs from storage
+      const configs = await this.loadServerConfigs();
+      
+      if (!Array.isArray(configs)) {
+        log.warn('clearRetryTimersForDisabledServers: Failed to load server configs');
+        return;
+      }
+      
+      // Find all disabled servers
+      const disabledServers = configs.filter(config => config.disabled);
+      
+      // Clear retry timers for disabled servers
+      for (const config of disabledServers) {
+        if (this.connectionRetryTimers.has(config.name)) {
+          log.info(`clearRetryTimersForDisabledServers: Clearing retry timer for disabled server ${config.name}`);
+          this.clearRetryTimer(config.name);
+          this.connectionRetryAttempts.delete(config.name);
+        }
+      }
+    } catch (error) {
+      log.error('clearRetryTimersForDisabledServers: Error clearing retry timers:', error);
+    }
   }
 
   /**
@@ -534,15 +771,6 @@ export class MCPService {
    * Get the connection status of an MCP server
    */
   async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string; containerName?: string }> {
-    // // If backend is starting up, return a special status
-    // if (this.isBackendStartingUp) {
-    //   log.debug(`getServerStatus: Backend is starting up, returning 'starting' status for ${serverName}`);
-    //   return { 
-    //     status: 'initialization', 
-    //     message: 'Backend is currently initializing. Please wait...' 
-    //   };
-    // }
-
     // force recovery
     this.getClient(serverName);
 
@@ -559,6 +787,37 @@ export class MCPService {
     if (config.disabled) {
       log.debug(`getServerStatus: Server ${serverName} is disabled`);
       return { status: 'disconnected' };
+    }
+
+    // Check if this is a streamable server that requires OAuth but has no tokens
+    if (config.transport === 'streamable') {
+      const streamableConfig = config as MCPStreamableConfig;
+      if (streamableConfig.oauthScopes && streamableConfig.oauthScopes.length > 0) {
+        // This server requires OAuth authentication
+        if (!streamableConfig.oauthTokens || !streamableConfig.oauthTokens.access_token) {
+          log.info(`getServerStatus: Server ${serverName} requires OAuth authentication but has no valid tokens`);
+          return {
+            status: 'requires_authentication',
+            message: 'OAuth authentication required. Click the authenticate button to complete the OAuth flow.'
+          };
+        }
+        
+        // Check if tokens are expired
+        if (streamableConfig.oauthTokens.expires_in && (streamableConfig.oauthTokens as any).issued_at) {
+          const issuedAt = (streamableConfig.oauthTokens as any).issued_at;
+          const expiresIn = streamableConfig.oauthTokens.expires_in;
+          const currentTime = Math.floor(Date.now() / 1000);
+          const expirationTime = issuedAt + expiresIn;
+          
+          if (currentTime >= expirationTime) {
+            log.info(`getServerStatus: OAuth tokens for ${serverName} have expired`);
+            return {
+              status: 'requires_authentication',
+              message: 'OAuth tokens have expired. Please re-authenticate.'
+            };
+          }
+        }
+      }
     }
 
     // Get any stderr logs for this server
@@ -588,6 +847,16 @@ export class MCPService {
         containerName
       };
     } else {
+      // Check if stderr contains OAuth authentication errors
+      if (stderrOutput && (stderrOutput.includes('OAuth authentication required') || stderrOutput.includes('invalid_token'))) {
+        log.info(`getServerStatus: OAuth authentication error detected for ${serverName}`);
+        return {
+          status: 'requires_authentication',
+          message: 'OAuth authentication required. Please complete the OAuth flow.',
+          stderrOutput: stderrOutput
+        };
+      }
+      
       // If we have stderr output, use it as the primary error message
       if (stderrOutput) {
         log.info(`getServerStatus: Using stderr output as error message for ${serverName}`);
@@ -738,6 +1007,9 @@ export class MCPService {
     log.info('Starting all enabled servers');
     
     try {
+      // First, clear any retry timers for disabled servers
+      await this.clearRetryTimersForDisabledServers();
+      
       // Load configs directly from storage
       const configs = await this.loadServerConfigs();
       

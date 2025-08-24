@@ -7,10 +7,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { ChildProcess, spawn } from 'child_process';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
+import { createOAuthClientProvider } from './oauth';
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -56,38 +57,61 @@ export function createNewClient(config: MCPServerConfig): Client {
 export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
   log.debug('Entering createTransport method');
 
-
   if (config.transport === 'streamable') {
     log.info(`Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`);
+    const streamableConfig = config as MCPStreamableConfig;
+    
+    // Create transport options
     const transportoptions: StreamableHTTPClientTransportOptions = {
-      ...config
+      requestInit: streamableConfig.requestInit,
+      reconnectionOptions: streamableConfig.reconnectionOptions,
+      sessionId: streamableConfig.sessionId,
+    };
+    
+    // Add OAuth authentication if configured
+    if (streamableConfig.oauthClientId || streamableConfig.oauthClientInformation) {
+      log.info(`Setting up OAuth authentication for ${config.name}`);
+      const oauthProvider = createOAuthClientProvider(streamableConfig);
+      
+      // Always set the OAuth provider - let the transport handle the OAuth flow
+      transportoptions.authProvider = oauthProvider;
+      
+      // Check if we have valid tokens for logging purposes
+      try {
+        const tokens = oauthProvider.tokens();
+        if (tokens && tokens.access_token) {
+          log.debug(`OAuth provider configured for ${config.name} with existing tokens`);
+          log.debug(`Token expires in: ${tokens.expires_in} seconds`);
+        } else {
+          log.debug(`OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`);
+        }
+      } catch (error) {
+        log.debug(`OAuth provider configured for ${config.name} - token check failed, will initiate OAuth flow if needed`);
+      }
+    } else {
+      log.debug(`No OAuth configuration found for ${config.name}`);
     }
-    return new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions );
+    
+    return new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions);
 
-
-  } else if  (config.transport === 'sse') {
+  } else if (config.transport === 'sse') {
     log.info(`Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`);
     const transportoptions: SSEClientTransportOptions = {
       ...config
     }
-    return new SSEClientTransport(new URL(config.serverUrl), transportoptions );
-
+    return new SSEClientTransport(new URL(config.serverUrl), transportoptions);
 
   } else if (config.transport === 'websocket') {
     log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
     return new WebSocketClientTransport(new URL(config.websocketUrl));
 
-
   } else if (config.transport === 'docker') {
     log.info(`Creating Docker transport for server ${config.name}`);
     return createDockerTransport(config);
 
-
   } else {
     return createStdioTransport(config);
-
   }
-
 }
 
 /**
@@ -172,9 +196,9 @@ export function createDockerTransport(config: MCPServerConfig): StdioClientTrans
     log.info(`Starting Docker container for ${dockerConfig.name} with image ${dockerConfig.image}`);
     log.debug(`Docker run command: docker ${runArgs.join(' ')}`);
     
-  // Create a copy of the current process environment
-  // Use type assertion to ensure it's treated as Record<string, string>
-  const processEnv: Record<string, string> = { ...process.env as Record<string, string> };
+    // Create a copy of the current process environment
+    // Use type assertion to ensure it's treated as Record<string, string>
+    const processEnv: Record<string, string> = { ...process.env as Record<string, string> };
     
     // Add the environment variables from the configuration to the process environment
     if (config.env) {
@@ -208,7 +232,7 @@ export function createDockerTransport(config: MCPServerConfig): StdioClientTrans
 /**
  * Generate a deterministic container name for Docker
  */
-function generateContainerName(serverName: string): string {
+export function generateContainerName(serverName: string): string {
   // Generate a short UUID (first 8 characters)
   const shortUuid = uuidv4().split('-')[0];
   // Create a deterministic name with the format flujo_servername_uuid
@@ -479,12 +503,13 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   }
   
   log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
-  const transportoptions : StdioServerParameters = {
-    command : command, 
-    args : args,
-    env : transformedEnv,
-    cwd : cwd, 
-    stderr : 'pipe'};
+  const transportoptions: StdioServerParameters = {
+    command: command, 
+    args: args,
+    env: transformedEnv,
+    cwd: cwd, 
+    stderr: 'pipe'
+  };
 
   const transport = new StdioClientTransport(transportoptions);
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import ServerCard from './ServerCard';
 import Spinner from '@/frontend/components/shared/Spinner';
-import { MCPServerConfig, MCPServerState } from '@/shared/types/';
+import { MCPServerConfig, MCPServerState, MCPStreamableConfig } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
 import { Grid, Box, Typography, Paper } from '@mui/material';
 
@@ -79,28 +79,35 @@ const ServerList: React.FC<ServerListProps> = ({
 
   return (
     <Grid container spacing={2}>
-      {servers.map((server) => (
-        <Grid item xs={12} md={6} lg={4} key={server.name}>
-          <ServerCard
-            name={server.name}
-            status={server.status}
-            path={server.rootPath}
-            enabled={!server.disabled}
-            transport={server.transport}
-            onToggle={(enabled) => onServerToggle(server.name, enabled)}
-            onRetry={() => onServerRetry(server.name)}
-            onDelete={() => onServerDelete(server.name)}
-            onClick={() => onServerSelect(server.name)}
-            onEdit={() => onServerEdit(server)}
-            error={server.error}
-            stderrOutput={server.stderrOutput}
-            containerName={server.containerName}
-            selectionMode={selectionMode}
-            selected={selectedServers.has(server.name)}
-            onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
-          />
-        </Grid>
-      ))}
+      {servers.map((server) => {
+        // Check if this is a streamable server with OAuth tokens
+        const hasOAuthTokens = server.transport === 'streamable' && 
+          (server as MCPStreamableConfig).oauthTokens !== undefined;
+        
+        return (
+          <Grid item xs={12} md={6} lg={4} key={server.name}>
+            <ServerCard
+              name={server.name}
+              status={server.status}
+              path={server.rootPath}
+              enabled={!server.disabled}
+              transport={server.transport}
+              onToggle={(enabled) => onServerToggle(server.name, enabled)}
+              onRetry={() => onServerRetry(server.name)}
+              onDelete={() => onServerDelete(server.name)}
+              onClick={() => onServerSelect(server.name)}
+              onEdit={() => onServerEdit(server)}
+              error={server.error}
+              stderrOutput={server.stderrOutput}
+              containerName={server.containerName}
+              selectionMode={selectionMode}
+              selected={selectedServers.has(server.name)}
+              onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
+              hasOAuthTokens={hasOAuthTokens}
+            />
+          </Grid>
+        );
+      })}
     </Grid>
   );
 };

@@ -237,9 +237,38 @@ export async function callTool(
   } catch (error) {
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
     let errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    let statusCode = 500;
+
+    // Check for OAuth-related errors
+    if (errorMessage.includes('401') || errorMessage.includes('Unauthorized') || 
+        errorMessage.includes('invalid_token') || errorMessage.includes('token_expired')) {
+      log.info(`OAuth authentication error detected for tool ${toolName} on server ${serverName}`);
+      return {
+        success: false,
+        error: 'OAuth authentication failed or tokens have expired. Please re-authenticate the server.',
+        statusCode: 401,
+        requiresAuthentication: true
+      };
+    }
+
+    // Check for 404 errors which might indicate OAuth issues
+    if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+      log.info(`404 error detected for tool ${toolName} on server ${serverName} - may indicate OAuth issues`);
+      statusCode = 404;
+      errorMessage = `Tool endpoint not found (404). This may indicate OAuth authentication issues or the server may not be properly configured.`;
+    }
 
     if (error instanceof McpError) {
       errorMessage = `Failed to call tool: ${errorMessage} (Code: ${error.code})`;
+      
+      // Map MCP error codes to HTTP status codes
+      if (error.code === -32601) { // Method not found
+        statusCode = 404;
+      } else if (error.code === -32602) { // Invalid params
+        statusCode = 400;
+      } else if (error.code === -32603) { // Internal error
+        statusCode = 500;
+      }
     } else {
       errorMessage = `Failed to call tool: ${errorMessage}`;
     }
@@ -247,7 +276,7 @@ export async function callTool(
     return { 
       success: false, 
       error: errorMessage,
-      statusCode: 500
+      statusCode
     };
   }
 }

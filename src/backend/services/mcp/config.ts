@@ -37,7 +37,16 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           authProvider: serverConfig.authProvider || '',
           requestInit: serverConfig.requestInit || '',
           reconnectionOptions: serverConfig.reconnectionOptions || '',
-          sessionId: serverConfig.sessionId || ''
+          sessionId: serverConfig.sessionId || '',
+          // OAuth configuration fields
+          oauthClientId: serverConfig.oauthClientId || '',
+          oauthClientSecret: serverConfig.oauthClientSecret || '',
+          oauthScopes: serverConfig.oauthScopes || ['read'],
+          // Stored OAuth data
+          oauthClientMetadata: serverConfig.oauthClientMetadata,
+          oauthClientInformation: serverConfig.oauthClientInformation,
+          oauthTokens: serverConfig.oauthTokens,
+          oauthCodeVerifier: serverConfig.oauthCodeVerifier
         } as MCPStreamableConfig;
 
 
