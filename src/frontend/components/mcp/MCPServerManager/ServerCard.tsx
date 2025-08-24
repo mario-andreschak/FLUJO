@@ -11,6 +11,9 @@ import ErrorIcon from '@mui/icons-material/Error';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import LockIcon from '@mui/icons-material/Lock';
+import LoginIcon from '@mui/icons-material/Login';
+import KeyOffIcon from '@mui/icons-material/KeyOff';
 import Spinner from '@/frontend/components/shared/Spinner';
 import TransportBadge from './TransportBadge';
 import Dialog from '@mui/material/Dialog';
@@ -35,7 +38,7 @@ import {
 
 interface ServerCardProps {
   name: string;
-  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization';
+  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
   path: string;
   enabled: boolean;
   transport: 'stdio' | 'websocket' | 'docker' | 'sse' | 'streamable';
@@ -44,12 +47,15 @@ interface ServerCardProps {
   onDelete: () => void;
   onClick: () => void;
   onEdit: () => void;
+  onAuthenticate?: () => void; // OAuth authentication handler
   error?: string; // Optional error message
   stderrOutput?: string; // Optional stderr output
   containerName?: string; // Optional Docker container name
+  authorizationUrl?: string; // OAuth authorization URL
   selected?: boolean; // For bulk selection
   onSelect?: (selected: boolean) => void; // For bulk selection
   selectionMode?: boolean; // Whether selection mode is active
+  hasOAuthTokens?: boolean; // Whether the server has OAuth tokens that can be reset
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -63,16 +69,22 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onDelete,
   onClick,
   onEdit,
+  onAuthenticate,
   error,
   stderrOutput,
   containerName,
+  authorizationUrl,
   selected = false,
   onSelect,
   selectionMode = false,
+  hasOAuthTokens = false,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastSeverity, setToastSeverity] = useState<'success' | 'error'>('success');
   const [isPolling, setIsPolling] = useState(false);
+  const [isResettingTokens, setIsResettingTokens] = useState(false);
   const muiTheme = useTheme();
   
   const statusColor = {
@@ -80,7 +92,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
     disconnected: 'text.secondary',
     error: 'error.main',
     connecting: 'info.main',
-    initialization: 'info.main', // Same color as connecting
+    initialization: 'info.main',
+    requires_authentication: 'warning.main',
   }[status];
   
   // Poll for status updates when server is connecting or initializing
@@ -141,6 +154,49 @@ const ServerCard: React.FC<ServerCardProps> = ({
     setRetryTimeoutId(timeoutId);
   };
 
+  // Handle reset OAuth tokens button click
+  const handleResetOAuthTokens = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    log.debug(`Reset OAuth tokens button clicked for server: ${name}`);
+    
+    setIsResettingTokens(true);
+    
+    try {
+      const response = await fetch('/api/oauth/reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ serverName: name }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to reset OAuth tokens');
+      }
+
+      const result = await response.json();
+      log.info(`OAuth tokens reset successfully for ${name}`, result);
+      
+      setToastMessage('OAuth tokens reset successfully. Server will require re-authentication.');
+      setToastSeverity('success');
+      setShowToast(true);
+      
+      // Trigger a retry to update the server status
+      setTimeout(() => {
+        onRetry();
+      }, 500);
+      
+    } catch (error) {
+      log.error(`Failed to reset OAuth tokens for ${name}`, error);
+      setToastMessage(`Failed to reset OAuth tokens: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setToastSeverity('error');
+      setShowToast(true);
+    } finally {
+      setIsResettingTokens(false);
+    }
+  };
+
   const { getThemeValue, getThemeColor, colors } = useThemeUtils();
   
   return (
@@ -181,9 +237,10 @@ const ServerCard: React.FC<ServerCardProps> = ({
               {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
               {status === 'disconnected' && <CancelIcon color="action" sx={{ mr: 0.5 }} fontSize="small" />}
               {status === 'error' && <ErrorIcon color="error" sx={{ mr: 0.5 }} fontSize="small" />}
+              {status === 'requires_authentication' && <LockIcon color="warning" sx={{ mr: 0.5 }} fontSize="small" />}
               {(status === 'connecting' || status === 'initialization') && <Spinner size="small" color="primary" sx={{ mr: 0.5 }} />}
               <Typography variant="body2" color={statusColor}>
-                {status}
+                {status === 'requires_authentication' ? 'Requires Authentication' : status}
               </Typography>
             </Box>
           </Box>
@@ -232,6 +289,75 @@ const ServerCard: React.FC<ServerCardProps> = ({
             }}>
               {error || 'Unknown error'}
             </Box>
+          </Box>
+        )}
+
+        {status === 'requires_authentication' && (
+          <Box sx={{ mt: 1, mb: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              <Typography variant="body2" fontWeight="medium" color="warning.main">
+                Authentication Required
+              </Typography>
+            </Box>
+            <Button
+              variant="contained"
+              color="warning"
+              size="small"
+              startIcon={<LoginIcon />}
+              onClick={async (e) => {
+                e.stopPropagation();
+                log.debug(`Authenticate button clicked for server: ${name}`);
+                
+                if (onAuthenticate) {
+                  onAuthenticate();
+                } else {
+                  // Fallback: Call OAuth initiation API directly
+                  try {
+                    const response = await fetch('/api/oauth/initiate', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({ serverName: name }),
+                    });
+
+                    if (!response.ok) {
+                      const errorData = await response.json();
+                      throw new Error(errorData.error || 'Failed to initiate OAuth');
+                    }
+
+                    const { authorizationUrl } = await response.json();
+                    
+                    // Open OAuth popup
+                    const { openOAuthPopup } = await import('@/frontend/utils/oauth');
+                    
+                    await openOAuthPopup({
+                      url: authorizationUrl,
+                      windowName: `oauth_${name}`,
+                      onSuccess: (result) => {
+                        log.info(`OAuth authentication successful for ${name}`, result);
+                        // Trigger a retry to reconnect with new tokens
+                        onRetry();
+                      },
+                      onError: (error) => {
+                        log.error(`OAuth authentication failed for ${name}`, error);
+                        setToastMessage('OAuth authentication failed');
+                        setToastSeverity('error');
+                        setShowToast(true);
+                      },
+                    });
+                  } catch (error) {
+                    log.error(`Failed to start OAuth authentication for ${name}`, error);
+                    setToastMessage('Failed to start OAuth authentication');
+                    setToastSeverity('error');
+                    setShowToast(true);
+                  }
+                }
+              }}
+              sx={{ width: '100%' }}
+            >
+              Authenticate with {name}
+            </Button>
           </Box>
         )}
       </CardContent>
@@ -296,6 +422,20 @@ const ServerCard: React.FC<ServerCardProps> = ({
               {isPolling ? <Spinner size="small" color="primary" /> : <RefreshIcon />}
             </IconButton>
           </Tooltip>
+          
+          {/* Reset OAuth Tokens button - only show for streamable servers with OAuth tokens */}
+          {transport === 'streamable' && hasOAuthTokens && (
+            <Tooltip title="Reset OAuth tokens">
+              <IconButton 
+                color="warning" 
+                onClick={handleResetOAuthTokens}
+                disabled={isResettingTokens}
+                size="small"
+              >
+              {isResettingTokens ? <Spinner size="small" color="primary" /> : <KeyOffIcon />}
+              </IconButton>
+            </Tooltip>
+          )}
           
           <Tooltip title="Edit server">
             <IconButton 
@@ -390,6 +530,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
               ].join('');
               navigator.clipboard.writeText(textToCopy);
               log.debug(`Error copied to clipboard for server: ${name}`);
+              setToastMessage('Error message copied to clipboard');
+              setToastSeverity('success');
               setShowToast(true);
             }}
             color="primary"
@@ -406,8 +548,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         onClose={() => setShowToast(false)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert onClose={() => setShowToast(false)} severity="success" sx={{ width: '100%' }}>
-          Error message copied to clipboard
+        <Alert onClose={() => setShowToast(false)} severity={toastSeverity} sx={{ width: '100%' }}>
+          {toastMessage || 'Error message copied to clipboard'}
         </Alert>
       </Snackbar>
     </Card>
