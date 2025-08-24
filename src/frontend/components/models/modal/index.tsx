@@ -74,11 +74,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     }
 
     // Only set up debounced fetch if we have the required data
-    if (formState.name && formState.name.length > 0 && formState.baseUrl) {
+    if (formState.baseUrl) {
       debounceTimeoutRef.current = setTimeout(() => {
-        log.debug("Debounced fetchModels triggered", { name: formState.name, baseUrl: formState.baseUrl });
-        fetchModels(formState.baseUrl!);
-      }, 100); // 300ms delay
+        log.debug("Debounced fetchModels triggered", { 
+          name: formState.name, 
+          baseUrl: formState.baseUrl,
+          searchTerm: formState.name ? `"${formState.name}"` : 'none'
+        });
+        // Pass the current input value as search term for server-side filtering
+        fetchModels(formState.baseUrl!, formState.name);
+      }, 100); // 100ms delay
     }
 
     // Cleanup function
@@ -98,23 +103,34 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     };
   }, []);
 
-  const fetchModels = async (baseUrl: string) => {
-    log.debug("fetchModels called", { baseUrl, apiKey: formState.ApiKey ? "present" : "not present", isApiKeyBound });
+  const fetchModels = async (baseUrl: string, searchTerm?: string) => {
+    log.debug("fetchModels called", { 
+      baseUrl, 
+      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      apiKey: formState.ApiKey ? "present" : "not present", 
+      isApiKeyBound 
+    });
     setIsLoadingModels(true);
     setErrors({});
     try {
-      const fetchedModels = await modelService.fetchProviderModels(baseUrl, model.id);
-      log.debug("Models fetched successfully", { count: fetchedModels?.length });
+      const fetchedModels = await modelService.fetchProviderModels(baseUrl, model.id, searchTerm);
+      log.debug("Models fetched successfully", { 
+        count: fetchedModels?.length,
+        searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
+      });
       
       if (Array.isArray(fetchedModels)) {
         setOpenRouterModels(fetchedModels);
-        log.info("Models set in state", { count: fetchedModels.length });
+        log.info("Models set in state", { 
+          count: fetchedModels.length,
+          searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
+        });
       } else {
         log.warn("Unexpected API response format", { models: fetchedModels });
         setOpenRouterModels([]);
       }
     } catch (error) {
-      log.warn("Error fetching models", { baseUrl, error });
+      log.warn("Error fetching models", { baseUrl, searchTerm, error });
       // Silently fail - don't show error messages in the UI
       setOpenRouterModels([]);
     } finally {

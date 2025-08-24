@@ -366,8 +366,18 @@ class ModelService {
     }
   }
 
-  async fetchProviderModels(baseUrl: string, modelId: string): Promise<Array<{id: string, name: string, description?: string}>> {
+  async fetchProviderModels(
+    baseUrl: string, 
+    modelId: string, 
+    searchTerm?: string
+  ): Promise<Array<{id: string, name: string, description?: string}>> {
     try {
+      log.debug('Fetching provider models', {
+        baseUrl,
+        modelId,
+        searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
+      });
+
       const response = await this.fetchWithErrorHandling('/api/model/provider', {
         method: 'POST',
         headers: {
@@ -376,12 +386,19 @@ class ModelService {
         body: JSON.stringify({
           baseUrl,
           modelId,
+          searchTerm,
         }),
+      });
+      
+      log.debug('Provider models fetched successfully', {
+        baseUrl,
+        modelCount: response.models?.length || 0,
+        searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
       });
       
       return response.models || [];
     } catch (error) {
-      log.error('Failed to fetch provider models', { baseUrl, error });
+      log.error('Failed to fetch provider models', { baseUrl, searchTerm, error });
       return [];
     }
   }
