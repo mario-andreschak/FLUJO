@@ -48,6 +48,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [openRouterModels, setOpenRouterModels] = useState<Array<{id: string, name: string, description?: string}>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Clear models list when modal opens
   useEffect(() => {
@@ -64,6 +65,38 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       setOpenRouterModels([]);
     }
   }, [formState.baseUrl, formState.ApiKey]);
+
+  // Debounced effect for fetching models when technical name changes
+  useEffect(() => {
+    // Clear any existing timeout
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+
+    // Only set up debounced fetch if we have the required data
+    if (formState.name && formState.name.length > 0 && formState.baseUrl) {
+      debounceTimeoutRef.current = setTimeout(() => {
+        log.debug("Debounced fetchModels triggered", { name: formState.name, baseUrl: formState.baseUrl });
+        fetchModels(formState.baseUrl!);
+      }, 100); // 300ms delay
+    }
+
+    // Cleanup function
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [formState.name, formState.baseUrl]);
+
+  // Cleanup timeout on component unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const fetchModels = async (baseUrl: string) => {
     log.debug("fetchModels called", { baseUrl, apiKey: formState.ApiKey ? "present" : "not present", isApiKeyBound });
@@ -388,11 +421,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   }}
                   onInputChange={(_, newValue) => {
                     handleChange('name', newValue);
-                    
-                    // Fetch models when user types in the technical name field
-                    if (newValue && newValue.length >= 0 && formState.baseUrl) {
-                      fetchModels(formState.baseUrl);
-                    }
+                    // Debounced API call is now handled by useEffect
                   }}
                   filterOptions={(options, state) => {
                     const inputValue = state.inputValue.toLowerCase();

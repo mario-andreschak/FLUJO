@@ -403,8 +403,4 @@ export const getModelService = (): ModelService => {
 };
 
 // For backward compatibility, export a getter that throws helpful error
-export const modelService = new Proxy({} as ModelService, {
-  get(target, prop) {
-    throw new Error('Use getModelService() instead of direct modelService access to avoid SSR issues');
-  }
-});
+export const modelService = getModelService();
