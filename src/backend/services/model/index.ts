@@ -23,7 +23,7 @@ import {
   fetchModelsFromProvider,
   getProviderFromBaseUrl
 } from './provider';
-import { mode } from 'crypto-js';
+import { modelCache, filterModels } from './cache';
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/index');
@@ -285,69 +285,99 @@ class ModelService {
   }
 
   /**
-   * Fetch models from a provider
+   * Fetch models from a provider with caching and optional search filtering
    * @param baseUrl The base URL of the provider
    * @param modelId Optional model ID for existing models
+   * @param searchTerm Optional search term to filter models
    */
   async fetchProviderModels(
     baseUrl: string,
-    modelId?: string
+    modelId?: string,
+    searchTerm?: string
   ): Promise<NormalizedModel[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`);
+    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`, { 
+      modelId, 
+      searchTerm: searchTerm ? `"${searchTerm}"` : 'none' 
+    });
+    
     try {
-      // Determine provider from model or baseUrl
-      let provider: ModelProvider;
+      // Check cache first
+      let allModels = modelCache.get(baseUrl);
       
-      if (modelId) {
-        log.debug(`Looking up model with ID: ${modelId}`);
-        const models = await this.loadModels();
-        const model = models.find(m => m.id === modelId);
+      if (allModels) {
+        log.debug('Using cached models', { count: allModels.length });
+      } else {
+        log.debug('Cache miss - fetching from provider');
         
-        if (model && model.provider) {
-          // Use the stored provider if available
-          provider = model.provider;
-          log.debug(`Using stored provider: ${provider}`);
+        // Determine provider from model or baseUrl
+        let provider: ModelProvider;
+        
+        if (modelId) {
+          log.debug(`Looking up model with ID: ${modelId}`);
+          const models = await this.loadModels();
+          const model = models.find(m => m.id === modelId);
+          
+          if (model && model.provider) {
+            // Use the stored provider if available
+            provider = model.provider;
+            log.debug(`Using stored provider: ${provider}`);
+          } else {
+            // Fall back to URL-based detection
+            provider = getProviderFromBaseUrl(baseUrl);
+            log.debug(`Provider determined from URL as: ${provider}`);
+          }
         } else {
-          // Fall back to URL-based detection
+          // For new models, determine provider from baseUrl
           provider = getProviderFromBaseUrl(baseUrl);
           log.debug(`Provider determined from URL as: ${provider}`);
         }
-      } else {
-        // For new models, determine provider from baseUrl
-        provider = getProviderFromBaseUrl(baseUrl);
-        log.debug(`Provider determined from URL as: ${provider}`);
-      }
-      
-      // Determine the API key to use
-      let apiKey = null;
-      
-      // Look up the API key for the model
-      if (modelId) {
-        log.debug(`Looking up API key for model ID: ${modelId}`);
-        const model = await this.getModel(modelId);
-        if (model) {
-          log.debug(`Found model, resolving and decrypting API key`);
-          // Resolve global vars and decrypt if needed
+        
+        // Determine the API key to use
+        let apiKey = null;
+        
+        // Look up the API key for the model
+        if (modelId) {
+          log.debug(`Looking up API key for model ID: ${modelId}`);
+          const model = await this.getModel(modelId);
+          if (model) {
+            log.debug(`Found model, resolving and decrypting API key`);
+            // Resolve global vars and decrypt if needed
 
-          // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
-          log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key pre-resolve: `, JSON.stringify(model.ApiKey));
-          apiKey = await resolveAndDecryptApiKey(model.ApiKey);
-          log.debug(`API key successfully resolved and decrypted`);
-          
-          // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
-          log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key: `, JSON.stringify(apiKey));
+            // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
+            log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key pre-resolve: `, JSON.stringify(model.ApiKey));
+            apiKey = await resolveAndDecryptApiKey(model.ApiKey);
+            log.debug(`API key successfully resolved and decrypted`);
+            
+            // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
+            log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key: `, JSON.stringify(apiKey));
+          } else {
+            log.warn(`Model with ID ${modelId} not found for API key resolution`);
+          }
         } else {
-          log.warn(`Model with ID ${modelId} not found for API key resolution`);
+          log.error(`No API key available - modelId not provided`);
         }
-      } else {
-        log.error(`No API key available - modelId not provided`);
+        
+        // Fetch models from provider
+        log.info(`Fetching models from provider: ${provider}`);
+        allModels = await fetchModelsFromProvider(provider, baseUrl, apiKey);
+        log.debug(`Successfully fetched ${allModels.length} models from provider`);
+        
+        // Cache the results
+        modelCache.set(baseUrl, allModels);
       }
       
-      // Fetch models based on provider
-      log.info(`Fetching models from provider: ${provider}`);
-      const models = await fetchModelsFromProvider(provider, baseUrl, apiKey);
-      log.debug(`Successfully fetched ${models.length} models from provider`);
-      return models;
+      // Apply search filtering if provided
+      if (searchTerm && searchTerm.trim()) {
+        const filteredModels = filterModels(allModels, searchTerm);
+        log.debug(`Search filtering applied`, { 
+          searchTerm: `"${searchTerm}"`, 
+          originalCount: allModels.length, 
+          filteredCount: filteredModels.length 
+        });
+        return filteredModels;
+      }
+      
+      return allModels;
     } catch (error) {
       log.error(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
       throw error;
