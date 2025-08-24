@@ -16,6 +16,9 @@ interface ServerListProps {
   onServerRetry: (serverName: string) => void;
   onServerDelete: (serverName: string) => void;
   onServerEdit: (server: MCPServerConfig) => void;
+  selectionMode?: boolean;
+  selectedServers?: Set<string>;
+  onServerSelectionChange?: (serverName: string, selected: boolean) => void;
 }
 
 const ServerList: React.FC<ServerListProps> = ({
@@ -27,6 +30,9 @@ const ServerList: React.FC<ServerListProps> = ({
   onServerRetry,
   onServerDelete,
   onServerEdit,
+  selectionMode = false,
+  selectedServers = new Set(),
+  onServerSelectionChange,
 }) => {
   log.debug('Rendering ServerList', { 
     serverCount: servers.length, 
@@ -80,6 +86,7 @@ const ServerList: React.FC<ServerListProps> = ({
             status={server.status}
             path={server.rootPath}
             enabled={!server.disabled}
+            transport={server.transport}
             onToggle={(enabled) => onServerToggle(server.name, enabled)}
             onRetry={() => onServerRetry(server.name)}
             onDelete={() => onServerDelete(server.name)}
@@ -88,6 +95,9 @@ const ServerList: React.FC<ServerListProps> = ({
             error={server.error}
             stderrOutput={server.stderrOutput}
             containerName={server.containerName}
+            selectionMode={selectionMode}
+            selected={selectedServers.has(server.name)}
+            onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
           />
         </Grid>
       ))}

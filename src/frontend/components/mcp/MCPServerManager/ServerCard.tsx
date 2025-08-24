@@ -12,6 +12,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import Spinner from '@/frontend/components/shared/Spinner';
+import TransportBadge from './TransportBadge';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
@@ -28,7 +29,8 @@ import {
   Card, 
   CardContent, 
   CardActions,
-  Box
+  Box,
+  Checkbox
 } from '@mui/material';
 
 interface ServerCardProps {
@@ -36,6 +38,7 @@ interface ServerCardProps {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization';
   path: string;
   enabled: boolean;
+  transport: 'stdio' | 'websocket' | 'docker' | 'sse' | 'streamable';
   onToggle: (enabled: boolean) => void;
   onRetry: () => void;
   onDelete: () => void;
@@ -44,6 +47,9 @@ interface ServerCardProps {
   error?: string; // Optional error message
   stderrOutput?: string; // Optional stderr output
   containerName?: string; // Optional Docker container name
+  selected?: boolean; // For bulk selection
+  onSelect?: (selected: boolean) => void; // For bulk selection
+  selectionMode?: boolean; // Whether selection mode is active
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -51,6 +57,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   status,
   path,
   enabled,
+  transport,
   onToggle,
   onRetry,
   onDelete,
@@ -59,6 +66,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
   error,
   stderrOutput,
   containerName,
+  selected = false,
+  onSelect,
+  selectionMode = false,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
@@ -148,18 +158,34 @@ const ServerCard: React.FC<ServerCardProps> = ({
       }}
     >
       <CardContent sx={{ pb: 1 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-          <Typography variant="h6" component="h3">
-            {name}
-          </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
-            {status === 'disconnected' && <CancelIcon color="action" sx={{ mr: 0.5 }} fontSize="small" />}
-            {status === 'error' && <ErrorIcon color="error" sx={{ mr: 0.5 }} fontSize="small" />}
-            {(status === 'connecting' || status === 'initialization') && <Spinner size="small" color="primary" sx={{ mr: 0.5 }} />}
-            <Typography variant="body2" color={statusColor}>
-              {status}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+            {selectionMode && onSelect && (
+              <Checkbox
+                checked={selected}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  onSelect(e.target.checked);
+                }}
+                size="small"
+                sx={{ mr: 1, p: 0.5 }}
+              />
+            )}
+            <Typography variant="h6" component="h3" sx={{ flex: 1 }}>
+              {name}
             </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
+            <TransportBadge transport={transport} size="small" />
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+              {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
+              {status === 'disconnected' && <CancelIcon color="action" sx={{ mr: 0.5 }} fontSize="small" />}
+              {status === 'error' && <ErrorIcon color="error" sx={{ mr: 0.5 }} fontSize="small" />}
+              {(status === 'connecting' || status === 'initialization') && <Spinner size="small" color="primary" sx={{ mr: 0.5 }} />}
+              <Typography variant="body2" color={statusColor}>
+                {status}
+              </Typography>
+            </Box>
           </Box>
         </Box>
         
