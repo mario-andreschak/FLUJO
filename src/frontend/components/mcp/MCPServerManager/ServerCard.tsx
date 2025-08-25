@@ -199,6 +199,21 @@ const ServerCard: React.FC<ServerCardProps> = ({
 
   const { getThemeValue, getThemeColor, colors } = useThemeUtils();
   
+  // Extract restart logic into a reusable function
+  const handleServerRestart = () => {
+    log.debug(`Server restart initiated for: ${name}`);
+    
+    // Disable the server
+    onToggle(false);
+    
+    // Wait a short time for the disconnect to complete
+    setTimeout(() => {
+      // Enable the server
+      onToggle(true);
+      log.info(`Server ${name} restarted`);
+    }, 1000);
+  };
+  
   return (
     <Card 
       sx={{ 
@@ -336,8 +351,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
                       windowName: `oauth_${name}`,
                       onSuccess: (result) => {
                         log.info(`OAuth authentication successful for ${name}`, result);
-                        // Trigger a retry to reconnect with new tokens
-                        onRetry();
+                        log.info(`Automatically restarting server ${name} after OAuth completion`);
+                        // Restart the server to ensure it reconnects with new OAuth tokens
+                        handleServerRestart();
                       },
                       onError: (error) => {
                         log.error(`OAuth authentication failed for ${name}`, error);
@@ -392,16 +408,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   log.debug(`Restart button clicked for server: ${name}`);
-                  
-                  // Disable the server
-                  onToggle(false);
-                  
-                  // Wait a short time for the disconnect to complete
-                  setTimeout(() => {
-                    // Enable the server
-                    onToggle(true);
-                    log.info(`Server ${name} restarted`);
-                  }, 1000);
+                  handleServerRestart();
                 }}
                 sx={{ ml: 1 }}
               >

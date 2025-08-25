@@ -580,6 +580,66 @@ export const handleBuild = async (
   setIsBuilding(false);
 };
 
+// HTTP connection test utility
+const testHttpConnection = async (serverUrl: string): Promise<{
+  success: boolean;
+  message: string;
+  details?: string;
+}> => {
+  try {
+    // Create an AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    // Attempt basic connection test
+    const response = await fetch(serverUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'FLUJO-MCP-Client/1.0'
+      }
+    });
+    
+    clearTimeout(timeoutId);
+    
+    // Special handling for 401 Unauthorized - likely requires OAuth
+    if (response.status === 401) {
+      return {
+        success: false,
+        message: 'Server requires authentication (401 Unauthorized)',
+        details: 'This server likely requires OAuth authentication. Save the server configuration once to initiate the OAuth flow.'
+      };
+    }
+    
+    return {
+      success: response.ok,
+      message: response.ok ? 'Connection successful' : 'Server responded with error',
+      details: `Status: ${response.status} ${response.statusText}`
+    };
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          message: 'Connection timeout',
+          details: 'Server did not respond within 10 seconds'
+        };
+      }
+      return {
+        success: false,
+        message: 'Connection failed',
+        details: error.message
+      };
+    }
+    return {
+      success: false,
+      message: 'Connection failed',
+      details: 'Unknown error occurred'
+    };
+  }
+};
+
 export const handleRun = async (
   localConfig: MCPServerConfig,
   websocketUrl: string,
@@ -625,18 +685,77 @@ export const handleRun = async (
   }
   
   setIsRunning(true);
-  setConsoleTitle('Run Server Output');
-  setConsoleOutput('Starting server...\n');
+  setConsoleTitle('Test Server Connection');
+  setConsoleOutput('Testing server connection...\n');
   setIsConsoleVisible(true);
   setMessage({
     type: 'success',
-    text: 'Running server...'
+    text: 'Testing server connection...'
   });
   
-  // Use rootPath if available, otherwise fall back to name with mcp-servers prefix
+  // For HTTP streaming transports (SSE and Streamable), test the connection instead of spawning a process
+  if (localConfig.transport === 'sse' || localConfig.transport === 'streamable') {
+    try {
+      setConsoleOutput((prev: string) => prev + `Attempting to connect to: ${serverUrl}\n`);
+      
+      const testResult = await testHttpConnection(serverUrl);
+      
+      setConsoleOutput((prev: string) => prev + `Connection test result: ${testResult.message}\n`);
+      if (testResult.details) {
+        setConsoleOutput((prev: string) => prev + `Details: ${testResult.details}\n`);
+      }
+      
+      if (testResult.success) {
+        setRunCompleted(true);
+        setMessage({
+          type: 'success',
+          text: 'HTTP connection test successful! Server is reachable.'
+        });
+        setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+      } else {
+        setMessage({
+          type: 'error',
+          text: 'HTTP connection test failed. Check the console for details.'
+        });
+        setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
+      }
+    } catch (error) {
+      console.error('Error testing HTTP connection:', error);
+      setConsoleOutput((prev: string) => prev + `\nError during connection test: ${(error as Error).message}\n`);
+      setMessage({
+        type: 'error',
+        text: 'Connection test failed with an error.'
+      });
+    } finally {
+      setIsRunning(false);
+    }
+    return;
+  }
+  
+  // For WebSocket transport, we could add a similar test here in the future
+  if (localConfig.transport === 'websocket') {
+    try {
+      setConsoleOutput((prev: string) => prev + `WebSocket URL: ${websocketUrl}\n`);
+      setConsoleOutput((prev: string) => prev + 'Note: WebSocket connection testing not yet implemented.\n');
+      setConsoleOutput((prev: string) => prev + 'Please verify the WebSocket server is running manually.\n');
+      
+      setRunCompleted(true);
+      setMessage({
+        type: 'warning',
+        text: 'WebSocket connection testing not yet implemented. Please verify manually.'
+      });
+    } finally {
+      setIsRunning(false);
+    }
+    return;
+  }
+  
+  // For stdio transport, use the original process spawning logic
   const serverPath = localConfig.rootPath || `mcp-servers/${localConfig.name}`;
   
   try {
+    setConsoleOutput((prev: string) => prev + 'Starting server process...\n');
+    
     const response = await fetch('/api/git', {
       method: 'POST',
       headers: {
