@@ -65,7 +65,7 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     const transportoptions: StreamableHTTPClientTransportOptions = {
       requestInit: streamableConfig.requestInit,
       reconnectionOptions: streamableConfig.reconnectionOptions,
-      sessionId: streamableConfig.sessionId,
+      // sessionId: streamableConfig.sessionId,
     };
     
     // Add OAuth authentication if configured

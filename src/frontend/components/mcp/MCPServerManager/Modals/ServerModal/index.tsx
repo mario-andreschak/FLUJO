@@ -8,6 +8,7 @@ import LocalServerTab from './tabs/LocalServerTab';
 import SmitheryTab from './tabs/SmitheryTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
 import DockerTab from './tabs/DockerTab';
+import RemoteTab from './tabs/RemoteTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import {
   Dialog,
@@ -31,7 +32,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onUpdate,
   onRestartAfterUpdate
 }) => {
-  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'smithery' | 'reference' | 'docker'>('github');
+  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'smithery' | 'reference' | 'docker' | 'remote'>('github');
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
@@ -43,12 +44,14 @@ const ServerModal: React.FC<ServerModalProps> = ({
     smithery: boolean;
     reference: boolean;
     docker: boolean;
+    remote: boolean;
   }>({
     github: false,
     local: false,
     smithery: false,
     reference: false,
-    docker: false
+    docker: false,
+    remote: false
   });
 
   // Initialize fields only on first visit to each tab in add mode
@@ -61,7 +64,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery' | 'reference' | 'docker') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'smithery' | 'reference' | 'docker' | 'remote') => {
     setActiveTab(newValue);
   };
   
@@ -126,6 +129,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
             >
               <Tab label="GitHub" value="github" />
               <Tab label="Local Server" value="local" />
+              <Tab label="Remote" value="remote" />
               <Tab label="Install from Registry" value="smithery" />
               <Tab label="Reference Servers" value="reference" />
               <Tab label="Docker Image" value="docker" />
@@ -155,6 +159,13 @@ const ServerModal: React.FC<ServerModalProps> = ({
               initialConfig={parsedConfig}
               onAdd={onAdd}
               onClose={onClose}
+            />
+          ) : activeTab === 'remote' ? (
+            <RemoteTab
+              onAdd={onAdd}
+              onClose={onClose}
+              setActiveTab={setActiveTab}
+              onUpdate={(config) => setParsedConfig(config)}
             />
           ) : activeTab === 'reference' ? (
             <ReferenceServersTab
