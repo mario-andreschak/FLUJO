@@ -30,10 +30,6 @@ Global $TEMP_DIR = @TempDir & "\FLUJO-Launcher"
 Global $LOG_FILE = $TEMP_DIR & "\launcher.log"
 Global $INI_FILE = @ScriptDir & "\FLUJO-Launcher.ini"
 
-; Download URLs (will be updated dynamically)
-Global $GIT_URL = "https://github.com/git-for-windows/git/releases/latest/download/Git-2.43.0-64-bit.exe"
-Global $NODE_URL = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
-Global $PYTHON_URL = "https://www.python.org/ftp/python/3.11.7/python-3.11.7-amd64.exe"
 
 ; GUI Controls
 Global $hGUI, $hProgress, $hStatus, $hLog, $hLogEdit
@@ -142,7 +138,7 @@ Func CreateGUI()
 
 	; FLUJO Status
 	GUICtrlCreateLabel("FLUJO Status:", 40, 500, 100, 20)
-	Local $hFLUJORunning = GUICtrlCreateLabel("Not Running", 150, 500, 200, 20)
+	Global $hFLUJORunning = GUICtrlCreateLabel("Not Running", 150, 500, 200, 20)
 	GUICtrlSetColor(-1, 0xF44336)
 
 	; Log window (initially hidden)
@@ -155,6 +151,7 @@ Func CreateGUI()
 
 	; Initial status check
 	CheckAllDependencies()
+	CheckFLUJOStatus()
 EndFunc   ;==>CreateGUI
 
 ; ===============================================
@@ -457,21 +454,51 @@ Func InstallSelectedItems()
 	GUICtrlSetState($hBtnStartFLUJO, $GUI_ENABLE)
 EndFunc   ;==>InstallSelectedItems
 
-; [Include all the installation functions from the previous version]
+; ===============================================
+; POWERSHELL EXECUTION POLICY FUNCTIONS
+; ===============================================
+Func SetPowerShellExecutionPolicy()
+	WriteLog("Setting PowerShell execution policy to RemoteSigned")
+
+	; Set execution policy for current user
+	Local $sCmd = "powershell -Command ""Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"""
+	Local $iPID = Run(@ComSpec & " /c " & $sCmd, "", @SW_HIDE, $STDERR_CHILD + $STDOUT_CHILD)
+
+	While ProcessExists($iPID)
+		Sleep(100)
+	WEnd
+
+	WriteLog("PowerShell execution policy set successfully")
+	Return True
+EndFunc   ;==>SetPowerShellExecutionPolicy
+
+; ===============================================
+; WINGET INSTALLATION FUNCTIONS
+; ===============================================
 Func InstallGit()
 	If IsGitInstalled() Then
 		WriteLog("Git is already installed")
 		Return True
 	EndIf
 
-	Local $sInstaller = $TEMP_DIR & "\git-installer.exe"
+	WriteLog("Installing Git using winget")
 
-	If Not DownloadFile($GIT_URL, $sInstaller, "Git for Windows") Then
-		Return False
-	EndIf
+	; Set PowerShell execution policy first
+	SetPowerShellExecutionPolicy()
 
-	Local $sArgs = "/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS"
-	Return RunSilentInstaller($sInstaller, $sArgs, "Git for Windows")
+	Local $sCmd = "winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements"
+	Local $iPID = Run(@ComSpec & " /c " & $sCmd, "", @SW_HIDE, $STDERR_CHILD + $STDOUT_CHILD)
+
+	While ProcessExists($iPID)
+		If $bCancelled Then
+			ProcessClose($iPID)
+			Return False
+		EndIf
+		Sleep(1000)
+	WEnd
+
+	WriteLog("Git installation completed via winget")
+	Return True
 EndFunc   ;==>InstallGit
 
 Func InstallNodeJS()
@@ -480,14 +507,24 @@ Func InstallNodeJS()
 		Return True
 	EndIf
 
-	Local $sInstaller = $TEMP_DIR & "\nodejs-installer.msi"
+	WriteLog("Installing Node.js using winget")
 
-	If Not DownloadFile($NODE_URL, $sInstaller, "Node.js LTS") Then
-		Return False
-	EndIf
+	; Set PowerShell execution policy first
+	SetPowerShellExecutionPolicy()
 
-	Local $sArgs = "/i " & Chr(34) & $sInstaller & Chr(34) & " /quiet /norestart"
-	Return RunSilentInstaller("msiexec", $sArgs, "Node.js LTS")
+	Local $sCmd = "winget install --id OpenJS.NodeJS -e --source winget --accept-package-agreements --accept-source-agreements"
+	Local $iPID = Run(@ComSpec & " /c " & $sCmd, "", @SW_HIDE, $STDERR_CHILD + $STDOUT_CHILD)
+
+	While ProcessExists($iPID)
+		If $bCancelled Then
+			ProcessClose($iPID)
+			Return False
+		EndIf
+		Sleep(1000)
+	WEnd
+
+	WriteLog("Node.js installation completed via winget")
+	Return True
 EndFunc   ;==>InstallNodeJS
 
 Func InstallPython()
@@ -496,23 +533,53 @@ Func InstallPython()
 		Return True
 	EndIf
 
-	Local $sInstaller = $TEMP_DIR & "\python-installer.exe"
+	WriteLog("Installing Python using winget")
 
-	If Not DownloadFile($PYTHON_URL, $sInstaller, "Python 3.11") Then
-		Return False
-	EndIf
+	; Set PowerShell execution policy first
+	SetPowerShellExecutionPolicy()
 
-	Local $sArgs = "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0"
-	Return RunSilentInstaller($sInstaller, $sArgs, "Python 3.11")
+	Local $sCmd = "winget install --id Python.Python.3.11 -e --source winget --accept-package-agreements --accept-source-agreements"
+	Local $iPID = Run(@ComSpec & " /c " & $sCmd, "", @SW_HIDE, $STDERR_CHILD + $STDOUT_CHILD)
+
+	While ProcessExists($iPID)
+		If $bCancelled Then
+			ProcessClose($iPID)
+			Return False
+		EndIf
+		Sleep(1000)
+	WEnd
+
+	WriteLog("Python installation completed via winget")
+	Return True
 EndFunc   ;==>InstallPython
 
 Func CloneFLUJO()
 	WriteLog("Setting up FLUJO repository to: " & $INSTALL_DIR)
 
-	If FileExists($INSTALL_DIR & "\package.json") Then
-		WriteLog("FLUJO directory already exists, updating...")
-		Local $sCmd = "git -C " & Chr(34) & $INSTALL_DIR & Chr(34) & " pull origin main"
+	; Check if directory exists and handle appropriately
+	If FileExists($INSTALL_DIR) Then
+		; Check if it's already a git repository
+		If FileExists($INSTALL_DIR & "\.git") Then
+			WriteLog("Git repository already exists, updating...")
+			Local $sCmd = "git -C " & Chr(34) & $INSTALL_DIR & Chr(34) & " pull origin main"
+		ElseIf FileExists($INSTALL_DIR & "\package.json") Then
+			WriteLog("FLUJO directory exists but not a git repo, updating via git pull...")
+			Local $sCmd = "git -C " & Chr(34) & $INSTALL_DIR & Chr(34) & " pull origin main"
+		Else
+			; Directory exists but is not empty and not a FLUJO repo
+			Local $aFileList = _FileListToArray($INSTALL_DIR)
+			If IsArray($aFileList) And $aFileList[0] > 0 Then
+				WriteLog("Directory is not empty and not a FLUJO repository. Cannot clone.")
+				MsgBox(48, "Directory Not Empty", "The installation directory is not empty and does not contain a FLUJO repository." & @CRLF & @CRLF & "Please select an empty directory or a directory with an existing FLUJO repository.")
+				Return False
+			Else
+				; Directory is empty, safe to clone
+				Local $sCmd = "git clone " & $FLUJO_REPO & " " & Chr(34) & $INSTALL_DIR & Chr(34)
+			EndIf
+		EndIf
 	Else
+		; Directory doesn't exist, create it and clone
+		WriteLog("Creating directory and cloning repository...")
 		Local $sCmd = "git clone " & $FLUJO_REPO & " " & Chr(34) & $INSTALL_DIR & Chr(34)
 	EndIf
 
@@ -599,6 +666,30 @@ Func RunSilentInstaller($sInstaller, $sArgs, $sDescription)
 EndFunc   ;==>RunSilentInstaller
 
 ; ===============================================
+; FLUJO STATUS CHECK FUNCTIONS
+; ===============================================
+Func CheckFLUJOStatus()
+	WriteLog("Checking FLUJO status via web connection to localhost:4200")
+
+	; Try to connect to localhost:4200
+	Local $hDownload = InetRead("http://localhost:4200")
+
+	If @error Then
+		; FLUJO is not running
+		GUICtrlSetData($hFLUJORunning, "Not Running")
+		GUICtrlSetColor($hFLUJORunning, 0xF44336)
+		WriteLog("FLUJO is not running - no response from localhost:4200")
+	Else
+		; FLUJO is running
+		GUICtrlSetData($hFLUJORunning, "✅ Running on localhost:4200")
+		GUICtrlSetColor($hFLUJORunning, 0x4CAF50)
+		WriteLog("FLUJO is running - successfully connected to localhost:4200")
+	EndIf
+
+	InetClose($hDownload)
+EndFunc   ;==>CheckFLUJOStatus
+
+; ===============================================
 ; FLUJO MANAGEMENT FUNCTIONS
 ; ===============================================
 Func StartFLUJO()
@@ -653,53 +744,74 @@ EndFunc   ;==>StartFLUJO
 ; ===============================================
 Func HandleEvents()
 	While True
-		Local $nMsg = GUIGetMsg()
+		Local $nMsg = GUIGetMsg(1) ; Get extended info to identify which window
 
-		Switch $nMsg
-			Case $GUI_EVENT_CLOSE
-				$bCancelled = True
-				Exit
+		Switch $nMsg[1] ; Check which window the event came from
+			Case $hGUI ; Main window events
+				Switch $nMsg[0]
+					Case $GUI_EVENT_CLOSE
+						$bCancelled = True
+						Exit
 
-			Case $hBtnCancel
-				$bCancelled = True
-				Exit
+					Case $hBtnCancel
+						$bCancelled = True
+						Exit
 
-			Case $hBtnRefresh
-				If Not $bInstalling Then
-					CheckAllDependencies()
-				EndIf
+					Case $hBtnRefresh
+						If Not $bInstalling Then
+							CheckAllDependencies()
+							CheckFLUJOStatus()
+						EndIf
 
-			Case $hBtnInstallSelected
-				If Not $bInstalling Then
-					InstallSelectedItems()
-				EndIf
+					Case $hBtnInstallSelected
+						If Not $bInstalling Then
+							InstallSelectedItems()
+						EndIf
 
-			Case $hBtnStartFLUJO
-				If Not $bInstalling Then
-					StartFLUJO()
-				EndIf
+					Case $hBtnStartFLUJO
+						If Not $bInstalling Then
+							StartFLUJO()
+						EndIf
 
-			Case $hBtnViewLog
-				If Not $bLogVisible Then
-					If FileExists($LOG_FILE) Then
-						Local $sLogContent = FileRead($LOG_FILE)
-						GUICtrlSetData($hLogEdit, $sLogContent)
-					EndIf
-					GUISetState(@SW_SHOW, $hLog)
-					$bLogVisible = True
-				Else
-					GUISetState(@SW_HIDE, $hLog)
-					$bLogVisible = False
-				EndIf
+					Case $hBtnViewLog
+						If Not $bLogVisible Then
+							If FileExists($LOG_FILE) Then
+								Local $sLogContent = FileRead($LOG_FILE)
+								GUICtrlSetData($hLogEdit, $sLogContent)
+							EndIf
+							GUISetState(@SW_SHOW, $hLog)
+							$bLogVisible = True
+						Else
+							GUISetState(@SW_HIDE, $hLog)
+							$bLogVisible = False
+						EndIf
 
-			Case $hBtnSettings
-				Local $sNewDir = FileSelectFolder("Select FLUJO Installation Directory", "", 0, $INSTALL_DIR)
-				If $sNewDir <> "" Then
-					$INSTALL_DIR = $sNewDir
-					SaveSettings()
-					UpdateInstallDirDisplay()
-					CheckAllDependencies()
-				EndIf
+					Case $hBtnSettings
+						Local $sNewDir = FileSelectFolder("Select FLUJO Installation Directory", "", 0, $INSTALL_DIR)
+						If $sNewDir <> "" Then
+							$INSTALL_DIR = $sNewDir
+							SaveSettings()
+							UpdateInstallDirDisplay()
+							CheckAllDependencies()
+						EndIf
+				EndSwitch
+
+			Case $hLog ; Log window events
+				Switch $nMsg[0]
+					Case $GUI_EVENT_CLOSE
+						; Just hide the log window, don't exit the application
+						GUISetState(@SW_HIDE, $hLog)
+						$bLogVisible = False
+					Case Else
+						; Handle log window button clicks (Close button)
+						If $nMsg[0] > 0 Then ; It's a control ID
+							GUISetState(@SW_HIDE, $hLog)
+							$bLogVisible = False
+						EndIf
+				EndSwitch
+
+			Case 0 ; No window (shouldn't happen with extended mode)
+				; Handle any other events that don't belong to specific windows
 		EndSwitch
 
 		Sleep(10)
