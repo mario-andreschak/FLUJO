@@ -41,7 +41,7 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           // OAuth configuration fields
           oauthClientId: serverConfig.oauthClientId || '',
           oauthClientSecret: serverConfig.oauthClientSecret || '',
-          oauthScopes: serverConfig.oauthScopes || ['read'],
+          oauthScopes: serverConfig.oauthScopes || (serverConfig.oauthClientId || serverConfig.oauthClientInformation ? ['read'] : undefined),
           // Stored OAuth data
           oauthClientMetadata: serverConfig.oauthClientMetadata,
           oauthClientInformation: serverConfig.oauthClientInformation,
