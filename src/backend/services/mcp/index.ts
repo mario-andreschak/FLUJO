@@ -372,6 +372,7 @@ export class MCPService {
           log.error(`Error name: ${error.name}`);
           log.error(`Error message: ${error.message}`);
           log.error(`Error stack: ${error.stack}`);
+          log.error(`Error cause: ${error.cause}`);
         } else if (error && typeof error === 'object') {
           // Try to log individual properties of the error object
           log.error(`Error type: ${typeof error}`);
@@ -464,9 +465,47 @@ export class MCPService {
         };
       }
       
-      // Check for other OAuth-related errors
-      if (errorMessage.includes('UnauthorizedError') || errorMessage.includes('invalid_token') || errorMessage.includes('token_expired')) {
-        log.info(`OAuth token error for server ${config.name}: ${errorMessage}`);
+      // Check for other OAuth-related errors (401/403 indicating missing auth)
+      if (errorMessage.includes('UnauthorizedError') || 
+          errorMessage.includes('invalid_token') || 
+          errorMessage.includes('token_expired') ||
+          errorMessage.includes('HTTP 401') ||
+          errorMessage.includes('HTTP 403') ||
+          errorMessage.includes('Missing Authorization header')) {
+        
+        log.info(`OAuth authentication error detected for server ${config.name}: ${errorMessage}`);
+        
+        // For streamable servers, dynamically enable OAuth if not already configured
+        if (config.transport === 'streamable') {
+          const streamableConfig = config as MCPStreamableConfig;
+          
+          // If OAuth scopes are not set, this server needs OAuth but wasn't configured for it
+          if (!streamableConfig.oauthScopes || streamableConfig.oauthScopes.length === 0) {
+            log.info(`Dynamically enabling OAuth for server ${config.name} due to authentication error`);
+            
+            try {
+              // Update the config to include OAuth scopes
+              const updatedConfig = {
+                ...streamableConfig,
+                oauthScopes: ['read'] // Set default OAuth scope
+              };
+              
+              // Save the updated config to storage
+              const configs = await this.loadServerConfigs();
+              if (Array.isArray(configs)) {
+                const configIndex = configs.findIndex(c => c.name === config.name);
+                if (configIndex !== -1) {
+                  configs[configIndex] = updatedConfig;
+                  await saveConfig(new Map(configs.map(c => [c.name, c])));
+                  log.info(`Updated config for ${config.name} to enable OAuth`);
+                }
+              }
+            } catch (updateError) {
+              log.warn(`Failed to update config for ${config.name} to enable OAuth:`, updateError);
+            }
+          }
+        }
+        
         return { 
           success: false, 
           error: 'OAuth authentication failed or tokens have expired. Please re-authenticate.',
