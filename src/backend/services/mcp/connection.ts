@@ -3,6 +3,7 @@ import { StdioClientTransport, StdioServerParameters } from '@modelcontextprotoc
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { StreamableHTTPClientTransportOptions, StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransportOptions, SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { MCPSSEConfig } from '@/shared/types/mcp/mcp';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -61,12 +62,21 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     log.info(`Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`);
     const streamableConfig = config as MCPStreamableConfig;
     
-    // Create transport options
-    const transportoptions: StreamableHTTPClientTransportOptions = {
-      requestInit: streamableConfig.requestInit,
-      reconnectionOptions: streamableConfig.reconnectionOptions,
-      // sessionId: streamableConfig.sessionId,
-    };
+    // Create transport options.
+    // Build defensively: only include object-typed options when they are actual objects.
+    // Legacy persisted configs may contain empty strings (''), which would be spread into
+    // the SDK's internal fetch() call and cause a generic "fetch failed" error.
+    const transportoptions: StreamableHTTPClientTransportOptions = {};
+
+    if (streamableConfig.requestInit && typeof streamableConfig.requestInit === 'object') {
+      transportoptions.requestInit = streamableConfig.requestInit;
+    }
+    if (streamableConfig.reconnectionOptions && typeof streamableConfig.reconnectionOptions === 'object') {
+      transportoptions.reconnectionOptions = streamableConfig.reconnectionOptions;
+    }
+    if (typeof streamableConfig.sessionId === 'string' && streamableConfig.sessionId.length > 0) {
+      transportoptions.sessionId = streamableConfig.sessionId;
+    }
     
     // Add OAuth authentication if configured
     if (streamableConfig.oauthClientId || streamableConfig.oauthClientInformation) {
@@ -96,9 +106,20 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
 
   } else if (config.transport === 'sse') {
     log.info(`Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`);
-    const transportoptions: SSEClientTransportOptions = {
-      ...config
+    const sseConfig = config as MCPSSEConfig;
+
+    // Build options defensively. Do NOT spread the entire config: it contains many
+    // unrelated fields (and possibly empty-string options from legacy persisted data)
+    // that would corrupt the SDK's internal fetch() call and cause "fetch failed".
+    const transportoptions: SSEClientTransportOptions = {};
+
+    if (sseConfig.requestInit && typeof sseConfig.requestInit === 'object') {
+      transportoptions.requestInit = sseConfig.requestInit;
     }
+    if (sseConfig.eventSourceInit && typeof sseConfig.eventSourceInit === 'object') {
+      transportoptions.eventSourceInit = sseConfig.eventSourceInit;
+    }
+
     return new SSEClientTransport(new URL(config.serverUrl), transportoptions);
 
   } else if (config.transport === 'websocket') {
@@ -546,6 +567,37 @@ export function shouldRecreateClient(
     // if (transport._url?.toString() !== config.websocketUrl) { // Property '_url' is private and only accessible within class 'WebSocketClientTransport'.
     //   return { needsNewClient: true, reason: 'WebSocket URL changed' };
     // }
+  } else if (config.transport === 'streamable') {
+    // For streamable HTTP transport, ensure the existing client uses the matching transport.
+    if (!(client.transport instanceof StreamableHTTPClientTransport)) {
+      return {
+        needsNewClient: true,
+        reason: 'Transport type changed to streamable',
+      };
+    }
+
+    // Check if the server URL has changed
+    const transport = client.transport as StreamableHTTPClientTransport;
+    const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
+    if (currentUrl !== undefined && currentUrl !== new URL(config.serverUrl).toString()) {
+      return { needsNewClient: true, reason: 'Streamable server URL changed' };
+    }
+  } else if (config.transport === 'sse') {
+    // For SSE transport, ensure the existing client uses the matching transport.
+    if (!(client.transport instanceof SSEClientTransport)) {
+      return {
+        needsNewClient: true,
+        reason: 'Transport type changed to sse',
+      };
+    }
+
+    // Check if the server URL has changed
+    const sseConfig = config as MCPSSEConfig;
+    const transport = client.transport as SSEClientTransport;
+    const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
+    if (currentUrl !== undefined && currentUrl !== new URL(sseConfig.serverUrl).toString()) {
+      return { needsNewClient: true, reason: 'SSE server URL changed' };
+    }
   } else if (config.transport === 'docker') {
     // For Docker transport, we need to check if the Docker-specific parameters have changed
     const dockerConfig = config as import('@/shared/types/mcp/mcp').MCPDockerConfig;

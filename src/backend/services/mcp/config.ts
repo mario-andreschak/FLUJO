@@ -29,15 +29,23 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
       };
       
       if (transport === 'streamable') {
-        // Create streamable config with defaults
+        // Create streamable config with defaults.
+        // IMPORTANT: Do NOT default object-typed transport options (requestInit,
+        // reconnectionOptions, sessionId, authProvider) to empty strings. The MCP SDK
+        // expects these to be proper objects (or undefined). Empty strings get spread
+        // into the internal fetch() call and cause a generic "fetch failed" error.
         return {
           ...defaults,
           ...serverConfig,
           name, // Ensure name is set correctly
-          authProvider: serverConfig.authProvider || '',
-          requestInit: serverConfig.requestInit || '',
-          reconnectionOptions: serverConfig.reconnectionOptions || '',
-          sessionId: serverConfig.sessionId || '',
+          // Only carry these through if they are actually present; otherwise leave undefined
+          requestInit: serverConfig.requestInit && typeof serverConfig.requestInit === 'object'
+            ? serverConfig.requestInit
+            : undefined,
+          reconnectionOptions: serverConfig.reconnectionOptions && typeof serverConfig.reconnectionOptions === 'object'
+            ? serverConfig.reconnectionOptions
+            : undefined,
+          sessionId: serverConfig.sessionId || undefined,
           // OAuth configuration fields
           oauthClientId: serverConfig.oauthClientId || '',
           oauthClientSecret: serverConfig.oauthClientSecret || '',
@@ -51,14 +59,18 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
 
 
       } else if (transport === 'sse') {
-        // Create sse config with defaults
+        // Create sse config with defaults.
+        // Same as streamable: object-typed options must not default to empty strings.
         return {
           ...defaults,
           ...serverConfig,
           name, // Ensure name is set correctly
-          authProvider: serverConfig.authProvider || '',
-          eventSourceInit: serverConfig.eventSourceInit || '',
-          requestInit: serverConfig.requestInit || ''
+          eventSourceInit: serverConfig.eventSourceInit && typeof serverConfig.eventSourceInit === 'object'
+            ? serverConfig.eventSourceInit
+            : undefined,
+          requestInit: serverConfig.requestInit && typeof serverConfig.requestInit === 'object'
+            ? serverConfig.requestInit
+            : undefined
         } as MCPSSEConfig;
 
 
