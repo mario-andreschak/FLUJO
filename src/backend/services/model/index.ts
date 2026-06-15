@@ -10,9 +10,10 @@ import {
   NormalizedModel
 } from '@/shared/types/model/response';
 import { ModelProvider } from '@/shared/types/model/provider';
-import { 
-  encryptApiKey, 
-  decryptApiKey, 
+import { MASKED_API_KEY } from '@/shared/types/constants';
+import {
+  encryptApiKey,
+  decryptApiKey,
   resolveAndDecryptApiKey,
   isEncryptionConfigured,
   isUserEncryptionEnabled,
@@ -87,12 +88,20 @@ class ModelService {
       if (model.displayName && models.some(m => m.displayName === model.displayName)) {
         return { success: false, error: 'A model with this display name already exists' };
       }
-      
+
+      // Encrypt the API key before persisting. A brand-new model's first save arrives here
+      // with the plaintext key the user typed (or a "${global:VAR}" binding), so this is the
+      // point that prevents an unencrypted key from being written to disk.
+      const modelToSave: Model = {
+        ...model,
+        ApiKey: await this.resolveApiKeyForSave(model.ApiKey, undefined)
+      };
+
       // Add the new model
-      const updatedModels = [...models, model];
+      const updatedModels = [...models, modelToSave];
       await saveItem(StorageKey.MODELS, updatedModels);
-      
-      return { success: true, model };
+
+      return { success: true, model: modelToSave };
     } catch (error) {
       log.warn('addModel: Failed to add model:', error);
       return { 
@@ -100,6 +109,39 @@ class ModelService {
         error: error instanceof Error ? error.message : 'Failed to add model' 
       };
     }
+  }
+
+  /**
+   * Decide what to persist for a model's API key on save.
+   *
+   * The frontend never holds the real key (the API adapter masks it), so it cannot send it
+   * back. This resolves the incoming value against the existing stored key:
+   *   - masked placeholder  -> keep the existing stored key unchanged (the key was not edited)
+   *   - "${global:VAR}"      -> store the reference verbatim; it is not a secret and is
+   *                             resolved+decrypted on demand at use time
+   *   - already encrypted    -> store as-is (idempotent; avoids double-encryption)
+   *   - empty                -> store empty (key explicitly cleared)
+   *   - anything else        -> a freshly typed plaintext key; encrypt it
+   *
+   * This is the single authoritative place that prevents the masked placeholder from ever
+   * overwriting (and destroying) a real stored key.
+   */
+  private async resolveApiKeyForSave(incomingApiKey: string | undefined, existingApiKey: string | undefined): Promise<string> {
+    const incoming = incomingApiKey ?? '';
+
+    if (incoming === MASKED_API_KEY) {
+      return existingApiKey ?? '';
+    }
+    if (incoming.startsWith('${global:')) {
+      return incoming;
+    }
+    if (incoming.startsWith('encrypted:') || incoming.startsWith('encrypted_failed:')) {
+      return incoming;
+    }
+    if (incoming.trim() === '') {
+      return '';
+    }
+    return await encryptApiKey(incoming);
   }
 
   /**
@@ -162,8 +204,11 @@ class ModelService {
         ...existingModel,
         ...model
       };
-      
-      updatedModel.ApiKey = await encryptApiKey(updatedModel.ApiKey);
+
+      // Resolve the API key against the existing stored value. Critically, a masked
+      // placeholder coming from the frontend means "unchanged" and must preserve the
+      // existing key rather than be encrypted on top of it.
+      updatedModel.ApiKey = await this.resolveApiKeyForSave(model.ApiKey, existingModel.ApiKey);
 
       // Update all the models
       const updatedModels = models.map(m => 
@@ -293,11 +338,13 @@ class ModelService {
   async fetchProviderModels(
     baseUrl: string,
     modelId?: string,
-    searchTerm?: string
+    searchTerm?: string,
+    apiKey?: string
   ): Promise<NormalizedModel[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`, { 
-      modelId, 
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none' 
+    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`, {
+      modelId,
+      hasApiKey: Boolean(apiKey),
+      searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
     });
     
     try {
@@ -332,34 +379,33 @@ class ModelService {
           log.debug(`Provider determined from URL as: ${provider}`);
         }
         
-        // Determine the API key to use
-        let apiKey = null;
-        
-        // Look up the API key for the model
-        if (modelId) {
-          log.debug(`Looking up API key for model ID: ${modelId}`);
+        // Determine the API key to use. Prefer a directly-supplied key (the value the user
+        // just typed, or a "${global:VAR}" binding) so a brand-new model can list provider
+        // models WITHOUT being persisted to disk first. Fall back to the stored key of an
+        // existing model looked up by id.
+        let resolvedApiKey: string | null = null;
+
+        if (apiKey && apiKey !== MASKED_API_KEY) {
+          // resolveAndDecryptApiKey transparently handles plaintext, "${global:VAR}"
+          // references, and "encrypted:" values.
+          resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
+          log.debug('Using directly-supplied API key for provider fetch');
+        } else if (modelId) {
+          log.debug(`Looking up stored API key for model ID: ${modelId}`);
           const model = await this.getModel(modelId);
           if (model) {
-            log.debug(`Found model, resolving and decrypting API key`);
-            // Resolve global vars and decrypt if needed
-
-            // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
-            log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key pre-resolve: `, JSON.stringify(model.ApiKey));
-            apiKey = await resolveAndDecryptApiKey(model.ApiKey);
-            log.debug(`API key successfully resolved and decrypted`);
-            
-            // DO NOT REMOVE THIS LOGGING, THIS IS ON PURPOSE DURING DEVELOPMENT STAGE
-            log.verbose(`!TODO:REMOVE FROM OUTPUT! - api key: `, JSON.stringify(apiKey));
+            resolvedApiKey = await resolveAndDecryptApiKey(model.ApiKey);
+            log.debug('Resolved stored API key for provider fetch');
           } else {
             log.warn(`Model with ID ${modelId} not found for API key resolution`);
           }
         } else {
-          log.error(`No API key available - modelId not provided`);
+          log.warn('No API key supplied and no modelId provided - provider fetch will be unauthenticated');
         }
-        
+
         // Fetch models from provider
         log.info(`Fetching models from provider: ${provider}`);
-        allModels = await fetchModelsFromProvider(provider, baseUrl, apiKey);
+        allModels = await fetchModelsFromProvider(provider, baseUrl, resolvedApiKey);
         log.debug(`Successfully fetched ${allModels.length} models from provider`);
         
         // Cache the results

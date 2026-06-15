@@ -1,12 +1,12 @@
 {
   "name": "flujo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 4200",
-    "turbo": "next dev --turbopack -p 4200",
+    "dev": "node scripts/launch-next.mjs dev -p 4200",
+    "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
     "build": "next build",
-    "start": "next start -p 4200",
+    "start": "node scripts/launch-next.mjs start -p 4200",
     "lint": "next lint",
     "postinstall": "node scripts/conditional-postinstall.js"
   },

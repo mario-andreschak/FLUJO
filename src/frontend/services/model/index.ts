@@ -367,15 +367,17 @@ class ModelService {
   }
 
   async fetchProviderModels(
-    baseUrl: string, 
-    modelId: string, 
-    searchTerm?: string
+    baseUrl: string,
+    modelId: string,
+    searchTerm?: string,
+    apiKey?: string
   ): Promise<Array<{id: string, name: string, description?: string}>> {
     try {
       log.debug('Fetching provider models', {
         baseUrl,
         modelId,
-        searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
+        searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+        apiKey: apiKey ? 'provided' : 'not provided'
       });
 
       const response = await this.fetchWithErrorHandling('/api/model/provider', {
@@ -387,6 +389,9 @@ class ModelService {
           baseUrl,
           modelId,
           searchTerm,
+          // The key the user just typed (or a "${global:VAR}" binding). Lets us fetch the
+          // provider's model list for a brand-new model WITHOUT first persisting it to disk.
+          apiKey,
         }),
       });
       
@@ -411,13 +416,22 @@ export const getModelService = (): ModelService => {
   if (typeof window === 'undefined') {
     throw new Error('ModelService can only be used in browser environment');
   }
-  
+
   if (!_modelService) {
     _modelService = new ModelService();
   }
-  
+
   return _modelService;
 };
 
-// For backward compatibility, export a getter that throws helpful error
-export const modelService = getModelService();
+// Lazy proxy: this module gets pulled into server bundles (it is imported by client
+// components that Next also evaluates during SSR/prerender), so importing it must never
+// throw. The browser-only guard fires only if a method is actually *invoked* on the
+// server - which never happens in normal use.
+export const modelService: ModelService = new Proxy({} as ModelService, {
+  get(_target, prop) {
+    const service = getModelService();
+    const value = (service as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(service) : value;
+  }
+});

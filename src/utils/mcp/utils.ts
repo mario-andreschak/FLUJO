@@ -34,6 +34,96 @@ export function isAbsolutePath(path: string): boolean {
   return path.startsWith('/');
 }
 
+// OpenSSL/Node error codes that indicate a TLS certificate trust problem.
+const TLS_ERROR_CODES = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'CERT_HAS_EXPIRED',
+  'CERT_UNTRUSTED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+const TLS_MESSAGE_PATTERN = /unable to verify|self[- ]signed certificate|certificate has expired|altname|leaf signature|unable to get local issuer/i;
+
+/**
+ * Walk an error's `cause`/`errors` chain and collect every message and error code.
+ *
+ * This is essential for `fetch`/undici failures: the top-level error is just a generic
+ * `TypeError: fetch failed`, while the real cause (e.g. a TLS verification failure with
+ * code `UNABLE_TO_VERIFY_LEAF_SIGNATURE`) is buried in `error.cause`.
+ */
+function collectErrorChain(error: unknown): { messages: string[]; codes: string[] } {
+  const messages: string[] = [];
+  const codes: string[] = [];
+  let current: unknown = error;
+  let depth = 0;
+
+  while (current && depth < 10) {
+    if (current instanceof Error) {
+      if (current.message) messages.push(current.message);
+      const code = (current as unknown as { code?: unknown }).code;
+      if (typeof code === 'string') codes.push(code);
+    } else if (typeof current === 'string') {
+      messages.push(current);
+    }
+
+    const cause = (current as { cause?: unknown })?.cause;
+    const errors = (current as { errors?: unknown })?.errors;
+    if (cause) {
+      current = cause;
+    } else if (Array.isArray(errors) && errors.length > 0) {
+      current = errors[0];
+    } else {
+      break;
+    }
+    depth++;
+  }
+
+  return { messages, codes };
+}
+
+function tlsTrustHint(): string {
+  return (
+    'This looks like a TLS certificate trust problem: the server presents a certificate ' +
+    'signed by a custom/private CA that Node.js does not trust by default.\n' +
+    'To fix it, start FLUJO so Node trusts your CA:\n' +
+    '  • Trust the OS certificate store (default in FLUJO): NODE_OPTIONS=--use-system-ca, or\n' +
+    '  • Point Node at the CA file: set NODE_EXTRA_CA_CERTS=C:\\path\\to\\root-ca.crt (or FLUJO_EXTRA_CA_CERTS)\n' +
+    'then restart FLUJO. (curl works because it uses the OS trust store; Node does not unless told to.)'
+  );
+}
+
+/**
+ * Build a human-readable error message from an error's full cause chain, appending the
+ * relevant error code(s) and, when the failure is TLS-related, an actionable hint.
+ */
+export function formatErrorChain(error: unknown): string {
+  const { messages, codes } = collectErrorChain(error);
+  const uniqueMessages = Array.from(new Set(messages.filter(Boolean)));
+  let combined = uniqueMessages.join(': ');
+
+  if (!combined) {
+    combined = error instanceof Error ? (error.message || error.name) : String(error);
+  }
+
+  const uniqueCodes = Array.from(new Set(codes));
+  if (uniqueCodes.length > 0 && !uniqueCodes.some(code => combined.includes(code))) {
+    combined += ` (${uniqueCodes.join(', ')})`;
+  }
+
+  const isTlsError =
+    uniqueCodes.some(code => TLS_ERROR_CODES.has(code)) ||
+    uniqueMessages.some(message => TLS_MESSAGE_PATTERN.test(message));
+  if (isTlsError) {
+    combined += `\n\n${tlsTrustHint()}`;
+  }
+
+  return combined;
+}
+
 /**
  * Enhance error messages for common MCP connection issues
  */
@@ -58,7 +148,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
   }
   
   if (!(error instanceof Error)) {
-    return 'Unknown error';
+    return formatErrorChain(error);
   }
 
   const errorMessage = error.message;
@@ -170,12 +260,16 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
     return `MCP error ${error.code}: ${errorMessage}`;
   }
 
-  // Include stderr output if available for other errors
+  // For all other errors (e.g. a generic "fetch failed" from undici), walk the full
+  // cause chain so the real underlying failure (TLS, DNS, ECONNREFUSED, ...) surfaces
+  // instead of the unhelpful top-level message.
+  const chainMessage = formatErrorChain(error);
+
   if (stderrOutput) {
-    return `${errorMessage}\n\nStderr output:\n${stderrOutput}`;
+    return `${chainMessage}\n\nStderr output:\n${stderrOutput}`;
   }
 
-  return errorMessage;
+  return chainMessage;
 }
 
 /**

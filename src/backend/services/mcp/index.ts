@@ -23,6 +23,7 @@ import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
 import {
   enhanceConnectionErrorMessage,
+  formatErrorChain,
   formatErrorResponse
 } from '@/utils/mcp/utils';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
@@ -48,6 +49,11 @@ const log = createLogger('backend/services/mcp/index');
 export class MCPService {
   private clients: Map<string, Client> = new Map();
   private stderrLogs: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  // Last connection failure per server. Unlike stderrLogs (which is reset at the start of
+  // every connection attempt to capture a fresh run), this persists until the server next
+  // connects successfully, so getServerStatus() can always report why a server is down -
+  // even during the brief window of an in-flight reconnect.
+  private lastConnectionError: Map<string, string> = new Map();
   private isBackendStartingUp: boolean = true; // Flag to track backend startup state - true by default
   private recover_attempted: boolean = false; // Flag to track if recovery has been attempted
   private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
@@ -317,6 +323,7 @@ export class MCPService {
       // If we already have a client, return success
       if (client) {
         log.info(`connectServer: Server ${config.name} is already connected`);
+        this.lastConnectionError.delete(config.name);
         return { success: true };
       }
 
@@ -405,12 +412,10 @@ export class MCPService {
           log.error(`Error value: ${String(error)} (type: ${typeof error})`);
         }
         
-        // Store more detailed error information
+        // Store more detailed error information. Walk the full cause chain so a generic
+        // "fetch failed" becomes the real underlying error (e.g. TLS verification failure).
         const errorLogs = this.stderrLogs.get(config.name) || [];
-        const errorMessage = error instanceof Error ? error.message : 
-                           (error && typeof error === 'object') ? JSON.stringify(error) : 
-                           String(error);
-        errorLogs.push(`Transport error: ${errorMessage}`);
+        errorLogs.push(`Transport error: ${formatErrorChain(error)}`);
         this.stderrLogs.set(config.name, errorLogs);
         
         // Always clean up client references first
@@ -437,7 +442,10 @@ export class MCPService {
       
       // Add to global recovery map
       this.addToGlobalRecovery(config.name, client);
-      
+
+      // Connected successfully - clear any persisted failure from previous attempts.
+      this.lastConnectionError.delete(config.name);
+
       log.info(`connectServer: Successfully connected to ${config.name}`);
       return { success: true };
     } catch (error) {
@@ -515,7 +523,96 @@ export class MCPService {
       
       const stderrLogs = this.stderrLogs.get(config.name) || [];
       const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
+
+      // Persist the failure so getServerStatus() can report a meaningful message instead of
+      // the generic "configured but not connected" fallback. HTTP transports (streamable/sse)
+      // fail inside client.connect(), which is caught here and does NOT necessarily fire
+      // transport.onerror, so without this nothing would be recorded for the status poll.
+      this.lastConnectionError.set(config.name, enhancedErrorMessage);
+
       return { success: false, error: enhancedErrorMessage };
+    }
+  }
+
+  /**
+   * Test a connection to an MCP server WITHOUT registering it as a managed client.
+   *
+   * This performs a real MCP handshake (and tool listing) using the same transport,
+   * TLS trust and custom headers the running server would use. It is the backend
+   * counterpart of the modal's "Test Run" button: because it runs in the Next.js
+   * server process (not the browser), it can reach servers behind custom CAs and send
+   * the configured Authorization/X-SAP-* headers, which a browser fetch cannot.
+   */
+  async testConnection(config: MCPServerConfig): Promise<MCPServiceResponse> {
+    log.info(`testConnection: Testing connection to ${config.name || '(unnamed)'} via ${config.transport} transport`);
+
+    const stderrLogs: string[] = [];
+    let client: Client | null = null;
+    let transport: ReturnType<typeof createTransport> | null = null;
+
+    try {
+      client = createNewClient(config);
+      transport = createTransport(config);
+
+      // Capture stdio stderr (for stdio servers) and transport errors so we can build a
+      // meaningful message if the handshake fails.
+      if (transport instanceof StdioClientTransport && transport.stderr) {
+        transport.stderr.on('data', (data: Buffer) => {
+          stderrLogs.push(data.toString());
+        });
+      }
+      transport.onerror = (err: Error) => {
+        stderrLogs.push(`Transport error: ${formatErrorChain(err)}`);
+      };
+
+      const timeoutMs = 15000;
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Connection timeout after ${timeoutMs / 1000}s`)),
+          timeoutMs
+        );
+      });
+
+      try {
+        await Promise.race([client.connect(transport), timeoutPromise]);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
+
+      // Handshake succeeded — try to list tools to confirm full protocol compatibility.
+      let toolCount = 0;
+      try {
+        const result = await client.listTools();
+        toolCount = Array.isArray(result?.tools) ? result.tools.length : 0;
+      } catch (listError) {
+        log.debug(`testConnection: connected to ${config.name} but listTools failed: ${listError instanceof Error ? listError.message : String(listError)}`);
+      }
+
+      log.info(`testConnection: Successfully connected to ${config.name} (${toolCount} tools)`);
+      return { success: true, data: { toolCount } };
+    } catch (error) {
+      log.warn(`testConnection: Failed to connect to ${config.name}:`, error);
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = error instanceof Error ? error.name : '';
+      const requiresAuthentication =
+        errorName === 'OAuthAuthenticationRequired' ||
+        errorMessage.includes('OAuth authentication required') ||
+        errorMessage.includes('UnauthorizedError') ||
+        errorMessage.includes('HTTP 401') ||
+        errorMessage.includes('HTTP 403');
+
+      const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
+      return { success: false, error: enhancedErrorMessage, requiresAuthentication };
+    } finally {
+      if (client) {
+        try {
+          await safelyCloseClient(client, config.name, config);
+        } catch (closeError) {
+          log.debug(`testConnection: error closing test client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+        }
+      }
     }
   }
 
@@ -862,6 +959,8 @@ export class MCPService {
     // Get any stderr logs for this server
     const stderrLogs = this.stderrLogs.get(serverName) || [];
     const stderrOutput = stderrLogs.join('\n').trim();
+    // The last persisted connection failure (survives the per-attempt stderr buffer reset).
+    const persistedError = this.lastConnectionError.get(serverName);
 
     // Check if the client exists in our map
     const clientExists = this.clients.has(serverName);
@@ -896,13 +995,16 @@ export class MCPService {
         };
       }
       
-      // If we have stderr output, use it as the primary error message
-      if (stderrOutput) {
-        log.info(`getServerStatus: Using stderr output as error message for ${serverName}`);
+      // Use the live stderr output if present, otherwise the last persisted connection
+      // error. HTTP transports fail inside connect() and produce no live stderr, so the
+      // persisted error is what makes the real reason visible here.
+      const effectiveError = stderrOutput || persistedError;
+      if (effectiveError) {
+        log.info(`getServerStatus: Using ${stderrOutput ? 'stderr output' : 'persisted connection error'} as error message for ${serverName}`);
         return {
           status: 'error',
-          message: stderrOutput,
-          stderrOutput: stderrOutput
+          message: effectiveError,
+          stderrOutput: stderrOutput || undefined
         };
       } else {
         // No stderr output available, try direct execution to capture error

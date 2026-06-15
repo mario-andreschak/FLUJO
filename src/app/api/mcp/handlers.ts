@@ -73,7 +73,22 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action, serverName, ...data } = body;
 
-    if (!action || !serverName) {
+    if (!action) {
+      return NextResponse.json({ success: false, error: 'Missing action parameter' }, { status: 400 });
+    }
+
+    // testConnection operates on a (possibly unsaved) config, so it does not require a
+    // registered serverName. Handle it before the serverName guard below.
+    if (action === 'testConnection') {
+      const config = data.config;
+      if (!config || !config.transport) {
+        return NextResponse.json({ success: false, error: 'Missing or invalid server config' }, { status: 400 });
+      }
+      const testResult = await mcpService.testConnection(config);
+      return NextResponse.json(testResult);
+    }
+
+    if (!serverName) {
       return NextResponse.json({ success: false, error: 'Missing required parameters' }, { status: 400 });
     }
 

@@ -23,6 +23,7 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { Model } from '@/shared/types';
 import { ModelProvider, PROVIDER_INFO } from '@/shared/types/model/provider';
+import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
 
 const log = createLogger('frontend/components/models/modal');
@@ -31,7 +32,7 @@ import { ModelResult } from '@/frontend/services/model';
 
 export interface ModelModalProps {
   open: boolean;
-  model: Model;  // Model will never be null since we create a preliminary model first
+  model: Model;  // Never null: edit mode passes the loaded model, add mode an in-memory draft
   onSave: (model: Model) => Promise<ModelResult>;
   onClose: () => void;
 }
@@ -113,7 +114,15 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     setIsLoadingModels(true);
     setErrors({});
     try {
-      const fetchedModels = await modelService.fetchProviderModels(baseUrl, model.id, searchTerm);
+      // Pass the key the user is currently entering directly to the backend so the provider's
+      // model list can be fetched WITHOUT persisting the model first. When the key wasn't
+      // edited (masked placeholder), send nothing and let the backend use the stored key
+      // looked up by model id (existing models only).
+      const apiKeyForFetch = isApiKeyBound && boundToGlobalVar
+        ? `\${global:${boundToGlobalVar}}`
+        : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
+
+      const fetchedModels = await modelService.fetchProviderModels(baseUrl, model.id, searchTerm, apiKeyForFetch);
       log.debug("Models fetched successfully", { 
         count: fetchedModels?.length,
         searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
@@ -161,7 +170,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         // Otherwise, mask the existing API key
         setFormState(prev => ({
           ...prev,
-          ApiKey: !model.name ? '' : '********'
+          ApiKey: !model.name ? '' : MASKED_API_KEY
         }));
       }
     } else {
@@ -183,37 +192,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     setInfo(null);
   }, [open, model]);
 
-  // Transfer API key to backend immediately when it changes
-  useEffect(() => {
-    const updateApiKey = async () => {
-      // Only update if API key is defined
-      if (!formState.ApiKey) return;
-
-      let newApiKey = formState.ApiKey;
-
-      // Skip if it's the masked value
-      if (newApiKey === '********') return;
-
-      // Handle global variable binding
-      if (isApiKeyBound && boundToGlobalVar) {
-          newApiKey = `\${global:${boundToGlobalVar}}`;
-      }
-
-      // Let the backend handle encryption - don't encrypt here
-      try {
-          await modelService.updateModelApiKey(model.id, newApiKey);
-          log.debug('API key updated successfully');
-      } catch (error) {
-          log.error('Failed to update API key', { error });
-          setErrors(prev => ({
-              ...prev,
-              ApiKey: 'Failed to update API key'
-          }));
-      }
-  };
-
-  updateApiKey();
-  }, [formState.ApiKey, isApiKeyBound, boundToGlobalVar, model.id]);
+  // Note: the API key is intentionally NOT persisted as the user types. It is sent directly
+  // to the provider-fetch endpoint for listing models, and only saved (encrypted) when the
+  // user clicks Save. This avoids writing a half-configured model + plaintext key to disk.
 
   // Update provider when baseUrl changes
   useEffect(() => {
@@ -283,19 +264,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     }
 
     try {
-      // If editing and API key hasn't changed, preserve the original
-      let apiKey = formState.ApiKey;
-      if (!isApiKeyBound && apiKey === '********') {
-        apiKey = model.ApiKey;
-      }
-      // Don't encrypt here - let the backend handle encryption
-
+      // The frontend never holds the real key. When it wasn't edited this session,
+      // formState.ApiKey is the masked placeholder, which the backend interprets as
+      // "keep the existing key". A "${global:VAR}" binding or a freshly typed key is sent
+      // through as-is. Encryption happens on the backend.
       const result: ModelResult = await onSave({
         id: model.id,
         name: formState.name!,
         displayName: formState.displayName!,
         description: formState.description,
-        ApiKey: apiKey,
+        ApiKey: formState.ApiKey,
         baseUrl: formState.baseUrl,
         provider: formState.provider!,
         promptTemplate: formState.promptTemplate,

@@ -5,6 +5,7 @@ import { MessageState } from '../../../types';
 import { parseConfigFromClipboard, parseConfigFromReadme, parseEnvFromClipboard, parseEnvFromFile } from '../../../utils/configUtils';
 import { installDependencies, buildServer } from '../../../utils/buildUtils';
 import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } from '../hooks/useLocalServerState';
+import { mcpService } from '@/frontend/services/mcp';
 
 // Function to get the MCP servers directory from the CWD API
 export const getMCPServersDir = async (): Promise<string> => {
@@ -590,201 +591,6 @@ interface TestResult {
 }
 
 /**
- * Test Streamable HTTP connection by sending a proper MCP initialize request
- */
-const testStreamableConnection = async (serverUrl: string): Promise<TestResult> => {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-    
-    // Send a proper MCP initialize request (JSON-RPC 2.0)
-    const initializeRequest = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        capabilities: {},
-        clientInfo: {
-          name: 'FLUJO-MCP-Test',
-          version: '1.0.0'
-        }
-      }
-    };
-    
-    const response = await fetch(serverUrl, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        'User-Agent': 'FLUJO-MCP-Client/1.0'
-      },
-      body: JSON.stringify(initializeRequest)
-    });
-    
-    clearTimeout(timeoutId);
-    
-    // Check if we got a valid JSON-RPC response
-    const contentType = response.headers.get('content-type') || '';
-    const isJson = contentType.includes('application/json');
-    const isEventStream = contentType.includes('text/event-stream');
-    
-    if (!response.ok) {
-      // For streamable HTTP, non-2xx responses might still be valid MCP responses
-      // (e.g., 401 for auth required, 400 for malformed request but server is reachable)
-      if (response.status === 401) {
-        return {
-          success: true,
-          message: 'Server reachable - requires authentication (401)',
-          details: 'This server requires OAuth authentication. Save the configuration to initiate the OAuth flow.'
-        };
-      }
-      
-      // Try to parse response as JSON-RPC error
-      if (isJson) {
-        try {
-          const json = await response.json();
-          if (json && json.jsonrpc === '2.0' && (json.error || json.result)) {
-            return {
-              success: true,
-              message: `Server reachable - MCP endpoint responded with ${json.error ? 'error' : 'result'}`,
-              details: `Status: ${response.status} ${response.statusText}`
-            };
-          }
-        } catch {
-          // Not valid JSON, fall through
-        }
-      }
-      
-      return {
-        success: false,
-        message: `Server responded with HTTP ${response.status}`,
-        details: `Status: ${response.status} ${response.statusText}. This may indicate the endpoint is not a valid MCP streamable HTTP server.`
-      };
-    }
-    
-    // For successful responses, try to parse as JSON-RPC
-    if (isJson) {
-      try {
-        const json = await response.json();
-        if (json && json.jsonrpc === '2.0' && (json.result || json.error)) {
-          return {
-            success: true,
-            message: json.result ? 'MCP connection test successful!' : 'MCP endpoint responded with error',
-            details: json.result 
-              ? `Server capabilities: ${JSON.stringify(json.result.capabilities || {})}`
-              : `MCP Error: ${json.error?.message || 'Unknown error'}`
-          };
-        }
-      } catch {
-        // Not valid JSON-RPC
-      }
-    }
-    
-    // If we got a 2xx but not valid JSON-RPC, it might be an SSE stream
-    if (isEventStream) {
-      return {
-        success: true,
-        message: 'Server reachable - appears to be an SSE endpoint',
-        details: 'Received text/event-stream response. This may be an SSE transport endpoint.'
-      };
-    }
-    
-    return {
-      success: false,
-      message: 'Server responded but not with valid MCP protocol',
-      details: `Status: ${response.status} ${response.statusText}, Content-Type: ${contentType}`
-    };
-  } catch (error) {
-    if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        return {
-          success: false,
-          message: 'Connection timeout',
-          details: 'Server did not respond within 10 seconds'
-        };
-      }
-      return {
-        success: false,
-        message: 'Connection failed',
-        details: error.message
-      };
-    }
-    return {
-      success: false,
-      message: 'Connection failed',
-      details: 'Unknown error occurred'
-    };
-  }
-};
-
-/**
- * Test SSE connection by attempting to establish an EventSource
- */
-const testSSEConnection = async (serverUrl: string): Promise<TestResult> => {
-  return new Promise((resolve) => {
-    let eventSource: EventSource | null = null;
-    let resolved = false;
-    
-    const timeoutId = setTimeout(() => {
-      if (!resolved && eventSource) {
-        eventSource.close();
-        resolved = true;
-        resolve({
-          success: false,
-          message: 'Connection timeout',
-          details: 'SSE connection did not establish within 10 seconds'
-        });
-      }
-    }, 10000);
-    
-    try {
-      eventSource = new EventSource(serverUrl);
-      
-      eventSource.onopen = () => {
-        if (!resolved) {
-          clearTimeout(timeoutId);
-          eventSource?.close();
-          resolved = true;
-          resolve({
-            success: true,
-            message: 'SSE connection test successful!',
-            details: 'EventSource connection established successfully'
-          });
-        }
-      };
-      
-      eventSource.onerror = (error) => {
-        if (!resolved) {
-          clearTimeout(timeoutId);
-          eventSource?.close();
-          resolved = true;
-          
-          // Check if it's a 401 (auth required) - EventSource doesn't expose status codes directly
-          // but we can infer from the error
-          resolve({
-            success: true, // Connection was established, just auth issue
-            message: 'Server reachable - SSE connection established (may require auth)',
-            details: 'SSE endpoint is reachable. If authentication is required, save the configuration to initiate OAuth flow.'
-          });
-        }
-      };
-    } catch (error) {
-      if (!resolved) {
-        clearTimeout(timeoutId);
-        resolved = true;
-        resolve({
-          success: false,
-          message: 'Connection failed',
-          details: error instanceof Error ? error.message : 'Unknown error occurred'
-        });
-      }
-    }
-  });
-};
-
-/**
  * Test WebSocket connection by attempting to establish a WebSocket
  */
 const testWebSocketConnection = async (websocketUrl: string): Promise<TestResult> => {
@@ -919,33 +725,52 @@ export const handleRun = async (
     text: 'Testing server connection...'
   });
   
-  // For HTTP streaming transports (SSE and Streamable), test the connection instead of spawning a process
+  // For HTTP streaming transports (SSE and Streamable), test the connection through the
+  // FLUJO backend rather than a browser fetch. The browser runs in a different process
+  // that does not share Node's TLS trust (custom CA) and cannot send the configured
+  // custom headers, so a browser-side fetch fails with an opaque "Failed to fetch".
   if (localConfig.transport === 'sse' || localConfig.transport === 'streamable') {
     try {
-      setConsoleOutput((prev: string) => prev + `Attempting to connect to: ${serverUrl}\n`);
-      
-      // Use transport-specific test function
-      const testResult = localConfig.transport === 'streamable'
-        ? await testStreamableConnection(serverUrl)
-        : await testSSEConnection(serverUrl);
-      
-      setConsoleOutput((prev: string) => prev + `Connection test result: ${testResult.message}\n`);
-      if (testResult.details) {
-        setConsoleOutput((prev: string) => prev + `Details: ${testResult.details}\n`);
+      setConsoleOutput((prev: string) => prev + `Attempting to connect (via FLUJO backend) to: ${serverUrl}\n`);
+
+      // Build the config to test from the current form state (serverUrl may be newer than
+      // what is stored on localConfig). Custom headers already live on localConfig.
+      const testConfig = { ...localConfig, serverUrl } as MCPServerConfig;
+      const headerCount = Object.keys((localConfig as MCPStreamableConfig | MCPSSEConfig).headers || {}).length;
+      if (headerCount > 0) {
+        setConsoleOutput((prev: string) => prev + `Sending ${headerCount} custom header(s).\n`);
       }
-      
+
+      const testResult = await mcpService.testConnection(testConfig);
+
       if (testResult.success) {
         setRunCompleted(true);
+        const toolCount = testResult.data?.toolCount;
         setMessage({
           type: 'success',
           text: 'Connection test successful! Server is reachable.'
         });
+        setConsoleOutput((prev: string) => prev +
+          `Connection test result: MCP handshake successful${typeof toolCount === 'number' ? ` (${toolCount} tool${toolCount === 1 ? '' : 's'} discovered)` : ''}\n`);
         setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+      } else if (testResult.requiresAuthentication) {
+        // Reachable, but needs auth — surface as actionable info rather than a hard failure.
+        setMessage({
+          type: 'warning',
+          text: 'Server reachable but requires authentication.'
+        });
+        setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
+        if (testResult.error) {
+          setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
+        }
+        setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required headers (e.g. Authorization) and test again.\n');
       } else {
         setMessage({
           type: 'error',
           text: 'Connection test failed. Check the console for details.'
         });
+        setConsoleOutput((prev: string) => prev + `Connection test result: Connection failed\n`);
+        setConsoleOutput((prev: string) => prev + `Details: ${testResult.error || 'Unknown error'}\n`);
         setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
       }
     } catch (error) {

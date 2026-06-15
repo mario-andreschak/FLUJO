@@ -15,14 +15,16 @@ const log = createLogger('app/api/model/backend-provider-adapter');
 export async function fetchProviderModels(
   baseUrl: string,
   modelId?: string,
-  searchTerm?: string
+  searchTerm?: string,
+  apiKey?: string
 ): Promise<NormalizedModel[]> {
   log.debug(`fetchProviderModels: Delegating to backend service for baseUrl: ${baseUrl}`, {
     modelId,
+    hasApiKey: Boolean(apiKey),
     searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
   });
   try {
-    return await modelService.fetchProviderModels(baseUrl, modelId, searchTerm);
+    return await modelService.fetchProviderModels(baseUrl, modelId, searchTerm, apiKey);
   } catch (error) {
     log.warn(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
     // Return empty array instead of throwing to avoid UI errors

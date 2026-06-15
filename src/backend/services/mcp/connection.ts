@@ -36,7 +36,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   return new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '0.1.4',
+      version: '0.1.5',
     },
     {
       capabilities: {
@@ -77,7 +77,25 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     if (typeof streamableConfig.sessionId === 'string' && streamableConfig.sessionId.length > 0) {
       transportoptions.sessionId = streamableConfig.sessionId;
     }
-    
+
+    // Merge user-defined custom headers (e.g. Authorization, X-SAP-System-Id, X-SAP-Client)
+    // into requestInit so they are sent on every request the SDK makes.
+    if (streamableConfig.headers && typeof streamableConfig.headers === 'object') {
+      const customHeaders = Object.fromEntries(
+        Object.entries(streamableConfig.headers).filter(([key, value]) => key && typeof value === 'string')
+      );
+      if (Object.keys(customHeaders).length > 0) {
+        transportoptions.requestInit = {
+          ...(transportoptions.requestInit || {}),
+          headers: {
+            ...((transportoptions.requestInit?.headers as Record<string, string>) || {}),
+            ...customHeaders,
+          },
+        };
+        log.info(`Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(', ')}`);
+      }
+    }
+
     // Add OAuth authentication if configured
     if (streamableConfig.oauthClientId || streamableConfig.oauthClientInformation) {
       log.info(`Setting up OAuth authentication for ${config.name}`);
@@ -118,6 +136,24 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     }
     if (sseConfig.eventSourceInit && typeof sseConfig.eventSourceInit === 'object') {
       transportoptions.eventSourceInit = sseConfig.eventSourceInit;
+    }
+
+    // Merge user-defined custom headers (e.g. Authorization, X-SAP-System-Id, X-SAP-Client)
+    // into requestInit so they are sent on every request the SDK makes.
+    if (sseConfig.headers && typeof sseConfig.headers === 'object') {
+      const customHeaders = Object.fromEntries(
+        Object.entries(sseConfig.headers).filter(([key, value]) => key && typeof value === 'string')
+      );
+      if (Object.keys(customHeaders).length > 0) {
+        transportoptions.requestInit = {
+          ...(transportoptions.requestInit || {}),
+          headers: {
+            ...((transportoptions.requestInit?.headers as Record<string, string>) || {}),
+            ...customHeaders,
+          },
+        };
+        log.info(`Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(', ')}`);
+      }
     }
 
     return new SSEClientTransport(new URL(config.serverUrl), transportoptions);

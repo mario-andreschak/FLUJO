@@ -6,7 +6,7 @@ const log = createLogger('app/api/model/provider/route');
 
 export async function POST(request: NextRequest) {
   try {
-    const { baseUrl, modelId, searchTerm } = await request.json();
+    const { baseUrl, modelId, searchTerm, apiKey } = await request.json();
 
     if (!baseUrl) {
       return new Response(JSON.stringify({ error: 'Base URL is required' }), {
@@ -15,22 +15,19 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (!modelId) {
-      return new Response(JSON.stringify({ error: 'Model ID is required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
+    // Either a directly-supplied apiKey (new/unsaved model) or a modelId (existing model,
+    // whose stored key is resolved on the backend) is needed to authenticate the fetch.
+    // Neither being present is allowed - the provider list call will simply be unauthenticated.
     log.debug('Processing provider models request', {
       baseUrl,
       modelId,
+      hasApiKey: Boolean(apiKey),
       searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
     });
 
     // Fetch available models from the provider using the adapter
     // The adapter will delegate to the backend service which handles API key resolution, decryption, caching, and filtering
-    const models = await fetchProviderModels(baseUrl, modelId, searchTerm);
+    const models = await fetchProviderModels(baseUrl, modelId, searchTerm, apiKey);
 
     log.debug('Provider models request completed', {
       baseUrl,

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { TabProps, MessageState } from '../../types';
-import { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp/mcp';
 import ConsoleOutput from './ConsoleOutput';
 import { useLocalServerState } from './hooks/useLocalServerState';
 import { useConsoleOutput } from './hooks/useConsoleOutput';
@@ -490,6 +490,10 @@ const LocalServerTab: React.FC<TabProps> = ({
                     runCompleted={runCompleted}
                     env={localConfig.env}
                     onEnvChange={handleEnvChange}
+                    headers={(localConfig.transport === 'sse' || localConfig.transport === 'streamable')
+                      ? ((localConfig as MCPSSEConfig | MCPStreamableConfig).headers || {})
+                      : {}}
+                    onHeadersChange={(headers) => setLocalConfig(prev => ({ ...prev, headers }))}
                     serverName={localConfig.name}
                     consoleOutput={consoleOutput}
                     message={message}

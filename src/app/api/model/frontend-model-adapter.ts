@@ -1,10 +1,11 @@
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types/model';
-import { 
-  ModelServiceResponse, 
-  ModelOperationResponse, 
+import {
+  ModelServiceResponse,
+  ModelOperationResponse,
   ModelListResponse,
 } from '@/shared/types/model/response';
+import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/backend/services/model';
 
 // Create a logger instance for this file
@@ -17,12 +18,17 @@ const log = createLogger('app/api/model/model-adapter');
 function sanitizeModelForFrontend(model: Model): Model {
   // Create a copy to avoid modifying the original
   const sanitizedModel = { ...model };
-  
-  // Replace the API key with a placeholder
+
   if (sanitizedModel.ApiKey) {
-    sanitizedModel.ApiKey = '********';
+    // A "${global:VAR}" reference is not a secret - it only names a global variable whose
+    // (encrypted) value lives on the backend. The modal needs to see it to show the "bound"
+    // state on re-edit, so pass it through. Everything else (plaintext or encrypted real
+    // keys) must never reach the frontend, so replace it with the masked placeholder.
+    if (!sanitizedModel.ApiKey.startsWith('${global:')) {
+      sanitizedModel.ApiKey = MASKED_API_KEY;
+    }
   }
-  
+
   return sanitizedModel;
 }
 

@@ -25,6 +25,31 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
+  // In-memory draft for a brand-new model (add mode). It is NOT persisted to disk until the
+  // user clicks Save, which replaces the old approach of writing a "preliminary" model record
+  // immediately and cleaning it up on cancel.
+  const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+
+  const isAddMode = searchParams.get('add') === '1';
+
+  // Create the draft once when entering add mode; clear it when leaving.
+  useEffect(() => {
+    if (isAddMode) {
+      setNewModelDraft(prev => prev ?? ({
+        id: uuidv4(),
+        name: '',
+        displayName: '',
+        description: '',
+        ApiKey: '',
+        baseUrl: '',
+        provider: 'openai',
+        promptTemplate: '',
+        temperature: '0.0',
+      } as Model));
+    } else {
+      setNewModelDraft(null);
+    }
+  }, [isAddMode]);
 
   // Ensure service is ready before using it
   useEffect(() => {
@@ -58,24 +83,27 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   }
 
   // Get modal state from URL
-  const modelId = searchParams.get('edit');
-  const isModalOpen = Boolean(modelId);
-  // Get current model from models list
-  const currentModel = modelId ? models.find(m => m.id === modelId) ?? null : null;
+  const editId = searchParams.get('edit');
+  // In add mode the model comes from the in-memory draft; in edit mode from the loaded list.
+  const currentModel: Model | null = isAddMode
+    ? newModelDraft
+    : (editId ? models.find(m => m.id === editId) ?? null : null);
+  const isModalOpen = isAddMode ? Boolean(newModelDraft) : Boolean(editId);
 
   const handleSave = async (model: Model): Promise<ModelResult> => {
-    log.info('Saving model', { modelId: model.id, modelName: model.name });
+    log.info('Saving model', { modelId: model.id, modelName: model.name, mode: isAddMode ? 'add' : 'update' });
     setIsLoading(true);
     try {
-      log.debug('Updating existing model');
       const service = getModelService();
-      const result = await service.updateModel(model);
+      // First-time save of a new model creates it; otherwise update the existing record.
+      const result = isAddMode ? await service.addModel(model) : await service.updateModel(model);
       if (result.success) {
         // Refresh models list
         const updatedModels = await service.loadModels();
         setModels(updatedModels);
 
         // Close modal by removing query param
+        setNewModelDraft(null);
         router.push('/models');
         return { success: true, model: result.model };
       } else {
@@ -99,40 +127,9 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   };
 
   const handleAdd = async () => {
-    log.info('Creating preliminary model');
-    setIsLoading(true);
-    try {
-      // Create a preliminary model
-      const preliminaryModel: Model = {
-        id: uuidv4(),
-        name: '',
-        displayName: '',
-        ApiKey: '',
-        provider: 'openai'
-      };
-      
-      const service = getModelService();
-      const result = await service.addModel(preliminaryModel);
-      if (result.success && result.model) {
-        // Update models list
-        const updatedModels = await service.loadModels();
-        setModels(updatedModels);
-
-        // Open modal with the new model's ID
-        router.push(`/models?edit=${result.model.id}`);
-        return { success: true };
-      } else {
-        log.error('Failed to create preliminary model', result.error);
-        setError(result.error || 'Failed to create model. Please try again.');
-        return { success: false, error: result.error || 'Failed to add model' };
-      }
-    } catch (error: any) {
-      log.error('Failed to create preliminary model', JSON.stringify(error));
-      setError(error?.message || 'Failed to create model. Please try again.');
-      return { success: false, error: error?.message || 'Failed to add model' };
-    } finally {
-      setIsLoading(false);
-    }
+    log.info('Opening add-model modal');
+    // Just open the modal in add mode - the draft lives in memory until the user saves.
+    router.push('/models?add=1');
   };
 
   const handleDelete = async (modelId: string) => {
@@ -155,22 +152,8 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   };
 
   const handleCloseModal = async () => {
-    // If we're closing a new model that hasn't been saved properly
-    if (modelId && currentModel && !currentModel.name) {
-      log.info('Cleaning up unsaved preliminary model', { modelId });
-      try {
-        const service = getModelService();
-        await service.deleteModel(modelId);
-        // Refresh models list
-        const updatedModels = await service.loadModels();
-        setModels(updatedModels);
-      } catch (error) {
-        log.warn('Failed to cleanup preliminary model', JSON.stringify(error));
-        // Don't show error to user since this is cleanup
-      }
-    }
-    
-    // Close modal by removing query param
+    // Nothing to clean up: an unsaved new model only ever lived in memory.
+    setNewModelDraft(null);
     router.push('/models');
   };
 

@@ -104,7 +104,9 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         _buildCommand: prev._buildCommand,
         _installCommand: prev._installCommand,
         transport: 'sse',
-        serverUrl: serverUrl
+        serverUrl: serverUrl,
+        // Preserve any custom headers when switching between HTTP-based transports
+        headers: (prev as MCPSSEConfig | MCPStreamableConfig).headers || {}
       } as MCPSSEConfig));
     } else if (transport === 'streamable') {
       // Convert to Streamable config
@@ -117,7 +119,9 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         _buildCommand: prev._buildCommand,
         _installCommand: prev._installCommand,
         transport: 'streamable',
-        serverUrl: serverUrl
+        serverUrl: serverUrl,
+        // Preserve any custom headers when switching between HTTP-based transports
+        headers: (prev as MCPSSEConfig | MCPStreamableConfig).headers || {}
       } as MCPStreamableConfig));
     } else {
       // Convert to stdio config

@@ -173,6 +173,42 @@ class MCPService {
   }
 
   /**
+   * Test a connection to an MCP server through the backend.
+   *
+   * This runs the real MCP handshake in the Next.js server process rather than the
+   * browser, so it can reach servers behind custom CAs (system CA trust) and send the
+   * configured custom headers (Authorization, X-SAP-*), which a browser fetch cannot.
+   */
+  async testConnection(config: MCPServerConfig): Promise<{
+    success: boolean;
+    error?: string;
+    requiresAuthentication?: boolean;
+    data?: { toolCount?: number };
+  }> {
+    try {
+      const response = await fetch('/api/mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'testConnection',
+          serverName: config.name,
+          config,
+        }),
+      });
+
+      return await response.json();
+    } catch (error) {
+      log.warn(`Failed to test connection for ${config.name}:`, error);
+      return {
+        success: false,
+        error: `Failed to reach the FLUJO backend to run the connection test: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      };
+    }
+  }
+
+  /**
    * Get the current server status
    */
   async getServerStatus(serverName: string) {

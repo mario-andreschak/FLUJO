@@ -2,6 +2,7 @@
 
 import React, { useEffect } from 'react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
+import HeadersEditor from './HeadersEditor';
 import { MessageState } from '../../types';
 import { EnvVarValue } from '@/shared/types/mcp/mcp';
 import {
@@ -30,6 +31,8 @@ interface RunToolsProps {
   runCompleted: boolean;
   env: Record<string, EnvVarValue>;
   onEnvChange: (env: Record<string, EnvVarValue>) => void;
+  headers?: Record<string, string>;
+  onHeadersChange?: (headers: Record<string, string>) => void;
   serverName: string;
   consoleOutput: string;
   message: MessageState | null;
@@ -50,6 +53,8 @@ const RunTools: React.FC<RunToolsProps> = ({
   runCompleted,
   env,
   onEnvChange,
+  headers = {},
+  onHeadersChange,
   serverName,
   consoleOutput,
   message,
@@ -154,6 +159,13 @@ const RunTools: React.FC<RunToolsProps> = ({
             error={!isServerUrlValid}
             helperText={!isServerUrlValid && "Please enter a valid HTTP URL (starting with http:// or https://)"}
           />
+        </Box>
+      )}
+
+      {/* Custom HTTP headers (only shown for sse or streamable transports) */}
+      {(transport === 'sse' || transport === 'streamable') && (
+        <Box>
+          <HeadersEditor headers={headers} onChange={onHeadersChange || (() => {})} />
         </Box>
       )}
 

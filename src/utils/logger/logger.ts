@@ -13,6 +13,38 @@ export const LOG_LEVEL = {
 export const CURRENT_LOG_LEVEL = 
   typeof FEATURES.LOG_LEVEL === 'number' ? FEATURES.LOG_LEVEL : LOG_LEVEL.ERROR;
 
+/**
+ * Convert an Error (and any nested Errors in its `cause`/`errors`) into a plain object
+ * that JSON.stringify can render. Without this, Errors serialize to "{}" because their
+ * standard properties are non-enumerable.
+ */
+function errorToPlain(err: unknown, depth = 0): unknown {
+  if (depth > 6) return String(err);
+  if (!(err instanceof Error)) return err;
+
+  const plain: Record<string, unknown> = {
+    name: err.name,
+    message: err.message,
+  };
+
+  for (const key of Object.getOwnPropertyNames(err)) {
+    if (key === 'name' || key === 'message') continue;
+    const value = (err as unknown as Record<string, unknown>)[key];
+    if (typeof value === 'function') continue;
+    if (key === 'stack') {
+      plain.stack = value;
+    } else if (key === 'cause') {
+      plain.cause = errorToPlain(value, depth + 1);
+    } else if (key === 'errors' && Array.isArray(value)) {
+      plain.errors = value.map(e => errorToPlain(e, depth + 1));
+    } else {
+      plain[key] = value;
+    }
+  }
+
+  return plain;
+}
+
 function logWithLevel(level: number, filepath: string, message: string, data?: any, overrideLogLevel?: number) {
   // Use the override log level if provided, otherwise use the global setting
   const effectiveLogLevel = typeof overrideLogLevel === 'number' ? overrideLogLevel : CURRENT_LOG_LEVEL;
@@ -23,9 +55,16 @@ function logWithLevel(level: number, filepath: string, message: string, data?: a
     
     let output = `${logPrefix} ${message}`;
     if (data !== undefined) {
-      if (typeof data === 'object') {
+      if (data instanceof Error || typeof data === 'object') {
         try {
-          const dataStr = JSON.stringify(data, null, 2);
+          // Error objects have no enumerable own properties, so a naive JSON.stringify(error)
+          // produces "{}". Normalize Errors (and any nested Errors) into plain objects that
+          // preserve name/message/stack/code and walk the `cause` chain (undici/fetch hide the
+          // real failure inside error.cause).
+          const normalized = data instanceof Error ? errorToPlain(data) : data;
+          const replacer = (_key: string, value: unknown) =>
+            value instanceof Error ? errorToPlain(value) : value;
+          const dataStr = JSON.stringify(normalized, replacer, 2);
           output += `:\n${dataStr}`;
         } catch (e) {
           output += ': [Object cannot be stringified]';

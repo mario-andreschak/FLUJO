@@ -32,12 +32,16 @@ export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
 
 export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   transport: 'sse';
-  serverUrl: string
+  serverUrl: string;
+  // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
+  headers?: Record<string, string>;
 };
 
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
   transport: 'streamable';
   serverUrl: string;
+  // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
+  headers?: Record<string, string>;
   // OAuth configuration fields
   oauthClientId?: string;
   oauthClientSecret?: string;
