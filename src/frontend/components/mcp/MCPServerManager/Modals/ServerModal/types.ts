@@ -27,5 +27,5 @@ export interface TabProps {
   onUpdate?: (config: MCPServerConfig) => void;
   onClose: () => void;
   onRestartAfterUpdate?: (serverName: string) => void;
-  setActiveTab?: (tab: 'github' | 'local' | 'smithery' | 'reference' | 'docker' | 'remote') => void;
+  setActiveTab?: (tab: 'github' | 'local' | 'reference' | 'remote') => void;
 }

@@ -636,7 +636,7 @@ export class MCPService {
       // Get the server config to pass to safelyCloseClient
       const config = await this.getServerConfig(serverName);
       
-      // Close the client and stop any Docker containers if needed
+      // Close the client following the MCP shutdown sequence
       await safelyCloseClient(client, serverName, config || undefined);
       
       // Remove the client from our map
@@ -906,7 +906,7 @@ export class MCPService {
   /**
    * Get the connection status of an MCP server
    */
-  async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string; containerName?: string }> {
+  async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
     // force recovery
     this.getClient(serverName);
 
@@ -965,24 +965,11 @@ export class MCPService {
     // Check if the client exists in our map
     const clientExists = this.clients.has(serverName);
 
-    // Get Docker container name if this is a Docker server
-    let containerName: string | undefined;
-    if (config.transport === 'docker') {
-      // Import the dockerContainerMap from connection.ts
-      const { dockerContainerMap } = require('./connection');
-      containerName = dockerContainerMap.get(serverName);
-      
-      if (containerName) {
-        log.debug(`getServerStatus: Docker container name for ${serverName}: ${containerName}`);
-      }
-    }
-
     if (clientExists) {
       log.info(`getServerStatus: Server ${serverName} is connected`);
       return {
         status: 'connected',
-        stderrOutput: stderrOutput || undefined,
-        containerName
+        stderrOutput: stderrOutput || undefined
       };
     } else {
       // Check if stderr contains OAuth authentication errors
@@ -1043,93 +1030,8 @@ export class MCPService {
             // If direct execution also fails, log but continue to default message
             log.warn(`getServerStatus: Direct execution failed for ${serverName}:`, execError);
           }
-        } else if (config.transport === 'docker') {
-          try {
-            // For Docker transport, check if the container is running
-            const dockerConfig = config as import('@/shared/types/mcp/mcp').MCPDockerConfig;
-            
-            // Import the dockerContainerMap from connection.ts to get the actual container name
-            const { dockerContainerMap } = require('./connection');
-            
-            // Import the generateContainerName function from connection.ts
-            const { generateContainerName } = require('./connection');
-            
-            // Get the container name from the map, or use the custom name if provided, or generate a deterministic name
-            let containerName: string;
-            const mappedContainerName = dockerContainerMap.get(config.name);
-            
-            if (mappedContainerName) {
-              // Use the mapped container name if available
-              containerName = mappedContainerName;
-            } else if (dockerConfig.containerName) {
-              // Use the custom container name if provided
-              containerName = dockerConfig.containerName;
-            } else {
-              // Generate a deterministic name as a fallback
-              containerName = generateContainerName(config.name);
-            }
-            
-            // Generate a request ID for logging
-            const requestId = uuidv4();
-            
-            // Check if the container is running with exponential backoff retries
-            // Docker containers can take a moment to start, so we'll use exponential backoff
-            let containerRunning = false;
-            const maxWaitTimeMs = 30000; // Maximum wait time of 30 seconds
-            let totalWaitTimeMs = 0;
-            let attempt = 0;
-            
-            while (totalWaitTimeMs < maxWaitTimeMs) {
-              attempt++;
-              log.info(`getServerStatus: Checking if Docker container ${containerName} is running (attempt ${attempt}, total wait: ${totalWaitTimeMs}ms)`);
-              
-              // Use docker ps with container name
-              // Note: We only use the name filter, not the id filter
-              const result = await executeCommand({
-                savePath: process.cwd(),
-                command: 'docker',
-                args: ['ps', '-q', '-f', `name=${containerName}`],
-                env: {},
-                actionName: 'CheckDockerContainer',
-                requestId,
-                timeout: 5000 // 5 second timeout to avoid hanging
-              });
-              
-              if (result.commandOutput && result.commandOutput.trim() !== '') {
-                log.info(`getServerStatus: Docker container ${containerName} is running`);
-                containerRunning = true;
-                break;
-              }
-              
-              // If not running and we haven't reached the max wait time, wait with exponential backoff
-              if (totalWaitTimeMs < maxWaitTimeMs) {
-                // Calculate wait time with exponential backoff (2^attempt * 100ms, capped at remaining time)
-                const waitTimeMs = Math.min(
-                  Math.pow(2, attempt) * 100, 
-                  maxWaitTimeMs - totalWaitTimeMs
-                );
-                
-                log.info(`getServerStatus: Docker container ${containerName} not running yet, waiting ${waitTimeMs}ms before retry`);
-                await new Promise(resolve => setTimeout(resolve, waitTimeMs));
-                totalWaitTimeMs += waitTimeMs;
-              }
-            }
-            
-            // If the container is still not running after all retries, return an error
-            if (!containerRunning) {
-              log.info(`getServerStatus: Docker container ${containerName} is not running after ${attempt} attempts (${totalWaitTimeMs}ms)`);
-              return {
-                status: 'error',
-                message: `Docker container ${containerName} is not running after waiting ${totalWaitTimeMs}ms. The container may be taking longer than expected to start, or it may have crashed or been stopped.`,
-                stderrOutput: undefined
-              };
-            }
-          } catch (dockerError) {
-            // If Docker command fails, log but continue to default message
-            log.warn(`getServerStatus: Docker command failed for ${serverName}:`, dockerError);
-          }
         }
-        
+
         // Fall back to generic message if all else fails
         log.info(`getServerStatus: No specific error details available for ${serverName}`);
         return {

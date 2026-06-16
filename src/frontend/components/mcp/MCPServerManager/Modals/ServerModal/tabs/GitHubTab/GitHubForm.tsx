@@ -62,14 +62,14 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
     <Stack spacing={3}>
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          GitHub Repository URL or MCP Server URL
+          GitHub Repository URL
         </Typography>
         <TextField
           fullWidth
           value={githubUrl}
           onChange={e => setGithubUrl(e.target.value)}
-          placeholder="GitHub, Glama, Smithery, or MCP.so URL"
-          helperText="You can paste URLs from GitHub, Glama, Smithery, or MCP.so"
+          placeholder="GitHub repository URL"
+          helperText="Paste a GitHub repository URL"
           variant="outlined"
           size="small"
         />

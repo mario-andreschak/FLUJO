@@ -41,7 +41,7 @@ interface ServerCardProps {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
   path: string;
   enabled: boolean;
-  transport: 'stdio' | 'websocket' | 'docker' | 'sse' | 'streamable';
+  transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
   onToggle: (enabled: boolean) => void;
   onRetry: () => void;
   onDelete: () => void;
@@ -50,7 +50,6 @@ interface ServerCardProps {
   onAuthenticate?: () => void; // OAuth authentication handler
   error?: string; // Optional error message
   stderrOutput?: string; // Optional stderr output
-  containerName?: string; // Optional Docker container name
   authorizationUrl?: string; // OAuth authorization URL
   selected?: boolean; // For bulk selection
   onSelect?: (selected: boolean) => void; // For bulk selection
@@ -72,7 +71,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onAuthenticate,
   error,
   stderrOutput,
-  containerName,
   authorizationUrl,
   selected = false,
   onSelect,
@@ -265,12 +263,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
           {path}
         </Typography>
         
-        {containerName && (
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.875rem' }}>
-            <span style={{ fontWeight: 'medium' }}>Docker container:</span> {containerName}
-          </Typography>
-        )}
-
         {status === 'error' && (
           <Box sx={{ mt: 1, mb: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>

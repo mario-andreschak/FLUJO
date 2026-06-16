@@ -4,12 +4,11 @@ import React from 'react';
 import { Chip, Box } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import WifiIcon from '@mui/icons-material/Wifi';
-import ContainerIcon from '@mui/icons-material/Inventory2';
 import StreamIcon from '@mui/icons-material/Stream';
 import HttpIcon from '@mui/icons-material/Http';
 
 interface TransportBadgeProps {
-  transport: 'stdio' | 'websocket' | 'docker' | 'sse' | 'streamable';
+  transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
   size?: 'small' | 'medium';
 }
 
@@ -29,13 +28,6 @@ const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'smal
           icon: <WifiIcon fontSize="small" />,
           color: '#2e7d32', // Green
           bgColor: '#e8f5e8'
-        };
-      case 'docker':
-        return {
-          label: 'Docker',
-          icon: <ContainerIcon fontSize="small" />,
-          color: '#7b1fa2', // Purple
-          bgColor: '#f3e5f5'
         };
       case 'sse':
         return {

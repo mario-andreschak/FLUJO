@@ -1,52 +1,5 @@
 import { RepoInfo, MessageState } from '../types';
 
-// Helper functions to detect platform URLs
-const isGlamaUrl = (url: string): boolean => {
-  return url.includes('glama.ai/mcp/servers/');
-};
-
-const isSmitheryUrl = (url: string): boolean => {
-  return url.includes('smithery.ai/server/');
-};
-
-const isMcpSoUrl = (url: string): boolean => {
-  return url.includes('mcp.so/server/');
-};
-
-// Function to extract GitHub URL from platform pages
-const extractGitHubUrlFromPlatform = async (
-  platformUrl: string
-): Promise<string | null> => {
-  try {
-    // Call the backend API to extract the GitHub URL
-    const response = await fetch('/api/git', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        action: 'extractGitHubUrl',
-        platformUrl
-      }),
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to extract GitHub URL from platform');
-    }
-    
-    const result = await response.json();
-    
-    if (result.success && result.githubUrl) {
-      return result.githubUrl;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Error extracting GitHub URL from platform:', error);
-    return null;
-  }
-};
-
 export const validateGitHubUrl = async (
   inputUrl: string
 ): Promise<{
@@ -55,35 +8,8 @@ export const validateGitHubUrl = async (
   showCloneButton: boolean;
 }> => {
   try {
-    let githubUrl = inputUrl;
-    
-    // Check if the URL is from a platform and extract the GitHub URL if needed
-    if (isGlamaUrl(inputUrl) || isSmitheryUrl(inputUrl) || isMcpSoUrl(inputUrl)) {
-      // Show loading message
-      const platformType = isGlamaUrl(inputUrl) ? 'Glama' : 
-                          isSmitheryUrl(inputUrl) ? 'Smithery' : 'MCP.so';
-      
-      // Return early with a loading message
-      const loadingResult = {
-        repoInfo: null,
-        message: {
-          type: 'warning' as const,
-          text: `Extracting GitHub URL from ${platformType}...`
-        },
-        showCloneButton: false
-      };
-      
-      // Extract the GitHub URL from the platform
-      const extractedUrl = await extractGitHubUrlFromPlatform(inputUrl);
-      
-      if (!extractedUrl) {
-        throw new Error(`Could not extract GitHub URL from ${platformType}`);
-      }
-      
-      // Use the extracted GitHub URL
-      githubUrl = extractedUrl;
-    }
-    
+    const githubUrl = inputUrl;
+
     // Validate URL format
     const url = new URL(githubUrl);
     if (url.hostname !== 'github.com') {

@@ -38,7 +38,6 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import ErrorIcon from '@mui/icons-material/Error';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import WifiIcon from '@mui/icons-material/Wifi';
-import ContainerIcon from '@mui/icons-material/Inventory2';
 import StreamIcon from '@mui/icons-material/Stream';
 import HttpIcon from '@mui/icons-material/Http';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -48,7 +47,7 @@ import SelectAllIcon from '@mui/icons-material/SelectAll';
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
 type SortOption = 'name-asc' | 'name-desc' | 'status-connected' | 'status-disconnected' | 'transport';
-type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'docker' | 'sse' | 'streamable';
+type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'sse' | 'streamable';
 
 interface ServerManagerProps {
   onServerSelect: (serverName: string) => void;
@@ -203,7 +202,6 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
             return server.disabled;
           case 'stdio':
           case 'websocket':
-          case 'docker':
           case 'sse':
           case 'streamable':
             return server.transport === filterOption;
@@ -229,7 +227,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
           if (a.status !== 'disconnected' && b.status === 'disconnected') return 1;
           return a.name.localeCompare(b.name);
         case 'transport':
-          const transportOrder = ['stdio', 'websocket', 'docker', 'sse', 'streamable'];
+          const transportOrder = ['stdio', 'websocket', 'sse', 'streamable'];
           const aIndex = transportOrder.indexOf(a.transport);
           const bIndex = transportOrder.indexOf(b.transport);
           if (aIndex !== bIndex) return aIndex - bIndex;
