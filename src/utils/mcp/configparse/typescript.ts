@@ -94,9 +94,11 @@ function determineInstallCommand(packageJson: any): string {
       return 'pnpm install';
     }
   }
-  
-  // Default to npm
-  return 'npm install';
+
+  // Default to npm. Use --include=dev so that the build step (tsc/etc.) has its
+  // devDependencies available even when FLUJO runs with NODE_ENV=production,
+  // under which a plain `npm install` silently omits devDependencies.
+  return 'npm install --include=dev';
 }
 
 /**

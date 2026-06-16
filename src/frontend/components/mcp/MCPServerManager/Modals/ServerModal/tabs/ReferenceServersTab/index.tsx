@@ -220,7 +220,9 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         body: JSON.stringify({
           action: 'install',
           savePath: savePath,
-          installCommand: 'npm install',
+          // --include=dev so the workspace build (tsc) has its devDependencies
+          // even when FLUJO runs with NODE_ENV=production.
+          installCommand: 'npm install --include=dev',
         }),
       });
       
@@ -421,7 +423,12 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         command = 'node';
         args = ['dist/index.js'];
         buildCommand = 'npm run build';
-        installCommand = 'npm install';
+        // The reference servers build from source with `tsc`, which needs the
+        // devDependencies (typescript, shx, @types/*, vitest). FLUJO's server
+        // process usually runs with NODE_ENV=production, under which a plain
+        // `npm install` omits devDependencies and the build fails. `--include=dev`
+        // forces them in regardless of NODE_ENV / .npmrc production settings.
+        installCommand = 'npm install --include=dev';
         
         // Try to read package.json to confirm the entry point
         try {
@@ -468,8 +475,22 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         const moduleNameSuffix = server.name.replace(/-/g, '_');
         const moduleName = `mcp_server_${moduleNameSuffix}`;
         args = ['-m', moduleName];
-        buildCommand = 'pip install -e .';
-        installCommand = 'pip install -r requirements.txt';
+
+        // Pick the install command based on which project files actually exist.
+        // Most reference servers (time, fetch, git) ship only a pyproject.toml and
+        // NO requirements.txt, so a hardcoded `pip install -r requirements.txt`
+        // fails with "No such file or directory". `pip install -e .` installs the
+        // dependencies declared in pyproject.toml/setup.py *and* the package itself.
+        const hasRequirements = await hasFile(`${server.directory}/requirements.txt`);
+        const hasPyproject = isPython; // we got here because pyproject.toml exists
+        if (hasRequirements) {
+          installCommand = 'pip install -r requirements.txt';
+          // If the project is also installable, install it (editable) as the build step.
+          buildCommand = hasPyproject ? 'pip install -e .' : '';
+        } else {
+          installCommand = 'pip install -e .';
+          buildCommand = ''; // pyproject install already builds/installs everything
+        }
         
         // Try to read pyproject.toml to confirm the module name
         try {
