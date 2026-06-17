@@ -80,8 +80,22 @@ export default function UpdateSettings() {
       }
       setStatus({ severity: 'success', message: data.message });
       if (data.restarting) {
-        // The server restarts and frees the port; reload once it is back up.
-        setTimeout(() => window.location.reload(), 15000);
+        // The server stops, rebuilds, and comes back up (can take minutes).
+        // Poll until it goes DOWN and then UP again, then reload.
+        let sawDown = false;
+        const poll = async () => {
+          try {
+            const ping = await fetch('/api/cwd', { cache: 'no-store' });
+            if (ping.ok && sawDown) {
+              window.location.reload();
+              return;
+            }
+          } catch {
+            sawDown = true; // server is down -> rebuilding
+          }
+          setTimeout(poll, 3000);
+        };
+        setTimeout(poll, 5000);
       } else {
         setApplying(false);
       }

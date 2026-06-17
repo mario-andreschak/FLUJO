@@ -101,47 +101,54 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    log.info('Applying update: git pull');
-    await git.pull();
+    if (process.platform === 'win32') {
+      // On Windows the whole update (stop server -> pull -> install -> build ->
+      // restart) is delegated to a detached PowerShell script. It MUST run out
+      // of process: `next build` fails while the running `next start` holds
+      // .next locked, so the server has to be stopped first. The script kills
+      // the server by port and brings up the rebuilt one. If spawning the
+      // script fails, the running server is left untouched (safe).
+      const updateScript = path.join(cwd, 'scripts', 'update.ps1');
+      try {
+        await fs.access(updateScript);
+      } catch {
+        return NextResponse.json({
+          success: false,
+          error: `Updater script not found at ${updateScript}. Pull the latest FLUJO and try again.`,
+        }, { status: 500 });
+      }
 
-    log.info('Applying update: npm install');
-    execSync('npm install', execOptions);
-
-    log.info('Applying update: npm run build');
-    execSync('npm run build', execOptions);
-
-    log.info('Update build complete');
-
-    // Only Windows has the bundled relauncher. On other platforms the user
-    // restarts manually (this is primarily a Windows self-hosted feature).
-    const isWindows = process.platform === 'win32';
-    let restarting = false;
-
-    if (isWindows) {
-      const relaunchScript = path.join(cwd, 'scripts', 'relaunch.ps1');
-      log.info('Spawning detached relauncher to restart the server');
+      log.info('Spawning detached updater (update.ps1) to update + restart FLUJO');
       const child = spawn(
         'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', relaunchScript, '-Dir', cwd],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', updateScript, '-Dir', cwd],
         { detached: true, stdio: 'ignore', windowsHide: true }
       );
       child.unref();
-      restarting = true;
 
-      // Give the response time to flush, then exit so the rebuilt server can
-      // bind the port. The relauncher waits for this process to release it.
-      setTimeout(() => {
-        log.info('Exiting current server process so the relauncher can take over');
-        process.exit(0);
-      }, 2000);
+      return NextResponse.json({
+        success: true,
+        restarting: true,
+        message:
+          'Update started. FLUJO will stop, rebuild, and restart automatically ' +
+          '(this can take a few minutes). The page reloads once it is back up. ' +
+          'Progress is logged to %TEMP%\\flujo-update.log.',
+      });
     }
+
+    // Non-Windows: rebuild in-process and ask the user to restart manually.
+    log.info('Applying update (non-Windows): git pull');
+    await git.pull();
+    log.info('Applying update: npm install');
+    execSync('npm install', execOptions);
+    log.info('Applying update: npm run build');
+    execSync('npm run build', execOptions);
+    log.info('Update build complete');
 
     return NextResponse.json({
       success: true,
-      restarting,
-      message: restarting
-        ? 'Update applied. FLUJO is restarting - the page will reload shortly.'
-        : 'Update applied. Please restart FLUJO (npm start) to use the new version.',
+      restarting: false,
+      message: 'Update applied. Please restart FLUJO (npm start) to use the new version.',
     });
   } catch (error) {
     // execSync errors carry stdout/stderr buffers with the real failure output.
