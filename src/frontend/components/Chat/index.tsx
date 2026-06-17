@@ -9,6 +9,7 @@ import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
 import FlowSelector from './FlowSelector';
+import DebuggerCanvas from './DebuggerCanvas';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
@@ -18,6 +19,7 @@ import axios, { AxiosResponse } from 'axios'; // Import axios for polling and Ax
 // Correctly import SharedState here
 import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
+import type { ExecutionEvent } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 
 const log = createLogger('frontend/components/Chat/index');
@@ -87,9 +89,29 @@ const Chat: React.FC = () => {
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
   const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
 
+  // Live execution stats, driven by the SSE event stream while a run is active.
+  const [liveStats, setLiveStats] = useState<
+    { totalTokens: number; activeNode: string | null; startedAt: number; lastEventAt: number } | null
+  >(null);
+  // Breakpoint node IDs for the visual debugger (mirrors server state).
+  const [breakpoints, setBreakpoints] = useState<string[]>([]);
+  // Which conversation currently has an active run (so the live indicator only
+  // shows for the conversation being viewed, not for background runs).
+  const [loadingConversationId, setLoadingConversationId] = useState<string | null>(null);
+  // Re-render tick (1s) so elapsed/"stuck" indicators update while loading.
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+
   // Refs
   const openaiRef = useRef<OpenAI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  // Highest event seq applied, for ordering + dedupe across SSE reconnects.
+  const lastSeqRef = useRef<number>(-1);
+  // Mirror of the viewed conversation id, for use inside stable event callbacks.
+  const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  useEffect(() => {
+    currentConversationIdRef.current = currentConversationId;
+  }, [currentConversationId]);
 
   // --- Effects ---
 
@@ -303,6 +325,142 @@ const Chat: React.FC = () => {
       ).sort((a, b) => b.updatedAt - a.updatedAt) // Keep sorted
     );
   }, []);
+
+  // --- Live execution event stream (SSE) ---
+  const closeEventStream = useCallback(() => {
+    if (eventSourceRef.current) {
+      log.debug('Closing execution event stream');
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+  }, []);
+
+  // Apply a single execution event from the SSE stream to local UI state.
+  const applyExecutionEvent = useCallback((event: ExecutionEvent) => {
+    // Ordered dedupe: ignore anything we've already applied (e.g. replayed on
+    // reconnect). usage accumulation depends on this to avoid double counting.
+    if (typeof event.seq === 'number') {
+      if (event.seq <= lastSeqRef.current) return;
+      lastSeqRef.current = event.seq;
+    }
+
+    const touch = (patch: Partial<{ totalTokens: number; activeNode: string | null }>) =>
+      setLiveStats(prev => ({
+        totalTokens: patch.totalTokens ?? prev?.totalTokens ?? 0,
+        activeNode: patch.activeNode !== undefined ? patch.activeNode : (prev?.activeNode ?? null),
+        startedAt: prev?.startedAt ?? Date.now(),
+        lastEventAt: Date.now(),
+      }));
+
+    switch (event.type) {
+      case 'run:start':
+        setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
+        break;
+      case 'message': {
+        const incoming = event.message as ChatMessage;
+        touch({});
+        setDetailedConversation(prev => {
+          if (!prev || prev.id !== event.conversationId) return prev;
+          const idx = prev.messages.findIndex(m => m.id === incoming.id);
+          let messages: ChatMessage[];
+          if (idx >= 0) {
+            messages = [...prev.messages];
+            // Spread across role-union members widens the type; the merged
+            // object is a valid ChatMessage, so assert it.
+            messages[idx] = { ...messages[idx], ...incoming } as ChatMessage;
+          } else {
+            messages = [...prev.messages, incoming];
+          }
+          return { ...prev, messages };
+        });
+        break;
+      }
+      case 'usage':
+        setLiveStats(prev => ({
+          totalTokens: (prev?.totalTokens ?? 0) + (event.totalTokens || 0),
+          activeNode: prev?.activeNode ?? null,
+          startedAt: prev?.startedAt ?? Date.now(),
+          lastEventAt: Date.now(),
+        }));
+        break;
+      case 'node:enter':
+        touch({ activeNode: event.node?.nodeName || event.node?.nodeId || null });
+        break;
+      case 'handoff':
+        touch({ activeNode: `→ ${event.toNodeId}` });
+        break;
+      case 'run:awaiting_approval':
+        setPendingToolCalls(event.pendingToolCalls || []);
+        break;
+      case 'breakpoint:hit':
+      case 'run:paused':
+        // Flip the UI to paused; the awaited POST response carries the full
+        // debugState (trace + current node) and populates the debugger panel.
+        setIsLoading(false);
+        setIsDebugPaused(true);
+        break;
+      case 'run:done':
+        setLiveStats(null);
+        setIsLoading(false);
+        setLoadingConversationId(null);
+        closeEventStream();
+        // Only refresh the view if this run is the one being viewed (a
+        // background run must not hijack the displayed conversation).
+        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+          fetchDetailedConversation(event.conversationId);
+        }
+        break;
+      case 'error':
+        setError(event.message || 'Execution error');
+        break;
+      default:
+        touch({});
+        break;
+    }
+  }, [closeEventStream, fetchDetailedConversation]);
+
+  // Open the SSE stream for a conversation and resolve once it is connected
+  // (or after a short timeout). Callers await this BEFORE issuing the run's POST
+  // so the subscription exists before the server emits any events — otherwise a
+  // fast run can finish before the stream attaches and the live view sees
+  // nothing. The browser auto-reconnects using Last-Event-ID to replay misses.
+  const openEventStream = useCallback((conversationId: string): Promise<void> => {
+    closeEventStream();
+    lastSeqRef.current = -1;
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const settle = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      try {
+        const es = new EventSource(`/v1/chat/conversations/${conversationId}/events`);
+        es.onopen = () => {
+          log.debug('Execution event stream open', { conversationId });
+          settle();
+        };
+        es.onmessage = (e) => {
+          try {
+            applyExecutionEvent(JSON.parse(e.data) as ExecutionEvent);
+          } catch (err) {
+            log.warn('Failed to parse SSE event', { err });
+          }
+        };
+        es.onerror = () => {
+          // EventSource reconnects automatically; nothing to do unless it closes.
+          log.debug('SSE stream error (browser will retry if still open)');
+        };
+        eventSourceRef.current = es;
+        // Safety: never block the run for more than ~1.5s waiting to connect.
+        setTimeout(settle, 1500);
+      } catch (err) {
+        log.error('Failed to open execution event stream', { conversationId, err });
+        settle();
+      }
+    });
+  }, [applyExecutionEvent, closeEventStream]);
 
   // Delete conversation
   const deleteConversation = async (conversationId: string) => {
@@ -537,6 +695,8 @@ const Chat: React.FC = () => {
       setDebugState(data.debugState as SharedState);
       setIsDebugPaused(true);
       setIsLoading(false); // Stop general loading indicator
+      setLoadingConversationId(null);
+      closeEventStream();
       stopPolling(); // Stop any active polling
       // Update detailed conversation from debug state if needed (e.g., messages)
       setDetailedConversation(prev => {
@@ -612,11 +772,15 @@ const Chat: React.FC = () => {
       log.info('API Response/Polling: Pausing for tool approval', { conversationId });
       setPendingToolCalls(data.pendingToolCalls || []);
       setIsLoading(false); // Stop loading indicator
+      setLoadingConversationId(null);
+      closeEventStream();
       stopPolling();
     } else if (data.status === 'completed' || data.status === 'error') {
       log.info('API Response/Polling: Stopping due to final status', { conversationId, status: data.status });
       stopPolling();
       setIsLoading(false);
+      setLoadingConversationId(null);
+      closeEventStream();
       if (data.status === 'error') {
          // Handle OpenAI compatible error structure
          const errorMessage = data.error?.message || data.lastResponse?.error || 'Unknown error during execution';
@@ -655,39 +819,10 @@ const Chat: React.FC = () => {
 
     return false; // Indicate standard response was handled
      // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation]);
+  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream]);
 
 
-  // Function to poll conversation state (Updates detailedConversation)
-  const pollConversationState = useCallback(async (conversationId: string) => {
-    // Stop polling if debug mode is active and paused
-    if (isDebugPaused) {
-        log.debug("Polling skipped: Debugger is paused.");
-        stopPolling();
-        return;
-    }
-    log.debug('Polling conversation state', { conversationId });
-    try {
-      // Use the GET endpoint which now returns the full Conversation structure
-      const response = await axios.get<Conversation>(`/v1/chat/conversations/${conversationId}`);
-      // Use the common handler
-      handleApiResponse(response, conversationId);
-    } catch (error: any) {
-      log.error('Polling error:', error);
-      stopPolling();
-      setIsLoading(false);
-      if (axios.isAxiosError(error) && error.response?.status === 404) {
-         setError(`Conversation ${conversationId} not found during polling.`);
-         // Optionally refresh list and clear selection
-         // fetchConversations();
-         // setCurrentConversationId(null);
-      } else {
-         setError('Connection error during update. Please retry.');
-      }
-    }
-  }, [handleApiResponse, isDebugPaused]); // Add isDebugPaused dependency
-
-  // Function to stop polling
+  // Function to stop polling (legacy interval; live updates now use SSE)
   const stopPolling = () => {
     if (pollingIntervalRef.current) {
       log.debug('Stopping polling interval');
@@ -696,25 +831,21 @@ const Chat: React.FC = () => {
     }
   };
 
-  // Effect to manage polling based on isLoading and currentConversationId
+  // The live event stream is opened imperatively at run start (see
+  // sendToChatCompletions / debug handlers) so it is connected before events
+  // are emitted. Here we only ensure it is torn down when the component unmounts.
   useEffect(() => {
-    if (isLoading && currentConversationId) {
-      // Start polling immediately and then set interval
-      pollConversationState(currentConversationId);
-      pollingIntervalRef.current = setInterval(() => {
-        pollConversationState(currentConversationId);
-      }, 2000); // Poll every 2 seconds
-      log.debug('Polling started', { conversationId: currentConversationId });
-    } else {
-      // Stop polling if not loading or no conversation selected
-      stopPolling();
-    }
-
-    // Cleanup function to stop polling when component unmounts or dependencies change
     return () => {
-      stopPolling();
+      closeEventStream();
     };
-  }, [isLoading, currentConversationId, pollConversationState]); // Rerun effect when isLoading or currentConversationId changes
+  }, [closeEventStream]);
+
+  // Tick once per second while loading so elapsed/"stuck" indicators refresh.
+  useEffect(() => {
+    if (!isLoading) return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [isLoading]);
 
 
   // Send conversation to chat completions API
@@ -731,6 +862,12 @@ const Chat: React.FC = () => {
     setPendingToolCalls(null);
     setError(null);
     setIsLoading(true); // Set loading true for the API call itself
+    setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
+    // Seed live stats immediately so the indicator shows 0 tokens / 0s right away.
+    setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
+    // Subscribe to live events BEFORE issuing the (blocking) POST so no early
+    // events are missed on a fast run.
+    await openEventStream(conversation.id);
 
     let success = false; // Track if API call itself succeeded
 
@@ -908,6 +1045,8 @@ const Chat: React.FC = () => {
       setError(errorMessage);
       stopPolling();
       setIsLoading(false); // Stop loading on error
+      setLoadingConversationId(null);
+      closeEventStream();
 
     } finally {
       // Don't set isLoading false here if polling might still be needed
@@ -968,6 +1107,11 @@ const Chat: React.FC = () => {
 
       // Call the API with the updated metadata
       if (!openaiRef.current) return;
+      setError(null);
+      setIsLoading(true);
+      setLoadingConversationId(updatedDetailedConv.id);
+      setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
+      await openEventStream(updatedDetailedConv.id);
       try {
         const flow = await flowService.getFlow(updatedDetailedConv.flowId);
         if (!flow) {
@@ -1036,6 +1180,8 @@ const Chat: React.FC = () => {
         log.error('Error sending edited message:', err);
         setError(err instanceof Error ? err.message : 'Failed to send edited message');
         setIsLoading(false);
+        setLoadingConversationId(null);
+        closeEventStream();
       }
     }
   };
@@ -1085,16 +1231,22 @@ const Chat: React.FC = () => {
 
     setPendingToolCalls(null);
     setIsLoading(true); // Indicate processing and potentially restart polling
+    setLoadingConversationId(currentConversationId);
     setError(null);
+    await openEventStream(currentConversationId);
 
     try {
-      // The POST endpoint should handle state updates and trigger continuation
-      await axios.post(`/v1/chat/conversations/${currentConversationId}/respond`, {
+      // The /respond endpoint processes the approved/rejected call, then resumes
+      // execution (re-invoking the model) once no calls remain pending. It
+      // returns the next natural stop point — another approval prompt, a debug
+      // pause, completion, or error — which we hand to the shared response
+      // handler. Live updates also arrive over the already-open SSE stream.
+      const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/respond`, {
         action,
         toolCallId,
       });
       log.debug(`Tool response successful`, { conversationId: currentConversationId, action, toolCallId });
-      // Polling should resume automatically via the isLoading state change in useEffect
+      handleApiResponse(response, currentConversationId);
 
     } catch (err) {
       log.error(`Error sending tool response (${action})`, { conversationId: currentConversationId, toolCallId, err });
@@ -1122,7 +1274,9 @@ const Chat: React.FC = () => {
     if (!currentConversationId || !isDebugPaused) return;
     log.info('Handling debug step request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during step
+    setLoadingConversationId(currentConversationId);
     setError(null);
+    await openEventStream(currentConversationId);
     try {
       const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/step`);
       handleApiResponse(response, currentConversationId); // Process the response (updates state, status)
@@ -1141,9 +1295,11 @@ const Chat: React.FC = () => {
     if (!currentConversationId || !isDebugPaused) return;
     log.info('Handling debug continue request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during continue
+    setLoadingConversationId(currentConversationId);
     setError(null);
     setIsDebugPaused(false); // Assume we are exiting explicit pause
     setDebugState(null);
+    await openEventStream(currentConversationId);
     try {
       const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/continue`);
       handleApiResponse(response, currentConversationId); // Process the response
@@ -1157,6 +1313,60 @@ const Chat: React.FC = () => {
     }
   };
 
+  // Keep local breakpoints in sync with the authoritative debug state.
+  useEffect(() => {
+    if (debugState) {
+      setBreakpoints(debugState.breakpoints ?? []);
+    }
+  }, [debugState]);
+
+  // Toggle a breakpoint on a node and persist it to the server.
+  const handleToggleBreakpoint = useCallback(async (nodeId: string) => {
+    if (!currentConversationId) return;
+    const next = breakpoints.includes(nodeId)
+      ? breakpoints.filter(id => id !== nodeId)
+      : [...breakpoints, nodeId];
+    setBreakpoints(next); // optimistic
+    try {
+      await axios.put(`/v1/chat/conversations/${currentConversationId}/breakpoints`, { breakpoints: next });
+    } catch (err) {
+      log.error('Failed to update breakpoints', { conversationId: currentConversationId, err });
+      setBreakpoints(breakpoints); // revert on failure
+    }
+  }, [breakpoints, currentConversationId]);
+
+  // Step Over: advance one node at a time until the active node changes (i.e.
+  // skip a process node's internal tool-call iterations), or execution pauses
+  // elsewhere / finishes. Implemented client-side as a bounded loop of steps.
+  const handleStepOver = async () => {
+    if (!currentConversationId || !isDebugPaused) return;
+    const startNodeId = debugState?.currentNodeId;
+    setIsLoading(true);
+    setLoadingConversationId(currentConversationId);
+    setError(null);
+    await openEventStream(currentConversationId);
+    try {
+      for (let i = 0; i < 50; i++) {
+        const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/step`);
+        const data = response.data;
+        const status = data?.status ?? data?.debugState?.status;
+        const nodeId = data?.debugState?.currentNodeId;
+        // Stop once we leave the original node or are no longer paused for debug.
+        if (status !== 'paused_debug' || (nodeId && nodeId !== startNodeId)) {
+          handleApiResponse(response, currentConversationId);
+          return;
+        }
+      }
+      // Safety cap reached; surface whatever the last response was.
+      log.warn('Step Over hit iteration cap', { conversationId: currentConversationId });
+      setIsLoading(false);
+    } catch (err) {
+      log.error('Error during step over', { conversationId: currentConversationId, err });
+      setError(err instanceof Error ? err.message : 'Failed to step over.');
+      setIsLoading(false);
+    }
+  };
+
   // Handle Cancel Request (Also used by Debugger)
   const handleCancelRequest = async () => {
     if (!currentConversationId) return;
@@ -1164,6 +1374,8 @@ const Chat: React.FC = () => {
 
     stopPolling();
     setIsLoading(false);
+    setLoadingConversationId(null);
+    closeEventStream();
     setPendingToolCalls(null);
 
     try {
@@ -1251,21 +1463,37 @@ const Chat: React.FC = () => {
                 onRejectToolCall={handleRejectToolCall}
               />
 
-              {/* Loading Indicator and Cancel Button */}
-              {isLoading && (
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', my: 2, gap: 2 }}>
-                  <CircularProgress size={24} />
-                  <Button
-                    variant="outlined"
-                    color="secondary"
-                    size="small"
-                    onClick={handleCancelRequest}
-                    disabled={!currentConversationId}
-                  >
-                    Cancel
-                  </Button>
-                </Box>
-              )}
+              {/* Live execution indicator (progress, active node, tokens, stop).
+                  Only shown for the conversation actually running, so a background
+                  run does not display its status in a different conversation. */}
+              {isLoading && loadingConversationId === currentConversationId && (() => {
+                const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
+                const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
+                const stuck = !!liveStats && sinceLast >= 20;
+                return (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                      <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
+                      <Typography variant="body2" color="textSecondary">
+                        {liveStats?.activeNode ? `Running: ${liveStats.activeNode}` : 'Working…'}
+                      </Typography>
+                      <Button
+                        variant="outlined"
+                        color="secondary"
+                        size="small"
+                        onClick={handleCancelRequest}
+                        disabled={!currentConversationId}
+                      >
+                        Stop
+                      </Button>
+                    </Box>
+                    <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
+                      {(liveStats?.totalTokens ?? 0).toLocaleString()} tokens · {elapsed}s elapsed
+                      {stuck ? ` · no activity for ${sinceLast}s — may be stuck` : ''}
+                    </Typography>
+                  </Box>
+                );
+              })()}
 
               {/* Error Display */}
               {error && (
@@ -1318,26 +1546,17 @@ const Chat: React.FC = () => {
         {/* Debugger Area (Conditional) */}
         {isDebugPaused && debugState && currentConversationId && (
           <Grid item xs={6} sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {/* Placeholder for DebuggerCanvas */}
-            <Box sx={{ flex: 1, p: 2, overflow: 'auto', border: 1, borderColor: 'warning.main', borderRadius: 1, m: 1 }}>
-               <Typography variant="h6">Debugger View</Typography>
-               <Typography variant="body2">Conversation ID: {currentConversationId}</Typography>
-               <Typography variant="body2">Status: {debugState.status}</Typography>
-               <Typography variant="body2">Current Node: {debugState.currentNodeId}</Typography>
-               <Typography variant="body2">Trace Steps: {debugState.executionTrace?.length || 0}</Typography>
-               {/* Add Buttons */}
-               <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
-                   <Button variant="outlined" size="small" onClick={handleDebugStep} disabled={isLoading}>Next Step</Button>
-                   <Button variant="contained" size="small" onClick={handleDebugContinue} disabled={isLoading}>Continue (Yolo)</Button>
-                   <Button variant="outlined" color="secondary" size="small" onClick={handleCancelRequest} disabled={isLoading}>Cancel</Button>
-                   {/* Add Previous button later */}
-               </Box>
-               {/* Add Trace List and Inspector later */}
-               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '400px', overflowY: 'auto', background: '#f0f0f0', padding: '8px', borderRadius: '4px', marginTop: '10px' }}>
-                   {JSON.stringify(debugState.executionTrace?.slice(-1)[0], null, 2)} {/* Show last trace step */}
-               </pre>
-            </Box>
-            {/* <DebuggerCanvas debugState={debugState} conversationId={currentConversationId} /> */}
+            <DebuggerCanvas
+              debugState={debugState}
+              conversationId={currentConversationId}
+              onStep={handleDebugStep}
+              onStepOver={handleStepOver}
+              onContinue={handleDebugContinue}
+              onCancel={handleCancelRequest}
+              isLoading={isLoading}
+              breakpoints={breakpoints}
+              onToggleBreakpoint={handleToggleBreakpoint}
+            />
           </Grid>
         )}
       </Grid> {/* End Main Content Grid */}

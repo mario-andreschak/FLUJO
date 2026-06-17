@@ -25,8 +25,17 @@ export async function GET(
     return new Response('Missing conversationId', { status: 400 });
   }
 
+  // Replay position: explicit ?fromSeq= wins; otherwise honor the browser's
+  // Last-Event-ID on auto-reconnect (resume just after the last seen event).
   const fromSeqParam = request.nextUrl.searchParams.get('fromSeq');
-  const fromSeq = fromSeqParam !== null ? parseInt(fromSeqParam, 10) : null;
+  const lastEventId = request.headers.get('last-event-id');
+  let fromSeq: number | null = null;
+  if (fromSeqParam !== null) {
+    fromSeq = parseInt(fromSeqParam, 10);
+  } else if (lastEventId !== null) {
+    const parsed = parseInt(lastEventId, 10);
+    if (!Number.isNaN(parsed)) fromSeq = parsed + 1;
+  }
 
   log.info('Opening SSE event stream', { conversationId, fromSeq });
 
@@ -62,7 +71,8 @@ export async function GET(
         if (event.seq <= maxSentSeq) return;
         maxSentSeq = event.seq;
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          // `id:` lets the browser resume via Last-Event-ID after a drop.
+          controller.enqueue(encoder.encode(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
         } catch {
           cleanup();
           return;

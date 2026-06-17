@@ -73,6 +73,11 @@ export class FlowExecutor {
 
     log.debug(`executeStep called for conversation ${conversationId}`, { flowId, currentNodeId });
 
+    // Build the execution trace when globally enabled OR when this conversation
+    // is in debug mode (so the visual debugger has data without forcing every
+    // normal run to pay the per-step snapshot cost).
+    const traceEnabled = FEATURES.ENABLE_EXECUTION_TRACKER || !!sharedState.debugMode;
+
     // Declare for access in catch block
     let stateBefore: Partial<SharedState> | undefined = undefined;
     let prepResult: PrepResult | undefined = undefined;
@@ -89,7 +94,7 @@ export class FlowExecutor {
       log.info(`Executing step for node ${node.id} (${node.type}) in conversation ${conversationId}`);
 
       // --- Initialize trace if needed (only if debug mode is enabled) ---
-      if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
+      if (traceEnabled && !sharedState.executionTrace) {
         sharedState.executionTrace = [];
       }
 
@@ -116,7 +121,7 @@ export class FlowExecutor {
       delete stateAfter.executionTrace; // Avoid recursive trace in snapshot
 
       // --- Create and append DebugStep (only if debug mode is enabled) ---
-      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
+      if (traceEnabled && sharedState.executionTrace) {
         const stepIndex = sharedState.executionTrace.length;
         const debugStep: DebugStep = {
           stepIndex,
@@ -160,7 +165,7 @@ export class FlowExecutor {
       });
 
       // --- Add error step to trace (only if debug mode is enabled) ---
-      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
+      if (traceEnabled && sharedState.executionTrace) {
         const stepIndex = sharedState.executionTrace.length;
         const errorStep: DebugStep = {
           stepIndex,

@@ -75,21 +75,59 @@ export async function verifyStorage(): Promise<void> {
   log.debug('Storage verification completed'); // Changed to debug
 }
 
-export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
-  // No longer call ensureStorageDir here, handle directory creation below
-  const filePath = getFilePath(key);
+// --- Crash/race-safe writes ------------------------------------------------
+// A plain fs.writeFile truncates the target before writing, so a crash or two
+// concurrent writes can leave a half-written or empty file on disk — which the
+// reader then chokes on ("Unexpected end of JSON input"). To avoid that we:
+//   1. Write to a unique temp file in the same directory, then rename it onto
+//      the target. rename() is atomic within a filesystem, so a reader always
+//      sees either the previous complete file or the new complete one.
+//   2. Serialize writes per key with an in-process promise chain, so two
+//      concurrent saveItem calls for the same key can't interleave their
+//      temp-file/rename steps (last write wins cleanly).
+
+// Per-key write chains so same-key writes run one at a time. Different keys
+// still write concurrently.
+const writeChains = new Map<string, Promise<unknown>>();
+// Monotonic counter to keep temp file names unique within this process.
+let tmpCounter = 0;
+
+async function writeFileAtomic(filePath: string, data: string): Promise<void> {
+  const dirPath = path.dirname(filePath);
+  await fs.mkdir(dirPath, { recursive: true });
+  // Temp file lives next to the target (same filesystem) so rename is atomic.
+  const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
   try {
-    // Ensure the directory for the specific file exists
-    const dirPath = path.dirname(filePath);
-    await fs.mkdir(dirPath, { recursive: true });
-    log.verbose(`Ensured directory exists: ${dirPath}`); // Changed to verbose
-    
-    // Now write the file
-    await fs.writeFile(filePath, JSON.stringify(value, null, 2));
+    await fs.writeFile(tmpPath, data);
+    await fs.rename(tmpPath, filePath);
+  } catch (error) {
+    // Best-effort cleanup so a failed write doesn't leave temp files behind.
+    try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }
+    throw error;
+  }
+}
+
+export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
+  const filePath = getFilePath(key);
+  // Serialize against any in-flight write for the same key. We chain off the
+  // previous write (ignoring its outcome) so a failure doesn't wedge the key.
+  const previous = writeChains.get(key) ?? Promise.resolve();
+  const run = previous
+    .catch(() => { /* prior write's error is surfaced to its own caller */ })
+    .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
+  writeChains.set(key, run);
+
+  try {
+    await run;
     log.verbose(`Successfully saved item to: ${filePath}`); // Changed to verbose
   } catch (error) {
     log.error(`Error saving item with key "${key}" to ${filePath}:`, error);
     throw error; // Re-throw the error after logging
+  } finally {
+    // Drop the chain entry once it's the tail, so the map doesn't grow forever.
+    if (writeChains.get(key) === run) {
+      writeChains.delete(key);
+    }
   }
 }
 
@@ -98,7 +136,16 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
     await ensureStorageDir();
     const filePath = getFilePath(key);
     const content = await fs.readFile(filePath, 'utf-8');
-    
+
+    // An empty/whitespace-only file is almost always a botched/interrupted
+    // write (the symptom the atomic write above prevents going forward), not
+    // real corruption worth a hard error. Treat it as absent and return the
+    // default so the caller can re-create it cleanly.
+    if (content.trim().length === 0) {
+      log.warn(`Item with key "${key}" at ${filePath} is empty; treating as missing and returning default.`);
+      return defaultValue;
+    }
+
     try {
       const parsedContent = JSON.parse(content);
       log.verbose(`Successfully loaded item from: ${filePath}`);

@@ -59,7 +59,17 @@ async function processChatCompletionInternal(
   flujo: boolean,
   requireApproval: boolean,
   flujodebug: boolean,
-  conversationId?: string
+  conversationId?: string,
+  // When true, a debug session (debugMode) runs freely until a terminal/
+  // approval/breakpoint state instead of pausing after every step. Used by the
+  // "Continue" control; "Step" leaves this false so it pauses each step.
+  continueDebug: boolean = false,
+  // True only for a fresh user-initiated turn (the public completions route).
+  // Such a turn re-syncs debugMode to the request's flujodebug flag so toggling
+  // the "Execute in Debugger" checkbox takes effect on an existing conversation.
+  // Internal resumes (step/continue/respond) leave this false to preserve the
+  // session's debugMode.
+  userTurn: boolean = false
 ) {
   const startTime = Date.now();
   const requestId = `proc-${Date.now()}`;
@@ -179,7 +189,9 @@ async function processChatCompletionInternal(
       updatedAt: Date.now(),
       debugMode: flujodebug,
       executionTrace: (flujodebug && FEATURES.ENABLE_EXECUTION_TRACKER) ? [] : undefined,
-      originalRequireApproval: flujodebug ? requireApproval : undefined
+      // Persist the approval intent for every run (not just debug) so a
+      // resume after tool approval keeps requiring approval for later calls.
+      originalRequireApproval: requireApproval
     };
     // stateSource is already 'new'
   }
@@ -240,18 +252,42 @@ async function processChatCompletionInternal(
       });
       log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
     }
-    // Ensure debugMode is set correctly if resuming state
-    if (sharedState.debugMode === undefined) {
+    // Sync debugMode with the request. A fresh user turn re-syncs to flujodebug
+    // (so unchecking "Execute in Debugger" exits a previously-debugged
+    // conversation, and checking it enters one). Internal resumes only fill in a
+    // missing value, never override the active session.
+    if (userTurn || sharedState.debugMode === undefined) {
       sharedState.debugMode = flujodebug;
-      if (flujodebug) {
-          if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
-              sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
-          }
-          // Store original requireApproval if resuming into debug mode and not already set
-          if (sharedState.originalRequireApproval === undefined) {
-              sharedState.originalRequireApproval = requireApproval;
-          }
-      }
+    }
+    if (sharedState.debugMode) {
+        if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
+            sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
+        }
+        // Store original requireApproval if resuming into debug mode and not already set
+        if (sharedState.originalRequireApproval === undefined) {
+            sharedState.originalRequireApproval = requireApproval;
+        }
+    }
+  }
+
+  // --- Direct a new user turn to its intended node (one-time, at turn start) ---
+  // Each completions POST is one user turn. If the previous run ended by handing
+  // off to a terminal/finish node, currentNodeId would be stranded there and the
+  // turn would just re-complete. The frontend tags the user message with the node
+  // it should resume at (typically the last agent), so honor that here. Skipped
+  // for explicit edits (data.processNodeId already sets currentNodeId above).
+  // Only redirect when the conversation actually ends on a fresh user message.
+  // A mid-turn continuation (e.g. resuming after tool approval, where the last
+  // message is a tool result) must keep its current node, not jump back to the
+  // node tagged on the original user message.
+  if (stateSource !== 'new' && !data.processNodeId) {
+    const lastMsg = sharedState.messages.length > 0
+      ? sharedState.messages[sharedState.messages.length - 1]
+      : undefined;
+    if (lastMsg?.role === 'user' && lastMsg.processNodeId && lastMsg.processNodeId !== sharedState.currentNodeId) {
+      log.info(`New user turn for ${effectiveConvId}: directing execution to node ${lastMsg.processNodeId} (was ${sharedState.currentNodeId}).`);
+      sharedState.currentNodeId = lastMsg.processNodeId;
+      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
     }
   }
 
@@ -313,55 +349,19 @@ async function processChatCompletionInternal(
 
   emit({ type: 'run:start', flowId: sharedState.flowId });
 
+  // In a debug session, "Step" pauses after each productive transition while
+  // "Continue" (continueDebug) runs freely to the next terminal/approval/
+  // breakpoint state. Both share the single loop below; singleStep just turns
+  // each would-be `continue` into a pause. Tracing stays on (debugMode) either
+  // way, so Continue still records every step it runs.
+  const singleStep = !!sharedState.debugMode && !continueDebug;
+  const pauseForDebug = () => {
+    sharedState.status = 'paused_debug';
+    emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
+  };
+
   try {
-    // --- Debug Mode: Execute only one step ---
-    if (sharedState.debugMode) {
-      log.info(`[Debug Mode] Executing single step for Conv ${effectiveConvId}`);
-      // Check cancellation before the step
-      if (sharedState.isCancelled) {
-        log.info(`[Debug Mode] Cancellation detected before step for conv ${effectiveConvId}.`);
-        sharedState.status = 'error';
-        sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
-        currentAction = ERROR_ACTION;
-      } else {
-        // Reset cancellation flag if it was previously set but not detected above
-        sharedState.isCancelled = false;
-        const stepResult = await FlowExecutor.executeStep(sharedState, emit);
-        sharedState = stepResult.sharedState; // Update state
-        currentAction = stepResult.action;
-        emitNewMessages();
-        // Set status to paused_debug unless it's an error or final response
-        if (currentAction !== ERROR_ACTION && currentAction !== FINAL_RESPONSE_ACTION) {
-          sharedState.status = 'paused_debug';
-          emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
-        } else if (currentAction === FINAL_RESPONSE_ACTION) {
-          sharedState.status = 'completed'; // Mark as completed if the single step finished
-          emit({ type: 'run:done', status: 'completed' });
-        } else {
-          sharedState.status = 'error'; // Mark as error if the single step errored
-          emit({ type: 'run:done', status: 'error' });
-        }
-        log.info(`[Debug Mode] Step completed for conv ${effectiveConvId}. Action: ${currentAction}, Status: ${sharedState.status}`);
-        // Save state after the single step
-        try {
-          sharedState.updatedAt = Date.now();
-          // Title update logic
-          if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
-            const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
-            if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-                sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-        }
-      }
-      await saveItemBackend(storageKey, sharedState);
-      log.verbose(`[Debug Mode] Saved state after single step for conv ${effectiveConvId}`); // Changed to verbose
-    } catch (error) {
-      log.error(`[Debug Mode] Failed to save state after single step for conv ${effectiveConvId}:`, error);
-    }
-      }
-      // No loop needed in debug mode, exit after one step or cancellation check
-    }
-      // --- Normal Mode: Execute loop ---
-    else {
+    {
       while (true) { // Loop indefinitely until a break condition is met
         internalIterations++;
         log.debug(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`); // Changed to debug
@@ -388,7 +388,9 @@ async function processChatCompletionInternal(
 
         // Breakpoint check: if the node we are about to run carries a breakpoint
         // (and we are not resuming directly from it), pause for the debugger.
-        if (sharedState.breakpoints && sharedState.breakpoints.length > 0) {
+        // Skipped while single-stepping: the user is already advancing one node
+        // at a time, so a pre-step breakpoint would just stall on the node.
+        if (!singleStep && sharedState.breakpoints && sharedState.breakpoints.length > 0) {
           const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
           if (nextNodeId && sharedState.breakpoints.includes(nextNodeId) && sharedState.lastBreakNodeId !== nextNodeId) {
             log.info(`Breakpoint hit at node ${nextNodeId} for conv ${effectiveConvId}. Pausing.`);
@@ -521,6 +523,13 @@ async function processChatCompletionInternal(
             sharedState.messages.push(...toolResultMessagesWithTimestamp);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
             emitNewMessages(); // surface tool result messages live
+              // In single-step debug, pause after processing the tools instead
+              // of immediately re-invoking the model.
+              if (singleStep) {
+                log.info(`[Debug Step] Paused after internal tool processing for conv ${effectiveConvId}.`);
+                pauseForDebug();
+                break;
+              }
               // State is updated, continue to the next iteration of the while loop
               log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
               continue; // Continue loop
@@ -698,6 +707,13 @@ async function processChatCompletionInternal(
                 });
                 log.info(`Transitioning conv ${effectiveConvId} to node ${sharedState.currentNodeId}`);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                // In single-step debug, the handoff advanced currentNodeId to
+                // the next node; pause here so the next step runs that node.
+                if (singleStep) {
+                  log.info(`[Debug Step] Paused after handoff to node ${sharedState.currentNodeId} for conv ${effectiveConvId}.`);
+                  pauseForDebug();
+                  break;
+                }
                 log.info(`Continuing loop for conv ${effectiveConvId} after handoff.`);
                 continue; // Continue loop for the next step
             } else {
@@ -720,10 +736,10 @@ async function processChatCompletionInternal(
         currentAction = FINAL_RESPONSE_ACTION;
         break;
 
-      } // --- End while loop (Normal Mode) ---
+      } // --- End while loop ---
 
       // Safety break check is now handled at the beginning of the loop
-    } // --- End Normal Mode execution ---
+    } // --- End execution block ---
 
   } catch (loopError) {
      // Catch errors originating from within the loop logic itself (e.g., state handling)
@@ -740,10 +756,13 @@ async function processChatCompletionInternal(
   const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
-  // Flush any trailing messages and signal terminal completion to live consumers.
-  // (Debug single-step already emitted its own run:paused / run:done above.)
+  // Flush any trailing messages and signal terminal completion to live
+  // consumers. A paused_debug run already emitted run:paused inside the loop and
+  // must NOT emit run:done (the SSE stream stays open for the next step). Any
+  // terminal status emits run:done, even in a debug session, so the stream
+  // closes and the client reconciles.
   emitNewMessages();
-  if (!sharedState.debugMode && (finalStatus === 'completed' || finalStatus === 'error')) {
+  if (finalStatus === 'completed' || finalStatus === 'error') {
     emit({ type: 'run:done', status: finalStatus });
   }
 
@@ -952,7 +971,9 @@ export async function processChatCompletion(
   flujo: boolean,
   requireApproval: boolean,
   flujodebug: boolean,
-  conversationId?: string
+  conversationId?: string,
+  continueDebug: boolean = false,
+  userTurn: boolean = false
 ) {
   // Handle streaming requests differently
   if (data.stream === true) {
@@ -962,7 +983,7 @@ export async function processChatCompletion(
     
     // Start processing asynchronously (don't await)
     // The reference in FlowExecutor.conversationStates will prevent garbage collection
-    processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId)
+    processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn)
       .catch(error => {
         // Log any errors that occur during processing
         log.error(`Error in background processing for conversation ${effectiveConvId}:`, error);
@@ -989,7 +1010,7 @@ export async function processChatCompletion(
     return createStreamingResponse(data.model, effectiveConvId);
   } else {
     // Non-streaming path - use the internal function directly
-    return processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId);
+    return processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
   }
 }
 

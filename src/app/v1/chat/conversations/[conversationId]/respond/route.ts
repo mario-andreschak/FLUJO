@@ -5,6 +5,9 @@ import { SharedState, TOOL_CALL_ACTION } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
+import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
+import { flowService } from '@/backend/services/flow/index';
 import OpenAI from 'openai';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
@@ -138,9 +141,50 @@ export async function POST(
     await saveItemBackend(storageKey, sharedState); // Save to storage
     log.info(`Saved updated state after processing tool response`, { requestId, conversationId, newStatus: sharedState.status });
 
-    // 6. Return success
-    // The frontend will restart polling by setting isLoading=true
-    return NextResponse.json({ success: true, status: sharedState.status });
+    // 6a. Still awaiting approval for other tool calls in the same batch: just
+    // report the remaining pending calls so the UI keeps prompting. No model
+    // run yet — we resume only once every pending call has been handled.
+    if (sharedState.status === 'awaiting_tool_approval') {
+      log.info(`Still awaiting approval for remaining tool calls`, { requestId, conversationId, remaining: sharedState.pendingToolCalls?.length });
+      return NextResponse.json({
+        status: 'awaiting_tool_approval',
+        conversation_id: conversationId,
+        pendingToolCalls: sharedState.pendingToolCalls,
+        messages: sharedState.messages,
+        updatedAt: sharedState.updatedAt,
+      });
+    }
+
+    // 6b. All pending calls handled → resume execution so the model is invoked
+    // again with the tool results. The /respond route only appends the tool
+    // result(s); without this the conversation would sit idle after approval
+    // (the old polling that used to drive continuation was removed). Mirrors
+    // the debug/continue route. The frontend already has the SSE stream open,
+    // so live events flow; the returned response is the next natural stop point
+    // (further approval, completion, debug pause, or error).
+    const flow = await flowService.getFlow(sharedState.flowId);
+    if (!flow) {
+      log.error(`Flow definition not found for flowId ${sharedState.flowId}`, { requestId, conversationId });
+      return NextResponse.json({ error: `Flow definition not found for ID ${sharedState.flowId}` }, { status: 500 });
+    }
+
+    const simulatedRequestData: ChatCompletionRequest = {
+      model: `flow-${flow.name}`,
+      messages: sharedState.messages,
+    };
+
+    log.info(`Resuming execution after tool response`, { requestId, conversationId });
+    const response = await processChatCompletion(
+      simulatedRequestData,
+      true, // flujo
+      // Got here via approval, so keep requiring approval for later calls unless
+      // the run explicitly recorded otherwise.
+      sharedState.originalRequireApproval ?? true,
+      false, // flujodebug param ignored on resume (debugMode already in state)
+      conversationId
+    );
+
+    return response;
 
   } catch (error) {
     log.error('Error processing tool response action', {

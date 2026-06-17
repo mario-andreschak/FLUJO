@@ -27,9 +27,12 @@ interface DebuggerCanvasProps {
   debugState: SharedState;
   conversationId: string;
   onStep: () => void; // Callback for Next Step button
+  onStepOver?: () => void; // Callback for Step Over (skip a node's internal iterations)
   onContinue: () => void; // Callback for Continue button
   onCancel: () => void; // Callback for Cancel button
   isLoading: boolean; // To disable buttons during API calls
+  breakpoints?: string[]; // Node IDs with active breakpoints
+  onToggleBreakpoint?: (nodeId: string) => void; // Toggle a breakpoint on node click
 }
 
 // Define node types for React Flow display
@@ -99,9 +102,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   debugState,
   conversationId,
   onStep,
+  onStepOver,
   onContinue,
   onCancel,
-  isLoading
+  isLoading,
+  breakpoints,
+  onToggleBreakpoint,
 }) => {
   const theme = useTheme();
   // Initialize step index safely, defaulting to -1 if no trace
@@ -183,30 +189,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     }
   }, [flowDefinition, setNodes, setEdges]);
 
-  // Highlight the current node based on the trace
-  useEffect(() => {
-    // Ensure nodes are loaded and trace/index are valid before highlighting
-    if (nodes.length > 0 && debugState.executionTrace && debugState.executionTrace.length > 0 && currentStepIndex >= 0 && currentStepIndex < debugState.executionTrace.length) {
-      const currentStep = debugState.executionTrace[currentStepIndex];
-      if (currentStep?.nodeId) {
-        log.debug(`Highlighting node for step ${currentStepIndex}: ${currentStep.nodeId}`);
-        setNodes((nds: Node[]) => // Add type annotation for nds
-          nds.map((node: Node) => ({ // Add type annotation for node
-            ...node,
-            selected: node.id === currentStep.nodeId,
-            // Optionally add a custom class or style for highlighting
-            style: {
-                ...node.style,
-                border: node.id === currentStep.nodeId ? `2px solid ${theme.palette.warning.main}` : undefined,
-                boxShadow: node.id === currentStep.nodeId ? `0 0 10px ${theme.palette.warning.light}` : undefined,
-            }
-          }))
-        );
-      }
-    }
-     // Add theme as dependency if its changes should trigger re-highlighting
-    // Add nodes as dependency to ensure highlighting happens after nodes are set
-  }, [currentStepIndex, debugState.executionTrace, setNodes, theme, nodes]);
+  // NOTE: current-node highlighting + breakpoint markers are applied via a
+  // derived `displayNodes` memo (below), not by mutating node state in an
+  // effect. The previous effect listed `nodes` in its deps while calling
+  // setNodes, which caused a re-render loop.
 
   const handleStepSelect = (index: number) => {
     // Ensure index is valid before setting
@@ -256,6 +242,28 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
 
+  // Derived nodes for display: highlight the inspected step's node (warning) and
+  // mark breakpoint nodes (error). Computed, not stateful, to avoid render loops.
+  const displayNodes = useMemo(() => {
+    const highlightId = currentStepData?.nodeId;
+    return nodes.map((node: Node) => {
+      const isCurrent = node.id === highlightId;
+      const isBreakpoint = breakpoints?.includes(node.id);
+      return {
+        ...node,
+        style: {
+          ...node.style,
+          border: isCurrent
+            ? `2px solid ${theme.palette.warning.main}`
+            : isBreakpoint
+              ? `2px dashed ${theme.palette.error.main}`
+              : (node.style?.border as string | undefined),
+          boxShadow: isCurrent ? `0 0 10px ${theme.palette.warning.light}` : undefined,
+        },
+      };
+    });
+  }, [nodes, currentStepData, breakpoints, theme]);
+
   // Removed duplicated handleNextStep definition
 
 
@@ -263,7 +271,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     <DebuggerContainer elevation={2}>
       <Header>
         <Typography variant="h6">Flow Debugger</Typography>
-        <Typography variant="caption" color="textSecondary">Conversation: {conversationId}</Typography>
+        <Typography variant="caption" color="textSecondary" display="block">
+          Click a node to toggle a breakpoint
+          {breakpoints && breakpoints.length > 0 ? ` · ${breakpoints.length} active` : ''}
+        </Typography>
       </Header>
       <ContentArea>
         <TracePanel>
@@ -296,7 +307,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           ) : (
             <ReactFlowProvider> {/* Needed for useReactFlow hook if used by controls */}
               <ReactFlow
-                nodes={nodes}
+                nodes={displayNodes}
                 edges={edges}
                 onNodesChange={onNodesChange} // Required, even if read-only
                 onEdgesChange={onEdgesChange} // Required, even if read-only
@@ -312,9 +323,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                 zoomOnScroll={true} // Allow zooming
                 zoomOnPinch={true}
                 zoomOnDoubleClick={false}
-                // Prevent default behaviors
-                onNodeClick={(e, node) => e.preventDefault()}
-                onEdgeClick={(e, edge) => e.preventDefault()}
+                // Click a node to toggle a breakpoint on it
+                onNodeClick={(e, node) => {
+                  e.preventDefault();
+                  if (onToggleBreakpoint) onToggleBreakpoint(node.id);
+                }}
+                onEdgeClick={(e) => e.preventDefault()}
                 onPaneClick={() => {}} // No action on pane click
               >
                 {/* <CanvasControls /> */} {/* Add controls if needed */}
@@ -406,12 +420,17 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             </Button>
             <Button variant="contained" size="small" onClick={handleNextStep} disabled={isLoading || currentStepIndex === -1}>
                 {/* Adjust button text based on whether we are at the end of the current trace */}
-                {debugState.executionTrace && currentStepIndex < debugState.executionTrace.length - 1 ? 'Next Trace Step' : 'Execute Next Step'}
+                {debugState.executionTrace && currentStepIndex < debugState.executionTrace.length - 1 ? 'Next Trace Step' : 'Step Next'}
             </Button>
-            <Button variant="contained" color="secondary" size="small" onClick={onContinue} disabled={isLoading || currentStepIndex === -1}>
-                Continue (Yolo)
+            {onStepOver && (
+              <Button variant="outlined" size="small" onClick={onStepOver} disabled={isLoading}>
+                Step Over
+              </Button>
+            )}
+            <Button variant="contained" color="secondary" size="small" onClick={onContinue} disabled={isLoading}>
+                Continue
             </Button>
-            <Button variant="outlined" color="error" size="small" onClick={onCancel} disabled={isLoading}>Cancel Execution</Button>
+            <Button variant="outlined" color="error" size="small" onClick={onCancel} disabled={isLoading}>Stop</Button>
        </ControlsPanel>
     </DebuggerContainer>
   );

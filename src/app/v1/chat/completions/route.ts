@@ -144,7 +144,9 @@ async function handleRequest(request: NextRequest) {
       flujo,
       requireApproval,
       flujodebug, // Pass the new flag
-      conversation_id
+      conversation_id,
+      false, // continueDebug: only the debug "Continue" control sets this
+      true // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
     );
 
     const duration = Date.now() - startTime;

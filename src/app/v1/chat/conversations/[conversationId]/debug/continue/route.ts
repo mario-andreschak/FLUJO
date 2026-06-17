@@ -79,14 +79,18 @@ export async function POST(
         conversationId,
         flujo: true,
         requireApproval: useRequireApproval,
-        flujodebug: false // Force debug off for continue
+        continueDebug: true
     });
+    // Keep the debug session active (debugMode stays true → trace keeps building
+    // and breakpoints stay enforced) but run freely until the next terminal,
+    // approval, or breakpoint state instead of pausing after a single step.
     const response = await processChatCompletion(
       simulatedRequestData,
       true, // flujo flag (always true for flow execution)
       useRequireApproval, // Use the original setting from the state
-      false, // FORCE flujodebug to false for this continuation run
-      conversationId // Pass the conversation ID to ensure state is used
+      false, // flujodebug param is only consulted for NEW states; ignored on resume
+      conversationId, // Pass the conversation ID to ensure state is used
+      true // continueDebug: run the debug session to the next pause/end
     );
 
     log.info(`Debug continue execution finished. Returning response.`, { requestId, conversationId, status: response.status });
