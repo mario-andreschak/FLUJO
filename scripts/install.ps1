@@ -4,8 +4,9 @@
 
 .DESCRIPTION
     Installs the prerequisites (Git, Node.js + npm, Python, uv) via winget,
-    refreshes the PATH for the current session, clones (or updates) FLUJO,
-    builds it, and optionally starts it.
+    refreshes the environment (PATH + vars) for the current session so the new
+    tools are usable immediately, clones (or updates) FLUJO, builds it, and
+    optionally starts it.
 
     Designed to be run either directly:
 
@@ -41,12 +42,36 @@ function Test-Command([string]$Name) {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-# Rebuild $env:Path from the Machine + User registry values so tools installed
-# by winget in this session resolve without reopening the terminal.
-function Update-SessionPath {
-    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = (@($machine, $user) | Where-Object { $_ } ) -join ';'
+# Refresh the CURRENT session's environment from the Machine + User registry
+# hives, so tools just installed by winget (git, node, uv, ...) are usable in
+# this same session without reopening the terminal. winget writes the new PATH
+# entries to the registry during install; this re-reads them.
+function Update-SessionEnvironment {
+    $pathSep = [System.IO.Path]::PathSeparator   # ';' on Windows
+
+    # Preserve PATH entries already added to the live process (e.g. by uv), so a
+    # registry refresh does not drop them.
+    $processPath = $env:Path
+
+    # Apply Machine-level then User-level vars (User wins). PATH is handled
+    # separately below because it must be MERGED, not overwritten.
+    foreach ($level in 'Machine', 'User') {
+        $vars = [Environment]::GetEnvironmentVariables($level)
+        foreach ($name in $vars.Keys) {
+            if ($name -ieq 'Path') { continue }
+            try { Set-Item -LiteralPath "Env:\$name" -Value $vars[$name] -ErrorAction Stop } catch { }
+        }
+    }
+
+    # PATH = Machine + User + existing process PATH, de-duplicated, order preserved.
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $seen = @{}
+    $merged = foreach ($p in (@($machinePath, $userPath, $processPath) -join $pathSep).Split($pathSep)) {
+        $t = $p.Trim()
+        if ($t -and -not $seen.ContainsKey($t)) { $seen[$t] = $true; $t }
+    }
+    $env:Path = $merged -join $pathSep
 }
 
 # Install a package via winget only if the given command is missing.
@@ -63,7 +88,7 @@ function Install-Prereq {
     Write-Step "Installing $DisplayName via winget ($WingetId)"
     winget install --id $WingetId -e --source winget `
         --accept-source-agreements --accept-package-agreements
-    Update-SessionPath
+    Update-SessionEnvironment
     if (Test-Command $CommandName) {
         Write-Ok "$DisplayName installed."
     } else {
@@ -112,7 +137,7 @@ Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS'      -DisplayName
 Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
 Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
 
-Update-SessionPath
+Update-SessionEnvironment
 
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
