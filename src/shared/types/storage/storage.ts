@@ -36,8 +36,17 @@ export interface SpeechSettings {
 }
 
 /**
+ * Auto-update settings interface
+ */
+export interface UpdateSettings {
+  /** When true, the landing page checks GitHub for a newer commit on startup. */
+  checkOnStartup: boolean;
+}
+
+/**
  * Settings interface containing all application settings
  */
 export interface Settings {
   speech: SpeechSettings;
+  update?: UpdateSettings;
 }

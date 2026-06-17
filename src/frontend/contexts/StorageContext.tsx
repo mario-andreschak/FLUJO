@@ -44,6 +44,9 @@ const StorageContext = createContext<StorageContextType>({
   settings: {
     speech: {
       enabled: true
+    },
+    update: {
+      checkOnStartup: false
     }
   },
   updateSettings: async () => {},
@@ -58,6 +61,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [settings, setSettings] = useState<Settings>({
     speech: {
       enabled: true
+    },
+    update: {
+      checkOnStartup: false
     }
   });
 
@@ -244,13 +250,16 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setGlobalEnvVarsState({});
         }
         
-        // Load speech settings
+        // Load application settings (speech + update)
         const loadedSettings = await loadItem<Settings>(StorageKey.SPEECH_SETTINGS, {
           speech: {
             enabled: true
+          },
+          update: {
+            checkOnStartup: false
           }
         });
-        log.debug('Loaded speech settings from storage', { settings: loadedSettings });
+        log.debug('Loaded settings from storage', { settings: loadedSettings });
         setSettings(loadedSettings);
         
         setIsHydrated(true);

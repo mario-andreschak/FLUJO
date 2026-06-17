@@ -13,7 +13,6 @@ docs/
 ├── features/                      # Feature documentation
 │   ├── README.md                  # Features overview
 │   ├── mcp/                       # MCP-related features
-│   │   ├── docker-servers.md      # Docker-based MCP servers
 │   │   └── ...
 │   ├── flows/                     # Flow-related features
 │   └── ...

@@ -1,14 +1,13 @@
 {
   "name": "flujo",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev -p 4200",
     "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
     "build": "next build",
     "start": "node scripts/launch-next.mjs start -p 4200",
-    "lint": "next lint",
-    "postinstall": "node scripts/conditional-postinstall.js"
+    "lint": "next lint"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

@@ -5,7 +5,6 @@ This section provides detailed documentation for Flujo's features.
 ## Model Context Protocol (MCP)
 
 - **[Overview](./mcp/overview.md)**: Introduction to the Model Context Protocol
-- **[Docker Servers](./mcp/docker-servers.md)**: Using Docker-based MCP servers
 - **[Local Servers](./mcp/local-servers.md)**: Running local MCP servers
 - **[GitHub Servers](./mcp/github-servers.md)**: Using GitHub MCP servers
 

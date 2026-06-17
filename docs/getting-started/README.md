@@ -6,7 +6,6 @@ This section provides quick start guides and installation instructions for Flujo
 
 - **System Requirements**: Hardware and software requirements
 - **Installation Guide**: Step-by-step installation instructions
-- **Docker Installation**: Running Flujo in Docker
 
 ## Quick Start
 

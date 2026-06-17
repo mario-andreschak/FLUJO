@@ -14,6 +14,7 @@ import ThemeSettings from './ThemeSettings';
 import GlobalEnvSettings from './GlobalEnvSettings';
 import BackupSettings from './BackupSettings';
 import SpeechRecognitionSettings from './SpeechRecognitionSettings';
+import UpdateSettings from './UpdateSettings';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -106,6 +107,22 @@ export default function Settings() {
           </AccordionSummary>
           <AccordionDetails>
             <SpeechRecognitionSettings />
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          expanded={expanded === 'updates'}
+          onChange={handleChange('updates')}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="updates-content"
+            id="updates-header"
+          >
+            <Typography variant="h6">Updates</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <UpdateSettings />
           </AccordionDetails>
         </Accordion>
 
