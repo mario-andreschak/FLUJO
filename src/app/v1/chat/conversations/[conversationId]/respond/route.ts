@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { SharedState, TOOL_CALL_ACTION } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend';
+import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
@@ -138,7 +139,7 @@ export async function POST(
     // 5. Save updated state
     sharedState.lastResponse = undefined; // Clear last response before potentially resuming
     FlowExecutor.conversationStates.set(conversationId, sharedState); // Update memory map
-    await saveItemBackend(storageKey, sharedState); // Save to storage
+    await persistConversationState(storageKey, sharedState); // Save to storage (trace stripped)
     log.info(`Saved updated state after processing tool response`, { requestId, conversationId, newStatus: sharedState.status });
 
     // 6a. Still awaiting approval for other tool calls in the same batch: just

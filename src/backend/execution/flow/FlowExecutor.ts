@@ -9,6 +9,42 @@ import { EmitFn } from '@/shared/types/execution/events';
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
 
+// --- Debug snapshot slimming -------------------------------------------------
+// Each debug step records a before/after state snapshot plus prep/exec results.
+// Naively deep-cloning the whole SharedState made the trace grow quadratically:
+// every step re-embedded the entire `messages` array (twice), the MCP tool
+// schemas, and the raw provider response. Those are large, already shown
+// elsewhere (chat panel / live state), and rarely needed at per-step
+// granularity. We keep the small, interesting bits and a `messageCount` marker
+// instead, so each step is roughly constant size regardless of conversation
+// length.
+
+/** Bulky fields stripped from prep/exec result snapshots. */
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse'] as const;
+
+/** Lightweight state snapshot: everything except the conversation/tool payloads. */
+function slimStateSnapshot(state: SharedState): Partial<SharedState> {
+  // Pull out the heavy / non-serializable members; deep-clone only the rest.
+  const { messages, executionTrace, emit, mcpContext, ...rest } = state;
+  const snap = cloneDeep(rest) as Partial<SharedState> & { messageCount?: number };
+  snap.messageCount = messages?.length ?? 0; // keep size context without the payload
+  if (mcpContext) {
+    // Keep which server was in context, drop the (potentially huge) tool schemas.
+    snap.mcpContext = { server: mcpContext.server, availableTools: [] };
+  }
+  return snap;
+}
+
+/** Clone a prep/exec result without its bulky duplicated payloads. */
+function slimResultSnapshot<T>(result: T | undefined): T | undefined {
+  if (!result || typeof result !== 'object') return result;
+  const copy = cloneDeep(result) as Record<string, unknown>;
+  for (const key of HEAVY_RESULT_KEYS) {
+    if (key in copy) delete copy[key];
+  }
+  return copy as T;
+}
+
 /**
  * Engine-agnostic facade for step-by-step flow execution.
  *
@@ -98,11 +134,8 @@ export class FlowExecutor {
         sharedState.executionTrace = [];
       }
 
-      // --- Capture state BEFORE execution ---
-      stateBefore = cloneDeep(sharedState);
-      if (stateBefore) {
-        delete stateBefore.executionTrace; // Avoid recursive trace in snapshot
-      }
+      // --- Capture state BEFORE execution (slimmed; see slimStateSnapshot) ---
+      stateBefore = slimStateSnapshot(sharedState);
 
       emit?.({ type: 'node:enter', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type } });
 
@@ -116,9 +149,8 @@ export class FlowExecutor {
 
       log.debug(`Node ${node.id} finished with action: ${action} for conversation ${conversationId}`);
 
-      // --- Capture state AFTER execution ---
-      const stateAfter = cloneDeep(sharedState);
-      delete stateAfter.executionTrace; // Avoid recursive trace in snapshot
+      // --- Capture state AFTER execution (slimmed; see slimStateSnapshot) ---
+      const stateAfter = slimStateSnapshot(sharedState);
 
       // --- Create and append DebugStep (only if debug mode is enabled) ---
       if (traceEnabled && sharedState.executionTrace) {
@@ -132,8 +164,8 @@ export class FlowExecutor {
           actionTaken: action,
           stateBefore,
           stateAfter,
-          prepResultSnapshot: cloneDeep(prepResult),
-          execResultSnapshot: cloneDeep(execResult),
+          prepResultSnapshot: slimResultSnapshot(prepResult),
+          execResultSnapshot: slimResultSnapshot(execResult),
         };
         sharedState.executionTrace.push(debugStep);
         log.verbose(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
@@ -174,9 +206,9 @@ export class FlowExecutor {
           nodeName: 'Unknown Node',
           timestamp: new Date().toISOString(),
           actionTaken: ERROR_ACTION,
-          stateBefore: stateBefore ? cloneDeep(stateBefore) : cloneDeep(sharedState),
-          stateAfter: cloneDeep(sharedState),
-          prepResultSnapshot: prepResult ? cloneDeep(prepResult) : null,
+          stateBefore: stateBefore ?? slimStateSnapshot(sharedState),
+          stateAfter: slimStateSnapshot(sharedState),
+          prepResultSnapshot: prepResult ? slimResultSnapshot(prepResult) : null,
           execResultSnapshot: { success: false, error: sharedState.lastResponse } as ExecResult,
         };
         sharedState.executionTrace.push(errorStep);

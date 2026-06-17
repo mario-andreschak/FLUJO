@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import { ChatCompletionRequest } from './requestParser';
@@ -14,7 +15,7 @@ import { flowService } from '@/backend/services/flow/index';
 import type { FlowService as FlowServiceType } from '@/backend/services/flow/index'; // Use 'type' import for the class
 import { Flow } from '@/shared/types/flow'; // Import Flow type
 // Import backend storage functions directly
-import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend'; 
+import { loadItem as loadItemBackend } from '@/utils/storage/backend'; 
 import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
 import { FEATURES } from '@/config/features'; // Import feature flags
 
@@ -51,6 +52,10 @@ if (!(flowService as any).getFlowByName) {
 }
 // Type assertion for usage within this file, assuming the method now exists
 const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByName: (name: string) => Promise<Flow | null> };
+
+// Persist conversation state WITHOUT the in-memory-only debug execution trace
+// (keeps the on-disk conversation lean). See persistConversationState.
+const persistState = persistConversationState;
 
 
 // Internal function that contains the core processing logic
@@ -227,7 +232,7 @@ async function processChatCompletionInternal(
             log.verbose(`Updated conversation title for ${effectiveConvId} during init to: ${sharedState.title}`); // Changed to verbose
         }
       }
-      await saveItemBackend(storageKey, sharedState);
+      await persistState(storageKey, sharedState);
       log.debug(`Saved initial state for new conversation ${effectiveConvId} to storage.`); // Changed to debug
     } catch (error) {
       log.error(`Failed to save initial state for new conversation ${effectiveConvId}:`, error);
@@ -401,7 +406,7 @@ async function processChatCompletionInternal(
             emit({ type: 'run:paused', reason: 'breakpoint', node: { nodeId: nextNodeId } });
             try {
               sharedState.updatedAt = Date.now();
-              await saveItemBackend(storageKey, sharedState);
+              await persistState(storageKey, sharedState);
             } catch (error) {
               log.error(`Failed to save state on breakpoint for conv ${effectiveConvId}:`, error);
             }
@@ -438,7 +443,7 @@ async function processChatCompletionInternal(
                 log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`); // Changed to verbose
             }
         }
-        await saveItemBackend(storageKey, sharedState);
+        await persistState(storageKey, sharedState);
         log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`); // Changed to verbose
       } catch (error) {
         log.error(`Failed to save state after step ${internalIterations} for conv ${effectiveConvId}:`, error);
@@ -493,7 +498,7 @@ async function processChatCompletionInternal(
                         log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`); // Changed to verbose
                     }
                 }
-                await saveItemBackend(storageKey, sharedState);
+                await persistState(storageKey, sharedState);
                 log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`); // Changed to verbose
               } catch (error) {
                 log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
@@ -777,7 +782,7 @@ async function processChatCompletionInternal(
             log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`); // Changed to verbose
         }
     }
-    await saveItemBackend(storageKey, sharedState);
+    await persistState(storageKey, sharedState);
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning response.`); // Changed to debug
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
@@ -1000,7 +1005,7 @@ export async function processChatCompletion(
           
           // Also save to storage
           const storageKey = `conversations/${effectiveConvId}` as StorageKey;
-          saveItemBackend(storageKey, errorState).catch(storageError => {
+          persistState(storageKey, errorState).catch(storageError => {
             log.error(`Failed to save error state for conversation ${effectiveConvId}:`, storageError);
           });
         }

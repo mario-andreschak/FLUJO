@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { SharedState } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend';
+import { loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
@@ -59,7 +60,7 @@ export async function POST(
     // 4. Save updated state (both memory and storage)
     FlowExecutor.conversationStates.set(conversationId, sharedState); // Update memory map
     try {
-      await saveItemBackend(storageKey, sharedState); // Save to storage
+      await persistConversationState(storageKey, sharedState); // Save to storage (trace stripped)
       log.info(`Saved updated state after setting cancel flag`, { requestId, conversationId });
     } catch (saveError) {
        log.error(`Failed to save cancelled state`, { requestId, conversationId, saveError });

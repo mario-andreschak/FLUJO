@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { SharedState } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend';
+import { loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/edit-state/route');
@@ -81,7 +82,7 @@ export async function PATCH(
 
     sharedState.updatedAt = Date.now();
     FlowExecutor.conversationStates.set(conversationId, sharedState);
-    await saveItemBackend(`conversations/${conversationId}` as StorageKey, sharedState);
+    await persistConversationState(`conversations/${conversationId}` as StorageKey, sharedState);
 
     return NextResponse.json({ success: true, debugState: sharedState });
   } catch (error) {

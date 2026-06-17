@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { SharedState } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend, saveItem as saveItemBackend } from '@/utils/storage/backend';
+import { loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { StorageKey } from '@/shared/types/storage';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
@@ -97,7 +98,7 @@ export async function POST(
       state.status = 'error';
       state.lastResponse = { success: false, error: errorMessage };
       FlowExecutor.conversationStates.set(conversationId, state);
-      try { await saveItemBackend(storageKey, state); } catch { /* ignore save error */ }
+      try { await persistConversationState(storageKey, state); } catch { /* ignore save error */ }
     }
     return NextResponse.json({ error: 'Internal server error during debug step' }, { status: 500 });
   }
