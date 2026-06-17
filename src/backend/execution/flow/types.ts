@@ -1,6 +1,7 @@
 import { NodeType } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
@@ -145,6 +146,21 @@ export interface SharedState {
     executionTrace?: DebugStep[];
     /** Stores the original requireApproval setting from the request that initiated the debug session. */
     originalRequireApproval?: boolean;
+    /** Node IDs with an active breakpoint (used by the visual debugger). */
+    breakpoints?: string[];
+    /** The node we most recently paused at for a breakpoint, so a resume from it does not immediately re-break. */
+    lastBreakNodeId?: string;
+
+    // --- Token / cost accounting (aggregated from per-message usage) ---
+    /** Running totals of token usage and estimated cost for this conversation. */
+    usage?: UsageTotals;
+
+    /**
+     * Transient emit callback for execution events, attached for the duration
+     * of a single step by the engine. NOT persisted (functions are dropped by
+     * JSON serialization and it is deleted after each step).
+     */
+    emit?: EmitFn;
 }
 
 

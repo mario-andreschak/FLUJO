@@ -80,6 +80,17 @@ export class ModelHandler {
     
     const prefixedContent = content;
 
+    // Extract provider-reported token usage, if present, so the UI can show
+    // per-message and aggregated token/cost figures.
+    const rawUsage = modelResponse.fullResponse?.usage;
+    const usage = rawUsage
+      ? {
+          promptTokens: rawUsage.prompt_tokens ?? 0,
+          completionTokens: rawUsage.completion_tokens ?? 0,
+          totalTokens: rawUsage.total_tokens ?? 0,
+        }
+      : undefined;
+
     // Create the assistant message with timestamp and ID
     const assistantMessage: FlujoChatMessage = {
       id: uuidv4(), // Generate unique ID
@@ -88,7 +99,8 @@ export class ModelHandler {
       // IMPORTANT: Include tool_calls if they exist in the raw response
       tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
       timestamp: Date.now(), // Add timestamp
-      processNodeId: nodeId // Attach the process node ID
+      processNodeId: nodeId, // Attach the process node ID
+      ...(usage ? { usage } : {}),
     };
     finalMessages.push(assistantMessage);
 

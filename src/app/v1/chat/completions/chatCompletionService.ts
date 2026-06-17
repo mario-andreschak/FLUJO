@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import { ChatCompletionRequest } from './requestParser';
 import OpenAI from 'openai';
 import { SharedState, TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, ERROR_ACTION, STAY_ON_NODE_ACTION, ErrorDetails } from '@/backend/execution/flow/types'; // Import types and actions
@@ -258,6 +260,59 @@ async function processChatCompletionInternal(
   const MAX_INTERNAL_ITERATIONS = 150; // Safety break for non-debug flujo=true loop
   let internalIterations = 0;
 
+  // --- Execution event emission (live progress + debugger) ---
+  // emit publishes to the in-memory ExecutionEventBus; subscribers (SSE) may or
+  // may not exist. When nobody is listening this is effectively a no-op, so it
+  // is safe to emit unconditionally.
+  const emit: EmitFn = executionEventBus.emitterFor(effectiveConvId);
+  // Only emit messages appended from here on: the client already has earlier
+  // messages (it fetches full state on connect and shows the user message
+  // optimistically).
+  let lastEmittedMsgIndex = sharedState.messages.length;
+
+  const accumulateUsage = (msg: FlujoChatMessage) => {
+    if (!msg.usage) return;
+    const totals: UsageTotals = sharedState.usage ?? {
+      promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {},
+    };
+    totals.promptTokens += msg.usage.promptTokens;
+    totals.completionTokens += msg.usage.completionTokens;
+    totals.totalTokens += msg.usage.totalTokens;
+    // Cost is filled in once per-model pricing is wired up; defaults to 0.
+    const nodeKey = msg.processNodeId || 'unknown';
+    const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
+    node.promptTokens += msg.usage.promptTokens;
+    node.completionTokens += msg.usage.completionTokens;
+    node.totalTokens += msg.usage.totalTokens;
+    totals.byNode[nodeKey] = node;
+    sharedState.usage = totals;
+    emit({
+      type: 'usage',
+      node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
+      promptTokens: msg.usage.promptTokens,
+      completionTokens: msg.usage.completionTokens,
+      totalTokens: msg.usage.totalTokens,
+      costUsd: 0,
+    });
+  };
+
+  // Emit `message` (+ `usage`) events for any messages appended since the last
+  // call. Keeps emission in one place regardless of which node/branch produced
+  // the message, and is idempotent (only newly-appended messages are emitted).
+  const emitNewMessages = () => {
+    for (; lastEmittedMsgIndex < sharedState.messages.length; lastEmittedMsgIndex++) {
+      const msg = sharedState.messages[lastEmittedMsgIndex];
+      emit({
+        type: 'message',
+        message: msg,
+        node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
+      });
+      accumulateUsage(msg);
+    }
+  };
+
+  emit({ type: 'run:start', flowId: sharedState.flowId });
+
   try {
     // --- Debug Mode: Execute only one step ---
     if (sharedState.debugMode) {
@@ -271,16 +326,20 @@ async function processChatCompletionInternal(
       } else {
         // Reset cancellation flag if it was previously set but not detected above
         sharedState.isCancelled = false;
-        const stepResult = await FlowExecutor.executeStep(sharedState);
+        const stepResult = await FlowExecutor.executeStep(sharedState, emit);
         sharedState = stepResult.sharedState; // Update state
         currentAction = stepResult.action;
+        emitNewMessages();
         // Set status to paused_debug unless it's an error or final response
         if (currentAction !== ERROR_ACTION && currentAction !== FINAL_RESPONSE_ACTION) {
           sharedState.status = 'paused_debug';
+          emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
         } else if (currentAction === FINAL_RESPONSE_ACTION) {
           sharedState.status = 'completed'; // Mark as completed if the single step finished
+          emit({ type: 'run:done', status: 'completed' });
         } else {
           sharedState.status = 'error'; // Mark as error if the single step errored
+          emit({ type: 'run:done', status: 'error' });
         }
         log.info(`[Debug Mode] Step completed for conv ${effectiveConvId}. Action: ${currentAction}, Status: ${sharedState.status}`);
         // Save state after the single step
@@ -327,6 +386,30 @@ async function processChatCompletionInternal(
            break; // Exit the loop immediately
         }
 
+        // Breakpoint check: if the node we are about to run carries a breakpoint
+        // (and we are not resuming directly from it), pause for the debugger.
+        if (sharedState.breakpoints && sharedState.breakpoints.length > 0) {
+          const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
+          if (nextNodeId && sharedState.breakpoints.includes(nextNodeId) && sharedState.lastBreakNodeId !== nextNodeId) {
+            log.info(`Breakpoint hit at node ${nextNodeId} for conv ${effectiveConvId}. Pausing.`);
+            sharedState.status = 'paused_debug';
+            sharedState.debugMode = true; // subsequent steps proceed one at a time
+            sharedState.lastBreakNodeId = nextNodeId;
+            emit({ type: 'breakpoint:hit', node: { nodeId: nextNodeId } });
+            emit({ type: 'run:paused', reason: 'breakpoint', node: { nodeId: nextNodeId } });
+            try {
+              sharedState.updatedAt = Date.now();
+              await saveItemBackend(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save state on breakpoint for conv ${effectiveConvId}:`, error);
+            }
+            break; // Exit loop; response formatting will report paused_debug
+          } else if (nextNodeId && sharedState.lastBreakNodeId && nextNodeId !== sharedState.lastBreakNodeId) {
+            // Moved past the node we broke at; allow it to break again on revisit.
+            sharedState.lastBreakNodeId = undefined;
+          }
+        }
+
         // Log message history before executing step (for debugging tool call issues)
         if (sharedState.messages.length > 0) {
         const lastFewMessages = sharedState.messages.slice(-3); // Log last 3 messages
@@ -337,9 +420,10 @@ async function processChatCompletionInternal(
 
 
       // 2a. Execute one step of the flow
-      const stepResult = await FlowExecutor.executeStep(sharedState);
+      const stepResult = await FlowExecutor.executeStep(sharedState, emit);
       sharedState = stepResult.sharedState; // Update state with results from the step
       currentAction = stepResult.action;
+      emitNewMessages(); // surface any assistant message produced by this step
       
       // Save state after each step (using the correct storageKey based on effectiveConvId)
       try {
@@ -412,6 +496,7 @@ async function processChatCompletionInternal(
               } catch (error) {
                 log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
               }
+              emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
               break; // Exit the loop, response formatting will handle the paused state
             } else {
               // Process tools internally without approval and continue loop
@@ -435,6 +520,7 @@ async function processChatCompletionInternal(
             }));
             sharedState.messages.push(...toolResultMessagesWithTimestamp);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
+            emitNewMessages(); // surface tool result messages live
               // State is updated, continue to the next iteration of the while loop
               log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
               continue; // Continue loop
@@ -535,18 +621,14 @@ async function processChatCompletionInternal(
         }
       }
 
-      // Check if action is an edgeId (Handoff)
-      // We need the PocketFlow instance to find the current node and its successors
-      // Accessing private methods directly is not ideal, consider refactoring FlowExecutor if possible
-      const pocketFlow = await FlowExecutor['loadAndConvertFlow'](sharedState.flowId);
-      const currentNode = sharedState.currentNodeId ? await FlowExecutor['findNodeById'](pocketFlow, sharedState.currentNodeId) : undefined;
+      // Check if action is an edgeId (Handoff). The engine answers whether this
+      // action is an outgoing edge of the current node and, if so, its target.
+      const handoff = await FlowExecutor.resolveHandoff(sharedState, currentAction);
 
-      if (currentNode && currentAction && currentNode.successors.has(currentAction)) {
+      if (handoff.isSuccessorEdge) {
          log.info(`[Action Handling] Step ${internalIterations}: Handling Handoff Action (Edge ID) for conv ${effectiveConvId}`);
          log.info(`Handoff action received for conv ${effectiveConvId}. Edge: ${currentAction}`);
-         const nextNode = currentNode.getSuccessor(currentAction);
-         if (nextNode) {
-            const nextNodeId = nextNode.node_params?.id;
+            const nextNodeId = handoff.targetNodeId;
             if (typeof nextNodeId === 'string' && nextNodeId.length > 0) {
 
                 // <<< --- START ADDED CODE --- >>>
@@ -602,9 +684,18 @@ async function processChatCompletionInternal(
                 // <<< --- END ADDED CODE --- >>>
 
 
+                // Surface the handoff tool-result/confirmation messages live
+                emitNewMessages();
                 // Original logic to update state and continue
+                const fromNodeId = sharedState.currentNodeId;
                 sharedState.currentNodeId = nextNodeId;
                 sharedState.handoffRequested = undefined; // Clear the request flag if it was set
+                emit({
+                  type: 'handoff',
+                  from: fromNodeId ? { nodeId: fromNodeId } : undefined,
+                  toNodeId: nextNodeId,
+                  edgeId: currentAction,
+                });
                 log.info(`Transitioning conv ${effectiveConvId} to node ${sharedState.currentNodeId}`);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 log.info(`Continuing loop for conv ${effectiveConvId} after handoff.`);
@@ -615,12 +706,6 @@ async function processChatCompletionInternal(
                  currentAction = ERROR_ACTION;
                  break;
             }
-         } else {
-            log.error(`Handoff failed for conv ${effectiveConvId}: Successor node not found for edge ${currentAction}`);
-            sharedState.lastResponse = { success: false, error: `Handoff failed: Cannot find target node for edge ${currentAction}` };
-            currentAction = ERROR_ACTION;
-            break;
-         }
       }
 
       // Handle STAY_ON_NODE or other potential actions
@@ -654,6 +739,13 @@ async function processChatCompletionInternal(
   // Use status from sharedState if available, otherwise infer from action
   const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
+
+  // Flush any trailing messages and signal terminal completion to live consumers.
+  // (Debug single-step already emitted its own run:paused / run:done above.)
+  emitNewMessages();
+  if (!sharedState.debugMode && (finalStatus === 'completed' || finalStatus === 'error')) {
+    emit({ type: 'run:done', status: finalStatus });
+  }
 
   // Save final state before returning
   try {

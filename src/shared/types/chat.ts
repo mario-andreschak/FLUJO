@@ -51,4 +51,11 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   
   /** The ID of the process node that generated or handled this message */
   processNodeId?: string;
+
+  /** Token usage reported by the provider for the call that produced this message (assistant messages only). */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 };
