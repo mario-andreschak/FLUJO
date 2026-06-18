@@ -36,6 +36,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoUrl = 'https://github.com/mario-andreschak/FLUJO/'
 
+# On a fresh Windows the user's execution policy defaults to 'Restricted', which
+# blocks running .ps1 files. The `irm ... | iex` one-liner is unaffected (iex
+# evaluates a string), but `npm` is a PowerShell shim (npm.ps1) and fails with
+# "running scripts is disabled on this system". Relax the policy for THIS PROCESS
+# unconditionally so the install below always completes. This does not persist.
+try {
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction Stop
+} catch {
+    # Process scope cannot override a Group-Policy-locked machine; in that rare
+    # case the persistent prompt below (and a reopened admin terminal) is needed.
+}
+
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Ok([string]$Message)   { Write-Host "    $Message" -ForegroundColor Green }
 function Write-Warn2([string]$Message) { Write-Host "    $Message" -ForegroundColor Yellow }
@@ -161,6 +173,48 @@ function Add-DesktopShortcut {
     }
 }
 
+# Ensure the user can run .ps1 shims (npm, npx, ...) in normal terminals from
+# now on - not just inside this installer's process. FLUJO builds and runs MCP
+# servers (npm/npx/uv/python) on demand later, and developers will run npm by
+# hand, so a persistent policy is worthwhile. We use the Microsoft-recommended
+# 'RemoteSigned' (local scripts run; downloaded scripts must be signed) at
+# 'CurrentUser' scope, which needs no admin. Skipped if scripts are already
+# allowed; persistent change is asked for first (or driven by FLUJO_SET_POLICY).
+function Set-PersistentExecutionPolicy {
+    $current = Get-ExecutionPolicy -Scope CurrentUser
+    if ($current -in @('RemoteSigned', 'Unrestricted', 'Bypass')) {
+        Write-Ok "Execution policy already allows scripts (CurrentUser = $current)."
+        return
+    }
+
+    $consent = $false
+    if ($env:FLUJO_SET_POLICY -in @('1', 'true', 'yes')) {
+        $consent = $true
+    } elseif ($env:FLUJO_SET_POLICY -in @('0', 'false', 'no')) {
+        $consent = $false
+    } else {
+        Write-Warn2 "Windows blocks running PowerShell scripts (npm/npx are .ps1 shims) by default."
+        Write-Warn2 "FLUJO needs to run npm/npx for this install and when building MCP servers later."
+        $ans = Read-Host "Set execution policy to RemoteSigned for your user account? (recommended) (Y/n)"
+        $consent = -not ($ans -match '^\s*(n|no)\s*$')
+    }
+
+    if ($consent) {
+        try {
+            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop
+            Write-Ok "Execution policy set to RemoteSigned (CurrentUser). Revert anytime with:"
+            Write-Ok "    Set-ExecutionPolicy -ExecutionPolicy Restricted -Scope CurrentUser"
+        } catch {
+            Write-Warn2 "Could not set execution policy: $($_.Exception.Message)"
+            Write-Warn2 "This install will still proceed (policy is bypassed for this session)."
+        }
+    } else {
+        Write-Warn2 "Skipped. This install proceeds (session-only bypass), but npm/npx may fail"
+        Write-Warn2 "in new terminals later until you run:"
+        Write-Warn2 "    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser"
+    }
+}
+
 Write-Host "FLUJO Installer" -ForegroundColor Magenta
 Write-Host "===============" -ForegroundColor Magenta
 
@@ -168,6 +222,10 @@ Write-Host "===============" -ForegroundColor Magenta
 if (-not (Test-Command 'winget')) {
     throw "winget (App Installer) was not found. Install 'App Installer' from the Microsoft Store, then re-run this script."
 }
+
+# Make script execution work now (process bypass above) and persist it for
+# future terminals / on-demand MCP server builds (with the user's consent).
+Set-PersistentExecutionPolicy
 
 # ---------------------------------------------------------------------------
 # 1. Ask for the install location (interactive, with a sensible default).
