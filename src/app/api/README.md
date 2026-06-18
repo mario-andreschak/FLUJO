@@ -259,29 +259,18 @@ These modules are maintained for backward compatibility:
 
 ### Model API
 
-The Model API manages model configurations and generation.
+The Model API manages model configurations. It follows standard REST resource conventions.
 
 #### Endpoints
 
-- **GET /api/model**: Performs various model operations
-- **POST /api/model**: Performs various model operations
+- **GET /api/model**: List all models
+- **POST /api/model**: Create a model (request body is the `Model` object)
+- **GET /api/model/{id}**: Get a specific model
+- **PUT /api/model/{id}**: Update a model (request body is the `Model`; the path `{id}` is authoritative)
+- **DELETE /api/model/{id}**: Delete a model
+- **POST /api/model/provider**: Fetch available models from a provider
 
-#### GET Actions
-
-- **fetchModels**: Fetches models from a provider
-- **fetchOpenRouterModels**: Fetches models from OpenRouter (legacy)
-- **listModels**: Lists all models
-- **getModel**: Gets a specific model
-- **checkEncryption**: Checks encryption status
-
-#### POST Actions
-
-- **generateCompletion**: Generates a completion
-- **addModel**: Adds a new model
-- **updateModel**: Updates an existing model
-- **deleteModel**: Deletes a model
-- **setEncryptionKey**: Sets encryption key
-- **encryptApiKey**: Encrypts an API key
+API keys are masked by the adapter layer before any model leaves the server.
 
 ### Restore API
 

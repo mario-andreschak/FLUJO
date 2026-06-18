@@ -123,7 +123,7 @@ class ModelService {
 
   async getModel(id: string): Promise<Model | null> {
     try {
-      const model = await this.fetchWithErrorHandling(`/api/model?id=${id}`);
+      const model = await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(id)}`);
       return model;
     } catch (error) {
       log.error('Failed to get model', { id, error });
@@ -152,10 +152,7 @@ class ModelService {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          action: 'addModel',
-          model
-        }),
+        body: JSON.stringify(model),
       });
       
       // Log successful addition
@@ -217,15 +214,12 @@ class ModelService {
         displayName: model.displayName 
       });
 
-      const updatedModel = await this.fetchWithErrorHandling('/api/model', {
-        method: 'POST',
+      const updatedModel = await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(model.id)}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          action: 'updateModel',
-          model: model
-        }),
+        body: JSON.stringify(model),
       });
       
       // Log successful update
@@ -290,15 +284,8 @@ class ModelService {
         displayName: model.displayName 
       });
 
-      await this.fetchWithErrorHandling('/api/model', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'deleteModel',
-          id
-        }),
+      await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
       });
       
       // Log successful deletion

@@ -25,7 +25,8 @@ The Model implementation follows a clean architecture pattern with clear separat
 
 ### API Routes
 
-- `route.ts`: Implements the HTTP request handlers for the API endpoints
+- `route.ts`: Collection endpoints — list all models (`GET`) and create a model (`POST`)
+- `[id]/route.ts`: Single-resource endpoints — get (`GET`), update (`PUT`), delete (`DELETE`) a model by ID
 - `provider/route.ts`: Implements provider-specific API endpoints
 
 ### Adapters
@@ -70,24 +71,19 @@ The backend services handle the core business logic:
 
 ## API Endpoints
 
-### GET Endpoints
+The model API follows standard REST resource conventions:
 
-- `?id={modelId}`: Get a specific model
-- `/`: List all models
+| Method | Path | Description | Success |
+|--------|------|-------------|---------|
+| `GET` | `/api/model` | List all models | `200` + `Model[]` |
+| `POST` | `/api/model` | Create a model (body = `Model`) | `201` + `Model` |
+| `GET` | `/api/model/{id}` | Get a single model | `200` + `Model` |
+| `PUT` | `/api/model/{id}` | Update a model (body = `Model`; path `{id}` is authoritative) | `200` + `Model` |
+| `DELETE` | `/api/model/{id}` | Delete a model | `204` (no body) |
 
-### POST Endpoints
-
-- `{ action: 'addModel', model }`: Add a new model
-- `{ action: 'updateModel', model }`: Update an existing model
-- `{ action: 'deleteModel', id }`: Delete a model
-
-### PUT Endpoints
-
-- Update an existing model
-
-### DELETE Endpoints
-
-- `?id={modelId}`: Delete a model
+Errors return `{ "error": string }` with an appropriate status (`400` invalid input,
+`404` not found, `500` server error). All returned models are sanitized by the adapter
+layer (API keys masked) before leaving the server.
 
 ### Provider Endpoints
 
