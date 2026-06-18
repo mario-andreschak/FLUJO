@@ -180,10 +180,27 @@ function Add-DesktopShortcut {
 # 'RemoteSigned' (local scripts run; downloaded scripts must be signed) at
 # 'CurrentUser' scope, which needs no admin. Skipped if scripts are already
 # allowed; persistent change is asked for first (or driven by FLUJO_SET_POLICY).
+# Determine the execution policy that NEW terminals will actually get, i.e. the
+# effective policy IGNORING this installer's transient Process-scope Bypass.
+# Precedence (highest first) is MachinePolicy > UserPolicy > CurrentUser >
+# LocalMachine; the first scope that isn't 'Undefined' wins. (We skip Process on
+# purpose - it does not persist to future terminals.) If all are Undefined,
+# Windows falls back to 'Restricted'.
+function Get-FutureExecutionPolicy {
+    foreach ($scope in 'MachinePolicy', 'UserPolicy', 'CurrentUser', 'LocalMachine') {
+        $p = Get-ExecutionPolicy -Scope $scope
+        if ($p -ne 'Undefined') { return $p }
+    }
+    return 'Restricted'
+}
+
 function Set-PersistentExecutionPolicy {
-    $current = Get-ExecutionPolicy -Scope CurrentUser
+    # Check the policy future terminals will inherit, NOT just the CurrentUser
+    # scope: a machine can already allow scripts via LocalMachine (or a GPO) with
+    # CurrentUser left Undefined, in which case there is nothing to do.
+    $current = Get-FutureExecutionPolicy
     if ($current -in @('RemoteSigned', 'Unrestricted', 'Bypass')) {
-        Write-Ok "Execution policy already allows scripts (CurrentUser = $current)."
+        Write-Ok "Execution policy already allows scripts in new terminals (effective = $current)."
         return
     }
 
@@ -205,8 +222,14 @@ function Set-PersistentExecutionPolicy {
             Write-Ok "Execution policy set to RemoteSigned (CurrentUser). Revert anytime with:"
             Write-Ok "    Set-ExecutionPolicy -ExecutionPolicy Restricted -Scope CurrentUser"
         } catch {
+            # Most commonly a System.Security.SecurityException ("Security error.")
+            # when security software or a locked-down HKCU ACL blocks writing the
+            # ShellIds key. The install is unaffected (Process scope is bypassed),
+            # and a one-off admin command can set it machine-wide if ever needed.
             Write-Warn2 "Could not set execution policy: $($_.Exception.Message)"
             Write-Warn2 "This install will still proceed (policy is bypassed for this session)."
+            Write-Warn2 "If npm/npx fail in new terminals later, run this once in an admin PowerShell:"
+            Write-Warn2 "    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine"
         }
     } else {
         Write-Warn2 "Skipped. This install proceeds (session-only bypass), but npm/npx may fail"
@@ -223,12 +246,12 @@ if (-not (Test-Command 'winget')) {
     throw "winget (App Installer) was not found. Install 'App Installer' from the Microsoft Store, then re-run this script."
 }
 
-# Make script execution work now (process bypass above) and persist it for
-# future terminals / on-demand MCP server builds (with the user's consent).
-Set-PersistentExecutionPolicy
-
 # ---------------------------------------------------------------------------
-# 1. Ask for the install location (interactive, with a sensible default).
+# 1. Gather all the user's choices up front, then run the install in one go.
+#    Order: install path -> desktop shortcut -> start after -> security policy.
+#    (Script execution already works this session via the Process-scope bypass
+#    set at the top; the persistent policy question comes last, just before the
+#    work begins.)
 # ---------------------------------------------------------------------------
 $defaultDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'FLUJO' } else { Join-Path $HOME 'FLUJO' }
 
@@ -239,6 +262,14 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 # Expand any environment variables the user may have typed (e.g. %USERPROFILE%).
 $InstallDir = [Environment]::ExpandEnvironmentVariables($InstallDir)
 Write-Ok "Installing into: $InstallDir"
+
+# Decide whether to create a Desktop shortcut (defaults to yes).
+if ($env:FLUJO_SHORTCUT -in @('0', 'false', 'no')) {
+    $makeShortcut = $false
+} else {
+    $scAnswer = Read-Host "Create a desktop shortcut for FLUJO? (Y/n)"
+    $makeShortcut = -not ($scAnswer -match '^\s*(n|no)\s*$')
+}
 
 # Decide whether to start FLUJO afterwards.
 $startAfter = $Start.IsPresent
@@ -251,13 +282,10 @@ if (-not $startAfter) {
     }
 }
 
-# Decide whether to create a Desktop shortcut (defaults to yes).
-if ($env:FLUJO_SHORTCUT -in @('0', 'false', 'no')) {
-    $makeShortcut = $false
-} else {
-    $scAnswer = Read-Host "Create a desktop shortcut for FLUJO? (Y/n)"
-    $makeShortcut = -not ($scAnswer -match '^\s*(n|no)\s*$')
-}
+# Last question: persist the script-execution policy for future terminals / on-
+# demand MCP server builds (with the user's consent). Skipped automatically if
+# scripts are already allowed. After this, the install runs without interruption.
+Set-PersistentExecutionPolicy
 
 # ---------------------------------------------------------------------------
 # 2. Install prerequisites via winget.
