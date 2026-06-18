@@ -7,7 +7,9 @@
     "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
     "build": "next build",
     "start": "node scripts/launch-next.mjs start -p 4200",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -43,6 +45,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@types/jest": "^29.5.14",
     "@types/lodash": "^4.17.16",
     "@types/node": "20.17.30",
     "@types/react": "19.1.0",

@@ -59,6 +59,21 @@ export class FlowService { // Add export keyword here
   }
 
   /**
+   * Invalidate the execution engine's compiled-flow cache for a flow (or all
+   * flows when no id is given). Uses a lazy import so this service does not
+   * statically depend on the execution layer, which depends back on it.
+   */
+  private async invalidateExecutionCache(flowId?: string): Promise<void> {
+    try {
+      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
+      FlowExecutor.clearFlowCache(flowId);
+      log.debug(`Invalidated execution flow cache`, { flowId: flowId ?? 'all' });
+    } catch (error) {
+      log.warn('Failed to invalidate execution flow cache', error);
+    }
+  }
+
+  /**
    * Save a flow (create new or update existing)
    */
   async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
@@ -83,10 +98,17 @@ export class FlowService { // Add export keyword here
       }
       
       await saveItem(StorageKey.FLOWS, updatedFlows);
-      
+
       // Update cache
       this.flowsCache = updatedFlows;
-      
+
+      // Invalidate the execution engine's compiled-flow cache for this flow so
+      // a subsequent run picks up the edit (renamed nodes/models, new edges,
+      // etc.). Without this the engine keeps using the stale compiled flow until
+      // the process restarts. Lazy import to avoid a static circular dependency
+      // (FlowExecutor → PocketflowEngine → this flowService).
+      await this.invalidateExecutionCache(flow.id);
+
       log.info(`Flow ${flow.id} saved successfully`);
       return { success: true };
     } catch (error) {
@@ -110,10 +132,13 @@ export class FlowService { // Add export keyword here
       // Remove the flow
       const updatedFlows = flows.filter(flow => flow.id !== flowId);
       await saveItem(StorageKey.FLOWS, updatedFlows);
-      
+
       // Update cache
       this.flowsCache = updatedFlows;
-      
+
+      // Drop any compiled copy of the deleted flow from the execution engine.
+      await this.invalidateExecutionCache(flowId);
+
       log.info(`Flow ${flowId} deleted successfully`);
       return { success: true };
     } catch (error) {

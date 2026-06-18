@@ -285,7 +285,14 @@ async function processChatCompletionInternal(
   // A mid-turn continuation (e.g. resuming after tool approval, where the last
   // message is a tool result) must keep its current node, not jump back to the
   // node tagged on the original user message.
-  if (stateSource !== 'new' && !data.processNodeId) {
+  //
+  // CRITICAL: this redirect only runs for a genuine new user turn (userTurn).
+  // Internal resumes — debug step/continue and tool-approval respond — pass
+  // userTurn=false and MUST NOT redirect. Otherwise, because the last message is
+  // still the original user message (the start→process handoff appends no
+  // assistant message), every debug step would reset currentNodeId back to the
+  // start node, trapping the debugger on the start node forever.
+  if (userTurn && stateSource !== 'new' && !data.processNodeId) {
     const lastMsg = sharedState.messages.length > 0
       ? sharedState.messages[sharedState.messages.length - 1]
       : undefined;
