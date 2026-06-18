@@ -15,6 +15,18 @@ function isWebSocketConfig(config: MCPServerConfig): config is MCPWebSocketConfi
   return config.transport === 'websocket';
 }
 
+// Resolve a display path for any server config based on its transport
+function getServerPath(config: MCPServerConfig): string {
+  if (isStdioConfig(config)) {
+    return config.args && config.args.length > 0 ? config.args[0] : 'Unknown path';
+  }
+  if (isWebSocketConfig(config)) {
+    return config.websocketUrl || 'Unknown URL';
+  }
+  // SSE and Streamable configs
+  return config.serverUrl || 'Unknown URL';
+}
+
 // Define ServerState as an intersection type instead of extending MCPServerConfig 
 // but with the updated environment variable type
 type ServerState = Omit<MCPServerConfig, 'env'> & {
@@ -66,9 +78,7 @@ export function useServerStatus() {
           const stderrOutput = typeof statusData === 'object' && statusData.stderrOutput ? statusData.stderrOutput : undefined;
 
           // Get the path based on the server type
-          const path = isStdioConfig(config) 
-            ? (config.args && config.args.length > 0 ? config.args[0] : 'Unknown path') 
-            : config.websocketUrl || 'Unknown URL';
+          const path = getServerPath(config);
             
           return {
             ...config,
@@ -193,9 +203,7 @@ export function useServerStatus() {
     try {
       // First add the server with a connecting status
       // Get the path based on the server type
-      const path = isStdioConfig(config) 
-        ? (config.args && config.args.length > 0 ? config.args[0] : 'Unknown path') 
-        : config.websocketUrl || 'Unknown URL';
+      const path = getServerPath(config);
         
       const newServer = {
         ...config,
@@ -307,9 +315,7 @@ export function useServerStatus() {
           server.name === config.name
             ? {
                 ...config,
-                path: isStdioConfig(config) 
-                  ? (config.args && config.args.length > 0 ? config.args[0] : 'Unknown path') 
-                  : config.websocketUrl || 'Unknown URL',
+                path: getServerPath(config),
                 status: server.status, // Keep current status until we know more
                 error: server.error, // Keep current error until we know more
                 stderrOutput: server.stderrOutput

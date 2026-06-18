@@ -18,9 +18,9 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { conversationId: string } }
+  { params }: { params: Promise<{ conversationId: string }> }
 ) {
-  const { conversationId } = params;
+  const { conversationId } = await params;
   if (!conversationId) {
     return new Response('Missing conversationId', { status: 400 });
   }

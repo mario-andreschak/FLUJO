@@ -3,6 +3,7 @@
 import React from 'react';
 import BuildTools from '../BuildTools';
 import SectionHeader from './SectionHeader';
+import { MessageState } from '../../../types';
 
 interface BuildSectionProps {
   installCommand: string;
@@ -15,6 +16,7 @@ interface BuildSectionProps {
   isBuilding: boolean;
   installCompleted: boolean;
   buildCompleted: boolean;
+  buildMessage: MessageState | null;
   isExpanded: boolean;
   toggleSection: () => void;
 }
@@ -30,6 +32,7 @@ const BuildSection: React.FC<BuildSectionProps> = ({
   isBuilding,
   installCompleted,
   buildCompleted,
+  buildMessage,
   isExpanded,
   toggleSection
 }) => {
@@ -70,6 +73,7 @@ const BuildSection: React.FC<BuildSectionProps> = ({
           isBuilding={isBuilding}
           installCompleted={installCompleted}
           buildCompleted={buildCompleted}
+          buildMessage={buildMessage}
         />
       )}
     </div>

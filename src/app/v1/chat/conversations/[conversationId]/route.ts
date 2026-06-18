@@ -12,7 +12,7 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { conversationId: string } } // Reverted to using params destructuring
+  { params }: { params: Promise<{ conversationId: string }> } // Reverted to using params destructuring
 ) {
   const awaitedParams = await params; // Await the params object
   const conversationId = awaitedParams.conversationId; // Access conversationId from awaited params
@@ -105,9 +105,9 @@ export async function GET(
 // PATCH handler to update conversation properties (e.g., flowId)
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { conversationId: string } }
+  { params }: { params: Promise<{ conversationId: string }> }
 ) {
-  const conversationId = params.conversationId;
+  const conversationId = (await params).conversationId;
   const requestId = `conv-patch-${Date.now()}`;
   log.info('Handling PATCH request for conversation', { requestId, conversationId });
 
@@ -199,9 +199,9 @@ export async function PATCH(
 // DELETE handler to remove conversation state
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { conversationId: string } }
+  { params }: { params: Promise<{ conversationId: string }> }
 ) {
-  const conversationId = params.conversationId; // Direct access instead of destructuring
+  const conversationId = (await params).conversationId; // Direct access instead of destructuring
   const requestId = `conv-delete-${Date.now()}`;
   log.info('Handling DELETE request for conversation', { requestId, conversationId });
 

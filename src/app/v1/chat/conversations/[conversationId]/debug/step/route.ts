@@ -13,9 +13,9 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/step/
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { conversationId: string } }
+  { params }: { params: Promise<{ conversationId: string }> }
 ) {
-  const conversationId = params.conversationId;
+  const conversationId = (await params).conversationId;
   const requestId = `debug-step-${Date.now()}`;
   log.info('Handling POST request for debug step', { requestId, conversationId });
 

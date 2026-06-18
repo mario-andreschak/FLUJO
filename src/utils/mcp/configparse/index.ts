@@ -162,7 +162,14 @@ async function parseReadmeConfig(repoPath: string, repoName: string): Promise<Co
         buildCommand: parseResult.config._buildCommand || '',
         runCommand: parseResult.config.transport === 'stdio' ? parseResult.config.command || '' : '',
         args: parseResult.config.transport === 'stdio' ? parseResult.config.args || [] : [],
-        env: parseResult.config.env || {},
+        env: parseResult.config.env
+          ? Object.fromEntries(
+              Object.entries(parseResult.config.env).map(([key, value]) => [
+                key,
+                typeof value === 'string' ? value : value.value,
+              ])
+            )
+          : {},
         message: parseResult.message || {
           type: 'success',
           text: 'Configuration extracted from README.'

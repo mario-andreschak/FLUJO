@@ -9,6 +9,8 @@ import { persistConversationState } from '@/backend/execution/flow/persistConver
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
+import { FlujoChatMessage } from '@/shared/types/chat';
+import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
@@ -20,9 +22,9 @@ interface RespondRequestBody {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { conversationId: string } }
+  { params }: { params: Promise<{ conversationId: string }> }
 ) {
-  const { conversationId } = params;
+  const { conversationId } = await params;
   const requestId = `conv-respond-${Date.now()}`;
   log.info('Handling POST request for conversation response (Approve/Reject)', { requestId, conversationId });
 
@@ -92,10 +94,12 @@ export async function POST(
       if (!toolProcessingResult.success) {
         log.error(`Internal tool processing failed after approval`, { requestId, conversationId, toolCallId, error: toolProcessingResult.error });
         // Add an error message to the chat? Or just fail the request? Let's add a message.
-        const errorMessage: OpenAI.ChatCompletionToolMessageParam = {
+        const errorMessage: FlujoChatMessage = {
           role: 'tool',
           tool_call_id: toolCallId,
           content: `Error processing approved tool call ${toolCallToProcess.function.name}: ${toolProcessingResult.error?.message || 'Unknown error'}`,
+          id: uuidv4(),
+          timestamp: Date.now(),
         };
         sharedState.messages.push(errorMessage);
         // Keep state as 'awaiting_tool_approval' but remove the failed call? Or mark as error?
@@ -117,10 +121,12 @@ export async function POST(
     } else { // action === 'reject'
       log.info(`Rejecting tool call`, { requestId, conversationId, toolCallId });
       // Create a tool message indicating rejection
-      const rejectionMessage: OpenAI.ChatCompletionToolMessageParam = {
+      const rejectionMessage: FlujoChatMessage = {
         role: 'tool',
         tool_call_id: toolCallId,
         content: `User rejected tool call: ${toolCallToProcess.function.name}`,
+        id: uuidv4(),
+        timestamp: Date.now(),
       };
       sharedState.messages.push(rejectionMessage);
       // Remove the rejected tool call from pending list

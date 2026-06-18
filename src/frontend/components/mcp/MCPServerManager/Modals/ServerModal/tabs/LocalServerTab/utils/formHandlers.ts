@@ -269,9 +269,9 @@ export const handleParseEnvClipboard = async (
         } as MCPStreamableConfig;
       } else {
         updatedConfig = {
-          ...localConfig,
+          ...(localConfig as MCPServerConfig),
           env: mergedEnv
-        };
+        } as MCPServerConfig;
       }
       
       setLocalConfig(updatedConfig);
@@ -343,9 +343,9 @@ export const handleParseEnvExample = async (
         } as MCPStreamableConfig;
       } else {
         updatedConfig = {
-          ...localConfig,
+          ...(localConfig as MCPServerConfig),
           env: mergedEnv
-        };
+        } as MCPServerConfig;
       }
       
       setLocalConfig(updatedConfig);

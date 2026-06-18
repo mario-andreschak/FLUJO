@@ -10,9 +10,9 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/rout
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { conversationId: string } }
+  { params }: { params: Promise<{ conversationId: string }> }
 ) {
-  const { conversationId } = params;
+  const { conversationId } = await params;
   const requestId = `conv-cancel-${Date.now()}`;
   log.info('Handling POST request to cancel conversation execution', { requestId, conversationId });
 
