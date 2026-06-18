@@ -119,11 +119,27 @@ export async function POST(request: NextRequest) {
       }
 
       log.info('Spawning detached updater (update.ps1) to update + restart FLUJO');
+      // IMPORTANT: do NOT spawn powershell.exe directly with `detached: true`.
+      // On Windows that sets the DETACHED_PROCESS creation flag, which leaves
+      // PowerShell without a usable console; it gets a PID but silently dies on
+      // init without ever running the script (no log, no rebuild). Instead we
+      // launch it through `cmd /c start`, which creates a fully independent
+      // process that survives this server being killed. `start ""` provides an
+      // explicit (empty) window title so a quoted script path with spaces is
+      // never mistaken for the title.
       const child = spawn(
-        'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', updateScript, '-Dir', cwd],
+        'cmd.exe',
+        [
+          '/c', 'start', '""',
+          'powershell.exe',
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+          '-File', updateScript, '-Dir', cwd,
+        ],
         { detached: true, stdio: 'ignore', windowsHide: true }
       );
+      // spawn() reports launch failures asynchronously via 'error'; without a
+      // listener the failure is swallowed and we'd wrongly report success.
+      child.on('error', (err) => log.error('Failed to spawn updater process', err));
       child.unref();
 
       return NextResponse.json({
