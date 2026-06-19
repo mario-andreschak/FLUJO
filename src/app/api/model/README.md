@@ -82,8 +82,8 @@ The model API follows standard REST resource conventions:
 | `DELETE` | `/api/model/{id}` | Delete a model | `204` (no body) |
 
 Errors return `{ "error": string }` with an appropriate status (`400` invalid input,
-`404` not found, `500` server error). All returned models are sanitized by the adapter
-layer (API keys masked) before leaving the server.
+`404` not found, `409` duplicate name on create, `500` server error). All returned models
+are sanitized by the adapter layer (API keys masked) before leaving the server.
 
 ### Provider Endpoints
 

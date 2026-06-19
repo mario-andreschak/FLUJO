@@ -29,20 +29,14 @@ class FlowService {
       }
 
       // Call the API to list flows
-      const response = await fetch('/api/flow?action=listFlows');
-      
+      const response = await fetch('/api/flow');
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to load flows');
       }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to load flows');
-      }
-      
-      const flows = data.flows || [];
+
+      const flows = (await response.json()) as Flow[];
       log.debug('loadFlows: Loaded flows from API', { count: flows.length });
       this.flowsCache = flows;
       return flows;
@@ -68,27 +62,21 @@ class FlowService {
       }
 
       // Call the API to get the flow
-      const response = await fetch(`/api/flow?action=getFlow&id=${encodeURIComponent(flowId)}`);
-      
+      const response = await fetch(`/api/flow/${encodeURIComponent(flowId)}`);
+
       if (!response.ok) {
         if (response.status === 404) {
           log.debug(`getFlow: Flow ${flowId} not found`);
           return null;
         }
-        
+
         const errorData = await response.json();
         throw new Error(errorData.error || `Failed to get flow: ${flowId}`);
       }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        log.debug(`getFlow: Flow ${flowId} not found`);
-        return null;
-      }
-      
+
+      const flow = (await response.json()) as Flow;
       log.debug('getFlow: Retrieved flow from API', { flowId });
-      return data.flow;
+      return flow;
     } catch (error) {
       log.warn(`getFlow: Failed to get flow ${flowId}:`, error);
       return null;
@@ -96,68 +84,98 @@ class FlowService {
   }
 
   /**
-   * Save a flow (create new or update existing)
+   * Create a new flow (POST /api/flow). Use updateFlow for an existing flow.
    */
-  async saveFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {
-    log.debug('saveFlow: Entering method', { 
-      flowId: flow.id, 
+  async addFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {
+    log.debug('addFlow: Entering method', {
+      flowId: flow.id,
       flowName: flow.name,
       nodeCount: flow.nodes.length,
       edgeCount: flow.edges.length
     });
-    
+
     try {
-      // Determine if this is a new flow or an update
-      const action = await this.getFlow(flow.id) ? 'updateFlow' : 'addFlow';
-      
-      // Call the API to save the flow
       const response = await fetch('/api/flow', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          action,
-          flow
-        })
+        body: JSON.stringify(flow)
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Failed to save flow' 
+        return {
+          success: false,
+          error: errorData.error || 'Failed to add flow'
         };
       }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to save flow' 
+
+      const savedFlow = (await response.json()) as Flow;
+
+      // Update cache
+      if (this.flowsCache) {
+        this.flowsCache.push(savedFlow);
+      }
+
+      log.debug('addFlow: Flow added successfully', { flowId: flow.id });
+      return { success: true };
+    } catch (error) {
+      log.warn('addFlow: Failed to add flow:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to add flow'
+      };
+    }
+  }
+
+  /**
+   * Update an existing flow (PUT /api/flow/{id}). Use addFlow to create a new flow.
+   */
+  async updateFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {
+    log.debug('updateFlow: Entering method', {
+      flowId: flow.id,
+      flowName: flow.name,
+      nodeCount: flow.nodes.length,
+      edgeCount: flow.edges.length
+    });
+
+    try {
+      const response = await fetch(`/api/flow/${encodeURIComponent(flow.id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(flow)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        return {
+          success: false,
+          error: errorData.error || 'Failed to update flow'
         };
       }
-      
+
+      const savedFlow = (await response.json()) as Flow;
+
       // Update cache
       if (this.flowsCache) {
         const existingFlowIndex = this.flowsCache.findIndex(f => f.id === flow.id);
         if (existingFlowIndex >= 0) {
-          // Update existing flow in cache
-          this.flowsCache[existingFlowIndex] = data.flow || flow;
+          this.flowsCache[existingFlowIndex] = savedFlow;
         } else {
-          // Add new flow to cache
-          this.flowsCache.push(data.flow || flow);
+          this.flowsCache.push(savedFlow);
         }
       }
-      
-      log.debug('saveFlow: Flow saved successfully', { flowId: flow.id });
+
+      log.debug('updateFlow: Flow updated successfully', { flowId: flow.id });
       return { success: true };
     } catch (error) {
-      log.warn('saveFlow: Failed to save flow:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to save flow' 
+      log.warn('updateFlow: Failed to update flow:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update flow'
       };
     }
   }
@@ -169,34 +187,18 @@ class FlowService {
     log.debug('deleteFlow: Entering method', { flowId });
     try {
       // Call the API to delete the flow
-      const response = await fetch('/api/flow', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'deleteFlow',
-          id: flowId
-        })
+      const response = await fetch(`/api/flow/${encodeURIComponent(flowId)}`, {
+        method: 'DELETE',
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
-        return { 
-          success: false, 
-          error: errorData.error || 'Failed to delete flow' 
+        return {
+          success: false,
+          error: errorData.error || 'Failed to delete flow'
         };
       }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to delete flow' 
-        };
-      }
-      
+
       // Update cache
       if (this.flowsCache) {
         this.flowsCache = this.flowsCache.filter(flow => flow.id !== flowId);

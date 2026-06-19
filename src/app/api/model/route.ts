@@ -48,8 +48,10 @@ export async function POST(request: NextRequest) {
 
     const result = await modelAdapter.addModel(model);
     if (!result.success) {
+      // A name collision is a conflict (409); everything else is invalid input (400).
+      const isDuplicate = typeof result.error === 'string' && result.error.includes('already exists');
       return new Response(JSON.stringify({ error: result.error }), {
-        status: 400,
+        status: isDuplicate ? 409 : 400,
         headers: { 'Content-Type': 'application/json' },
       });
     }

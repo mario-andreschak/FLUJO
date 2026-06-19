@@ -145,9 +145,19 @@ const FlowsPage = () => {
   const handleSaveFlow = async (flow: Flow) => {
     log.info('Saving flow', { flowId: flow.id, flowName: flow.name });
     try {
-      await flowService.saveFlow(flow);
+      // A flow not yet in state is a create (POST); otherwise it's an update (PUT).
+      const isNew = !flows.some(f => f.id === flow.id);
+      const result = isNew
+        ? await flowService.addFlow(flow)
+        : await flowService.updateFlow(flow);
+
+      if (!result.success) {
+        log.error('Failed to save flow', { error: result.error });
+        showSnackbar(result.error || 'Failed to save flow', 'error');
+        return;
+      }
       log.debug('Flow saved successfully');
-      
+
       // Update local state
       setFlows(prevFlows => {
         const existingFlowIndex = prevFlows.findIndex(f => f.id === flow.id);
@@ -163,7 +173,7 @@ const FlowsPage = () => {
           return [...prevFlows, flow];
         }
       });
-      
+
       setSelectedFlow(flow.id);
       showSnackbar('Flow saved successfully', 'success');
     } catch (error) {

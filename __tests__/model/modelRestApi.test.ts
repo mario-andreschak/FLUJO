@@ -73,10 +73,10 @@ describe('Model REST API', () => {
     expect(created.ApiKey).toBe(MASKED_API_KEY);
   });
 
-  it('rejects a duplicate technical name with 400', async () => {
+  it('rejects a duplicate technical name with 409', async () => {
     await createModel(req(modelFixture()));
     const res = await createModel(req(modelFixture({ id: 'm2', displayName: 'Other' })));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
     await expect(res.json()).resolves.toHaveProperty('error');
   });
 

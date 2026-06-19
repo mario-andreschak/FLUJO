@@ -49,7 +49,8 @@ The frontend service is responsible for:
 
 - `loadFlows()`: Load all flows via API
 - `getFlow(flowId)`: Get a specific flow via API
-- `saveFlow(flow)`: Save a flow (create new or update existing) via API
+- `addFlow(flow)`: Create a new flow via API (`POST /api/flow`)
+- `updateFlow(flow)`: Update an existing flow via API (`PUT /api/flow/{id}`)
 - `deleteFlow(flowId)`: Delete a flow via API
 
 ### Node and Edge Management
@@ -74,8 +75,9 @@ const flow = await flowService.getFlow('flow-id');
 // Create a new flow
 const newFlow = flowService.createNewFlow('My New Flow');
 
-// Save a flow
-const saveResult = await flowService.saveFlow(newFlow);
+// Persist a brand-new flow (create) or save edits to an existing one (update)
+const addResult = await flowService.addFlow(newFlow);
+const updateResult = await flowService.updateFlow(existingFlow);
 
 // Delete a flow
 const deleteResult = await flowService.deleteFlow('flow-id');

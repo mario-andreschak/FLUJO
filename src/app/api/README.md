@@ -190,21 +190,16 @@ The Environment Variables API manages environment variables with secure encrypti
 
 ### Flow API
 
-The Flow API manages flow definitions and execution.
+The Flow API manages flow definitions. It follows standard REST resource conventions.
 
 #### Endpoints
 
-- **GET /api/flow?action=listFlows**: Lists all flows
-- **GET /api/flow?action=getFlow&id={flowId}**: Gets a specific flow
-- **POST /api/flow**: Performs various flow operations
-
-#### Actions
-
-- **addFlow**: Adds a new flow
-- **updateFlow**: Updates an existing flow
-- **deleteFlow**: Deletes a flow
-- **createNewFlow**: Creates a new flow with default nodes
-- **generateSampleFlow**: Generates a sample flow for testing
+- **GET /api/flow**: List all flows
+- **POST /api/flow**: Create a flow (request body is the `Flow` object; a duplicate id is rejected with `409`)
+- **GET /api/flow/{id}**: Get a specific flow
+- **PUT /api/flow/{id}**: Update a flow (request body is the `Flow`; the path `{id}` is authoritative; `404` if it does not exist)
+- **DELETE /api/flow/{id}**: Delete a flow
+- **POST /api/flow/prompt-renderer**: Render a node's prompt within a flow
 
 ### Git Operations API
 

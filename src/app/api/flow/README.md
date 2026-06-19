@@ -23,25 +23,23 @@ The Flow implementation follows a clean architecture pattern with clear separati
 
 ## Components
 
-### API Handlers
+### API Routes
 
-- `handlers.ts`: Contains the HTTP request handlers for the API endpoints
-- `route.ts`: Exports the handlers and initializes the backend service
+- `route.ts`: Collection endpoints — list all flows (`GET`) and create a flow (`POST`)
+- `[id]/route.ts`: Single-resource endpoints — get (`GET`), create-or-replace (`PUT`), delete (`DELETE`) a flow by ID
+- `prompt-renderer/route.ts`: Renders a node's prompt within a flow (`POST`)
+- `_helpers.ts`: Shared `json()` response builder (not a route — the leading `_` keeps Next.js from treating it as one)
 
-### Adapters
-
-The API layer uses the adapter pattern to delegate calls to the backend service:
-
-- `flow-adapter.ts`: Adapts flow-related operations
+The routes call the backend `flowService` (`@/backend/services/flow`) directly; the
+flow service performs no sanitization, so no adapter layer sits in between.
 
 ## Flow of Control
 
 1. Frontend components use the frontend service to make API calls
 2. Frontend service makes HTTP requests to the API endpoints
-3. API handlers process the requests and delegate to the adapters
-4. Adapters delegate to the backend service
-5. Backend service performs the operations and returns the results
-6. API handlers format the results and return them to the frontend
+3. API routes process the requests and delegate to the backend service
+4. Backend service performs the operations and returns the results
+5. API routes format the results and return them to the frontend
 
 ## Benefits
 
@@ -53,18 +51,24 @@ The API layer uses the adapter pattern to delegate calls to the backend service:
 
 ## API Endpoints
 
-### GET Endpoints
+The flow API follows standard REST resource conventions:
 
-- `?action=listFlows`: List all flows
-- `?action=getFlow&id={flowId}`: Get a specific flow
+| Method | Path | Description | Success |
+|--------|------|-------------|---------|
+| `GET` | `/api/flow` | List all flows | `200` + `Flow[]` |
+| `POST` | `/api/flow` | Create a flow (body = `Flow`; rejects a duplicate id) | `201` + `Flow` |
+| `GET` | `/api/flow/{id}` | Get a single flow | `200` + `Flow` |
+| `PUT` | `/api/flow/{id}` | Update a flow (body = `Flow`; path `{id}` is authoritative) | `200` + `Flow` |
+| `DELETE` | `/api/flow/{id}` | Delete a flow | `204` (no body) |
+| `POST` | `/api/flow/prompt-renderer` | Render a node's prompt within a flow | `200` + `{ prompt }` |
 
-### POST Endpoints
+Errors return `{ "error": string }` with an appropriate status (`400` invalid input,
+`404` not found, `409` duplicate on create, `500` server error).
 
-- `{ action: 'addFlow', flow }`: Add a new flow
-- `{ action: 'updateFlow', flow }`: Update an existing flow
-- `{ action: 'deleteFlow', id }`: Delete a flow
-- `{ action: 'createNewFlow', name }`: Create a new flow with default nodes
-- `{ action: 'generateSampleFlow', name }`: Generate a sample flow for testing
+Create and update are separate, mirroring the Model API: `POST` creates and fails if
+the id already exists; `PUT` updates an existing flow and returns `404` if it does not.
+The frontend mints a new flow's id client-side, so the UI knows whether a save is a
+create or an update and calls `addFlow` (`POST`) or `updateFlow` (`PUT`) accordingly.
 
 ## Usage
 
