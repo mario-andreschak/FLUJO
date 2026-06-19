@@ -26,15 +26,17 @@ class MCPService {
    */
   async loadServerConfigs() {
     try {
-      const response = await fetch('/api/mcp?action=loadConfigs');
+      const response = await fetch('/api/mcp/servers');
       const data = await response.json();
-      
-      if (data.error) {
-        log.warn('Failed to load server configs:', data.error);
-        return { error: data.error };
+
+      if (!response.ok || (data && data.error)) {
+        const error = (data && data.error) || 'Failed to load server configs';
+        log.warn('Failed to load server configs:', error);
+        return { error };
       }
-      
-      return data.configs;
+
+      // GET /api/mcp/servers returns the configs array directly.
+      return data;
     } catch (error) {
       log.warn('Failed to load server configs:', error);
       return { error: 'Failed to load server configs' };
@@ -60,7 +62,7 @@ class MCPService {
       }
       
       // Cache miss or expired, fetch from server
-      const response = await fetch(`/api/mcp?action=listTools&server=${encodeURIComponent(serverName)}`);
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/tools`);
       const data = await response.json();
       
       if (data.error) {
@@ -102,20 +104,17 @@ class MCPService {
    */
   async callTool(serverName: string, toolName: string, args: Record<string, any>, timeout?: number) {
     try {
-      const response = await fetch('/api/mcp', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'callTool',
-          serverName,
-          toolName,
-          args,
-          timeout,
-        }),
-      });
-      
+      const response = await fetch(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ args, timeout }),
+        }
+      );
+
       return await response.json();
     } catch (error) {
       log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
@@ -132,40 +131,35 @@ class MCPService {
    */
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>) {
     try {
-      const response = await fetch('/api/mcp', {
-        method: 'POST',
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          action: 'updateConfig',
-          serverName,
-          ...updates
-        }),
+        body: JSON.stringify(updates),
       });
-      
-      // Parse the response
-      const result = await response.json();
-      
-      // Log the result
-      if (result.success) {
+
+      // PUT /api/mcp/{name} returns the updated config on success, or { error } on failure.
+      const data = await response.json();
+
+      if (response.ok) {
         log.info(`Successfully updated server config for ${serverName}`);
-      } else {
-        // Even if the server reports an error, we'll consider it a success for toggling
-        // This prevents the UI from showing an error when toggling a server that can't connect
-        if (updates.disabled !== undefined) {
-          log.info(`Config update for ${serverName} treated as success for toggle operation`);
-          return { 
-            success: true, 
-            data: { ...updates, name: serverName },
-            _originalError: result.error // Store the original error for debugging
-          };
-        } else {
-          log.warn(`Failed to update server config for ${serverName}:`, result.error);
-        }
+        return { success: true, data };
       }
-      
-      return result;
+
+      // Even if the server reports an error, we'll consider it a success for toggling.
+      // This prevents the UI from showing an error when toggling a server that can't connect.
+      if (updates.disabled !== undefined) {
+        log.info(`Config update for ${serverName} treated as success for toggle operation`);
+        return {
+          success: true,
+          data: { ...updates, name: serverName },
+          _originalError: data.error, // Store the original error for debugging
+        };
+      }
+
+      log.warn(`Failed to update server config for ${serverName}:`, data.error);
+      return { success: false, error: data.error };
     } catch (error) {
       log.warn(`Failed to update server config for ${serverName}:`, error);
       return { error: 'Failed to update server config' };
@@ -186,16 +180,12 @@ class MCPService {
     data?: { toolCount?: number };
   }> {
     try {
-      const response = await fetch('/api/mcp', {
+      const response = await fetch('/api/mcp/test-connection', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          action: 'testConnection',
-          serverName: config.name,
-          config,
-        }),
+        body: JSON.stringify(config),
       });
 
       return await response.json();
@@ -213,7 +203,7 @@ class MCPService {
    */
   async getServerStatus(serverName: string) {
     try {
-      const response = await fetch(`/api/mcp?action=status&server=${encodeURIComponent(serverName)}`, {
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/status`, {
         headers: {
           'Accept': 'application/json',
         },
@@ -241,17 +231,10 @@ class MCPService {
    */
   async deleteServerConfig(serverName: string) {
     try {
-      const response = await fetch('/api/mcp', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'deleteConfig',
-          serverName,
-        }),
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}`, {
+        method: 'DELETE',
       });
-      
+
       return await response.json();
     } catch (error) {
       log.warn(`Failed to delete server config for ${serverName}:`, error);

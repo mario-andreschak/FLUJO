@@ -1,83 +1,77 @@
 # MCP API Layer
 
-This directory contains the API layer for the Model Context Protocol (MCP) implementation. The API layer serves as an interface between the frontend and backend services.
+This directory contains the RESTful HTTP API for the Model Context Protocol (MCP)
+implementation. The API layer is a thin transport boundary between the frontend and the
+backend MCP service (`@/backend/services/mcp`).
 
 ## Architecture
 
-The MCP implementation follows a clean architecture pattern with clear separation of concerns:
-
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  UI Components  │◄───►│  Frontend       │◄───►│  API Layer      │◄───┐
-│                 │     │  Service        │     │  (Adapters)     │    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘    │
-                                                        │               │
-                                                        ▼               │
-                                                ┌─────────────────┐     │
-                                                │                 │     │
-                                                │  Backend        │◄────┘
-                                                │  Service        │
-                                                └─────────────────┘
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │     │                 │
+│  UI Components  │◄───►│  Frontend       │◄───►│  REST routes    │◄───►│  Backend        │
+│                 │     │  Service        │     │  (this dir)     │     │  Service        │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-## Components
+The route handlers do no business logic of their own — they parse the request, delegate to
+`mcpService`, and map the result onto an HTTP status code.
 
-### API Handlers
+## Endpoints
 
-- `handlers.ts`: Contains the HTTP request handlers for the API endpoints
-- `route.ts`: Exports the handlers and initializes the backend service
+The MCP server configuration is modelled as a REST resource keyed by its (URL-encoded) name,
+nested under `/servers`. The action routes (`test-connection`, `cancel`) live directly under
+`/api/mcp`, outside the server namespace — see "Why `/servers`" below.
 
-### Adapters
+| Method   | Path                                          | Description                                          |
+| -------- | --------------------------------------------- | ---------------------------------------------------- |
+| `GET`    | `/api/mcp/servers`                            | List all server configs (returns an array).          |
+| `POST`   | `/api/mcp/servers`                            | Create a server config (`409` if the name exists).   |
+| `GET`    | `/api/mcp/servers/{name}`                     | Get a single server config (`404` if not found).     |
+| `PUT`    | `/api/mcp/servers/{name}`                     | Update a server config (partial body is merged).     |
+| `DELETE` | `/api/mcp/servers/{name}`                     | Delete a server config (disconnects it first).       |
+| `GET`    | `/api/mcp/servers/{name}/status`              | Live connection status (always `200`).               |
+| `GET`    | `/api/mcp/servers/{name}/tools`               | List tools exposed by the server.                    |
+| `POST`   | `/api/mcp/servers/{name}/tools/{toolName}`    | Invoke a tool. Body: `{ args, timeout? }`.           |
+| `POST`   | `/api/mcp/test-connection`                    | Test a (possibly unsaved) config. Body: the config.  |
+| `POST`   | `/api/mcp/cancel?serverName=&token=`          | Cancel / force-cancel an in-flight tool execution.   |
 
-The API layer uses the adapter pattern to delegate calls to the backend service:
+### Why `/servers`?
 
-- `config-adapter.ts`: Adapts configuration-related operations
-- `tools-adapter.ts`: Adapts tool-related operations
-- `connection-adapter.ts`: Adapts connection-related operations
+The server **name** is the resource key and goes into the URL path. In the Next.js App Router,
+static segments win over dynamic ones, so if server configs lived at `/api/mcp/{name}`, a server
+named `cancel` or `test-connection` would be shadowed by those static action routes (its
+`GET`/`PUT`/`DELETE` would hit the wrong handler). Nesting configs under `/servers/{name}` gives
+the dynamic segment its own namespace with **no static siblings**, so no name can ever collide.
 
-### Legacy Modules
+### Server name validation
 
-These modules are maintained for backward compatibility but delegate to the adapters:
+Because the name is a path segment, `POST` (create) and `PUT` (rename) reject names that break
+URL routing: empty, longer than 200 chars, `.`/`..`, or containing `/`, `\`, or control
+characters. Spaces and unicode are allowed — they round-trip through `encodeURIComponent` fine.
+Validation applies only to new create/rename; pre-existing names keep working.
 
-- `config.ts`: Configuration operations
-- `tools.ts`: Tool operations
-- `connection.ts`: Connection operations
+### Notes
 
-## Flow of Control
-
-1. Frontend components use the frontend service to make API calls
-2. Frontend service makes HTTP requests to the API endpoints
-3. API handlers process the requests and delegate to the backend service
-4. Backend service performs the operations and returns the results
-5. API handlers format the results and return them to the frontend
-
-## Refactoring Notes
-
-This architecture was refactored to eliminate circular dependencies between the API layer and the backend service. The key changes were:
-
-1. Moving core functionality from the API layer to the backend service
-2. Creating adapter modules in the API layer to delegate to the backend service
-3. Maintaining backward compatibility through the legacy modules
-
-## Benefits
-
-- **Clean Architecture**: Clear separation of concerns between layers
-- **No Circular Dependencies**: Each layer only depends on the layer below it
-- **Maintainability**: Each component has a single responsibility
-- **Testability**: Components can be tested in isolation
-- **Extensibility**: New features can be added without modifying existing code
+- **`PUT` is a merge + upsert.** The provided fields are merged onto the stored config, so
+  callers can send a partial body (e.g. just `{ "disabled": true }` to toggle a server).
+  Saving a config also drives connection state: `disabled: false` (re)connects the server,
+  `disabled: true` disconnects it.
+- **Status and tools never return a non-2xx for a down server.** A disconnected server is a
+  normal state, surfaced in the response body (`status: "error"` / `{ tools: [], error }`),
+  not as an HTTP error — only an internal failure produces `500`.
+- **`test-connection` is unauthenticated by resource** because the config it tests may not be
+  saved yet. It runs the real MCP handshake in the Next.js server process, so it can reach
+  servers behind custom CAs and send custom headers (Authorization, X-SAP-*).
 
 ## Usage
 
-The API layer should not be used directly by frontend components. Instead, frontend components should use the frontend service, which will make the appropriate API calls.
+Frontend components must not call these endpoints directly. They go through the frontend
+service, which owns the HTTP details:
 
 ```typescript
-// Frontend component
 import { mcpService } from '@/frontend/services/mcp';
 
-// Call a method on the frontend service
-const result = await mcpService.callTool('serverName', 'toolName', { arg1: 'value1' });
+const configs = await mcpService.loadServerConfigs();
+const result  = await mcpService.callTool('serverName', 'toolName', { arg1: 'value1' });
 ```
-
-The frontend service will make an API call to the appropriate endpoint, which will be handled by the API layer and delegated to the backend service.

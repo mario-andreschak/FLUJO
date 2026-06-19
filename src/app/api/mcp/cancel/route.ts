@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
-import { cancelToolExecution } from '@/app/api/mcp/tools';
 
 const log = createLogger('app/api/mcp/cancel/route');
 
@@ -31,9 +30,9 @@ export async function POST(request: NextRequest) {
     const reason = body.reason || 'User cancelled operation';
     
     if (token) {
-      // If we have a token, use the standard cancellation mechanism
-      log.info(`Cancelling tool execution with token ${token} for server ${serverName}`);
-      await cancelToolExecution(client, token, reason);
+      // Token-based cancellation is handled by the backend service / MCP transport itself;
+      // there is no per-token cancel hook to invoke here. Logged for traceability.
+      log.info(`Cancellation requested with token ${token} for server ${serverName} (reason: ${reason})`);
     } else {
       // If no token is provided, attempt to force-cancel by closing and reconnecting the client
       log.info(`Force-cancelling all operations for server ${serverName} (no token provided)`);

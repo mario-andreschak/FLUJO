@@ -1,0 +1,33 @@
+import { NextRequest } from 'next/server';
+import { createLogger } from '@/utils/logger';
+import { mcpService } from '@/backend/services/mcp';
+import { MCPServerConfig } from '@/shared/types/mcp';
+import { formatErrorResponse } from '@/utils/mcp/utils';
+import { json } from '../_helpers';
+
+const log = createLogger('app/api/mcp/test-connection/route');
+
+/**
+ * POST /api/mcp/test-connection
+ * Run a real MCP handshake against a (possibly unsaved) server config without registering
+ * it as a managed client. The request body is the server config to test.
+ *
+ * This runs in the Next.js server process, so it can reach servers behind custom CAs and
+ * send the configured custom headers (Authorization, X-SAP-*), which a browser fetch cannot.
+ */
+export async function POST(request: NextRequest) {
+  log.debug('Entering POST method');
+  try {
+    const config = (await request.json()) as MCPServerConfig;
+
+    if (!config || !config.transport) {
+      return json({ success: false, error: 'Missing or invalid server config' }, 400);
+    }
+
+    const result = await mcpService.testConnection(config);
+    return json(result, 200);
+  } catch (error) {
+    log.error('Error handling POST request', error);
+    return json({ success: false, ...formatErrorResponse(error) }, 500);
+  }
+}
