@@ -81,6 +81,22 @@ const Chat: React.FC = () => {
 
   // State for ongoing chat completion requests (send/poll)
   const [isLoading, setIsLoading] = useState(false);
+  // Which conversations currently have a run in flight. This is the per-conversation
+  // source of truth for gating the input, so a run in one conversation no longer
+  // disables the input of every other conversation (enables parallel use). It is
+  // intentionally isolated from the single live-stream machinery (isLoading /
+  // loadingConversationId), which still scopes the live indicator to the one
+  // conversation being viewed.
+  const [runningConvs, setRunningConvs] = useState<Set<string>>(new Set());
+  const markConvRunning = useCallback((conversationId: string, running: boolean) => {
+    if (!conversationId) return;
+    setRunningConvs(prev => {
+      if (running === prev.has(conversationId)) return prev;
+      const next = new Set(prev);
+      if (running) next.add(conversationId); else next.delete(conversationId);
+      return next;
+    });
+  }, []);
   const [error, setError] = useState<string | null>(null); // General error display
 
   // Other states
@@ -452,12 +468,14 @@ const Chat: React.FC = () => {
         // Flip the UI to paused; the awaited POST response carries the full
         // debugState (trace + current node) and populates the debugger panel.
         setIsLoading(false);
+        if (event.conversationId) markConvRunning(event.conversationId, false);
         setIsDebugPaused(true);
         break;
       case 'run:done':
         setLiveStats(null);
         setIsLoading(false);
         setLoadingConversationId(null);
+        if (event.conversationId) markConvRunning(event.conversationId, false);
         closeEventStream();
         // Only refresh the view if this run is the one being viewed (a
         // background run must not hijack the displayed conversation).
@@ -477,7 +495,7 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation, fetchConversations]);
+  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -527,6 +545,7 @@ const Chat: React.FC = () => {
     loadingConversationIdRef.current = currentConversationId; // guard re-entry before state commits
     setIsLoading(true);
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setLiveStats(prev => prev ?? { totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
     openEventStream(currentConversationId, 0); // replay buffered events from the start
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -755,6 +774,12 @@ const Chat: React.FC = () => {
   const handleApiResponse = useCallback((data: any, conversationId: string) => {
     log.verbose('Handling API response data', JSON.stringify(data));
 
+    // Keep the per-conversation running set in sync from the response status, for
+    // every funnel (send/edit/respond/debug). Only 'running' keeps the input
+    // disabled here; awaiting-approval / paused-debug are handled by the
+    // viewed-conversation gates (pendingToolCalls / isDebugPaused).
+    markConvRunning(conversationId, data.status === 'running');
+
     // --- Check for Debug Paused State ---
     if (data.status === 'paused_debug' && data.debugState) {
       log.info('API Response: Paused for debugging', { conversationId });
@@ -885,7 +910,7 @@ const Chat: React.FC = () => {
 
     return false; // Indicate standard response was handled
      // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream]);
+  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning]);
 
 
   // Function to stop polling (legacy interval; live updates now use SSE)
@@ -929,6 +954,7 @@ const Chat: React.FC = () => {
     setError(null);
     setIsLoading(true); // Set loading true for the API call itself
     setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
+    markConvRunning(conversation.id, true);
     // Seed live stats immediately so the indicator shows 0 tokens / 0s right away.
     setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
     // Subscribe to live events BEFORE issuing the (blocking) POST so no early
@@ -1088,6 +1114,7 @@ const Chat: React.FC = () => {
       stopPolling();
       setIsLoading(false); // Stop loading on error
       setLoadingConversationId(null);
+      markConvRunning(conversation.id, false);
       closeEventStream();
 
     } finally {
@@ -1152,6 +1179,7 @@ const Chat: React.FC = () => {
       setError(null);
       setIsLoading(true);
       setLoadingConversationId(updatedDetailedConv.id);
+      markConvRunning(updatedDetailedConv.id, true);
       setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
       await openEventStream(updatedDetailedConv.id);
       try {
@@ -1217,6 +1245,7 @@ const Chat: React.FC = () => {
         setError(err instanceof Error ? err.message : 'Failed to send edited message');
         setIsLoading(false);
         setLoadingConversationId(null);
+        markConvRunning(updatedDetailedConv.id, false);
         closeEventStream();
       }
     }
@@ -1268,6 +1297,7 @@ const Chat: React.FC = () => {
     setPendingToolCalls(null);
     setIsLoading(true); // Indicate processing and potentially restart polling
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     await openEventStream(currentConversationId);
 
@@ -1291,6 +1321,7 @@ const Chat: React.FC = () => {
       }
       setError(errorMessage);
       setIsLoading(false); // Stop loading on error since polling won't restart
+      markConvRunning(currentConversationId, false);
     }
   };
 
@@ -1308,6 +1339,7 @@ const Chat: React.FC = () => {
     log.info('Handling debug step request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during step
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     await openEventStream(currentConversationId);
     try {
@@ -1317,6 +1349,7 @@ const Chat: React.FC = () => {
       log.error('Error during debug step API call', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to execute debug step.');
       setIsLoading(false); // Stop loading on error
+      markConvRunning(currentConversationId, false);
       setIsDebugPaused(false); // Exit debug mode on error? Or just show error?
       setDebugState(null);
     } finally {
@@ -1329,6 +1362,7 @@ const Chat: React.FC = () => {
     log.info('Handling debug continue request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during continue
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     setIsDebugPaused(false); // Assume we are exiting explicit pause
     setDebugState(null);
@@ -1341,6 +1375,7 @@ const Chat: React.FC = () => {
       log.error('Error during debug continue API call', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to continue execution.');
       setIsLoading(false); // Stop loading on error
+      markConvRunning(currentConversationId, false);
     } finally {
        // setIsLoading(false); // Loading is stopped by handleApiResponse or polling
     }
@@ -1376,6 +1411,7 @@ const Chat: React.FC = () => {
     const startNodeId = debugState?.currentNodeId;
     setIsLoading(true);
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     await openEventStream(currentConversationId);
     try {
@@ -1392,10 +1428,12 @@ const Chat: React.FC = () => {
       // Safety cap reached; surface whatever the last response was.
       log.warn('Step Over hit iteration cap', { conversationId: currentConversationId });
       setIsLoading(false);
+      markConvRunning(currentConversationId, false);
     } catch (err) {
       log.error('Error during step over', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to step over.');
       setIsLoading(false);
+      markConvRunning(currentConversationId, false);
     }
   };
 
@@ -1407,6 +1445,7 @@ const Chat: React.FC = () => {
     stopPolling();
     setIsLoading(false);
     setLoadingConversationId(null);
+    markConvRunning(currentConversationId, false);
     closeEventStream();
     setPendingToolCalls(null);
 
@@ -1608,8 +1647,11 @@ const Chat: React.FC = () => {
         <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
           <ChatInput
             onSendMessage={handleSendMessage}
-            // Disable if loading details, loading response, no flow selected (check both detailed and summary), OR awaiting approval
-            disabled={isLoadingDetails || isLoading || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused} // Also disable input when paused
+            // Disable only when the VIEWED conversation is busy, so a run in one
+            // conversation no longer blocks typing/sending in another (parallel use).
+            // runningConvs scopes "busy" per-conversation; pendingToolCalls /
+            // isDebugPaused are viewed-conversation states.
+            disabled={isLoadingDetails || (!!currentConversationId && runningConvs.has(currentConversationId)) || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
             onRequireApprovalChange={setRequireApproval}
             executeInDebugger={executeInDebugger} // Pass debugger state
