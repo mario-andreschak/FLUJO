@@ -3,9 +3,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Box, Typography, List, ListItem, ListItemButton, ListItemText, Button, Paper, CircularProgress, Alert,
-    Accordion, AccordionSummary, AccordionDetails // Import Accordion components
+    Accordion, AccordionSummary, AccordionDetails, // Import Accordion components
+    IconButton, Tooltip
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'; // Import icon for Accordion
+import CloseIcon from '@mui/icons-material/Close';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
 import { SharedState, DebugStep } from '@/backend/execution/flow/types'; // Import backend types
@@ -33,6 +35,7 @@ interface DebuggerCanvasProps {
   isLoading: boolean; // To disable buttons during API calls
   breakpoints?: string[]; // Node IDs with active breakpoints
   onToggleBreakpoint?: (nodeId: string) => void; // Toggle a breakpoint on node click
+  onClose?: () => void; // Callback to dismiss/hide the debugger panel
 }
 
 // Define node types for React Flow display
@@ -108,6 +111,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   isLoading,
   breakpoints,
   onToggleBreakpoint,
+  onClose,
 }) => {
   const theme = useTheme();
   // Initialize step index safely, defaulting to -1 if no trace
@@ -269,12 +273,21 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
 
   return (
     <DebuggerContainer elevation={2}>
-      <Header>
-        <Typography variant="h6">Flow Debugger</Typography>
-        <Typography variant="caption" color="textSecondary" display="block">
-          Click a node to toggle a breakpoint
-          {breakpoints && breakpoints.length > 0 ? ` · ${breakpoints.length} active` : ''}
-        </Typography>
+      <Header sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <Box>
+          <Typography variant="h6">Flow Debugger</Typography>
+          <Typography variant="caption" color="textSecondary" display="block">
+            Click a node to toggle a breakpoint
+            {breakpoints && breakpoints.length > 0 ? ` · ${breakpoints.length} active` : ''}
+          </Typography>
+        </Box>
+        {onClose && (
+          <Tooltip title="Close debugger">
+            <IconButton size="small" onClick={onClose} aria-label="Close debugger">
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Header>
       <ContentArea>
         <TracePanel>

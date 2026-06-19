@@ -11,7 +11,7 @@ import {
   DialogContentText, 
   DialogActions, 
   TextField,
-  Snackbar,
+  Collapse,
   Alert,
   Breadcrumbs,
   Link,
@@ -110,10 +110,20 @@ const FlowsPage = () => {
     });
   }, []);
   
-  // Handle snackbar close
+  // Handle banner close
   const handleSnackbarClose = useCallback(() => {
     setSnackbar(prev => ({ ...prev, open: false }));
   }, []);
+
+  // Auto-dismiss the banner after a few seconds (re-armed whenever a new
+  // message is shown). Errors stay until dismissed so they aren't missed.
+  useEffect(() => {
+    if (!snackbar.open || snackbar.severity === 'error') return;
+    const timer = setTimeout(() => {
+      setSnackbar(prev => ({ ...prev, open: false }));
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [snackbar.open, snackbar.message, snackbar.severity]);
 
   // Validate flow name
   const validateFlowName = useCallback((name: string): string | null => {
@@ -439,7 +449,19 @@ const FlowsPage = () => {
           </Box>
         )}
       </Box>
-      
+
+      {/* Notification banner - shown at the top of the content so it isn't easy
+          to miss (replaces the old bottom-right toast/snackbar). */}
+      <Collapse in={snackbar.open} unmountOnExit>
+        <Alert
+          severity={snackbar.severity}
+          onClose={handleSnackbarClose}
+          sx={{ borderRadius: 0 }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Collapse>
+
       {/* Main content area - switches between dashboard and editor */}
       <Box sx={{ flex: 1, overflow: 'hidden' }}>
         {renderContent()}
@@ -477,17 +499,6 @@ const FlowsPage = () => {
         </DialogActions>
       </Dialog>
       
-      {/* Snackbar for notifications */}
-      <Snackbar 
-        open={snackbar.open} 
-        autoHideDuration={6000} 
-        onClose={handleSnackbarClose}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert onClose={handleSnackbarClose} severity={snackbar.severity} sx={{ width: '100%' }}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };
