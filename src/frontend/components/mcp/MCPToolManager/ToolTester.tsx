@@ -12,8 +12,11 @@ import {
   Alert,
   LinearProgress,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  IconButton,
+  Tooltip
 } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createLogger } from '@/utils/logger';
@@ -37,12 +40,14 @@ interface ToolTesterProps {
     inputSchema: Record<string, any>;
   }>;
   onTestTool: (toolName: string, params: Record<string, any>, timeout?: number) => Promise<ToolTestResult>;
+  onClose?: () => void; // Optional handler to dismiss the tester panel
 }
 
 const ToolTester: React.FC<ToolTesterProps> = ({
   serverName,
   tools = [], // Provide default empty array
   onTestTool,
+  onClose,
 }) => {
   log.debug('Props:', { serverName, toolsCount: tools?.length });
   // Ensure tools is always an array
@@ -254,10 +259,19 @@ const ToolTester: React.FC<ToolTesterProps> = ({
         borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
       }}
     >
-      <Typography variant="h6" sx={{ mb: 2, fontWeight: 'semibold' }}>
-        Tool Tester - {serverName}
-      </Typography>
-      
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 'semibold' }}>
+          Tool Tester - {serverName}
+        </Typography>
+        {onClose && (
+          <Tooltip title="Close tool tester">
+            <IconButton size="small" onClick={onClose} aria-label="Close tool tester">
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
+      </Box>
+
       {/* Error notification */}
       {errorNotification && (
         <Alert severity="error" sx={{ mb: 2 }}>

@@ -253,7 +253,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               borderColor: message.role === 'tool' ? 'grey.400' : 'transparent',
               overflowWrap: 'break-word', // Ensure long words break
               wordBreak: 'break-word', // Ensure words break correctly
-              whiteSpace: 'pre-wrap', // Preserve whitespace and wrap lines
+              // NOTE: do NOT set white-space: pre-wrap here. react-markdown emits
+              // literal "\n" text nodes *between* block elements; a pre-wrap
+              // container renders those as visible blank lines on top of the
+              // paragraph block margins, which doubled the spacing for every
+              // newline. Whitespace is instead preserved per-block (see the `p`
+              // and `li` renderers below, which use `pre-line`).
               // wordWrap: 'break-word', // Redundant with overflowWrap
               overflow: 'hidden', // Prevent content from visually overflowing the paper
             }}
@@ -316,7 +321,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                       components={{
-                        p: (props) => <Typography variant="body1" sx={{ mb: 0.5 }}>{props.children}</Typography>,
+                        p: (props) => <Typography variant="body1" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Typography>,
                         h1: (props) => <Typography variant="h5" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
                         h2: (props) => <Typography variant="h6" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
                         h3: (props) => <Typography variant="subtitle1" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
@@ -325,7 +330,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                         h6: (props) => <Typography variant="body2" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
                         ul: (props) => <Box component="ul" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
                         ol: (props) => <Box component="ol" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
-                        li: (props) => <Box component="li" sx={{ mb: 0.5 }}>{props.children}</Box>,
+                        li: (props) => <Box component="li" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Box>,
                         a: (props) => <Typography component="a" sx={{ color: 'primary.main' }} href={props.href}>{props.children}</Typography>,
                         blockquote: (props) => (
                           <Box component="blockquote" sx={{

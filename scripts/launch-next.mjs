@@ -7,8 +7,8 @@
  * why a streamable-HTTP MCP server over HTTPS with a corporate CA fails with
  * "unable to verify the first certificate" even though `curl` works. This launcher:
  *
- *   1. Adds `--use-system-ca` to NODE_OPTIONS (Node >= 22.15 / >= 23) so Node trusts the
- *      OS certificate store — the same store `curl` uses.
+ *   1. Adds `--use-system-ca` to NODE_OPTIONS (on Node versions that support it) so Node
+ *      trusts the OS certificate store — the same store `curl` uses.
  *   2. Maps the friendlier FLUJO_EXTRA_CA_CERTS env var to NODE_EXTRA_CA_CERTS so a
  *      specific PEM CA bundle can be trusted without touching the OS store.
  *
@@ -23,16 +23,22 @@ const passthroughArgs = process.argv.slice(2);
 
 const env = { ...process.env };
 
-const [major, minor] = process.versions.node.split('.').map(part => parseInt(part, 10));
-const supportsSystemCa = major > 23 || (major === 23) || (major === 22 && minor >= 15);
+// Detect support empirically instead of sniffing the version number. This Set is the
+// authoritative list of flags THIS Node binary accepts inside NODE_OPTIONS, so it is
+// correct across versions, platforms, and nightly/RC builds — and it guarantees we never
+// inject a flag that Node would then reject at startup with a scary error.
+const supportsSystemCa = process.allowedNodeEnvironmentFlags.has('--use-system-ca');
 
 if (supportsSystemCa && !/--use-system-ca/.test(env.NODE_OPTIONS || '')) {
   env.NODE_OPTIONS = `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ''}--use-system-ca`;
-} else if (!supportsSystemCa) {
-  console.warn(
-    `[FLUJO] Node ${process.versions.node} does not support --use-system-ca. ` +
-    `To trust a custom CA, set NODE_EXTRA_CA_CERTS (or FLUJO_EXTRA_CA_CERTS) to your CA file ` +
-    `before starting FLUJO.`
+} else if (!supportsSystemCa && !env.NODE_EXTRA_CA_CERTS && !env.FLUJO_EXTRA_CA_CERTS) {
+  // Not an error — older Node simply lacks the flag and falls back to Node's bundled CAs.
+  // Only surface this (as info, not a warning) when no CA bundle is already configured,
+  // so it never looks alarming on the happy path.
+  console.log(
+    `[FLUJO] Node ${process.versions.node} has no --use-system-ca flag; using Node's bundled CAs. ` +
+    `If an MCP server uses a private/corporate CA, set FLUJO_EXTRA_CA_CERTS (or NODE_EXTRA_CA_CERTS) ` +
+    `to your CA file before starting FLUJO.`
   );
 }
 

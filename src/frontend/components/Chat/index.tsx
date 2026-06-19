@@ -1421,6 +1421,16 @@ const Chat: React.FC = () => {
     }
   };
 
+  // Manually dismiss the debugger panel. Hides the split view and clears the
+  // local debug state, then cancels the paused run so the conversation is not
+  // left stuck in 'paused_debug' on the backend.
+  const handleDebugClose = async () => {
+    log.info('Closing debugger panel', { conversationId: currentConversationId });
+    setIsDebugPaused(false);
+    setDebugState(null);
+    await handleCancelRequest();
+  };
+
   // --- Add logging for Edit button prop ---
   log.debug('Rendering Chat component', {
     currentConversationId,
@@ -1621,6 +1631,7 @@ const Chat: React.FC = () => {
               isLoading={isLoading}
               breakpoints={breakpoints}
               onToggleBreakpoint={handleToggleBreakpoint}
+              onClose={handleDebugClose}
             />
           </Grid>
         )}

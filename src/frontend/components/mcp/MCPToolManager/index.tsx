@@ -12,9 +12,10 @@ const log = createLogger('frontend/components/mcp/MCPToolManager');
 
 interface ToolManagerProps {
   serverName: string | null;
+  onClose?: () => void; // Optional handler to dismiss the tool tester panel
 }
 
-const ToolManager: React.FC<ToolManagerProps> = ({ serverName }) => {
+const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
   const {
     tools,
     isLoading,
@@ -118,6 +119,7 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName }) => {
         serverName={serverName}
         tools={tools}
         onTestTool={handleTestTool}
+        onClose={onClose}
       />
       {isLoading && (
         <div className="mt-4 flex items-center space-x-2 text-blue-500">
