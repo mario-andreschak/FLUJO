@@ -24,6 +24,8 @@ export interface HandoffResolution {
   isSuccessorEdge: boolean;
   /** The target node id for the handoff, or null if it cannot be determined. */
   targetNodeId: string | null;
+  /** The target node's type (e.g. 'finish'), or null if it cannot be determined. */
+  targetNodeType?: string | null;
 }
 
 /**

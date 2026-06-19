@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'; // Added useCallback
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import { Grid } from '@mui/material'; // Import Grid for layout
 import ChatHistory from './ChatHistory';
@@ -1492,6 +1494,39 @@ const Chat: React.FC = () => {
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
               />
+
+              {/* Completion banner: shown once the run has reached a Finish node
+                  (status 'completed'). Driven by the same status the sidebar dot
+                  uses. Hidden while a run is active or paused for debug so it
+                  never competes with the live indicator / debugger. */}
+              {!isLoading && !isDebugPaused && currentConversationSummary?.status === 'completed' && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                  <Alert
+                    icon={<CheckCircleIcon fontSize="inherit" />}
+                    severity="success"
+                    variant="filled"
+                    sx={{ borderRadius: 2, py: 0.5 }}
+                  >
+                    Conversation completed
+                  </Alert>
+                </Box>
+              )}
+
+              {/* Error banner: the run ended in an error state. Guarded by !error
+                  so it doesn't duplicate the transient error Alert shown right
+                  after a live failure; this one persists across reloads. */}
+              {!isLoading && !isDebugPaused && !error && currentConversationSummary?.status === 'error' && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                  <Alert
+                    icon={<ErrorOutlineIcon fontSize="inherit" />}
+                    severity="error"
+                    variant="filled"
+                    sx={{ borderRadius: 2, py: 0.5 }}
+                  >
+                    Conversation ended with an error
+                  </Alert>
+                </Box>
+              )}
 
               {/* Live execution indicator (progress, active node, tokens, stop).
                   Only shown for the conversation actually running, so a background

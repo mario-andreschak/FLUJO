@@ -684,15 +684,23 @@ async function processChatCompletionInternal(
                         sharedState.messages.push(toolResultMessage);
                         log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
 
-                        // 4. Append the follow-up user message with timestamp
-                        const userHandoffConfirmation: FlujoChatMessage = {
-                            id: crypto.randomUUID(), // Add unique ID
-                            role: 'user',
-                            content: 'The handoff was successful. Continue',
-                            timestamp: Date.now()
-                        };
-                        sharedState.messages.push(userHandoffConfirmation);
-                        log.info(`Appended user confirmation message after handoff tool result.`);
+                        // 4. Append the follow-up user message with timestamp.
+                        //    Skip this when handing off to a Finish node: that node
+                        //    ends the conversation without re-invoking the model, so the
+                        //    "Continue" nudge is never acted on and would just appear as
+                        //    a stray user message right before a completed conversation.
+                        if (handoff.targetNodeType === 'finish') {
+                            log.info(`Handoff target ${nextNodeId} is a Finish node; skipping "Continue" confirmation message.`);
+                        } else {
+                            const userHandoffConfirmation: FlujoChatMessage = {
+                                id: crypto.randomUUID(), // Add unique ID
+                                role: 'user',
+                                content: 'The handoff was successful. Continue',
+                                timestamp: Date.now()
+                            };
+                            sharedState.messages.push(userHandoffConfirmation);
+                            log.info(`Appended user confirmation message after handoff tool result.`);
+                        }
 
                     } else {
                         log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);

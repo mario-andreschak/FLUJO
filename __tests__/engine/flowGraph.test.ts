@@ -71,6 +71,16 @@ describe('PocketflowEngine graph traversal', () => {
     const h = await engine.resolveHandoff(state(START), EDGE_START_PROCESS);
     expect(h.isSuccessorEdge).toBe(true);
     expect(h.targetNodeId).toBe(PROCESS);
+    expect(h.targetNodeType).toBe('process');
+  });
+
+  it('reports the target node type for a handoff to a finish node', async () => {
+    // The chat loop uses targetNodeType === 'finish' to suppress the
+    // "The handoff was successful. Continue" message before a completed run.
+    const h = await engine.resolveHandoff(state(PROCESS), EDGE_PROCESS_FINISH);
+    expect(h.isSuccessorEdge).toBe(true);
+    expect(h.targetNodeId).toBe(FINISH);
+    expect(h.targetNodeType).toBe('finish');
   });
 
   it('reports a non-successor action as not a handoff edge', async () => {

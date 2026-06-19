@@ -155,9 +155,11 @@ export class PocketflowEngine implements FlowEngine {
 
     const nextNode = currentNode.getSuccessor(action);
     const nextNodeId = nextNode?.node_params?.id;
+    const nextNodeType = nextNode?.node_params?.type;
     return {
       isSuccessorEdge: true,
       targetNodeId: typeof nextNodeId === 'string' && nextNodeId.length > 0 ? nextNodeId : null,
+      targetNodeType: typeof nextNodeType === 'string' ? nextNodeType : null,
     };
   }
 
