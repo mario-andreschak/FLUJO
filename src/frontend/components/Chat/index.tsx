@@ -14,8 +14,8 @@ import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
 import { flowService } from '@/frontend/services/flow';
+import { chatService, ChatApiError } from '@/frontend/services/chat';
 import { createLogger } from '@/utils/logger';
-import axios, { AxiosResponse } from 'axios'; // Import axios for polling and AxiosResponse
 // Correctly import SharedState here
 import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
@@ -112,6 +112,15 @@ const Chat: React.FC = () => {
   useEffect(() => {
     currentConversationIdRef.current = currentConversationId;
   }, [currentConversationId]);
+  // Mirror of the conversation whose run we are currently tracking, so the
+  // re-attach effect can tell "already tracking" from "needs re-attach" without
+  // taking loadingConversationId as a dependency (which would re-fire the effect
+  // as soon as it sets it). Declared before the re-attach effect so its sync
+  // runs first within a commit.
+  const loadingConversationIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    loadingConversationIdRef.current = loadingConversationId;
+  }, [loadingConversationId]);
 
   // --- Effects ---
 
@@ -142,42 +151,62 @@ const Chat: React.FC = () => {
   }, []);
 
   // Fetch conversation list from backend on mount
-  const fetchConversations = useCallback(async (selectIdAfterFetch?: string | null) => {
-    log.debug('Fetching conversation list from backend');
-    setIsLoadingHistory(true);
-    setHistoryError(null);
+  const fetchConversations = useCallback(async (
+    selectIdAfterFetch?: string | null,
+    options?: { silent?: boolean }
+  ) => {
+    // `silent` refreshes the list in place (e.g. after a background run finishes
+    // to pick up the server-generated title) without flashing the loading
+    // spinner or wiping the sidebar on a transient error.
+    const silent = options?.silent ?? false;
+    log.debug('Fetching conversation list from backend', { silent });
+    if (!silent) {
+      setIsLoadingHistory(true);
+      setHistoryError(null);
+    }
     let fetchedList: ConversationListItem[] = [];
+    let fetchFailed = false;
     try {
-      const response = await axios.get<ConversationListItem[]>('/v1/chat/conversations');
-      fetchedList = response.data.sort((a, b) => b.updatedAt - a.updatedAt);
+      fetchedList = (await chatService.listConversations()).sort((a, b) => b.updatedAt - a.updatedAt);
       setConversationList(fetchedList);
       log.info(`Fetched ${fetchedList.length} conversations for the list`);
     } catch (err) {
+      fetchFailed = true;
       log.error('Error fetching conversation list:', err);
-      setHistoryError('Failed to load conversation history.');
-      setConversationList([]); // Clear list on error
+      if (!silent) {
+        setHistoryError('Failed to load conversation history.');
+        setConversationList([]); // Clear list on error
+      }
     } finally {
-      setIsLoadingHistory(false);
+      if (!silent) setIsLoadingHistory(false);
+
+      // A silent refresh must never change the current selection.
+      if (silent || fetchFailed) {
+        return;
+      }
 
       // --- Auto-selection logic ---
-      const idToSelect = selectIdAfterFetch !== undefined ? selectIdAfterFetch : currentConversationId;
+      // Read the live selection from the ref to avoid acting on a stale value
+      // captured when this callback was memoized.
+      const idToSelect = selectIdAfterFetch !== undefined ? selectIdAfterFetch : currentConversationIdRef.current;
 
+      const liveSelection = currentConversationIdRef.current;
       if (idToSelect && fetchedList.some(c => c.id === idToSelect)) {
          // If the intended ID exists in the new list, ensure it's selected
-         if (idToSelect !== currentConversationId) {
+         if (idToSelect !== liveSelection) {
             log.debug(`Setting currentConversationId to ${idToSelect} after fetch/operation.`);
             setCurrentConversationId(idToSelect);
          }
       } else if (fetchedList.length > 0) {
          // If intended ID is invalid or null, select the most recent
          const mostRecentId = fetchedList[0].id;
-         if (mostRecentId !== currentConversationId) {
+         if (mostRecentId !== liveSelection) {
             log.debug(`Selecting most recent conversation ${mostRecentId} after fetch/operation.`);
             setCurrentConversationId(mostRecentId);
          }
       } else {
          // No conversations left
-         if (currentConversationId !== null) {
+         if (liveSelection !== null) {
             log.debug('No conversations available after fetch/operation, clearing selection.');
             setCurrentConversationId(null);
          }
@@ -200,14 +229,37 @@ const Chat: React.FC = () => {
     setDetailedConversation(null); // Clear previous details
     try {
       // Use the endpoint that returns the full state
-      const response = await axios.get<Conversation>(`/v1/chat/conversations/${id}`);
-      // TODO: Adapt if backend returns SharedState - map it to Conversation type here if needed
-      // For now, assume the GET endpoint returns the Conversation structure (or compatible)
-      setDetailedConversation(response.data);
+      const conversation = await chatService.getConversation(id);
+
+      // Guard against an out-of-order response: if the user switched to a
+      // different conversation while this request was in flight, a late reply
+      // must not clobber the newer selection's view.
+      if (currentConversationIdRef.current !== id) {
+        log.debug('Discarding stale detailed conversation response', {
+          fetchedId: id,
+          currentId: currentConversationIdRef.current,
+        });
+        return;
+      }
+
+      setDetailedConversation(conversation);
+      // Reconcile the sidebar summary with server truth. The backend derives a
+      // title from the first user message during a run, but completion/SSE
+      // responses don't echo it — without this the list keeps showing
+      // "New Conversation" until a full reload.
+      setConversationList(prevList =>
+        prevList.map(c =>
+          c.id === id
+            ? { ...c, title: conversation.title, flowId: conversation.flowId, updatedAt: conversation.updatedAt }
+            : c
+        ).sort((a, b) => b.updatedAt - a.updatedAt)
+      );
       log.info('Fetched detailed conversation successfully', { conversationId: id });
     } catch (err: any) { // Use any for error checking
        log.error('Error fetching detailed conversation:', { conversationId: id, err });
-       if (axios.isAxiosError(err) && err.response?.status === 404) {
+       // Ignore errors for a selection that is no longer current.
+       if (currentConversationIdRef.current !== id) return;
+       if (err instanceof ChatApiError && err.status === 404) {
           setDetailsError(`Conversation ${id} not found.`);
           // Clear the invalid selection and refresh the list
           setCurrentConversationId(null);
@@ -217,9 +269,13 @@ const Chat: React.FC = () => {
        }
       setDetailedConversation(null);
     } finally {
-      setIsLoadingDetails(false);
+      // Only clear the loading flag if this fetch still owns the view; otherwise
+      // a newer in-flight fetch manages its own loading state.
+      if (currentConversationIdRef.current === id) {
+        setIsLoadingDetails(false);
+      }
     }
-  }, []); // No dependencies needed if it only uses the 'id' argument
+  }, [fetchConversations, setCurrentConversationId]); // currentConversationId read via ref
 
   useEffect(() => {
     if (currentConversationId) {
@@ -268,10 +324,7 @@ const Chat: React.FC = () => {
     try {
       log.info('Sending request to create conversation on backend', { payload: JSON.stringify(payload) });
       // Make the POST request to the backend endpoint
-      const response = await axios.post<ConversationListItem>('/v1/chat/conversations', payload);
-
-      // Use the data returned from the backend for consistency
-      const createdConversationSummary = response.data;
+      const createdConversationSummary = await chatService.createConversation(payload);
       log.info('Successfully created conversation on backend', { conversationId: createdConversationSummary.id });
 
       // Update UI state *after* successful backend creation
@@ -295,8 +348,8 @@ const Chat: React.FC = () => {
     } catch (err) {
       log.error('Error creating conversation on backend:', err);
       let errorMsg = 'Failed to create conversation on the server.';
-      if (axios.isAxiosError(err) && err.response?.data?.error) {
-        errorMsg += ` Error: ${err.response.data.error}`;
+      if (err instanceof ChatApiError) {
+        errorMsg += ` Error: ${err.body?.error || err.message}`;
       } else if (err instanceof Error) {
         errorMsg += ` Error: ${err.message}`;
       }
@@ -407,7 +460,12 @@ const Chat: React.FC = () => {
         // Only refresh the view if this run is the one being viewed (a
         // background run must not hijack the displayed conversation).
         if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
-          fetchDetailedConversation(event.conversationId);
+          fetchDetailedConversation(event.conversationId); // also reconciles the list summary/title
+        } else {
+          // A background run finished: silently refresh the list so its
+          // server-generated title and sort order show up, without disturbing
+          // the current selection or view.
+          fetchConversations(undefined, { silent: true });
         }
         break;
       case 'error':
@@ -417,16 +475,17 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation]);
+  }, [closeEventStream, fetchDetailedConversation, fetchConversations]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
   // so the subscription exists before the server emits any events — otherwise a
   // fast run can finish before the stream attaches and the live view sees
   // nothing. The browser auto-reconnects using Last-Event-ID to replay misses.
-  const openEventStream = useCallback((conversationId: string): Promise<void> => {
+  const openEventStream = useCallback((conversationId: string, fromSeq?: number): Promise<void> => {
     closeEventStream();
-    lastSeqRef.current = -1;
+    // Accept events at/after the replay position (fromSeq) or everything (-1).
+    lastSeqRef.current = fromSeq !== undefined ? fromSeq - 1 : -1;
     return new Promise<void>((resolve) => {
       let settled = false;
       const settle = () => {
@@ -436,23 +495,11 @@ const Chat: React.FC = () => {
         }
       };
       try {
-        const es = new EventSource(`/v1/chat/conversations/${conversationId}/events`);
-        es.onopen = () => {
-          log.debug('Execution event stream open', { conversationId });
-          settle();
-        };
-        es.onmessage = (e) => {
-          try {
-            applyExecutionEvent(JSON.parse(e.data) as ExecutionEvent);
-          } catch (err) {
-            log.warn('Failed to parse SSE event', { err });
-          }
-        };
-        es.onerror = () => {
-          // EventSource reconnects automatically; nothing to do unless it closes.
-          log.debug('SSE stream error (browser will retry if still open)');
-        };
-        eventSourceRef.current = es;
+        eventSourceRef.current = chatService.subscribeToEvents(
+          conversationId,
+          { onEvent: applyExecutionEvent, onOpen: settle },
+          fromSeq
+        );
         // Safety: never block the run for more than ~1.5s waiting to connect.
         setTimeout(settle, 1500);
       } catch (err) {
@@ -461,6 +508,27 @@ const Chat: React.FC = () => {
       }
     });
   }, [applyExecutionEvent, closeEventStream]);
+
+  // Re-attach to a run that is still in progress on the backend — e.g. after
+  // navigating to another page (which unmounts Chat and tears down the stream)
+  // and back, or selecting a conversation that is running in the background.
+  // Without this the live indicator and streaming updates stay missing until a
+  // full reload. Limited to 'running': restoring the 'awaiting_tool_approval'
+  // and 'paused_debug' UIs needs pendingToolCalls/debugState, which the list
+  // summary doesn't carry (would require the GET conversation route to return
+  // them — tracked as a follow-up).
+  useEffect(() => {
+    if (!currentConversationId) return;
+    if (currentConversationSummary?.status !== 'running') return;
+    if (loadingConversationIdRef.current === currentConversationId) return; // already tracking
+    log.info('Re-attaching to in-progress run', { conversationId: currentConversationId });
+    loadingConversationIdRef.current = currentConversationId; // guard re-entry before state commits
+    setIsLoading(true);
+    setLoadingConversationId(currentConversationId);
+    setLiveStats(prev => prev ?? { totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
+    openEventStream(currentConversationId, 0); // replay buffered events from the start
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentConversationId, currentConversationSummary?.status, openEventStream]);
 
   // Delete conversation
   const deleteConversation = async (conversationId: string) => {
@@ -492,7 +560,7 @@ const Chat: React.FC = () => {
     // If deleting a non-selected conversation, nextSelectionId remains previousSelectionId
 
     try {
-      await axios.delete(`/v1/chat/conversations/${conversationId}`);
+      await chatService.deleteConversation(conversationId);
       log.info('Successfully deleted conversation on backend', { conversationId });
       // No need to refetch here, optimistic update is sufficient
       // Selection is handled above
@@ -545,12 +613,7 @@ const Chat: React.FC = () => {
 
     try {
       // Call the backend PATCH endpoint
-      const response = await axios.patch<ConversationListItem>(
-        `/v1/chat/conversations/${currentConversationId}`,
-        { flowId } // Send only the flowId in the body
-      );
-
-      const updatedSummaryFromServer = response.data;
+      const updatedSummaryFromServer = await chatService.updateConversationFlow(currentConversationId, flowId);
       log.info('Successfully updated flowId on backend', { conversationId: currentConversationId, flowId });
 
       // --- Confirm UI Update with Server Data ---
@@ -583,8 +646,8 @@ const Chat: React.FC = () => {
     } catch (err) {
       log.error('Error updating flowId on backend:', { conversationId: currentConversationId, flowId, err });
       let errorMsg = 'Failed to update the selected flow.';
-      if (axios.isAxiosError(err) && err.response?.data?.error) {
-        errorMsg += ` Error: ${err.response.data.error}`;
+      if (err instanceof ChatApiError) {
+        errorMsg += ` Error: ${err.body?.error || err.message}`;
       } else if (err instanceof Error) {
         errorMsg += ` Error: ${err.message}`;
       }
@@ -684,9 +747,10 @@ const Chat: React.FC = () => {
     }
   };
 
-  // Function to handle responses, including debug state
-  const handleApiResponse = useCallback((response: AxiosResponse<any>, conversationId: string) => {
-    const data = response.data;
+  // Handle a conversation run response (from the OpenAI completion call, or the
+  // respond/debug REST endpoints), including debug-paused state. `data` is the
+  // parsed response body.
+  const handleApiResponse = useCallback((data: any, conversationId: string) => {
     log.verbose('Handling API response data', JSON.stringify(data));
 
     // --- Check for Debug Paused State ---
@@ -966,30 +1030,21 @@ const Chat: React.FC = () => {
       log.debug('Chat completion initial response received', { completionId: completion.id });
       success = true; // API call itself succeeded
 
-      // --- Extract relevant data from completion and pass to handler ---
-      // The completion object itself is not an AxiosResponse. We need to simulate
-      // the structure handleApiResponse expects based on the completion data.
-      const responseDataForHandler = {
-          data: { // Simulate the 'data' property of AxiosResponse
-              ...(completion as any), // Spread the completion data (use 'any' carefully)
-              // Ensure essential fields for handleApiResponse are present
-              status: (completion as any).status || 'completed', // Infer status if needed
-              conversation_id: conversation.id,
-              messages: (completion as any).messages || conversation.messages, // Use messages from completion if available
-              pendingToolCalls: (completion as any).pendingToolCalls,
-              debugState: (completion as any).debugState,
-              error: (completion as any).error,
-              lastResponse: (completion as any).lastResponse,
-              updatedAt: (completion as any).updatedAt || Date.now() // Add timestamp if missing
-          },
-          // Simulate other AxiosResponse properties (likely not needed by handler)
-          status: 200,
-          statusText: 'OK',
-          headers: {},
-          config: {}
-      } as AxiosResponse<any>; // Cast to AxiosResponse for the handler
+      // --- Normalize completion data for the shared response handler ---
+      const responseData = {
+          ...(completion as any), // Spread the completion data (use 'any' carefully)
+          // Ensure essential fields for handleApiResponse are present
+          status: (completion as any).status || 'completed', // Infer status if needed
+          conversation_id: conversation.id,
+          messages: (completion as any).messages || conversation.messages, // Use messages from completion if available
+          pendingToolCalls: (completion as any).pendingToolCalls,
+          debugState: (completion as any).debugState,
+          error: (completion as any).error,
+          lastResponse: (completion as any).lastResponse,
+          updatedAt: (completion as any).updatedAt || Date.now() // Add timestamp if missing
+      };
 
-      const handledDebug = handleApiResponse(responseDataForHandler, conversation.id);
+      const handledDebug = handleApiResponse(responseData, conversation.id);
 
       // If debug state was handled, polling is stopped by the handler
       // If not handled (standard response), start polling if needed (isLoading is true)
@@ -1019,26 +1074,11 @@ const Chat: React.FC = () => {
           if (nestedError.type) errorMessage += ` [Type: ${nestedError.type}]`;
         }
         log.verbose('OpenAIError details', JSON.stringify(err));
-      } else if (axios.isAxiosError(err)) {
-        errorMessage = `Network Error: ${err.message}`;
-        if (err.response?.data?.error) {
-          const apiError = err.response.data.error;
-          errorMessage = apiError.message || errorMessage;
-          if (apiError.code) errorMessage += ` (Code: ${apiError.code})`;
-          if (apiError.type) errorMessage += ` [Type: ${apiError.type}]`;
-          if (apiError.param) errorMessage += ` - Param: ${apiError.param}`;
-          if (apiError.details) {
-             try {
-               const detailsStr = typeof apiError.details === 'string' ? apiError.details : JSON.stringify(apiError.details);
-               errorMessage += `\nDetails: ${detailsStr}`;
-             } catch (e) { /* ignore stringify error */ }
-          }
-          log.verbose('AxiosError backend details', JSON.stringify(apiError));
-        } else if (err.response) {
-          errorMessage += ` (Status: ${err.response.status})`;
-        } else if (err.request) {
-          errorMessage += ' (No response received)';
-        }
+      } else if (err instanceof ChatApiError) {
+        // A backend REST error surfaced through chatService.
+        errorMessage = `Error: ${err.body?.error || err.message}`;
+        if (err.status) errorMessage += ` (Status: ${err.status})`;
+        log.verbose('ChatApiError details', JSON.stringify(err.body));
       } else if (err instanceof Error) {
         errorMessage = err.message;
       }
@@ -1157,24 +1197,18 @@ const Chat: React.FC = () => {
         });
 
         // Handle the response using the existing handler
-        const responseDataForHandler = {
-          data: {
-            ...(completion as any),
-            status: (completion as any).status || 'completed',
-            conversation_id: updatedDetailedConv.id,
-            messages: (completion as any).messages || updatedDetailedConv.messages,
-            pendingToolCalls: (completion as any).pendingToolCalls,
-            debugState: (completion as any).debugState,
-            error: (completion as any).error,
-            updatedAt: (completion as any).updatedAt || Date.now()
-          },
-          status: 200,
-          statusText: 'OK',
-          headers: {},
-          config: {}
-        } as AxiosResponse<any>;
+        const responseData = {
+          ...(completion as any),
+          status: (completion as any).status || 'completed',
+          conversation_id: updatedDetailedConv.id,
+          messages: (completion as any).messages || updatedDetailedConv.messages,
+          pendingToolCalls: (completion as any).pendingToolCalls,
+          debugState: (completion as any).debugState,
+          error: (completion as any).error,
+          updatedAt: (completion as any).updatedAt || Date.now()
+        };
 
-        handleApiResponse(responseDataForHandler, updatedDetailedConv.id);
+        handleApiResponse(responseData, updatedDetailedConv.id);
 
       } catch (err) {
         log.error('Error sending edited message:', err);
@@ -1241,18 +1275,15 @@ const Chat: React.FC = () => {
       // returns the next natural stop point — another approval prompt, a debug
       // pause, completion, or error — which we hand to the shared response
       // handler. Live updates also arrive over the already-open SSE stream.
-      const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/respond`, {
-        action,
-        toolCallId,
-      });
+      const data = await chatService.respondToToolCall(currentConversationId, action, toolCallId);
       log.debug(`Tool response successful`, { conversationId: currentConversationId, action, toolCallId });
-      handleApiResponse(response, currentConversationId);
+      handleApiResponse(data, currentConversationId);
 
     } catch (err) {
       log.error(`Error sending tool response (${action})`, { conversationId: currentConversationId, toolCallId, err });
       let errorMessage = `Failed to ${action} tool call.`;
-      if (axios.isAxiosError(err) && err.response?.data?.error) {
-        errorMessage += ` Error: ${err.response.data.error}`;
+      if (err instanceof ChatApiError) {
+        errorMessage += ` Error: ${err.body?.error || err.message}`;
       } else if (err instanceof Error) {
         errorMessage += ` Error: ${err.message}`;
       }
@@ -1278,8 +1309,8 @@ const Chat: React.FC = () => {
     setError(null);
     await openEventStream(currentConversationId);
     try {
-      const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/step`);
-      handleApiResponse(response, currentConversationId); // Process the response (updates state, status)
+      const data = await chatService.debugStep(currentConversationId);
+      handleApiResponse(data, currentConversationId); // Process the response (updates state, status)
     } catch (err) {
       log.error('Error during debug step API call', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to execute debug step.');
@@ -1301,8 +1332,8 @@ const Chat: React.FC = () => {
     setDebugState(null);
     await openEventStream(currentConversationId);
     try {
-      const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/continue`);
-      handleApiResponse(response, currentConversationId); // Process the response
+      const data = await chatService.debugContinue(currentConversationId);
+      handleApiResponse(data, currentConversationId); // Process the response
       // Polling might restart via useEffect if status is 'running'
     } catch (err) {
       log.error('Error during debug continue API call', { conversationId: currentConversationId, err });
@@ -1328,7 +1359,7 @@ const Chat: React.FC = () => {
       : [...breakpoints, nodeId];
     setBreakpoints(next); // optimistic
     try {
-      await axios.put(`/v1/chat/conversations/${currentConversationId}/breakpoints`, { breakpoints: next });
+      await chatService.setBreakpoints(currentConversationId, next);
     } catch (err) {
       log.error('Failed to update breakpoints', { conversationId: currentConversationId, err });
       setBreakpoints(breakpoints); // revert on failure
@@ -1347,13 +1378,12 @@ const Chat: React.FC = () => {
     await openEventStream(currentConversationId);
     try {
       for (let i = 0; i < 50; i++) {
-        const response = await axios.post(`/v1/chat/conversations/${currentConversationId}/debug/step`);
-        const data = response.data;
+        const data = await chatService.debugStep(currentConversationId);
         const status = data?.status ?? data?.debugState?.status;
         const nodeId = data?.debugState?.currentNodeId;
         // Stop once we leave the original node or are no longer paused for debug.
         if (status !== 'paused_debug' || (nodeId && nodeId !== startNodeId)) {
-          handleApiResponse(response, currentConversationId);
+          handleApiResponse(data, currentConversationId);
           return;
         }
       }
@@ -1379,7 +1409,7 @@ const Chat: React.FC = () => {
     setPendingToolCalls(null);
 
     try {
-      await axios.post(`/v1/chat/conversations/${currentConversationId}/cancel`);
+      await chatService.cancel(currentConversationId);
       log.debug('Cancel request sent successfully', { conversationId: currentConversationId });
       // Fetch details again to get the potentially updated 'cancelled' status/message
       await fetchDetailedConversation(currentConversationId);
