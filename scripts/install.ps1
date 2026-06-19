@@ -303,9 +303,14 @@ Update-SessionEnvironment
 # ---------------------------------------------------------------------------
 if (Test-Path (Join-Path $InstallDir '.git')) {
     Write-Step "Existing FLUJO clone found - updating ($Branch)"
+    # Hard-reset instead of pull: `npm install`/`npm run build` rewrite
+    # package-lock.json, leaving the tree dirty, so `git pull` aborts with
+    # "local changes would be overwritten by merge". This is an install/deploy
+    # copy, not a dev checkout, so discarding tracked-file drift is safe;
+    # untracked node_modules/.next/user data are preserved by reset --hard.
     git -C $InstallDir fetch origin $Branch
     git -C $InstallDir checkout $Branch
-    git -C $InstallDir pull origin $Branch
+    git -C $InstallDir reset --hard "origin/$Branch"
 } else {
     Write-Step "Cloning FLUJO into $InstallDir"
     $parent = Split-Path -Parent $InstallDir
@@ -321,7 +326,9 @@ if (Test-Path (Join-Path $InstallDir '.git')) {
 Push-Location $InstallDir
 try {
     Write-Step "Installing npm dependencies (npm install)"
-    npm install
+    # --include=dev: `next build` needs typescript/webpack/postcss (all
+    # devDependencies), which npm prunes when NODE_ENV=production.
+    npm install --include=dev
 
     Write-Step "Building FLUJO (npm run build)"
     npm run build
