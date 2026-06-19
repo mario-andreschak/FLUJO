@@ -1,7 +1,7 @@
 // Mark this file as a client component
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 
@@ -12,6 +12,14 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T)
   log.verbose('useLocalStorage: Entering method'); // Changed to verbose
   const [storedValue, setStoredValue] = useState<T>(initialValue);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Mirror of storedValue so the (memoized) setter can resolve a functional
+  // update against the latest value without taking storedValue as a dependency
+  // (which would make setValue change identity on every render).
+  const storedValueRef = useRef(storedValue);
+  useEffect(() => {
+    storedValueRef.current = storedValue;
+  }, [storedValue]);
 
   useEffect(() => {
     const loadValue = async () => {
@@ -32,10 +40,15 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T)
     loadValue();
   }, [key]); // Remove initialValue from dependencies to prevent infinite loop
 
-  const setValue = async (value: T) => {
+  // Stable identity (depends only on `key`) so consumers can safely list it in
+  // effect/useCallback dependency arrays — like React's own useState setter.
+  // An unstable setter here previously cascaded through the Chat component's
+  // memoized fetch callbacks and re-fired its data-loading effect on every
+  // render (thousands of requests / UI flashing).
+  const setValue = useCallback(async (value: T) => {
     log.verbose('setValue: Entering method'); // Changed to verbose
     try {
-      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      const valueToStore = value instanceof Function ? (value as (prev: T) => T)(storedValueRef.current) : value;
       setStoredValue(valueToStore);
 
       const response = await fetch('/api/storage', {
@@ -55,7 +68,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T)
     } catch (error) {
       log.warn(`Error setting storage key "${key}":`, error);
     }
-  };
+  }, [key]);
 
   return [storedValue, setValue, isLoading];
 }
