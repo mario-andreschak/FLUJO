@@ -17,6 +17,9 @@ interface ContextMenuProps {
   onClose: () => void;
   onDelete: () => void;
   onEditProperties?: () => void;
+  onCopy?: () => void;
+  onPaste?: () => void;
+  canPaste?: boolean;
   nodeId?: string;
   edgeId?: string;
 }
@@ -27,6 +30,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onClose,
   onDelete,
   onEditProperties,
+  onCopy,
+  onPaste,
+  canPaste,
   nodeId,
   edgeId,
 }) => {
@@ -35,9 +41,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     onClose();
   };
 
-  // For future implementation
   const handleCopy = () => {
-    console.log('Copy element', nodeId || edgeId);
+    if (onCopy) onCopy();
+    onClose();
+  };
+
+  const handlePaste = () => {
+    if (onPaste) onPaste();
     onClose();
   };
 
@@ -74,42 +84,42 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <EditIcon fontSize="small" />
         </ListItemIcon>
         <ListItemText>Edit Properties</ListItemText>
+      </MenuItem>
+    );
+    if (onCopy) {
+      menuItems.push(
+        <MenuItem key="copy" onClick={handleCopy}>
+          <ListItemIcon>
+            <ContentCopyIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Copy</ListItemText>
+        </MenuItem>
+      );
+    }
+    menuItems.push(<Divider key="node-divider" />);
+  }
+
+  // Paste is available wherever the user right-clicks (node, edge, or pane) as
+  // long as there is something on the clipboard.
+  if (onPaste && canPaste) {
+    menuItems.push(
+      <MenuItem key="paste" onClick={handlePaste}>
+        <ListItemIcon>
+          <ContentPasteIcon fontSize="small" />
+        </ListItemIcon>
+        <ListItemText>Paste</ListItemText>
       </MenuItem>,
-      // <MenuItem key="copy" onClick={handleCopy}>
-      //   <ListItemIcon>
-      //     <ContentCopyIcon fontSize="small" />
-      //   </ListItemIcon>
-      //   <ListItemText>Copy</ListItemText>
-      // </MenuItem>,
-      // <MenuItem key="connect" onClick={handleConnect}>
-      //   <ListItemIcon>
-      //     <LinkIcon fontSize="small" />
-      //   </ListItemIcon>
-      //   <ListItemText>New Connection</ListItemText>
-      // </MenuItem>,
-      // <MenuItem key="zoom" onClick={handleZoomToFit}>
-      //   <ListItemIcon>
-      //     <ZoomInIcon fontSize="small" />
-      //   </ListItemIcon>
-      //   <ListItemText>Focus Node</ListItemText>
-      // </MenuItem>,
-      <Divider key="node-divider" />
+      <Divider key="paste-divider" />
     );
   }
-  
+
   // Add edge-specific menu items
   if (edgeId) {
     menuItems.push(
-      // <MenuItem key="disconnect" onClick={handleDisconnect}>
-      //   <ListItemIcon>
-      //     <LinkOffIcon fontSize="small" />
-      //   </ListItemIcon>
-      //   <ListItemText>Disconnect</ListItemText>
-      // </MenuItem>,
       <Divider key="edge-divider" />
     );
   }
-  
+
   // Add delete menu item (always present)
   menuItems.push(
     <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }}>

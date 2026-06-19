@@ -13,8 +13,6 @@ import {
   TextField,
   Collapse,
   Alert,
-  Breadcrumbs,
-  Link,
   Tooltip,
   Paper,
   IconButton,
@@ -23,7 +21,6 @@ import {
   useTheme
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import HomeIcon from '@mui/icons-material/Home';
 import AddIcon from '@mui/icons-material/Add';
 import FlowBuilder from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
@@ -394,39 +391,10 @@ const FlowsPage = () => {
           )}
           
           <Box>
-            <Breadcrumbs aria-label="breadcrumb" sx={{ mb: 1 }}>
-              {/* Home link is always present */}
-              <Link 
-                color="inherit" 
-                href="/"
-                sx={{ display: 'flex', alignItems: 'center' }}
-              >
-                <HomeIcon sx={{ mr: 0.5 }} fontSize="inherit" />
-                Home
-              </Link>
-              
-              {/* Conditionally render either just "Flows" or "Flows" + "Editor" */}
-              {isEditing && selectedFlow ? (
-                <Link 
-                  color="inherit"
-                  component="button"
-                  onClick={handleBackToDashboard}
-                >
-                  Flows
-                </Link>
-              ) : (
-                <Typography color="text.primary">Flows</Typography>
-              )}
-              
-              {/* Add flow name as final breadcrumb when editing */}
-              {isEditing && selectedFlow && (
-                <Typography color="text.primary">
-                  {flows.find(f => f.id === selectedFlow)?.name || 'Editor'}
-                </Typography>
-              )}
-            </Breadcrumbs>
+            {/* Breadcrumbs were removed for consistency with the Models/MCP pages;
+                the back arrow (left) plus this dynamic title handle editor nav. */}
             <Typography variant="h5">
-              {isEditing && selectedFlow 
+              {isEditing && selectedFlow
                 ? `Editing: ${flows.find(f => f.id === selectedFlow)?.name || 'Flow'}`
                 : 'Flow Dashboard'
               }

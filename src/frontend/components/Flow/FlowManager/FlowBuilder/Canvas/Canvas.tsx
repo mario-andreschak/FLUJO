@@ -17,6 +17,7 @@ import {
   OnConnectStartParams
 } from '@xyflow/react';
 import { styled, useTheme } from '@mui/material/styles';
+import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { StartNode, ProcessNode, FinishNode, MCPNode } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
@@ -32,6 +33,15 @@ import { createLogger } from '@/utils/logger';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/Canvas.tsx');
+
+// Clipboard for copy/paste of nodes. localStorage backs cross-flow paste (and
+// survives reloads); the in-tab variable is the fast path within a session.
+const FLOW_CLIPBOARD_KEY = 'flujo:flowClipboard';
+interface FlowClipboard {
+  nodes: FlowNode[];
+  edges: any[];
+}
+let flowClipboardMemory: FlowClipboard | null = null;
 
 // Node types for the ReactFlow component
 const nodeTypes = {
@@ -517,6 +527,142 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     setNodeSelectionModal({ open: false, position: null, sourceNodeType: undefined, sourceHandleId: undefined });
   }, []);
 
+  // --- Copy / paste of nodes (within a flow and across flows) ---
+  // Copy the current selection (its nodes + any edges fully inside it) to the
+  // clipboard. Returns false when there is nothing copyable so the key event
+  // can fall through. Start nodes are excluded (unique per flow).
+  const handleCopySelection = useCallback(() => {
+    const selectedSet = new Set(selectedElements.nodes);
+    const copyNodes = nodes.filter(n => selectedSet.has(n.id) && n.type !== 'start');
+    if (copyNodes.length === 0) return false;
+    const copyIds = new Set(copyNodes.map(n => n.id));
+    const copyEdges = edges.filter(e => copyIds.has(e.source) && copyIds.has(e.target));
+    const payload: FlowClipboard = {
+      nodes: JSON.parse(JSON.stringify(copyNodes)),
+      edges: JSON.parse(JSON.stringify(copyEdges)),
+    };
+    flowClipboardMemory = payload;
+    try {
+      localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
+    } catch (err) {
+      log.warn('Could not persist flow clipboard to localStorage', err);
+    }
+    log.debug(`Copied ${payload.nodes.length} node(s) and ${payload.edges.length} edge(s)`);
+    return true;
+  }, [selectedElements, nodes, edges]);
+
+  // Paste clipboard contents as new, independent nodes/edges (regenerated ids,
+  // offset position). Notifies the parent via 'add' changes so it persists.
+  const handlePaste = useCallback(() => {
+    let payload = flowClipboardMemory;
+    if (!payload) {
+      try {
+        const raw = localStorage.getItem(FLOW_CLIPBOARD_KEY);
+        if (raw) payload = JSON.parse(raw) as FlowClipboard;
+      } catch (err) {
+        log.warn('Could not read flow clipboard from localStorage', err);
+      }
+    }
+    if (!payload || !payload.nodes || payload.nodes.length === 0) {
+      log.debug('Paste requested but clipboard is empty');
+      return;
+    }
+
+    const idMap = new Map<string, string>();
+    payload.nodes.forEach(n => idMap.set(n.id, uuidv4()));
+    const OFFSET = 40;
+
+    const newNodes: FlowNode[] = payload.nodes.map(n => ({
+      ...n,
+      id: idMap.get(n.id)!,
+      position: { x: (n.position?.x ?? 0) + OFFSET, y: (n.position?.y ?? 0) + OFFSET },
+      selected: true,
+      data: { ...n.data },
+    }));
+
+    const newEdges = (payload.edges || [])
+      .filter(e => idMap.has(e.source) && idMap.has(e.target))
+      .map(e => ({
+        ...e,
+        id: `${idMap.get(e.source)}-${idMap.get(e.target)}`,
+        source: idMap.get(e.source)!,
+        target: idMap.get(e.target)!,
+        selected: false,
+      }));
+
+    setNodes((nds) => [...nds.map(n => ({ ...n, selected: false })), ...newNodes]);
+    if (newEdges.length > 0) {
+      setEdges((eds) => [...eds, ...newEdges]);
+    }
+
+    if (onNodesChangeCallback) {
+      onNodesChangeCallback(newNodes.map(n => ({ type: 'add' as const, item: n })));
+    }
+    if (onEdgesChangeCallback && newEdges.length > 0) {
+      onEdgesChangeCallback(newEdges.map(e => ({ type: 'add' as const, item: e })) as any);
+    }
+
+    log.info(`Pasted ${newNodes.length} node(s) and ${newEdges.length} edge(s)`);
+  }, [setNodes, setEdges, onNodesChangeCallback, onEdgesChangeCallback]);
+
+  // Keyboard handler: copy/cut/paste shortcuts, then delegate everything else
+  // (e.g. Delete) to the existing canvas key handler.
+  const handleCanvasKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === 'c') {
+        if (handleCopySelection()) event.preventDefault();
+        return;
+      }
+      if (mod && key === 'x') {
+        if (handleCopySelection()) {
+          event.preventDefault();
+          // Reuse the existing Delete logic (also protects Start nodes).
+          handleKeyDown({ key: 'Delete' } as React.KeyboardEvent);
+        }
+        return;
+      }
+      if (mod && key === 'v') {
+        event.preventDefault();
+        handlePaste();
+        return;
+      }
+      handleKeyDown(event);
+    },
+    [handleCopySelection, handlePaste, handleKeyDown]
+  );
+
+  // Context-menu "Copy": if the right-clicked node isn't part of the current
+  // selection, copy just that node; otherwise copy the whole selection.
+  const handleContextCopy = useCallback(() => {
+    if (contextMenu.nodeId && !selectedElements.nodes.includes(contextMenu.nodeId)) {
+      const node = nodes.find(n => n.id === contextMenu.nodeId);
+      if (node && node.type !== 'start') {
+        const payload: FlowClipboard = { nodes: JSON.parse(JSON.stringify([node])), edges: [] };
+        flowClipboardMemory = payload;
+        try {
+          localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
+        } catch (err) {
+          log.warn('Could not persist flow clipboard to localStorage', err);
+        }
+        log.debug('Copied right-clicked node to clipboard');
+      }
+      return;
+    }
+    handleCopySelection();
+  }, [contextMenu.nodeId, selectedElements, nodes, handleCopySelection]);
+
+  // Whether there is anything to paste (re-checked each time the menu opens).
+  const canPaste = useMemo(() => {
+    if (flowClipboardMemory) return true;
+    try {
+      return !!localStorage.getItem(FLOW_CLIPBOARD_KEY);
+    } catch {
+      return false;
+    }
+  }, [contextMenu.open]);
+
   return (
     <FlowContainer 
       ref={(el) => {
@@ -562,7 +708,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onNodeContextMenu={onNodeContextMenu}
         onEdgeContextMenu={onEdgeContextMenu}
         onPaneContextMenu={onPaneContextMenu}
-        onKeyDown={handleKeyDown}
+        onKeyDown={handleCanvasKeyDown}
         onNodeDoubleClick={onNodeDoubleClick}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
@@ -585,6 +731,9 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onClose={closeContextMenu}
         onDelete={handleDelete}
         onEditProperties={handleEditProperties}
+        onCopy={handleContextCopy}
+        onPaste={handlePaste}
+        canPaste={canPaste}
         nodeId={contextMenu.nodeId}
         edgeId={contextMenu.edgeId}
       />
