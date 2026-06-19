@@ -7,7 +7,8 @@ import {
   BaseEdge, 
   EdgeLabelRenderer,
   Position,
-  MarkerType
+  MarkerType,
+  useReactFlow
 } from '@xyflow/react';
 import { styled, useTheme } from '@mui/material/styles';
 
@@ -22,17 +23,15 @@ const EdgeButton = styled('button')(({ theme }) => ({
   display: 'flex',
   justifyContent: 'center',
   alignItems: 'center',
-  color: theme.palette.text.primary,
-  boxShadow: theme.palette.mode === 'dark' 
-    ? '0 2px 4px rgba(0,0,0,0.3)' 
+  color: theme.palette.text.secondary,
+  boxShadow: theme.palette.mode === 'dark'
+    ? '0 2px 4px rgba(0,0,0,0.3)'
     : '0 2px 4px rgba(0,0,0,0.1)',
+  // Turn red on hover to signal the destructive (delete) action.
   '&:hover': {
-    boxShadow: theme.palette.mode === 'dark' 
-      ? '0 2px 6px rgba(0,0,0,0.4)' 
-      : '0 2px 6px rgba(0,0,0,0.2)',
-    background: theme.palette.mode === 'dark' 
-      ? theme.palette.action.hover 
-      : theme.palette.background.paper,
+    background: theme.palette.error.main,
+    borderColor: theme.palette.error.main,
+    color: theme.palette.error.contrastText,
   }
 }));
 
@@ -76,7 +75,8 @@ const MCPEdge: FC<EdgeProps> = ({
   });
 
   const theme = useTheme();
-  
+  const { deleteElements } = useReactFlow();
+
   // MCP edge style - using theme colors
   const edgeStyle = {
     ...style,
@@ -105,7 +105,13 @@ const MCPEdge: FC<EdgeProps> = ({
           }}
           className="nodrag nopan"
         >
-          <EdgeButton title="Delete connection">×</EdgeButton>
+          <EdgeButton
+            title="Delete connection"
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteElements({ edges: [{ id }] });
+            }}
+          >×</EdgeButton>
         </div>
       </EdgeLabelRenderer>
     </>

@@ -209,29 +209,18 @@ const FlowDashboard = ({
             </Box>
             
             {/* Sort button */}
-            <IconButton 
-              size="small" 
+            <IconButton
+              size="small"
               onClick={handleSortMenuOpen}
-              sx={{ 
+              sx={{
                 border: `1px solid ${theme.palette.divider}`,
                 backgroundColor: theme.palette.background.default
               }}
             >
               <SortIcon fontSize="small" />
             </IconButton>
-            
-            {/* New flow button */}
-            {onCreateFlow && (
-              <Button 
-                variant="contained" 
-                color="primary" 
-                startIcon={<AddIcon />}
-                onClick={onCreateFlow}
-                size="small"
-              >
-                New Flow
-              </Button>
-            )}
+            {/* "New Flow" lives in the page header (and the empty-state CTA below);
+                a third button here was redundant, so it was removed. */}
           </Box>
         </Box>
       </Paper>

@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Box, Button, Alert } from '@mui/material';
+import { Box, Button, Alert, Paper, TextField, InputAdornment } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import SearchIcon from '@mui/icons-material/Search';
 import { v4 as uuidv4 } from 'uuid';
 
 import ModelList from '@/frontend/components/models/list/ModelList';
@@ -22,6 +24,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [models, setModels] = useState(initialModels);
+  const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
@@ -157,18 +160,57 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     router.push('/models');
   };
 
+  // Filter models by name/displayName for the search box (consistent with the
+  // Flows and MCP list pages, which both offer search).
+  const filteredModels = searchTerm.trim()
+    ? models.filter(m => {
+        const q = searchTerm.toLowerCase();
+        return (
+          (m.displayName || '').toLowerCase().includes(q) ||
+          (m.name || '').toLowerCase().includes(q)
+        );
+      })
+    : models;
+
   return (
     <>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-        <Button
-          variant="contained"
-          color="primary"
-          onClick={handleAdd}
+      {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
+      <Paper elevation={1} sx={{ mb: 2, p: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: 1,
+            alignItems: { xs: 'stretch', sm: 'center' },
+            justifyContent: 'space-between',
+          }}
         >
-          Add Model
-        </Button>
-      </Box>
-      
+          <TextField
+            placeholder="Search models..."
+            variant="outlined"
+            size="small"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+            sx={{ maxWidth: { sm: 300 }, width: '100%' }}
+          />
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<AddIcon />}
+            onClick={handleAdd}
+          >
+            Add Model
+          </Button>
+        </Box>
+      </Paper>
+
       {error && (
         <Box sx={{ mb: 2 }}>
           <Alert severity="error" onClose={() => setError(null)}>
@@ -178,7 +220,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       )}
 
       <ModelList
-        models={models}
+        models={filteredModels}
         isLoading={isLoading}
         onAdd={handleAdd}
         onUpdate={handleEdit}

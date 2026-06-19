@@ -23,8 +23,8 @@ export interface ModelCardProps {
 
 export const ModelCard = ({ model, onEdit, onDelete }: ModelCardProps) => {
   return (
-    <Card elevation={2}>
-      <CardContent>
+    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <CardContent sx={{ flexGrow: 1 }}>
         <Typography variant="h6" gutterBottom>
           {model.displayName || model.name}
         </Typography>

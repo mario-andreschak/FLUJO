@@ -26,7 +26,10 @@ const NodeContainer = styled(Paper, {
   selected?: boolean; 
 }>(({ theme, nodeType, selected }) => ({
   padding: theme.spacing(1.5),
-  minWidth: '180px',
+  // Fixed (not min) width so every node is the same size: with equal widths and
+  // grid snapping, node centers line up vertically, so top/bottom handles align
+  // and edges run straight instead of jogging "around the corner".
+  width: '200px',
   borderRadius: '8px',
   backgroundColor: theme.palette.background.paper,
   border: `2px solid ${
@@ -111,7 +114,7 @@ const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp') => {
   }
 };
 
-const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme: any) => {
+export const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme: any) => {
   switch (type) {
     case 'start':
       return '#795548'; // Brown color hex value

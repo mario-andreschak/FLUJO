@@ -13,12 +13,14 @@ import {
   Chip,
   alpha,
   Skeleton,
-  styled
+  styled,
+  useTheme
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditIcon from '@mui/icons-material/Edit';
 import { Flow } from '@/frontend/types/flow/flow';
+import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
@@ -80,7 +82,8 @@ const FlowCard = ({
   onEdit
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
-  
+  const theme = useTheme();
+
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onDelete(flow.id);
@@ -96,94 +99,103 @@ const FlowCard = ({
     if (onEdit) onEdit(flow.id);
   };
   
-  // Generate simple flow preview
-  // In a real implementation, this could render a simplified version of the flow graph
+  // Render a faithful mini-map of the flow: real node positions/edges scaled to
+  // fit, using the same per-type colors as the FlowBuilder canvas so the preview
+  // matches what the user sees when editing.
   const renderFlowPreview = () => {
-    // Simple representation of nodes as circles
-    return (
-      <Box sx={{ 
-        width: '100%', 
-        height: '100%', 
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        p: 1,
-        position: 'relative'
-      }}>
-        {flow.nodes.length > 0 ? (
-          <svg width="100%" height="100%" style={{ maxHeight: 120 }}>
-            <g transform="translate(10,10)">
-              {flow.nodes.map((node, index) => {
-                // Calculate position for simple visualization
-                const x = (index % 3) * 70 + 30;
-                const y = Math.floor(index / 3) * 50 + 30;
-                
-                return (
-                  <g key={node.id}>
-                    <circle
-                      cx={x}
-                      cy={y}
-                      r={20}
-                      fill={
-                        node.data.type === 'start' ? '#4caf50' :
-                        node.data.type === 'finish' ? '#f44336' :
-                        node.data.type === 'mcp' ? '#ff9800' : '#2196f3'
-                      }
-                      opacity={0.7}
-                    />
-                    <text
-                      x={x}
-                      y={y}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      fill="white"
-                      fontSize="10px"
-                    >
-                      {node.data.type.substring(0, 1).toUpperCase()}
-                    </text>
-                  </g>
-                );
-              })}
-              
-              {/* Simplified edge representation */}
-              {flow.edges.map((edge, index) => {
-                // Find source and target nodes
-                const sourceNode = flow.nodes.find(n => n.id === edge.source);
-                const targetNode = flow.nodes.find(n => n.id === edge.target);
-                
-                if (!sourceNode || !targetNode) return null;
-                
-                // Calculate simplified positions
-                const sourceIndex = flow.nodes.indexOf(sourceNode);
-                const targetIndex = flow.nodes.indexOf(targetNode);
-                
-                const sourceX = (sourceIndex % 3) * 70 + 30;
-                const sourceY = Math.floor(sourceIndex / 3) * 50 + 30;
-                
-                const targetX = (targetIndex % 3) * 70 + 30;
-                const targetY = Math.floor(targetIndex / 3) * 50 + 30;
-                
-                return (
-                  <line
-                    key={index}
-                    x1={sourceX}
-                    y1={sourceY}
-                    x2={targetX}
-                    y2={targetY}
-                    stroke="#888"
-                    strokeWidth="2"
-                    opacity={0.5}
-                  />
-                );
-              })}
-            </g>
-          </svg>
-        ) : (
+    if (flow.nodes.length === 0) {
+      return (
+        <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography color="textSecondary" align="center">
             Empty Flow
           </Typography>
-        )}
+        </Box>
+      );
+    }
+
+    // Approximate on-canvas node footprint (matches the builder's ~180px min width).
+    const NODE_W = 180;
+    const NODE_H = 70;
+    const PAD = 40;
+
+    const xs = flow.nodes.map(n => n.position?.x ?? 0);
+    const ys = flow.nodes.map(n => n.position?.y ?? 0);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs) + NODE_W;
+    const maxY = Math.max(...ys) + NODE_H;
+
+    const viewBox = `${minX - PAD} ${minY - PAD} ${maxX - minX + PAD * 2} ${maxY - minY + PAD * 2}`;
+    const center = (node: typeof flow.nodes[number]) => ({
+      cx: (node.position?.x ?? 0) + NODE_W / 2,
+      cy: (node.position?.y ?? 0) + NODE_H / 2,
+    });
+
+    return (
+      <Box sx={{ width: '100%', height: '100%', p: 1 }}>
+        <svg
+          width="100%"
+          height="100%"
+          viewBox={viewBox}
+          preserveAspectRatio="xMidYMid meet"
+          style={{ display: 'block' }}
+        >
+          {/* Edges first so nodes render on top */}
+          {flow.edges.map((edge, index) => {
+            const sourceNode = flow.nodes.find(n => n.id === edge.source);
+            const targetNode = flow.nodes.find(n => n.id === edge.target);
+            if (!sourceNode || !targetNode) return null;
+            const s = center(sourceNode);
+            const t = center(targetNode);
+            return (
+              <line
+                key={edge.id || index}
+                x1={s.cx}
+                y1={s.cy}
+                x2={t.cx}
+                y2={t.cy}
+                stroke={theme.palette.text.secondary}
+                strokeWidth={2}
+                opacity={0.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            );
+          })}
+
+          {flow.nodes.map((node) => {
+            const x = node.position?.x ?? 0;
+            const y = node.position?.y ?? 0;
+            const type = (node.data?.type ?? 'process') as 'start' | 'process' | 'finish' | 'mcp';
+            const color = getNodeColor(type, theme);
+            return (
+              <g key={node.id}>
+                <rect
+                  x={x}
+                  y={y}
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={12}
+                  fill={color}
+                  opacity={0.85}
+                  stroke={theme.palette.background.paper}
+                  strokeWidth={2}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <text
+                  x={x + NODE_W / 2}
+                  y={y + NODE_H / 2}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="#fff"
+                  fontSize={NODE_H * 0.5}
+                  fontWeight="bold"
+                >
+                  {type.substring(0, 1).toUpperCase()}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
       </Box>
     );
   };
