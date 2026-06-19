@@ -181,29 +181,50 @@ export class ToolHandler {
         if (properties && properties.boundServer) {
           const boundServer = properties.boundServer;
           const enabledTools = properties.enabledTools || [];
-          
-          // Get server status
-          const status = await mcpService.getServerStatus(boundServer);
-          
-          if (status.message !== 'connected') {
-            // Try to connect
-            const connectResult = await mcpService.connectServer(boundServer);
-            
-            if (!connectResult.success) {
-              log.warn(`Failed to connect to server ${boundServer}: ${connectResult.error}`);
-              continue;
-            }
+
+          // Ensure the server is connected. connectServer recreates a client whose config
+          // changed; listServerTools below additionally self-heals a dead transport by
+          // reconnecting and retrying. We deliberately do NOT gate this on getServerStatus:
+          // that only reports map presence, not liveness, so it cannot detect a stale session.
+          const connectResult = await mcpService.connectServer(boundServer);
+
+          if (!connectResult.success) {
+            // A node is explicitly wired to this MCP server, so its tools are not optional.
+            // Failing loudly here is critical: otherwise the ProcessNode would proceed with
+            // only its handoff tool and the model would (truthfully) report it has no tools -
+            // the exact "tools randomly missing" symptom this guards against.
+            return {
+              success: false,
+              error: createMCPError(
+                'server_connection_failed',
+                `Failed to connect to MCP server '${boundServer}': ${connectResult.error}`,
+                boundServer,
+                'connect'
+              )
+            };
           }
-          
+
           // List server tools
           const toolsResult = await mcpService.listServerTools(boundServer);
-          
-          if (!toolsResult.tools || toolsResult.tools.length === 0) {
-            continue;
+
+          // Distinguish a genuine failure from a legitimately empty tool list. An error means
+          // we could not retrieve the tools (even after the reconnect/retry inside
+          // listServerTools) - propagate it rather than silently dropping the node's tools.
+          if (toolsResult.error) {
+            return {
+              success: false,
+              error: createMCPError(
+                'list_tools_failed',
+                `Failed to list tools for MCP server '${boundServer}': ${toolsResult.error}`,
+                boundServer,
+                'listTools'
+              )
+            };
           }
-          
+
+          // An empty list with no error is valid (server exposes none / none are enabled).
           // Filter and format tools
-          const serverTools = toolsResult.tools
+          const serverTools = (toolsResult.tools || [])
             .filter(tool => enabledTools.includes(tool.name))
             .map(tool => ({
               originalName: tool.name,
@@ -211,7 +232,7 @@ export class ToolHandler {
               description: tool.description,
               inputSchema: tool.inputSchema
             }));
-          
+
           // Add unique tools
           for (const tool of serverTools) {
             if (!allTools.some(t => t.name === tool.name)) {

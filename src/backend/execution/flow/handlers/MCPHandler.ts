@@ -22,10 +22,12 @@ export class MCPHandler {
     log.verbose('executeMCP input', JSON.stringify(input));
     
     try {
-      // Check server status
+      // Check server status. getServerStatus reports the connection state in `status`
+      // (not `message`, which only carries error/auth detail) - checking the wrong field
+      // here previously made this branch always run, masking the real intent.
       const status = await mcpService.getServerStatus(mcpServer);
-      
-      if (status.message !== 'connected') {
+
+      if (status.status !== 'connected') {
         // Try to connect
         const connectResult = await mcpService.connectServer(mcpServer);
         

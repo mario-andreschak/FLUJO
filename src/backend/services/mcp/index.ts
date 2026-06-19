@@ -319,12 +319,33 @@ export class MCPService {
 
       // Check if we already have a client for this server
       let client = this.clients.get(config.name);
-      
-      // If we already have a client, return success
+
+      // If we already have a client, reuse it - but only if it is still valid for the
+      // current config. shouldRecreateClient catches transport-type / URL / command changes
+      // that would otherwise leave us talking to a client built for a stale config.
+      //
+      // Note: this does NOT detect a dead transport (e.g. an expired streamable-HTTP
+      // session) - the presence of a client object in the map says nothing about whether
+      // the underlying connection is alive. Liveness is verified at the point of use in
+      // listServerTools()/callTool(), which reconnect-and-retry on failure. Keeping this
+      // check cheap (no network round-trip) preserves the fast path for the common case.
       if (client) {
-        log.info(`connectServer: Server ${config.name} is already connected`);
-        this.lastConnectionError.delete(config.name);
-        return { success: true };
+        const { needsNewClient, reason } = shouldRecreateClient(client, config);
+        if (!needsNewClient) {
+          log.info(`connectServer: Server ${config.name} is already connected`);
+          this.lastConnectionError.delete(config.name);
+          return { success: true };
+        }
+
+        log.info(`connectServer: Existing client for ${config.name} is stale (${reason}), recreating`);
+        try {
+          await safelyCloseClient(client, config.name, config);
+        } catch (closeError) {
+          log.debug(`connectServer: error closing stale client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+        }
+        this.clients.delete(config.name);
+        this.removeFromGlobalRecovery(config.name);
+        client = undefined;
       }
 
       // Create a new client
@@ -663,24 +684,73 @@ export class MCPService {
   }
 
   /**
-   * List tools available from an MCP server
+   * Tear down any existing client for a server and establish a fresh connection.
+   *
+   * Used to self-heal a dead/stale connection: the cached client is closed and removed
+   * before reconnecting, so connectServer() is guaranteed to build a brand-new client and
+   * transport rather than short-circuiting on the stale one still sitting in the map.
+   */
+  private async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
+    log.info(`forceReconnect: Forcing fresh connection for server ${serverName}`);
+
+    const existing = this.clients.get(serverName);
+    if (existing) {
+      const config = await this.getServerConfig(serverName);
+      try {
+        await safelyCloseClient(existing, serverName, config || undefined);
+      } catch (closeError) {
+        log.debug(`forceReconnect: error closing stale client for ${serverName}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+      }
+      this.clients.delete(serverName);
+      this.removeFromGlobalRecovery(serverName);
+    }
+
+    return this.connectServer(serverName);
+  }
+
+  /**
+   * List tools available from an MCP server.
+   *
+   * A client object in the map does NOT guarantee a live connection: streamable-HTTP /
+   * SSE sessions expire server-side, processes die, networks blip - and the SDK only fires
+   * transport.onclose/onerror for *some* of those cases, so a dead client can linger in the
+   * map indefinitely. When that happens client.listTools() fails. Rather than surface an
+   * empty/failed list (which upstream silently turned into "this node has no MCP tools"),
+   * we force a single reconnect-and-retry. Listing tools is idempotent, so retrying is safe.
    */
   async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
     log.debug(`listServerTools: Entering method for server ${serverName}`);
-    
-    const client = this.clients.get(serverName);
+
+    let client = this.clients.get(serverName);
     if (!client) {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
-    
-    const result = await listTools(client, serverName);
-    
+
+    let result = await listTools(client, serverName);
+
     if (result.error) {
-      log.warn(`listServerTools: Error listing tools for ${serverName}:`, result.error);
+      // The connection is likely stale/dead - reconnect from scratch and try once more
+      // before giving up, so a recoverable blip does not silently strip a node's tools.
+      log.warn(`listServerTools: Listing tools for ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+
+      const reconnect = await this.forceReconnect(serverName);
+      if (!reconnect.success) {
+        log.warn(`listServerTools: Reconnect for ${serverName} failed: ${reconnect.error}`);
+        return { tools: [], error: reconnect.error || result.error };
+      }
+
+      client = this.clients.get(serverName);
+      result = await listTools(client, serverName);
+
+      if (result.error) {
+        log.warn(`listServerTools: Retry after reconnect still failed for ${serverName}:`, result.error);
+      } else {
+        log.info(`listServerTools: Recovered after reconnect for ${serverName}; listed ${result.tools.length} tools`);
+      }
     } else {
       log.info(`listServerTools: Listed ${result.tools.length} tools for ${serverName}`);
     }
-    
+
     return result;
   }
 
