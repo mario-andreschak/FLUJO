@@ -3,6 +3,11 @@ import path from 'path';
 
 const nextConfig: NextConfig = {
   /* config options here */
+  // Pin the workspace root to this project. Without this, a stray
+  // package-lock.json in a parent dir (e.g. the user's home folder) makes
+  // Next infer the wrong root and install/resolve deps like typescript in the
+  // wrong place, breaking `next build`.
+  outputFileTracingRoot: __dirname,
   typescript: {
     // Ignore all TypeScript errors during build
     ignoreBuildErrors: true,

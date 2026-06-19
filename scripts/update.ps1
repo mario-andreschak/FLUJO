@@ -60,10 +60,35 @@ while ((Get-Date) -lt $deadline -and (Test-PortListening $Port)) {
 if (Test-PortListening $Port) { Log "WARNING: port $Port still in use after 30s" } else { Log "Port $Port is free" }
 
 # 3. Pull + install + build (server down -> no Windows file locks).
-Log "git pull"
-& git pull 2>&1 | ForEach-Object { Log "  $_" }
+#
+# `npm install` rewrites package-lock.json on nearly every run (npm-version /
+# partial-install drift), which leaves the working tree dirty and makes a plain
+# `git pull` abort with "local changes would be overwritten by merge". This is a
+# deployment copy (in %LOCALAPPDATA%\FLUJO), not a dev checkout, so we hard-reset
+# to the remote branch instead of merging. `reset --hard` only touches TRACKED
+# files; untracked node_modules/.next/user data are preserved.
+$branch = (& git rev-parse --abbrev-ref HEAD 2>$null | Out-String).Trim()
+if (-not $branch -or $branch -eq 'HEAD') { $branch = 'main' }
+$remote = (& git config --get "branch.$branch.remote" 2>$null | Out-String).Trim()
+if (-not $remote) { $remote = 'origin' }
+
+Log "git fetch $remote"
+& git fetch --prune $remote 2>&1 | ForEach-Object { Log "  $_" }
+$fetchOk = ($LASTEXITCODE -eq 0)
+
+Log "git reset --hard $remote/$branch"
+& git reset --hard "$remote/$branch" 2>&1 | ForEach-Object { Log "  $_" }
+if ($fetchOk -and $LASTEXITCODE -eq 0) {
+    Log "Working tree reset to $remote/$branch"
+} else {
+    Log "WARNING: could not update code (fetch/reset failed); restarting on the EXISTING version"
+}
+
+# Install with dev dependencies: `next build` needs typescript/webpack/postcss,
+# which are devDependencies and get pruned when npm runs in production mode.
+# --include=dev forces them in even when NODE_ENV=production.
 Log "npm install"
-& cmd /c "npm install" 2>&1 | ForEach-Object { Log "  $_" }
+& cmd /c "npm install --include=dev" 2>&1 | ForEach-Object { Log "  $_" }
 Log "npm run build"
 & cmd /c "npm run build" 2>&1 | ForEach-Object { Log "  $_" }
 
