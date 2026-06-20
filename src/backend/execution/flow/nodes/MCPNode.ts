@@ -2,6 +2,7 @@
 import { BaseNode } from '../temp_pocket';
 import { createLogger } from '@/utils/logger';
 import { MCPHandler } from '../handlers/MCPHandler';
+import { encodeToolName } from '../handlers/toolNamespace';
 import { SharedState, MCPNodeParams, MCPNodePrepResult, MCPNodeExecResult } from '../types';
 import { FEATURES } from '@/config/features'; // Import feature flags
 
@@ -133,11 +134,12 @@ export class MCPNode extends BaseNode {
       const availableTools = execResult.tools
         .filter(tool => execResult.enabledTools?.includes(tool.name))
         .map(tool => {
-          // Create a copy of the tool with the name formatted
+          // Create a copy of the tool with the model-facing name encoded (#16).
           return {
             ...tool,
             originalName: tool.name,
-            name: `_-_-_${execResult.server}_-_-_${tool.name}`
+            server: execResult.server,
+            name: encodeToolName(execResult.server!, tool.name)
           };
         });
       
@@ -161,7 +163,14 @@ export class MCPNode extends BaseNode {
         
         sharedState.mcpContext.availableTools = mergedTools;
       }
-      
+
+      // Record the model-facing-name -> (server, tool) mapping so tool calls can
+      // be decoded later, including across a tool-approval resume (#16).
+      sharedState.toolNameMap = sharedState.toolNameMap || {};
+      for (const tool of availableTools) {
+        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName };
+      }
+
       // Get tool names for logging
       const toolNames = availableTools.map(tool => tool.name);
       

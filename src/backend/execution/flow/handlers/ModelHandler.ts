@@ -9,6 +9,7 @@ import { ToolCallInfo } from '../types'; // Import ToolCallInfo
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path for FlujoChatMessage
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
+import { decodeToolName } from './toolNamespace';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
@@ -400,7 +401,7 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    const { toolCalls } = input;
+    const { toolCalls, toolNameMap } = input;
 
     // Add verbose logging of the input
     log.verbose('processToolCalls input', JSON.stringify(input));
@@ -473,15 +474,17 @@ export class ModelHandler {
             continue;
           }
 
-          // For MCP tools: Format is "_-_-_serverName_-_-_toolName"
-          const parts = name.split('_-_-_');
-          if (parts.length !== 3) {
+          // Decode the model-facing name back to (server, tool). New names use the
+          // mcp_<slug>_<hash> scheme (decoded via toolNameMap); legacy conversations
+          // used _-_-_SERVER_-_-_TOOL (decoded by decodeToolName's fallback).
+          const decoded = decodeToolName(name, toolNameMap);
+          if (!decoded) {
             log.error("invalid tool format", name)
             throw new Error(`Invalid tool name format: ${name}`);
           }
 
-          const serverName = parts[1];
-          const toolName = parts[2];
+          const serverName = decoded.server;
+          const toolName = decoded.tool;
 
           // Call the tool via MCP service
           const result = await mcpService.callTool(

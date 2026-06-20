@@ -178,6 +178,16 @@ export class ProcessNode extends BaseNode {
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
 
+    // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
+    // model's tool calls can be decoded later, including across a tool-approval
+    // resume (#16). Handoff tools have no server and are decoded by name prefix.
+    sharedState.toolNameMap = sharedState.toolNameMap || {};
+    for (const tool of availableTools) {
+      if (tool.server && tool.originalName) {
+        sharedState.toolNameMap[tool.name] = { server: tool.server, tool: tool.originalName };
+      }
+    }
+
   // Create a properly typed PrepResult
   const prepResult: ProcessNodePrepResult = {
     nodeId,

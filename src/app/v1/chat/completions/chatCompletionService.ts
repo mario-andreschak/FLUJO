@@ -9,7 +9,7 @@ import OpenAI from 'openai';
 import { SharedState, TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, ERROR_ACTION, STAY_ON_NODE_ACTION, ErrorDetails } from '@/backend/execution/flow/types'; // Import types and actions
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage from shared types
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler'; // Import ModelHandler
-import { toolNameInternalRegex } from '@/utils/shared/common'; // Import the regex
+import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 // Import the flowService instance and the FlowService class type directly
 import { flowService } from '@/backend/services/flow/index';
 import type { FlowService as FlowServiceType } from '@/backend/services/flow/index'; // Use 'type' import for the class
@@ -412,7 +412,7 @@ async function processChatCompletionInternal(
           const pendingCalls = sharedState.debugPendingToolCalls;
           sharedState.debugPendingToolCalls = undefined;
           log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
-          const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: pendingCalls });
+          const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap });
           if (!toolProcessingResult.success) {
             log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
             sharedState.lastResponse = { success: false, error: "Tool processing failed", errorDetails: toolProcessingResult.error };
@@ -578,7 +578,7 @@ async function processChatCompletionInternal(
             } else {
               // Process tools internally without approval and continue loop
               log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
-              const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: lastAssistantMsg.tool_calls });
+              const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap });
 
               if (!toolProcessingResult.success) {
                log.error(`Internal tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
@@ -611,13 +611,10 @@ async function processChatCompletionInternal(
             const internalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
             const externalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
 
-            // Reset the regex state before each test
-            toolNameInternalRegex.lastIndex = 0;
             allToolCalls.forEach(tc => {
-              if (tc.type === 'function' && toolNameInternalRegex.test(tc.function.name)) {
+              if (tc.type === 'function' && isInternalToolName(tc.function.name, sharedState.toolNameMap)) {
                 log.verbose("tool is internal:", tc.function.name) // Changed to verbose
                 internalTools.push(tc);
-                toolNameInternalRegex.lastIndex = 0; // Reset after successful test
               } else {
                 log.verbose("tool is external:", tc.function.name) // Changed to verbose
                 externalTools.push(tc);
@@ -627,7 +624,7 @@ async function processChatCompletionInternal(
             if (internalTools.length > 0) {
               // Process internal tools and continue the loop
               log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);
-              const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: internalTools });
+              const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: internalTools, toolNameMap: sharedState.toolNameMap });
 
               if (!toolProcessingResult.success) {
                  log.error(`[flujo=false] Internal tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });

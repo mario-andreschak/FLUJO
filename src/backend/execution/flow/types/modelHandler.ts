@@ -29,6 +29,12 @@ export interface ModelCallResult {
 export interface ToolCallProcessingInput {
   toolCalls: OpenAI.ChatCompletionMessageToolCall[];
   content?: string;
+  /**
+   * Maps model-facing MCP tool names back to (server, tool). Built from the
+   * conversation's bound tools (SharedState.toolNameMap). When omitted, decoding
+   * falls back to the legacy `_-_-_SERVER_-_-_TOOL` scheme.
+   */
+  toolNameMap?: Record<string, { server: string; tool: string }>;
 }
 
 // Tool call processing result
