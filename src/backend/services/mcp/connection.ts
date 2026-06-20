@@ -33,14 +33,12 @@ export function createNewClient(config: MCPServerConfig): Client {
       version: '0.2.0',
     },
     {
+      // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the
+      // server — e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER
+      // capabilities and are consumed regardless of what we declare here, so they do
+      // not belong in this object. (#15 will add roots/sampling here.)
       capabilities: {
-        // Define capabilities according to MCP specification
-        resources: {}, // Ability to access resources
-        tools: {},     // Ability to use tools
-        // Add other capabilities as needed
-        experimental: {
-          // Any experimental features can be defined here
-        }
+        experimental: {},
       }
     }
   );
