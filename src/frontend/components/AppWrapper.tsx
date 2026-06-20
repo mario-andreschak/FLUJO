@@ -27,6 +27,16 @@ const EncryptionAuthDialog = dynamic(() => import("./EncryptionAuthDialog"), {
   loading: () => null
 });
 
+const TourProvider = dynamic(() => import('../contexts/TourContext').then(mod => mod.TourProvider), {
+  ssr: false,
+  loading: () => null
+});
+
+const TourOverlay = dynamic(() => import('./Tour/TourOverlay'), {
+  ssr: false,
+  loading: () => null
+});
+
 // Lazily load the TransformersPreloader only in the browser
 const TransformersPreloader = dynamic(
   () => import('../services/transcription/client').then(mod => mod.TransformersPreloader),
@@ -93,13 +103,16 @@ export default function AppWrapper({ children }: AppWrapperProps) {
       <Suspense fallback={<div>Loading application...</div>}>
         <ThemeProvider>
           <StorageProvider>
-            <Suspense fallback={<div>Loading navigation...</div>}>
-              <Navigation />
-              <EncryptionAuthDialog />
-            </Suspense>
-            <main>
-              {children}
-            </main>
+            <TourProvider>
+              <Suspense fallback={<div>Loading navigation...</div>}>
+                <Navigation />
+                <EncryptionAuthDialog />
+              </Suspense>
+              <main>
+                {children}
+              </main>
+              <TourOverlay />
+            </TourProvider>
           </StorageProvider>
         </ThemeProvider>
       </Suspense>

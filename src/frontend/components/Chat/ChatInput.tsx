@@ -351,6 +351,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             fullWidth
             multiline
             maxRows={4}
+            data-tour="chat-input"
             placeholder="Type a message..."
             value={message}
             onChange={handleMessageChange}

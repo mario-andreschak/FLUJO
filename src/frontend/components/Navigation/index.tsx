@@ -10,11 +10,12 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const navItems = [
-  { name: 'Models', path: '/models' },
-  { name: 'MCP', path: '/mcp' },
-  { name: 'Flows', path: '/flows' },
-  { name: 'Chat', path: '/chat' },
-  { name: 'Settings', path: '/settings' },
+  { name: 'Models', path: '/models', tour: 'nav-models' },
+  { name: 'MCP', path: '/mcp', tour: 'nav-mcp' },
+  { name: 'Flows', path: '/flows', tour: 'nav-flows' },
+  { name: 'Chat', path: '/chat', tour: 'nav-chat' },
+  { name: 'Docs', path: '/docs', tour: 'nav-docs' },
+  { name: 'Settings', path: '/settings', tour: 'nav-settings' },
 ];
 
 export default function Navigation() {
@@ -48,6 +49,7 @@ export default function Navigation() {
               key={item.path}
               component={Link}
               href={item.path}
+              data-tour={item.tour}
               sx={{
                 color: pathname === item.path ? 'primary.main' : 'text.primary',
                 textDecoration: 'none',

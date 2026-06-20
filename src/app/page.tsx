@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { useState, useEffect, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useTour } from '@/frontend/contexts/TourContext';
 
 const log = createLogger('app/page');
 
@@ -33,6 +34,7 @@ const features = [
 export default function HomePage() {
   log.debug('Rendering HomePage');
   const { settings } = useStorage();
+  const { startTour } = useTour();
   const [encryptionKeySet, setEncryptionKeySet] = useState(true); // Assume key is set initially
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ behindBy: number; branch: string } | null>(null);
@@ -203,7 +205,7 @@ export default function HomePage() {
         <Typography variant="h5" color="text.secondary" sx={{ mb: 4 }}>
           A browser-based application for managing models, MCP servers, flows and chat interactions
         </Typography>
-        <Button component={Link} href="/models" variant="contained" size="large" sx={{ mr: 2 }}>
+        <Button variant="contained" size="large" sx={{ mr: 2 }} onClick={startTour}>
           Get Started
         </Button>
       </Box>
