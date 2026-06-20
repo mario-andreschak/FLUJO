@@ -92,8 +92,11 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 
 ### 🔄 External Tool Integration
 
-- **OpenAI Compatible Endpoint**: Integrate with tools like CLine or Roo
+- **OpenAI Compatible Endpoint**: Integrate with tools like Cline or Roo Code. In the client, choose the **OpenAI Compatible** provider, set the **Base URL** to `http://localhost:4200/v1` (note: `/v1`, not `/v1/models`), put any value as the API key, and pick a **model** named `flow-<your-flow-name>` (the list comes from `/v1/models`).
+- **FLUJO as an MCP server (proxy)**: Re-expose any configured MCP server to external MCP clients (Claude Desktop, Cursor, Cline, …) so you set a server up once in FLUJO and use it everywhere. Toggle **"Expose to external apps"** on the server's card, then add a **Streamable-HTTP** MCP server in your client pointing at `http://localhost:4200/mcp-proxy/<server-name>`. (Localhost-only in the current version.)
 - **Seamless Connection**: Use FLUJO as a backend for other AI applications
+
+> **Note:** to consume flows from other apps, use the **OpenAI Compatible** provider (above). FLUJO does not expose an Ollama-compatible *server* endpoint. (Connecting FLUJO *to* a local Ollama instance as a model provider is a separate, supported feature.)
 
 ![Screenshot 2025-03-27 130144](https://github.com/user-attachments/assets/7ba68655-2a38-48b1-8d52-c0e2c217e506)
 ![Screenshot 2025-03-26 213657](https://github.com/user-attachments/assets/43add66a-ba69-4651-9722-f920c4ef746b)
