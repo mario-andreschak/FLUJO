@@ -106,6 +106,11 @@ const Chat: React.FC = () => {
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
   const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
+  // Whether a debug session is active (panel should stay open). Decoupled from
+  // isDebugPaused so the debugger panel does NOT vanish while a step is executing
+  // (between pauses) — it stays open and shows live progress, then re-populates
+  // when the next pause arrives. Cleared when the session ends or is closed.
+  const [debugSessionActive, setDebugSessionActive] = useState<boolean>(false);
 
   // Live execution stats, driven by the SSE event stream while a run is active.
   const [liveStats, setLiveStats] = useState<
@@ -785,6 +790,7 @@ const Chat: React.FC = () => {
       log.info('API Response: Paused for debugging', { conversationId });
       setDebugState(data.debugState as SharedState);
       setIsDebugPaused(true);
+      setDebugSessionActive(true);
       setIsLoading(false); // Stop general loading indicator
       setLoadingConversationId(null);
       closeEventStream();
@@ -818,6 +824,7 @@ const Chat: React.FC = () => {
       log.info(`API Response: Execution completed or errored (Status: ${data.status}). Hiding debugger panel.`, { conversationId });
       setIsDebugPaused(false);
       setDebugState(null);
+      setDebugSessionActive(false);
     } else {
        // For other statuses ('running', 'awaiting_tool_approval'), keep the debugger panel state as is.
        log.debug(`API Response: Status is '${data.status}'. Debugger panel visibility unchanged (currently ${isDebugPaused ? 'visible' : 'hidden'}).`, { conversationId });
@@ -1364,8 +1371,10 @@ const Chat: React.FC = () => {
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
     setError(null);
-    setIsDebugPaused(false); // Assume we are exiting explicit pause
-    setDebugState(null);
+    setIsDebugPaused(false); // No longer paused — running until the next pause/end.
+    // Keep debugState + debugSessionActive so the panel stays open and shows live
+    // progress while continuing (it repopulates on the next pause); previously
+    // nulling debugState here made the panel vanish until the next breakpoint.
     await openEventStream(currentConversationId);
     try {
       const data = await chatService.debugContinue(currentConversationId);
@@ -1446,6 +1455,7 @@ const Chat: React.FC = () => {
     setIsLoading(false);
     setLoadingConversationId(null);
     markConvRunning(currentConversationId, false);
+    setDebugSessionActive(false);
     closeEventStream();
     setPendingToolCalls(null);
 
@@ -1467,6 +1477,7 @@ const Chat: React.FC = () => {
     log.info('Closing debugger panel', { conversationId: currentConversationId });
     setIsDebugPaused(false);
     setDebugState(null);
+    setDebugSessionActive(false);
     await handleCancelRequest();
   };
 
@@ -1476,6 +1487,10 @@ const Chat: React.FC = () => {
     isHandleEditMessageDefined: typeof handleEditMessage === 'function'
   });
   // --- End logging ---
+
+  // The debugger panel stays open for the whole debug session (not just while
+  // paused), so it doesn't flicker shut while a step/continue is executing.
+  const debugPanelOpen = (debugSessionActive || isDebugPaused) && !!debugState && !!currentConversationId;
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
@@ -1509,7 +1524,7 @@ const Chat: React.FC = () => {
       {/* Main Content Area (Chat or Chat + Debugger) */}
       <Grid container sx={{ flex: 1, height: '100%' }}>
         {/* Chat Area */}
-        <Grid item xs={isDebugPaused ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: isDebugPaused ? 1 : 0, borderColor: 'divider' }}>
+        <Grid item xs={debugPanelOpen ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: debugPanelOpen ? 1 : 0, borderColor: 'divider' }}>
           {/* Flow selector - Use summary data */}
           <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
             <FlowSelector
@@ -1660,8 +1675,8 @@ const Chat: React.FC = () => {
         </Box>
         </Grid> {/* End Chat Area Grid */}
 
-        {/* Debugger Area (Conditional) */}
-        {isDebugPaused && debugState && currentConversationId && (
+        {/* Debugger Area (open for the whole debug session, not only when paused) */}
+        {debugPanelOpen && (
           <Grid item xs={6} sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <DebuggerCanvas
               debugState={debugState}

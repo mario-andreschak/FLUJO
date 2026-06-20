@@ -150,6 +150,14 @@ export interface SharedState {
     breakpoints?: string[];
     /** The node we most recently paused at for a breakpoint, so a resume from it does not immediately re-break. */
     lastBreakNodeId?: string;
+    /**
+     * Tool calls a Process node's model just produced that are waiting to be
+     * executed, captured ONLY while single-stepping in the debugger. It lets a
+     * step pause *before* running the tools (so the user can inspect the model's
+     * tool calls); the next step executes them at the top of the loop and pauses
+     * *after* the results come back. Unset during normal (non-debug) runs.
+     */
+    debugPendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
