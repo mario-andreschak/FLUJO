@@ -324,6 +324,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
           <Button
             variant="contained"
             color="primary"
+            data-tour="add-mcp-server"
             onClick={() => {
               // Ensure editing server is null when adding a new server
               setEditingServer(null);

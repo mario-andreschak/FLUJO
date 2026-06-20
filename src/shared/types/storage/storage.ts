@@ -44,9 +44,18 @@ export interface UpdateSettings {
 }
 
 /**
+ * Onboarding / guided-tour settings interface
+ */
+export interface OnboardingSettings {
+  /** True once the user has finished or skipped the first-run guided tour. */
+  completed: boolean;
+}
+
+/**
  * Settings interface containing all application settings
  */
 export interface Settings {
   speech: SpeechSettings;
   update?: UpdateSettings;
+  onboarding?: OnboardingSettings;
 }

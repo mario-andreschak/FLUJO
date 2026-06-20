@@ -15,6 +15,7 @@ import GlobalEnvSettings from './GlobalEnvSettings';
 import BackupSettings from './BackupSettings';
 import SpeechRecognitionSettings from './SpeechRecognitionSettings';
 import UpdateSettings from './UpdateSettings';
+import OnboardingSettings from './OnboardingSettings';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -123,6 +124,22 @@ export default function Settings() {
           </AccordionSummary>
           <AccordionDetails>
             <UpdateSettings />
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          expanded={expanded === 'onboarding'}
+          onChange={handleChange('onboarding')}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="onboarding-content"
+            id="onboarding-header"
+          >
+            <Typography variant="h6">Onboarding</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <OnboardingSettings />
           </AccordionDetails>
         </Accordion>
 

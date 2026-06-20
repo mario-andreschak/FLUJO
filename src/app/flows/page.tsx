@@ -410,6 +410,7 @@ const FlowsPage = () => {
                 color="primary"
                 startIcon={<AddIcon />}
                 onClick={createNewFlow}
+                data-tour="new-flow"
               >
                 New Flow
               </Button>

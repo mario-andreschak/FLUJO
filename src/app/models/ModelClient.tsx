@@ -205,6 +205,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             color="primary"
             startIcon={<AddIcon />}
             onClick={handleAdd}
+            data-tour="add-model"
           >
             Add Model
           </Button>
