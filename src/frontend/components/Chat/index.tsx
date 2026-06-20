@@ -81,6 +81,22 @@ const Chat: React.FC = () => {
 
   // State for ongoing chat completion requests (send/poll)
   const [isLoading, setIsLoading] = useState(false);
+  // Which conversations currently have a run in flight. This is the per-conversation
+  // source of truth for gating the input, so a run in one conversation no longer
+  // disables the input of every other conversation (enables parallel use). It is
+  // intentionally isolated from the single live-stream machinery (isLoading /
+  // loadingConversationId), which still scopes the live indicator to the one
+  // conversation being viewed.
+  const [runningConvs, setRunningConvs] = useState<Set<string>>(new Set());
+  const markConvRunning = useCallback((conversationId: string, running: boolean) => {
+    if (!conversationId) return;
+    setRunningConvs(prev => {
+      if (running === prev.has(conversationId)) return prev;
+      const next = new Set(prev);
+      if (running) next.add(conversationId); else next.delete(conversationId);
+      return next;
+    });
+  }, []);
   const [error, setError] = useState<string | null>(null); // General error display
 
   // Other states
@@ -90,6 +106,11 @@ const Chat: React.FC = () => {
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
   const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
+  // Whether a debug session is active (panel should stay open). Decoupled from
+  // isDebugPaused so the debugger panel does NOT vanish while a step is executing
+  // (between pauses) — it stays open and shows live progress, then re-populates
+  // when the next pause arrives. Cleared when the session ends or is closed.
+  const [debugSessionActive, setDebugSessionActive] = useState<boolean>(false);
 
   // Live execution stats, driven by the SSE event stream while a run is active.
   const [liveStats, setLiveStats] = useState<
@@ -452,12 +473,14 @@ const Chat: React.FC = () => {
         // Flip the UI to paused; the awaited POST response carries the full
         // debugState (trace + current node) and populates the debugger panel.
         setIsLoading(false);
+        if (event.conversationId) markConvRunning(event.conversationId, false);
         setIsDebugPaused(true);
         break;
       case 'run:done':
         setLiveStats(null);
         setIsLoading(false);
         setLoadingConversationId(null);
+        if (event.conversationId) markConvRunning(event.conversationId, false);
         closeEventStream();
         // Only refresh the view if this run is the one being viewed (a
         // background run must not hijack the displayed conversation).
@@ -477,7 +500,7 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation, fetchConversations]);
+  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -527,6 +550,7 @@ const Chat: React.FC = () => {
     loadingConversationIdRef.current = currentConversationId; // guard re-entry before state commits
     setIsLoading(true);
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setLiveStats(prev => prev ?? { totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
     openEventStream(currentConversationId, 0); // replay buffered events from the start
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -755,11 +779,18 @@ const Chat: React.FC = () => {
   const handleApiResponse = useCallback((data: any, conversationId: string) => {
     log.verbose('Handling API response data', JSON.stringify(data));
 
+    // Keep the per-conversation running set in sync from the response status, for
+    // every funnel (send/edit/respond/debug). Only 'running' keeps the input
+    // disabled here; awaiting-approval / paused-debug are handled by the
+    // viewed-conversation gates (pendingToolCalls / isDebugPaused).
+    markConvRunning(conversationId, data.status === 'running');
+
     // --- Check for Debug Paused State ---
     if (data.status === 'paused_debug' && data.debugState) {
       log.info('API Response: Paused for debugging', { conversationId });
       setDebugState(data.debugState as SharedState);
       setIsDebugPaused(true);
+      setDebugSessionActive(true);
       setIsLoading(false); // Stop general loading indicator
       setLoadingConversationId(null);
       closeEventStream();
@@ -793,6 +824,7 @@ const Chat: React.FC = () => {
       log.info(`API Response: Execution completed or errored (Status: ${data.status}). Hiding debugger panel.`, { conversationId });
       setIsDebugPaused(false);
       setDebugState(null);
+      setDebugSessionActive(false);
     } else {
        // For other statuses ('running', 'awaiting_tool_approval'), keep the debugger panel state as is.
        log.debug(`API Response: Status is '${data.status}'. Debugger panel visibility unchanged (currently ${isDebugPaused ? 'visible' : 'hidden'}).`, { conversationId });
@@ -885,7 +917,7 @@ const Chat: React.FC = () => {
 
     return false; // Indicate standard response was handled
      // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream]);
+  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning]);
 
 
   // Function to stop polling (legacy interval; live updates now use SSE)
@@ -929,6 +961,7 @@ const Chat: React.FC = () => {
     setError(null);
     setIsLoading(true); // Set loading true for the API call itself
     setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
+    markConvRunning(conversation.id, true);
     // Seed live stats immediately so the indicator shows 0 tokens / 0s right away.
     setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
     // Subscribe to live events BEFORE issuing the (blocking) POST so no early
@@ -1088,6 +1121,7 @@ const Chat: React.FC = () => {
       stopPolling();
       setIsLoading(false); // Stop loading on error
       setLoadingConversationId(null);
+      markConvRunning(conversation.id, false);
       closeEventStream();
 
     } finally {
@@ -1152,6 +1186,7 @@ const Chat: React.FC = () => {
       setError(null);
       setIsLoading(true);
       setLoadingConversationId(updatedDetailedConv.id);
+      markConvRunning(updatedDetailedConv.id, true);
       setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
       await openEventStream(updatedDetailedConv.id);
       try {
@@ -1217,6 +1252,7 @@ const Chat: React.FC = () => {
         setError(err instanceof Error ? err.message : 'Failed to send edited message');
         setIsLoading(false);
         setLoadingConversationId(null);
+        markConvRunning(updatedDetailedConv.id, false);
         closeEventStream();
       }
     }
@@ -1268,6 +1304,7 @@ const Chat: React.FC = () => {
     setPendingToolCalls(null);
     setIsLoading(true); // Indicate processing and potentially restart polling
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     await openEventStream(currentConversationId);
 
@@ -1291,6 +1328,7 @@ const Chat: React.FC = () => {
       }
       setError(errorMessage);
       setIsLoading(false); // Stop loading on error since polling won't restart
+      markConvRunning(currentConversationId, false);
     }
   };
 
@@ -1308,6 +1346,7 @@ const Chat: React.FC = () => {
     log.info('Handling debug step request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during step
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     await openEventStream(currentConversationId);
     try {
@@ -1317,6 +1356,7 @@ const Chat: React.FC = () => {
       log.error('Error during debug step API call', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to execute debug step.');
       setIsLoading(false); // Stop loading on error
+      markConvRunning(currentConversationId, false);
       setIsDebugPaused(false); // Exit debug mode on error? Or just show error?
       setDebugState(null);
     } finally {
@@ -1329,9 +1369,12 @@ const Chat: React.FC = () => {
     log.info('Handling debug continue request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during continue
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
-    setIsDebugPaused(false); // Assume we are exiting explicit pause
-    setDebugState(null);
+    setIsDebugPaused(false); // No longer paused — running until the next pause/end.
+    // Keep debugState + debugSessionActive so the panel stays open and shows live
+    // progress while continuing (it repopulates on the next pause); previously
+    // nulling debugState here made the panel vanish until the next breakpoint.
     await openEventStream(currentConversationId);
     try {
       const data = await chatService.debugContinue(currentConversationId);
@@ -1341,6 +1384,7 @@ const Chat: React.FC = () => {
       log.error('Error during debug continue API call', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to continue execution.');
       setIsLoading(false); // Stop loading on error
+      markConvRunning(currentConversationId, false);
     } finally {
        // setIsLoading(false); // Loading is stopped by handleApiResponse or polling
     }
@@ -1376,6 +1420,7 @@ const Chat: React.FC = () => {
     const startNodeId = debugState?.currentNodeId;
     setIsLoading(true);
     setLoadingConversationId(currentConversationId);
+    markConvRunning(currentConversationId, true);
     setError(null);
     await openEventStream(currentConversationId);
     try {
@@ -1392,10 +1437,12 @@ const Chat: React.FC = () => {
       // Safety cap reached; surface whatever the last response was.
       log.warn('Step Over hit iteration cap', { conversationId: currentConversationId });
       setIsLoading(false);
+      markConvRunning(currentConversationId, false);
     } catch (err) {
       log.error('Error during step over', { conversationId: currentConversationId, err });
       setError(err instanceof Error ? err.message : 'Failed to step over.');
       setIsLoading(false);
+      markConvRunning(currentConversationId, false);
     }
   };
 
@@ -1407,6 +1454,8 @@ const Chat: React.FC = () => {
     stopPolling();
     setIsLoading(false);
     setLoadingConversationId(null);
+    markConvRunning(currentConversationId, false);
+    setDebugSessionActive(false);
     closeEventStream();
     setPendingToolCalls(null);
 
@@ -1428,6 +1477,7 @@ const Chat: React.FC = () => {
     log.info('Closing debugger panel', { conversationId: currentConversationId });
     setIsDebugPaused(false);
     setDebugState(null);
+    setDebugSessionActive(false);
     await handleCancelRequest();
   };
 
@@ -1437,6 +1487,10 @@ const Chat: React.FC = () => {
     isHandleEditMessageDefined: typeof handleEditMessage === 'function'
   });
   // --- End logging ---
+
+  // The debugger panel stays open for the whole debug session (not just while
+  // paused), so it doesn't flicker shut while a step/continue is executing.
+  const debugPanelOpen = (debugSessionActive || isDebugPaused) && !!debugState && !!currentConversationId;
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
@@ -1470,7 +1524,7 @@ const Chat: React.FC = () => {
       {/* Main Content Area (Chat or Chat + Debugger) */}
       <Grid container sx={{ flex: 1, height: '100%' }}>
         {/* Chat Area */}
-        <Grid item xs={isDebugPaused ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: isDebugPaused ? 1 : 0, borderColor: 'divider' }}>
+        <Grid item xs={debugPanelOpen ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: debugPanelOpen ? 1 : 0, borderColor: 'divider' }}>
           {/* Flow selector - Use summary data */}
           <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
             <FlowSelector
@@ -1608,8 +1662,11 @@ const Chat: React.FC = () => {
         <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
           <ChatInput
             onSendMessage={handleSendMessage}
-            // Disable if loading details, loading response, no flow selected (check both detailed and summary), OR awaiting approval
-            disabled={isLoadingDetails || isLoading || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused} // Also disable input when paused
+            // Disable only when the VIEWED conversation is busy, so a run in one
+            // conversation no longer blocks typing/sending in another (parallel use).
+            // runningConvs scopes "busy" per-conversation; pendingToolCalls /
+            // isDebugPaused are viewed-conversation states.
+            disabled={isLoadingDetails || (!!currentConversationId && runningConvs.has(currentConversationId)) || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
             onRequireApprovalChange={setRequireApproval}
             executeInDebugger={executeInDebugger} // Pass debugger state
@@ -1618,8 +1675,8 @@ const Chat: React.FC = () => {
         </Box>
         </Grid> {/* End Chat Area Grid */}
 
-        {/* Debugger Area (Conditional) */}
-        {isDebugPaused && debugState && currentConversationId && (
+        {/* Debugger Area (open for the whole debug session, not only when paused) */}
+        {debugPanelOpen && (
           <Grid item xs={6} sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <DebuggerCanvas
               debugState={debugState}

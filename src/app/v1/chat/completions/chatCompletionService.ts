@@ -264,6 +264,11 @@ async function processChatCompletionInternal(
     if (userTurn || sharedState.debugMode === undefined) {
       sharedState.debugMode = flujodebug;
     }
+    // A genuine new user turn discards any leftover "before tool execution" debug
+    // pause from an abandoned step, so stale tool calls are never replayed.
+    if (userTurn) {
+      sharedState.debugPendingToolCalls = undefined;
+    }
     if (sharedState.debugMode) {
         if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
             sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
@@ -398,6 +403,47 @@ async function processChatCompletionInternal(
            break; // Exit the loop immediately
         }
 
+        // Debug step granularity: a previous step paused *before* executing the
+        // model's tool calls (see the TOOL_CALL_ACTION handler). Execute them now
+        // as their own step, then pause again so the user can inspect the tool
+        // results before the model is re-invoked on the next step. Only set while
+        // single-stepping, so this is inert during normal runs.
+        if (sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
+          const pendingCalls = sharedState.debugPendingToolCalls;
+          sharedState.debugPendingToolCalls = undefined;
+          log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
+          const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: pendingCalls });
+          if (!toolProcessingResult.success) {
+            log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
+            sharedState.lastResponse = { success: false, error: "Tool processing failed", errorDetails: toolProcessingResult.error };
+            currentAction = ERROR_ACTION;
+            break;
+          }
+          const toolResultMessages: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+            ...msg,
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            processNodeId: sharedState.currentNodeId
+          }));
+          sharedState.messages.push(...toolResultMessages);
+          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+          emitNewMessages(); // surface tool result messages live
+          try {
+            sharedState.updatedAt = Date.now();
+            await persistState(storageKey, sharedState);
+          } catch (error) {
+            log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
+          }
+          if (singleStep) {
+            log.info(`[Debug Step] Paused after tool execution for conv ${effectiveConvId}.`);
+            pauseForDebug();
+            break;
+          }
+          // "Continue" was pressed while a before-tools pause was pending: run the
+          // tools (done above) and keep going to the model re-invocation.
+          continue;
+        }
+
         // Breakpoint check: if the node we are about to run carries a breakpoint
         // (and we are not resuming directly from it), pause for the debugger.
         // Skipped while single-stepping: the user is already advancing one node
@@ -512,6 +558,23 @@ async function processChatCompletionInternal(
               }
               emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
               break; // Exit the loop, response formatting will handle the paused state
+            } else if (singleStep) {
+              // Debug single-step: pause *before* executing the tools so the user
+              // can inspect the model's tool calls and intervene (Stop). The tools
+              // are executed on the next step at the top of the loop, which then
+              // pauses again before the model is re-invoked. This splits the old
+              // single "model call + tool execution" step into finer steps.
+              log.info(`[Debug Step] Paused before executing ${lastAssistantMsg.tool_calls.length} tool call(s) for conv ${effectiveConvId}.`);
+              sharedState.debugPendingToolCalls = lastAssistantMsg.tool_calls;
+              FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+              try {
+                sharedState.updatedAt = Date.now();
+                await persistState(storageKey, sharedState);
+              } catch (error) {
+                log.error(`Failed to save state before debug tool pause for conv ${effectiveConvId}:`, error);
+              }
+              pauseForDebug();
+              break;
             } else {
               // Process tools internally without approval and continue loop
               log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
@@ -535,13 +598,8 @@ async function processChatCompletionInternal(
             sharedState.messages.push(...toolResultMessagesWithTimestamp);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState); // Update state map
             emitNewMessages(); // surface tool result messages live
-              // In single-step debug, pause after processing the tools instead
-              // of immediately re-invoking the model.
-              if (singleStep) {
-                log.info(`[Debug Step] Paused after internal tool processing for conv ${effectiveConvId}.`);
-                pauseForDebug();
-                break;
-              }
+              // (Single-step debug pauses *before* tool execution — handled in the
+              // `else if (singleStep)` branch above — so here we always continue.)
               // State is updated, continue to the next iteration of the while loop
               log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
               continue; // Continue loop
