@@ -11,6 +11,8 @@ irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/instal
 
 Prefer to set it up manually? See [Getting Started](#-getting-started). To remove FLUJO later, see [Uninstalling](#uninstalling-windows).
 
+## A few words in advance
+
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
 -> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
