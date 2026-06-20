@@ -24,6 +24,7 @@ jest.mock('@/backend/services/mcp', () => ({
 }));
 
 import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
+import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 
 const mockService = mcpService as unknown as {
@@ -59,10 +60,19 @@ describe('ToolHandler.processMCPNodes', () => {
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('expected success');
     const names = result.value.availableTools.map(t => t.name);
+    // Tools are namespaced with the OpenAI-safe scheme (#16) and carry server +
+    // originalName so the call can be decoded later.
     expect(names).toEqual([
-      '_-_-_demo-mcp-server_-_-_demo_read',
-      '_-_-_demo-mcp-server_-_-_demo_search',
+      encodeToolName('demo-mcp-server', 'demo_read'),
+      encodeToolName('demo-mcp-server', 'demo_search'),
     ]);
+    expect(result.value.availableTools.map(t => ({ server: t.server, originalName: t.originalName }))).toEqual([
+      { server: 'demo-mcp-server', originalName: 'demo_read' },
+      { server: 'demo-mcp-server', originalName: 'demo_search' },
+    ]);
+    for (const name of names) {
+      expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    }
   });
 
   it('propagates a connection failure instead of silently returning no tools', async () => {

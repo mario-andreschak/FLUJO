@@ -9,6 +9,7 @@ import { Result } from '../errors';
 import { createToolError, createMCPError } from '../errorFactory';
 import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
+import { encodeToolName } from './toolNamespace';
 import OpenAI from 'openai';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
@@ -228,7 +229,8 @@ export class ToolHandler {
             .filter(tool => enabledTools.includes(tool.name))
             .map(tool => ({
               originalName: tool.name,
-              name: `_-_-_${boundServer}_-_-_${tool.name}`,
+              server: boundServer,
+              name: encodeToolName(boundServer, tool.name),
               description: tool.description,
               inputSchema: tool.inputSchema
             }));

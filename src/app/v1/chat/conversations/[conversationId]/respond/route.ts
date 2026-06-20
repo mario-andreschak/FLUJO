@@ -89,7 +89,7 @@ export async function POST(
     if (action === 'approve') {
       log.info(`Approving tool call`, { requestId, conversationId, toolCallId });
       // Process *only* the approved tool call
-      const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: [toolCallToProcess] });
+      const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: [toolCallToProcess], toolNameMap: sharedState.toolNameMap });
 
       if (!toolProcessingResult.success) {
         log.error(`Internal tool processing failed after approval`, { requestId, conversationId, toolCallId, error: toolProcessingResult.error });

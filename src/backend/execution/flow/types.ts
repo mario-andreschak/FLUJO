@@ -159,6 +159,14 @@ export interface SharedState {
      */
     debugPendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
 
+    /**
+     * Maps each model-facing MCP tool name (mcp_<slug>_<hash>, see toolNamespace.ts)
+     * back to its (server, tool). Populated when tools are bound for a Process node
+     * and persisted so a tool-approval resume (a separate request) can still decode
+     * the call. Legacy `_-_-_SERVER_-_-_TOOL` names decode without this map.
+     */
+    toolNameMap?: Record<string, { server: string; tool: string }>;
+
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
     usage?: UsageTotals;
@@ -183,6 +191,8 @@ export interface HandoffToolInfo {
 export interface ToolDefinition {
     name: string;
     originalName?: string;
+    /** Source MCP server, used to decode the model-facing name back to (server, tool). */
+    server?: string;
     description?: string;
     inputSchema: Record<string, unknown>;
 }

@@ -43,6 +43,7 @@ import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import { ChatMessage, Attachment } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import shared type
+import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { createLogger } from '@/utils/logger'; // Import the logger
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
@@ -383,8 +384,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                 </Typography>
 
                 {message.tool_calls.map((toolCall, tcIndex) => { // Added index for key
-                  const parts = toolCall.function.name.split('_-_-_');
-                  const toolName = parts.length === 3 ? parts[2] : toolCall.function.name;
+                  const toolName = displayToolName(toolCall.function.name);
                   let formattedArgs = toolCall.function.arguments;
                   try {
                     const parsedArgs = JSON.parse(toolCall.function.arguments);
@@ -657,8 +657,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             The assistant wants to use the following tool(s). Please approve or reject each request.
           </Typography>
           {pendingToolCalls.map((toolCall, ptcIndex) => { // Added index for key
-            const parts = toolCall.function.name.split('_-_-_');
-            const toolName = parts.length === 3 ? parts[2] : toolCall.function.name;
+            const toolName = displayToolName(toolCall.function.name);
             let formattedArgs = toolCall.function.arguments;
             try {
               const parsedArgs = JSON.parse(toolCall.function.arguments);
