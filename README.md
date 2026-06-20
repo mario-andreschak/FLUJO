@@ -3,7 +3,8 @@ FLUJO is still an early preview!
 
 ## ⚡ Quick Install (Windows)
 
-Install everything (Git, Node.js, Python, uv), clone FLUJO, build it, and optionally start it with a single PowerShell command:
+Install everything (Git, Node.js, Python, uv), clone FLUJO, build it, and optionally start it with a single PowerShell command.
+Press start, type powershell, press Enter, copy & paste the command below and press Enter again.
 
 ```powershell
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
