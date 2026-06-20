@@ -44,7 +44,7 @@ export const API_GROUPS: ApiGroup[] = [
     id: 'openai',
     name: 'Chat — OpenAI-compatible',
     description:
-      'A drop-in OpenAI-compatible surface. Point any OpenAI SDK at this base URL and use a flow as the "model" (id format flow-<NAME>). Also mirrors Ollama\'s tags endpoint.',
+      'A drop-in OpenAI-compatible surface. In OpenAI-compatible clients (Roo Code, Cline, Cursor, the OpenAI SDK, …) set the Base URL to this instance + "/v1" (e.g. http://localhost:4200/v1) and the model to a flow id (format flow-<NAME>, as listed by /v1/models).',
     endpoints: [
       {
         method: 'POST',
@@ -69,12 +69,6 @@ export const API_GROUPS: ApiGroup[] = [
         path: '/v1/models',
         summary: 'List all flows as OpenAI-style models.',
         response: '{ object: "list", data: [{ id: "flow-<NAME>", object: "model" }, ...] }',
-      },
-      {
-        method: 'GET',
-        path: '/v1/api/tags',
-        summary: 'Ollama-compatible tags endpoint; lists flows in Ollama model format.',
-        response: '{ models: [{ name: "flow-<NAME>", modified_at, size, digest, details }, ...] }',
       },
     ],
   },
@@ -287,6 +281,22 @@ export const API_GROUPS: ApiGroup[] = [
         summary: 'Cancel an in-progress tool execution; force-reconnects if no token is supplied.',
         paramsLabel: 'Body',
         params: [{ name: 'reason', type: 'string', required: true, description: 'Cancellation reason.' }],
+      },
+    ],
+  },
+  {
+    id: 'mcp-proxy',
+    name: 'FLUJO as an MCP server (proxy)',
+    description:
+      'Re-expose a configured MCP server to EXTERNAL MCP clients (Claude Desktop, Cursor, Cline, mcp-inspector, …) so you configure the server once in FLUJO and reach it everywhere. Enable per server via the "Expose to external apps" toggle on its card. In your MCP client, add a Streamable-HTTP server with the URL below. One downstream server per endpoint, so tool names are unchanged. Localhost-only for now (no auth token in this version — see the security roadmap).',
+    endpoints: [
+      {
+        method: 'POST',
+        alsoMethods: ['GET', 'DELETE'],
+        path: '/mcp-proxy/{server}',
+        summary:
+          'A Streamable-HTTP MCP endpoint that forwards tools/list and tools/call to the named downstream MCP server. {server} is the configured server name; it must have "Expose to external apps" enabled (otherwise 404). Rejects non-localhost requests.',
+        response: 'MCP JSON-RPC over Streamable HTTP (handled by your MCP client, not called directly).',
       },
     ],
   },

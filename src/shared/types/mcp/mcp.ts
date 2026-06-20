@@ -1,5 +1,4 @@
-import { z } from 'zod';
-import { ToolSchema } from '@modelcontextprotocol/sdk/types.js';
+import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -24,6 +23,11 @@ export type MCPManagerConfig = {
   env: Record<string, EnvVarValue>
   _buildCommand: string;
   _installCommand: string;
+  /**
+   * When true, FLUJO re-exposes this server's tools to external MCP clients at
+   * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
+   */
+  exposeAsMcpServer?: boolean;
 }
 
 export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
@@ -73,8 +77,9 @@ export interface MCPServiceResponse<T = unknown> {
   requiresAuthentication?: boolean;
 }
 
-// Using the official type from MCP SDK
-export type MCPToolResponse = z.infer<typeof ToolSchema>;
+// Using the official type from MCP SDK (the SDK exports the inferred TS type directly,
+// avoiding a cross-zod-version inference mismatch).
+export type MCPToolResponse = Tool;
 
 export interface MCPConnectionAttempt {
   requestId: string;
