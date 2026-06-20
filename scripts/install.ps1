@@ -95,18 +95,30 @@ function Install-Prereq {
         [string]$WingetId,
         [string]$DisplayName
     )
-    if (Test-Command $CommandName) {
+    # Record whether the command was already on the system BEFORE we touch it, so
+    # the uninstaller can default to removing only what FLUJO installed itself.
+    $preexisting = Test-Command $CommandName
+    if ($preexisting) {
         Write-Ok "$DisplayName already installed ($((Get-Command $CommandName).Source))"
-        return
-    }
-    Write-Step "Installing $DisplayName via winget ($WingetId)"
-    winget install --id $WingetId -e --source winget `
-        --accept-source-agreements --accept-package-agreements
-    Update-SessionEnvironment
-    if (Test-Command $CommandName) {
-        Write-Ok "$DisplayName installed."
     } else {
-        Write-Warn2 "$DisplayName installed but '$CommandName' is not yet on PATH. You may need to reopen the terminal."
+        Write-Step "Installing $DisplayName via winget ($WingetId)"
+        # Pipe to Out-Host so winget's stdout goes to the console and does NOT leak
+        # into this function's return value (which the caller captures as the
+        # prerequisite record for the uninstall manifest).
+        winget install --id $WingetId -e --source winget `
+            --accept-source-agreements --accept-package-agreements | Out-Host
+        Update-SessionEnvironment
+        if (Test-Command $CommandName) {
+            Write-Ok "$DisplayName installed."
+        } else {
+            Write-Warn2 "$DisplayName installed but '$CommandName' is not yet on PATH. You may need to reopen the terminal."
+        }
+    }
+    return [PSCustomObject]@{
+        Command     = $CommandName
+        WingetId    = $WingetId
+        DisplayName = $DisplayName
+        Preexisting = $preexisting
     }
 }
 
@@ -173,6 +185,48 @@ function Add-DesktopShortcut {
     }
 }
 
+# Record what this install did, so scripts\uninstall.ps1 can cleanly reverse it.
+# Stored in the FLUJO-cli bin dir (NOT inside $AppDir, which the uninstaller
+# deletes) so it survives folder reinstalls and is readable after the app is gone.
+function Write-InstallManifest {
+    param(
+        [string]$AppDir,
+        [object[]]$Prereqs,
+        [bool]$DesktopShortcut,
+        [bool]$ExecutionPolicyChanged
+    )
+    try {
+        $binDir = Join-Path $env:LOCALAPPDATA 'FLUJO-cli'
+        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+        $manifest = [PSCustomObject]@{
+            schema                 = 1
+            installDir             = $AppDir
+            binDir                 = $binDir
+            branch                 = $Branch
+            repoUrl                = $RepoUrl
+            desktopShortcut        = $DesktopShortcut
+            executionPolicyChanged = $ExecutionPolicyChanged
+            prerequisites          = @($Prereqs | Where-Object { $_ } | ForEach-Object {
+                [PSCustomObject]@{
+                    command     = $_.Command
+                    wingetId    = $_.WingetId
+                    displayName = $_.DisplayName
+                    preexisting = $_.Preexisting
+                }
+            })
+        }
+
+        $manifestPath = Join-Path $binDir 'install-manifest.json'
+        Set-Content -LiteralPath $manifestPath -Value ($manifest | ConvertTo-Json -Depth 5) -Encoding UTF8
+        Write-Ok "Uninstall manifest written: $manifestPath"
+    } catch {
+        # Non-fatal: the install is fine without it; the uninstaller falls back to
+        # detect-and-ask (defaulting to keep) when no manifest is present.
+        Write-Warn2 "Could not write uninstall manifest: $($_.Exception.Message)"
+    }
+}
+
 # Ensure the user can run .ps1 shims (npm, npx, ...) in normal terminals from
 # now on - not just inside this installer's process. FLUJO builds and runs MCP
 # servers (npm/npx/uv/python) on demand later, and developers will run npm by
@@ -201,7 +255,7 @@ function Set-PersistentExecutionPolicy {
     $current = Get-FutureExecutionPolicy
     if ($current -in @('RemoteSigned', 'Unrestricted', 'Bypass')) {
         Write-Ok "Execution policy already allows scripts in new terminals (effective = $current)."
-        return
+        return $false
     }
 
     $consent = $false
@@ -221,6 +275,7 @@ function Set-PersistentExecutionPolicy {
             Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop
             Write-Ok "Execution policy set to RemoteSigned (CurrentUser). Revert anytime with:"
             Write-Ok "    Set-ExecutionPolicy -ExecutionPolicy Restricted -Scope CurrentUser"
+            return $true
         } catch {
             # Most commonly a System.Security.SecurityException ("Security error.")
             # when security software or a locked-down HKCU ACL blocks writing the
@@ -230,11 +285,13 @@ function Set-PersistentExecutionPolicy {
             Write-Warn2 "This install will still proceed (policy is bypassed for this session)."
             Write-Warn2 "If npm/npx fail in new terminals later, run this once in an admin PowerShell:"
             Write-Warn2 "    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine"
+            return $false
         }
     } else {
         Write-Warn2 "Skipped. This install proceeds (session-only bypass), but npm/npx may fail"
         Write-Warn2 "in new terminals later until you run:"
         Write-Warn2 "    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser"
+        return $false
     }
 }
 
@@ -277,24 +334,28 @@ if (-not $startAfter) {
     if ($env:FLUJO_START -in @('1', 'true', 'yes')) {
         $startAfter = $true
     } else {
-        $startAnswer = Read-Host "Start FLUJO after building? (y/N)"
-        $startAfter = ($startAnswer -match '^(y|yes)$')
+        $startAnswer = Read-Host "Start FLUJO after building? (Y/n)"
+        $startAfter = -not ($startAnswer -match '^\s*(n|no)\s*$')
     }
 }
 
 # Last question: persist the script-execution policy for future terminals / on-
 # demand MCP server builds (with the user's consent). Skipped automatically if
 # scripts are already allowed. After this, the install runs without interruption.
-Set-PersistentExecutionPolicy
+$policyChanged = Set-PersistentExecutionPolicy
 
 # ---------------------------------------------------------------------------
 # 2. Install prerequisites via winget.
 # ---------------------------------------------------------------------------
 # npm ships with Node.js, so there is no separate winget package for it.
-Install-Prereq -CommandName 'git'    -WingetId 'Git.Git'            -DisplayName 'Git'
-Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS'      -DisplayName 'Node.js (includes npm)'
-Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
-Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
+# Each Install-Prereq returns a record (incl. whether it was already present)
+# that is folded into the uninstall manifest below.
+$prereqResults = @(
+    Install-Prereq -CommandName 'git'    -WingetId 'Git.Git'            -DisplayName 'Git'
+    Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS'      -DisplayName 'Node.js (includes npm)'
+    Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
+    Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
+)
 
 Update-SessionEnvironment
 
@@ -340,6 +401,10 @@ try {
     if ($makeShortcut) {
         Add-DesktopShortcut -Launcher $flujoLauncher -AppDir $InstallDir
     }
+
+    # Record everything we did, so scripts\uninstall.ps1 can reverse it precisely.
+    Write-InstallManifest -AppDir $InstallDir -Prereqs $prereqResults `
+        -DesktopShortcut $makeShortcut -ExecutionPolicyChanged $policyChanged
 
     if ($startAfter) {
         Write-Step "Starting FLUJO (npm start) - open http://localhost:4200"

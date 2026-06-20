@@ -9,7 +9,7 @@ Install everything (Git, Node.js, Python, uv), clone FLUJO, build it, and option
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
 ```
 
-Prefer to set it up manually? See [Getting Started](#-getting-started).
+Prefer to set it up manually? See [Getting Started](#-getting-started). To remove FLUJO later, see [Uninstalling](#uninstalling-windows).
 
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
 -> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
@@ -152,6 +152,33 @@ $env:FLUJO_DIR = "D:\Apps\FLUJO"; $env:FLUJO_START = "1"; irm https://raw.github
 ```
 
 See [`scripts/install.ps1`](scripts/install.ps1) for all options.
+
+### Uninstalling (Windows)
+
+To remove FLUJO, run the uninstaller:
+
+```powershell
+irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/uninstall.ps1 | iex
+```
+
+or, from inside your install folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
+```
+
+It asks, per prerequisite (Git, Node.js, Python, uv), whether to remove it — defaulting
+to **yes** for ones FLUJO installed and **no** for ones that were already on your system
+— then removes the `flujo` command and the FLUJO folder.
+
+> ⚠️ **This permanently deletes your data.** All flows, encrypted API keys, MCP server
+> configs and chat history live in `<install>\db\` and are removed with the folder. Use
+> FLUJO's built-in backup/export first if you want to keep them.
+
+Installs created before this feature have no manifest; the uninstaller then defaults every
+prerequisite to **keep** (it can't tell which FLUJO installed). Re-running the installer
+once writes the manifest for future uninstalls. See
+[`scripts/uninstall.ps1`](scripts/uninstall.ps1) for details.
 
 ## 📖 Usage
 
