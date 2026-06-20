@@ -71,10 +71,6 @@ async function handle(request: Request, serverName: string): Promise<Response> {
   });
 
   const { req, res } = toReqRes(request);
-  res.on('close', () => {
-    void transport.close();
-    void server.close();
-  });
 
   try {
     await server.connect(transport);
@@ -86,6 +82,22 @@ async function handle(request: Request, serverName: string): Promise<Response> {
   } catch (error) {
     log.error('Proxy request failed', { serverName, error });
     return jsonError(500, 'Internal proxy error.');
+  } finally {
+    // Close once, here — NOT on a res 'close' listener. By the time the synthetic
+    // fetch-to-node response has been turned into a Response, its controller is
+    // already finalized, so a late transport.close() double-closes it and throws
+    // "Controller is already closed" as an UNCAUGHT exception. Swallow the benign
+    // already-closed errors; for stateless JSON the body is buffered by now.
+    try {
+      await transport.close();
+    } catch {
+      /* already closed */
+    }
+    try {
+      await server.close();
+    } catch {
+      /* already closed */
+    }
   }
 }
 
