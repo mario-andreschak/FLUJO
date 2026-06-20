@@ -78,15 +78,10 @@ async function handle(request: Request, serverName: string): Promise<Response> {
 
   try {
     await server.connect(transport);
-    let body: unknown;
-    if (request.method === 'POST') {
-      try {
-        body = await request.json();
-      } catch {
-        body = undefined; // let the transport return a proper JSON-RPC parse error
-      }
-    }
-    await transport.handleRequest(req, res, body);
+    // Let the transport read & parse the body from the (fetch-to-node) Node stream.
+    // Do NOT call request.json() here: that locks the same body ReadableStream that
+    // `req` streams from, causing "Invalid state: ReadableStream is locked".
+    await transport.handleRequest(req, res);
     return await toFetchResponse(res);
   } catch (error) {
     log.error('Proxy request failed', { serverName, error });
