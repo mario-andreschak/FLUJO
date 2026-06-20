@@ -23,6 +23,11 @@ export type MCPManagerConfig = {
   env: Record<string, EnvVarValue>
   _buildCommand: string;
   _installCommand: string;
+  /**
+   * When true, FLUJO re-exposes this server's tools to external MCP clients at
+   * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
+   */
+  exposeAsMcpServer?: boolean;
 }
 
 export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {

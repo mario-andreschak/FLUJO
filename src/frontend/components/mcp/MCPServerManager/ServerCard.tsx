@@ -14,7 +14,10 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import LockIcon from '@mui/icons-material/Lock';
 import LoginIcon from '@mui/icons-material/Login';
 import KeyOffIcon from '@mui/icons-material/KeyOff';
+import PublicIcon from '@mui/icons-material/Public';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import Spinner from '@/frontend/components/shared/Spinner';
+import { mcpService } from '@/frontend/services/mcp';
 import TransportBadge from './TransportBadge';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -55,6 +58,7 @@ interface ServerCardProps {
   onSelect?: (selected: boolean) => void; // For bulk selection
   selectionMode?: boolean; // Whether selection mode is active
   hasOAuthTokens?: boolean; // Whether the server has OAuth tokens that can be reset
+  exposeAsMcpServer?: boolean; // Whether this server is re-exposed at /mcp-proxy/<name> (#17A)
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -76,6 +80,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onSelect,
   selectionMode = false,
   hasOAuthTokens = false,
+  exposeAsMcpServer = false,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
@@ -83,7 +88,41 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [toastSeverity, setToastSeverity] = useState<'success' | 'error'>('success');
   const [isPolling, setIsPolling] = useState(false);
   const [isResettingTokens, setIsResettingTokens] = useState(false);
+  // Local optimistic state for the "expose as MCP server" toggle (#17A).
+  const [exposed, setExposed] = useState(exposeAsMcpServer);
   const muiTheme = useTheme();
+
+  // Keep the toggle in sync if the parent reloads configs.
+  useEffect(() => {
+    setExposed(exposeAsMcpServer);
+  }, [exposeAsMcpServer]);
+
+  // The URL external MCP clients paste in. Only meaningful in the browser.
+  const proxyUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/mcp-proxy/${encodeURIComponent(name)}` : '';
+
+  const handleToggleExpose = async (checked: boolean) => {
+    setExposed(checked); // optimistic
+    const result = await mcpService.updateServerConfig(name, { exposeAsMcpServer: checked });
+    if ('success' in result && result.success) {
+      setToastMessage(
+        checked ? 'Server is now exposed to external apps.' : 'Server is no longer exposed.',
+      );
+      setToastSeverity('success');
+    } else {
+      setExposed(!checked); // revert
+      setToastMessage('Failed to update exposure setting.');
+      setToastSeverity('error');
+    }
+    setShowToast(true);
+  };
+
+  const handleCopyProxyUrl = () => {
+    navigator.clipboard.writeText(proxyUrl);
+    setToastMessage('Endpoint URL copied to clipboard.');
+    setToastSeverity('success');
+    setShowToast(true);
+  };
   
   const statusColor = {
     connected: 'success.main',
@@ -262,7 +301,43 @@ const ServerCard: React.FC<ServerCardProps> = ({
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.875rem' }} noWrap title={path}>
           {path}
         </Typography>
-        
+
+        {/* Expose to external apps (#17A) */}
+        <Box
+          sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <PublicIcon fontSize="small" sx={{ mr: 0.5, color: exposed ? 'primary.main' : 'text.disabled' }} />
+            <Switch
+              checked={exposed}
+              onChange={(e) => handleToggleExpose(e.target.checked)}
+              size="small"
+            />
+            <Tooltip title="Re-expose this server's tools to external MCP clients (Claude Desktop, Cursor, …) at a local URL.">
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                Expose to external apps
+              </Typography>
+            </Tooltip>
+          </Box>
+          {exposed && (
+            <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ flex: 1, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={proxyUrl}
+              >
+                {proxyUrl}
+              </Typography>
+              <Tooltip title="Copy endpoint URL">
+                <IconButton size="small" onClick={handleCopyProxyUrl}>
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
+        </Box>
+
         {status === 'error' && (
           <Box sx={{ mt: 1, mb: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
