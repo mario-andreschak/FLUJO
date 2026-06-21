@@ -1,36 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyStorage } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
-import { mcpService } from '@/backend/services/mcp';
+import { ensureBackendInitialized } from '@/backend/init';
 
 const log = createLogger('app/api/init/route');
 
 /**
- * API route for application initialization
- * This runs server-side initialization tasks
+ * API route for application initialization.
+ *
+ * Backend initialization is normally triggered server-side at process startup
+ * by the instrumentation hook (src/instrumentation.ts), so the app no longer
+ * depends on the frontend calling this. This route remains as an idempotent
+ * fallback / explicit re-trigger: ensureBackendInitialized() is memoized, so
+ * calling it here simply joins the in-progress (or completed) startup run.
  */
 export async function GET(req: NextRequest) {
   const requestId = uuidv4();
   log.info(`Handling initialization request [RequestID: ${requestId}]`);
-  
+
   try {
-    // Verify storage system
-    await verifyStorage();
-    
-    // Start all enabled MCP servers
-    log.info('Initializing MCP servers');
-    await mcpService.startEnabledServers().catch(error => {
-      log.error('Failed to start enabled servers:', error);
-      // Make sure the flag is reset even if there's an unhandled error
-      if (mcpService.isStartingUp()) {
-        log.warn('Resetting startup flag after error');
-        (mcpService as any).setStartingUp(false);
-      }
-    });
-    
-    return NextResponse.json({ 
+    await ensureBackendInitialized();
+
+    return NextResponse.json({
       success: true,
       message: 'Application initialized successfully'
     });

@@ -10,11 +10,28 @@ import { executeCommand } from '@/utils/mcp/directExecution';
 declare global {
   // eslint-disable-next-line no-var
   var __mcp_recovery: Map<string, Client> | undefined;
+  // Names of servers whose connection attempt is currently in flight (initial
+  // startup sweep or a reconnect). Global-backed for the same reason as
+  // __mcp_recovery: the module instance that starts the servers may not be the
+  // one that later serves getServerStatus(), and the status route must still be
+  // able to see that a startup is in progress so it can report "connecting"
+  // instead of a misleading "configured but not connected" error.
+  // eslint-disable-next-line no-var
+  var __mcp_connecting: Set<string> | undefined;
+  // True from process boot until startEnabledServers() finishes its first sweep.
+  // eslint-disable-next-line no-var
+  var __mcp_starting_up: boolean | undefined;
 }
 
 // Initialize the global recovery map if it doesn't exist
 if (typeof global.__mcp_recovery === 'undefined') {
   global.__mcp_recovery = new Map<string, Client>();
+}
+if (typeof global.__mcp_connecting === 'undefined') {
+  global.__mcp_connecting = new Set<string>();
+}
+if (typeof global.__mcp_starting_up === 'undefined') {
+  global.__mcp_starting_up = true;
 }
 
 // Import from backend modules
@@ -54,11 +71,16 @@ export class MCPService {
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
   private lastConnectionError: Map<string, string> = new Map();
-  private isBackendStartingUp: boolean = true; // Flag to track backend startup state - true by default
   private recover_attempted: boolean = false; // Flag to track if recovery has been attempted
   private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
   private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
-  
+
+  // Servers with an in-flight connection attempt. Global-backed (see __mcp_connecting)
+  // so the set is shared across module instances / hot reloads.
+  private get connectingServers(): Set<string> {
+    return global.__mcp_connecting!;
+  }
+
   /**
    * Constructor - attempt to recover clients from global recovery map
    */
@@ -198,14 +220,14 @@ export class MCPService {
    * Check if the backend is currently starting up
    */
   isStartingUp(): boolean {
-    return this.isBackendStartingUp;
+    return global.__mcp_starting_up === true;
   }
-  
+
   /**
    * Set the backend startup state
    */
   private setStartingUp(value: boolean): void {
-    this.isBackendStartingUp = value;
+    global.__mcp_starting_up = value;
     log.info(`Backend startup state set to: ${value ? 'starting' : 'complete'}`);
   }
 
@@ -312,7 +334,12 @@ export class MCPService {
     
     const requestId = uuidv4();
     log.info(`connectServer: Starting connection for server ${config.name} [RequestID: ${requestId}]`);
-    
+
+    // Mark this server as having an in-flight connection attempt so getServerStatus()
+    // reports "connecting" (spinner + auto-poll on the MCP page) instead of an error
+    // while the attempt is running. Cleared in the finally below.
+    this.connectingServers.add(config.name);
+
     try {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
@@ -552,6 +579,11 @@ export class MCPService {
       this.lastConnectionError.set(config.name, enhancedErrorMessage);
 
       return { success: false, error: enhancedErrorMessage };
+    } finally {
+      // The attempt has settled (connected, failed, or threw) - it is no longer
+      // "connecting". A successful connection now shows as connected; a failure
+      // falls through to its real error message.
+      this.connectingServers.delete(config.name);
     }
   }
 
@@ -1042,6 +1074,22 @@ export class MCPService {
         stderrOutput: stderrOutput || undefined
       };
     } else {
+      // The backend may still be bringing this server up - either an attempt is
+      // in flight right now, or the initial startup sweep hasn't reached it yet
+      // (it's still queued). Report a transient "connecting" state so the MCP page
+      // shows a spinner and keeps polling, instead of the misleading
+      // "configured but not connected" error the user would otherwise see for the
+      // first few seconds after launch. A server that has already recorded a real
+      // connection failure falls through to that error even during startup.
+      const startupPending = this.isStartingUp() && !this.lastConnectionError.has(serverName);
+      if (this.connectingServers.has(serverName) || startupPending) {
+        log.info(`getServerStatus: Server ${serverName} is still connecting`);
+        return {
+          status: 'connecting',
+          message: 'Server is starting up. This may take a few moments.'
+        };
+      }
+
       // Check if stderr contains OAuth authentication errors
       if (stderrOutput && (stderrOutput.includes('OAuth authentication required') || stderrOutput.includes('invalid_token'))) {
         log.info(`getServerStatus: OAuth authentication error detected for ${serverName}`);
@@ -1118,25 +1166,32 @@ export class MCPService {
    */
   async startEnabledServers(): Promise<void> {
     log.info('Starting all enabled servers');
-    
+    this.setStartingUp(true);
+
     try {
       // First, clear any retry timers for disabled servers
       await this.clearRetryTimersForDisabledServers();
-      
+
       // Load configs directly from storage
       const configs = await this.loadServerConfigs();
-      
+
       // Skip if there was an error loading configs
       if (!Array.isArray(configs)) {
         log.warn('Failed to load server configs, cannot start servers');
         return;
       }
-      
+
       // Find all enabled servers
       const enabledServers = configs.filter(config => !config.disabled);
       log.info(`Found ${enabledServers.length} enabled servers to start`);
       log.debug(`${enabledServers}`);
-      
+
+      // Mark every enabled server as "connecting" up front. We connect them one at
+      // a time below, so without this the servers still waiting in the queue would
+      // report an error on the MCP page until their turn comes. connectServer()
+      // clears each entry as its attempt settles.
+      enabledServers.forEach(config => this.connectingServers.add(config.name));
+
       // Connect each enabled server
       for (const config of enabledServers) {
         try {

@@ -83,7 +83,7 @@ export function useServerStatus() {
           return {
             ...config,
             path,
-            status: status as 'connected' | 'disconnected' | 'error' | 'starting',
+            status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting',
             error: errorMessage,
             stderrOutput,
           };
@@ -149,7 +149,7 @@ export function useServerStatus() {
             s.name === serverName
               ? { 
                   ...s, 
-                  status: status as 'connected' | 'disconnected' | 'error' | 'starting', 
+                  status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                   error: errorMessage,
                   stderrOutput
                 }
@@ -257,7 +257,7 @@ export function useServerStatus() {
             s.name === config.name
               ? { 
                   ...s, 
-                  status: status as 'connected' | 'disconnected' | 'error' | 'starting', 
+                  status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                   error: errorMessage,
                   stderrOutput
                 }
@@ -355,7 +355,7 @@ export function useServerStatus() {
             server.name === config.name
               ? { 
                   ...server, 
-                  status: status as 'connected' | 'disconnected' | 'error' | 'starting', 
+                  status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                   error: errorMessage,
                   stderrOutput
                 }
@@ -439,7 +439,7 @@ export function useServerStatus() {
           s.name === serverName
             ? { 
                 ...s, 
-                status: status as 'connected' | 'disconnected' | 'error' | 'starting', 
+                status: status as 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting', 
                 error: errorMessage,
                 stderrOutput
               }
