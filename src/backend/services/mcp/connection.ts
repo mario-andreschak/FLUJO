@@ -11,6 +11,8 @@ import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { ChildProcess } from 'child_process';
 import { createOAuthClientProvider } from './oauth';
+import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
+import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -30,7 +32,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   return new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '0.2.0',
+      version: '0.2.4',
     },
     {
       // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the
@@ -221,9 +223,34 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
     }
   }
 
+  // #36: resolve bare `node`/`npm`/`npx` to absolute paths so spawning works even
+  // when FLUJO was launched outside a shell that initialized nvm (and thus inherited
+  // a PATH without the nvm Node bin dir). Runs after the .bat rewrite above so
+  // `cmd.exe` is left untouched.
+  const resolvedCommand = resolveNodeCommand(command, {
+    execPath: process.execPath,
+    platform: os.platform(),
+    dirname: path.dirname,
+    joinPath: path.join,
+    fileExists: fs.existsSync,
+  });
+  if (resolvedCommand !== command) {
+    log.debug(`Resolved Node toolchain command "${command}" to absolute path: ${resolvedCommand}`);
+    command = resolvedCommand;
+  }
+
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  const cwd = config.rootPath || config.cwd || `${SERVER_DIR_PREFIX}/${config.name}`;
+  // Use the original (pre-.bat-rewrite) command/args for runner detection so e.g.
+  // `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
+  const cwd = resolveServerCwd({
+    command: config.command,
+    args: config.args,
+    rootPath: config.rootPath,
+    cwd: config.cwd,
+    serverName: config.name,
+    defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
+  });
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 

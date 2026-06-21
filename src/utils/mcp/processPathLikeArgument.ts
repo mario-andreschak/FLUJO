@@ -18,6 +18,16 @@ export function processPathLikeArgument(arg: string, serverName?: string): strin
     return arg;
   }
 
+  // Skip scoped npm package specifiers (e.g. "@softeria/ms-365-mcp-server",
+  // "@modelcontextprotocol/server-filesystem@1.2.3"). These use "/" as a scope
+  // separator, not a path separator. Treating them as paths corrupts them - and
+  // the server-name stripping below would otherwise turn "@scope/<serverName>"
+  // into "@scope/", breaking `npx -y @scope/<serverName>` commands.
+  if (/^@[^/\s]+\/[^/\s@]+(?:@[^/\s]+)?$/.test(arg)) {
+    log.debug(`processPathLikeArgument: Detected scoped npm package, leaving unchanged: ${arg}`);
+    return arg;
+  }
+
   log.debug(`processPathLikeArgument: Processing argument: ${arg}`);
   
   // Define patterns to match path indicators

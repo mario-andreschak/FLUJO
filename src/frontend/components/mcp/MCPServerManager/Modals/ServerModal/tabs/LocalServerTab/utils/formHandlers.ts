@@ -581,97 +581,6 @@ export const handleBuild = async (
   setIsBuilding(false);
 };
 
-// MCP Protocol connection test utilities
-// These functions test actual MCP protocol compatibility, not just HTTP reachability
-
-interface TestResult {
-  success: boolean;
-  message: string;
-  details?: string;
-}
-
-/**
- * Test WebSocket connection by attempting to establish a WebSocket
- */
-const testWebSocketConnection = async (websocketUrl: string): Promise<TestResult> => {
-  return new Promise((resolve) => {
-    let ws: WebSocket | null = null;
-    let resolved = false;
-    
-    const timeoutId = setTimeout(() => {
-      if (!resolved && ws) {
-        ws.close();
-        resolved = true;
-        resolve({
-          success: false,
-          message: 'Connection timeout',
-          details: 'WebSocket connection did not establish within 10 seconds'
-        });
-      }
-    }, 10000);
-    
-    try {
-      ws = new WebSocket(websocketUrl);
-      
-      ws.onopen = () => {
-        if (!resolved) {
-          clearTimeout(timeoutId);
-          ws?.close();
-          resolved = true;
-          resolve({
-            success: true,
-            message: 'WebSocket connection test successful!',
-            details: 'WebSocket connection established successfully'
-          });
-        }
-      };
-      
-      ws.onerror = (error) => {
-        if (!resolved) {
-          clearTimeout(timeoutId);
-          ws?.close();
-          resolved = true;
-          resolve({
-            success: false,
-            message: 'WebSocket connection failed',
-            details: 'Failed to establish WebSocket connection. Check the URL and ensure the server is running.'
-          });
-        }
-      };
-      
-      ws.onclose = (event) => {
-        if (!resolved) {
-          clearTimeout(timeoutId);
-          resolved = true;
-          if (event.code === 1000 || event.code === 1001) {
-            resolve({
-              success: true,
-              message: 'WebSocket connection test successful!',
-              details: 'WebSocket connection was established and closed normally'
-            });
-          } else {
-            resolve({
-              success: false,
-              message: 'WebSocket connection closed unexpectedly',
-              details: `Close code: ${event.code}, Reason: ${event.reason || 'No reason provided'}`
-            });
-          }
-        }
-      };
-    } catch (error) {
-      if (!resolved) {
-        clearTimeout(timeoutId);
-        resolved = true;
-        resolve({
-          success: false,
-          message: 'Connection failed',
-          details: error instanceof Error ? error.message : 'Unknown error occurred'
-        });
-      }
-    }
-  });
-};
-
 export const handleRun = async (
   localConfig: MCPServerConfig,
   websocketUrl: string,
@@ -786,31 +695,47 @@ export const handleRun = async (
     return;
   }
   
-  // For WebSocket transport, test the connection
+  // For WebSocket transport, run the SAME real MCP handshake the live connection uses
+  // (FLUJO backend → WebSocketClientTransport → initialize + listTools), rather than a
+  // browser-side WebSocket probe. A raw WS open only proves the socket connects — not
+  // that the server speaks MCP — and the browser doesn't share Node's TLS trust or
+  // custom headers, so its result could diverge from real usage.
   if (localConfig.transport === 'websocket') {
     try {
-      setConsoleOutput((prev: string) => prev + `WebSocket URL: ${websocketUrl}\n`);
-      
-      const testResult = await testWebSocketConnection(websocketUrl);
-      
-      setConsoleOutput((prev: string) => prev + `Connection test result: ${testResult.message}\n`);
-      if (testResult.details) {
-        setConsoleOutput((prev: string) => prev + `Details: ${testResult.details}\n`);
-      }
-      
+      setConsoleOutput((prev: string) => prev + `Attempting to connect (via FLUJO backend) to: ${websocketUrl}\n`);
+
+      // websocketUrl from form state may be newer than what's on localConfig.
+      const testConfig = { ...localConfig, websocketUrl } as MCPServerConfig;
+      const testResult = await mcpService.testConnection(testConfig);
+
       if (testResult.success) {
         setRunCompleted(true);
+        const toolCount = testResult.data?.toolCount;
         setMessage({
           type: 'success',
-          text: 'WebSocket connection test successful!'
+          text: 'Connection test successful! Server completed the MCP handshake.'
         });
-        setConsoleOutput((prev: string) => prev + '\n✅ WebSocket connection test passed!\n');
+        setConsoleOutput((prev: string) => prev +
+          `Connection test result: MCP handshake successful${typeof toolCount === 'number' ? ` (${toolCount} tool${toolCount === 1 ? '' : 's'} discovered)` : ''}\n`);
+        setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+      } else if (testResult.requiresAuthentication) {
+        setMessage({
+          type: 'warning',
+          text: 'Server reachable but requires authentication.'
+        });
+        setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
+        if (testResult.error) {
+          setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
+        }
+        setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required credentials and test again.\n');
       } else {
         setMessage({
           type: 'error',
-          text: 'WebSocket connection test failed. Check the console for details.'
+          text: 'Connection test failed. Check the console for details.'
         });
-        setConsoleOutput((prev: string) => prev + '\n❌ WebSocket connection test failed.\n');
+        setConsoleOutput((prev: string) => prev + `Connection test result: Connection failed\n`);
+        setConsoleOutput((prev: string) => prev + `Details: ${testResult.error || 'Unknown error'}\n`);
+        setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
       }
     } catch (error) {
       console.error('Error testing WebSocket connection:', error);
@@ -825,58 +750,58 @@ export const handleRun = async (
     return;
   }
   
-  // For stdio transport, use the original process spawning logic
-  const serverPath = localConfig.rootPath || `mcp-servers/${localConfig.name}`;
-  
+  // For stdio transport, run the SAME real MCP handshake the live connection uses
+  // (FLUJO backend → createStdioTransport → cross-spawn → initialize + listTools).
+  // Going through the production path is deliberate: the test cannot pass or fail
+  // differently from actual usage, because argument handling, cwd resolution (#40),
+  // Node-path resolution (#36) and env are all identical. (This previously used a
+  // one-off `execSync` string via /api/git, which diverged from how the server is
+  // really launched and produced "works in test, fails live" confusion.)
   try {
-    setConsoleOutput((prev: string) => prev + 'Starting server process...\n');
-    
-    const response = await fetch('/api/git', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        action: 'run',
-        savePath: serverPath,
-        runCommand: isStdioConfig(localConfig) ? localConfig.command : '',
-        args: isStdioConfig(localConfig) ? localConfig.args || [] : [],
-        env: isStdioConfig(localConfig) ? localConfig.env || {} : {}
-      }),
-    });
-    
-    const result = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to run server');
+    if (isStdioConfig(localConfig)) {
+      const argString = (localConfig.args || []).join(' ');
+      setConsoleOutput((prev: string) => prev +
+        `Launching (via FLUJO backend): ${localConfig.command}${argString ? ' ' + argString : ''}\n`);
     }
-    
-    // Check if result has commandOutput
-    if (result.commandOutput) {
-      setConsoleOutput((consoleOutput: string) => consoleOutput + result.commandOutput + '\n');
+
+    const testResult = await mcpService.testConnection(localConfig);
+
+    if (testResult.success) {
+      setRunCompleted(true);
+      const toolCount = testResult.data?.toolCount;
+      setMessage({
+        type: 'success',
+        text: 'Connection test successful! Server started and completed the MCP handshake.'
+      });
+      setConsoleOutput((prev: string) => prev +
+        `Connection test result: MCP handshake successful${typeof toolCount === 'number' ? ` (${toolCount} tool${toolCount === 1 ? '' : 's'} discovered)` : ''}\n`);
+      setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+    } else if (testResult.requiresAuthentication) {
+      setMessage({
+        type: 'warning',
+        text: 'Server started but requires authentication.'
+      });
+      setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
+      if (testResult.error) {
+        setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
+      }
+      setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required credentials (env/headers) and test again.\n');
     } else {
-      setConsoleOutput((consoleOutput: string) => consoleOutput + 'Command executed successfully, but no output was returned.\n');
+      setMessage({
+        type: 'error',
+        text: 'Connection test failed. Check the console for details.'
+      });
+      setConsoleOutput((prev: string) => prev + `Connection test result: Connection failed\n`);
+      setConsoleOutput((prev: string) => prev + `Details: ${testResult.error || 'Unknown error'}\n`);
+      setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
     }
-    setRunCompleted(true);
-    setMessage({
-      type: 'success',
-      text: 'Server running successfully. Check the console for more information.'
-    });
   } catch (error) {
-    console.error('Error running server:', error);
-    
-    // Add more detailed error information to console output
-    setConsoleOutput((consoleOutput: string) => consoleOutput + `Error: ${(error as Error).message}\n`);
-    
-    // Try to extract more details if available
-    let errorDetails = '';
-    if (error instanceof Response) {
-      errorDetails = ` (Status: ${error.status})`;
-    } else if (typeof error === 'object' && error !== null) {
-      errorDetails = ` (${JSON.stringify(error)})`;
-    }
-    
-    // this error is now handled in RunTools 
+    console.error('Error testing stdio connection:', error);
+    setConsoleOutput((prev: string) => prev + `\nError during connection test: ${(error as Error).message}\n`);
+    setMessage({
+      type: 'error',
+      text: 'Connection test failed with an error.'
+    });
   } finally {
     setIsRunning(false);
   }
