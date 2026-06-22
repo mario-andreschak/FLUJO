@@ -841,6 +841,20 @@ async function processChatCompletionInternal(
      }
   }
 
+  // Reconcile status with the terminal action BEFORE the final persist below.
+  // The in-loop error paths set currentAction = ERROR_ACTION but leave
+  // sharedState.status at its start-of-run value ('running'). Without this the
+  // status reaches the final persistState() as 'running', so: finalStatus below
+  // resolves to 'running' (the ERROR_ACTION fallback never fires against a
+  // truthy status), no run:done is emitted (the live SSE stream hangs on
+  // "Working…"), and the conversation persists as 'running' — which shows a
+  // blue "running" dot in the sidebar and makes the client auto-reattach to a
+  // dead run on reload. (status is set to 'error' again at the error-response
+  // block below, but that runs AFTER the persist and never re-persists.)
+  if (currentAction === ERROR_ACTION && sharedState.status !== 'error') {
+    sharedState.status = 'error';
+  }
+
   // --- 3. Format and Return Response ---
   const finalExecutionTime = Date.now() - startTime;
   // Use status from sharedState if available, otherwise infer from action

@@ -4,6 +4,7 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { saveItem } from '@/utils/storage/backend'; // Import saveItem directly
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -53,7 +54,19 @@ export async function GET() {
         const createdAt = state.createdAt || 0; // Fallback timestamp
         const updatedAt = state.updatedAt || 0; // Fallback timestamp
         const flowId = state.flowId || null; // Use null if missing
-        const status = state.status;
+        // Reconcile a stale 'running' status. A conversation persists as
+        // 'running' while a flow executes, but a process restart drops the
+        // in-memory run (and its event channel) without flipping the stored
+        // status. Such a run can never resume — re-attaching to it just hangs
+        // the live view on "Working…". If the status says 'running' but this
+        // process has no live event channel for it, the run is dead: report it
+        // as 'error' so the sidebar is honest and the client doesn't
+        // auto-reattach to a run that will never emit again.
+        let status = state.status;
+        if (status === 'running' && executionEventBus.currentSeq(id) === 0) {
+          log.warn(`Conversation ${id} is 'running' with no live run; reporting as interrupted ('error').`, { requestId });
+          status = 'error';
+        }
 
         // Ensure ID consistency if possible
         if (state.conversationId && state.conversationId !== conversationIdFromFile) {
