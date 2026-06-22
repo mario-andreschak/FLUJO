@@ -820,7 +820,23 @@ async function processChatCompletionInternal(
      // Catch errors originating from within the loop logic itself (e.g., state handling)
      log.error(`Unhandled error during execution loop for conv ${effectiveConvId}`, { loopError });
      if (currentAction !== ERROR_ACTION) {
-        sharedState.lastResponse = { success: false, error: loopError instanceof Error ? loopError.message : String(loopError), errorDetails: loopError instanceof Error ? { name: loopError.name, message: loopError.message, stack: loopError.stack } : undefined };
+        // Model errors thrown by ProcessNode carry a `.details` payload (HTTP
+        // status, provider code/type, retry hints, the raw provider body).
+        // Merge it into errorDetails so the response reports the *real* failure
+        // (e.g. 429 rate limit) instead of a generic 500/internal_error.
+        const modelDetails = (loopError as any)?.details;
+        sharedState.lastResponse = {
+          success: false,
+          error: loopError instanceof Error ? loopError.message : String(loopError),
+          errorDetails: loopError instanceof Error
+            ? {
+                name: loopError.name,
+                message: loopError.message,
+                stack: loopError.stack,
+                ...(modelDetails && typeof modelDetails === 'object' ? modelDetails : {}),
+              }
+            : undefined,
+        };
         currentAction = ERROR_ACTION;
      }
   }

@@ -12,6 +12,7 @@ import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName } from './toolNamespace';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import { mcpService } from '@/backend/services/mcp';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -191,8 +192,10 @@ export class ModelHandler {
       }
       log.verbose(`decrypted api key ${decryptedApiKey}`)
       log.verbose(` baseurl ${model.baseUrl}`)
-      // Initialize the OpenAI client
-      const openai = new OpenAI({
+      // Initialize the OpenAI client. Use the shared factory so the Node
+      // transport is tuned to avoid intermittent "Premature close" failures
+      // (keep-alive connection reuse). See createOpenAIClient for the rationale.
+      const openai = createOpenAIClient({
         apiKey: decryptedApiKey,
         baseURL: model.baseUrl
       });
@@ -349,11 +352,44 @@ export class ModelHandler {
 
       // Handle API errors
       if (error instanceof OpenAI.APIError) {
+        // The SDK's APIError.message is often terse (e.g. "429 Provider returned
+        // error"). Providers like OpenRouter carry the *real* reason deeper in
+        // the parsed response body (error.error) - frequently in
+        // `metadata.raw`, which is itself a JSON string from the upstream
+        // provider. Dig it out so the user sees something actionable (e.g. the
+        // actual rate-limit / upstream message) instead of a generic line.
+        let detailedMessage = error.message;
+        const body = (error as any).error as any; // parsed response body, if any
+        try {
+          const providerMsg = body?.message;
+          if (typeof providerMsg === 'string' && providerMsg && providerMsg !== detailedMessage) {
+            detailedMessage = `${detailedMessage} - ${providerMsg}`;
+          }
+          if (body?.metadata?.raw) {
+            const raw = typeof body.metadata.raw === 'string'
+              ? JSON.parse(body.metadata.raw)
+              : body.metadata.raw;
+            const rawMsg = raw?.error?.message || raw?.message;
+            if (typeof rawMsg === 'string' && rawMsg) {
+              detailedMessage = `${detailedMessage} (upstream: ${rawMsg})`;
+            }
+          }
+        } catch (parseError) {
+          log.warn('Failed to extract detailed message from APIError body', parseError);
+        }
+
+        // Surface rate-limit / retry hints from the response headers so the
+        // verbose error and any UI can show *when* a retry would succeed.
+        const headers = (error.headers || {}) as Record<string, unknown>;
+        const retryAfter = headers['retry-after'] ?? headers['Retry-After'];
+        const rateLimitReset =
+          headers['x-ratelimit-reset'] ?? headers['x-ratelimit-reset-requests'];
+
         const errorResult: Result<ModelCallResult> = {
           success: false,
           error: createModelError(
             'api_error',
-            error.message,
+            detailedMessage,
             modelId,
             undefined,
             {
@@ -361,6 +397,10 @@ export class ModelHandler {
               type: error.type,
               code: error.code,
               param: error.param,
+              retryAfter: retryAfter !== undefined ? String(retryAfter) : undefined,
+              rateLimitReset: rateLimitReset !== undefined ? String(rateLimitReset) : undefined,
+              // The full parsed provider body is the richest source of truth.
+              providerError: body,
               // Include stack trace if available
               stack: error.stack
             }

@@ -1,4 +1,5 @@
 import { Model } from '@/shared/types';
+import { ModelTestResult } from '@/shared/types/model/response';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/model');
@@ -351,6 +352,29 @@ class ModelService {
         error: error instanceof Error ? error.message : 'Failed to update API key',
       };
     }
+  }
+
+  /**
+   * Run a direct (no flow engine) connectivity test for a model. Pass an
+   * existing model's id, or the fields of an unsaved draft. Returns the verbose
+   * result (SDK + axios attempts and a diagnosis). Throws on transport/HTTP
+   * failure of the test endpoint itself (not on a model that simply failed the
+   * test — that is reported inside the result).
+   */
+  async testModel(params: {
+    modelId?: string;
+    name?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    provider?: string;
+  }): Promise<ModelTestResult> {
+    log.debug('Testing model', { modelId: params.modelId, name: params.name });
+    const result = await this.fetchWithErrorHandling('/api/model/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return result as ModelTestResult;
   }
 
   async fetchProviderModels(

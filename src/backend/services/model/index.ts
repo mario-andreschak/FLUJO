@@ -20,11 +20,13 @@ import {
   setEncryptionKey,
   initializeDefaultEncryption
 } from './encryption';
-import { 
+import {
   fetchModelsFromProvider,
   getProviderFromBaseUrl
 } from './provider';
 import { modelCache, filterModels } from './cache';
+import { testModelConnection } from './testConnection';
+import { ModelTestResult } from '@/shared/types/model/response';
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/index');
@@ -430,6 +432,61 @@ class ModelService {
     }
   }
 
+
+  /**
+   * Run a direct, flow-engine-free connectivity test for a model.
+   *
+   * Resolution mirrors fetchProviderModels: prefer a directly-supplied key (the
+   * value the user just typed, or a "${global:VAR}" binding) so a brand-new,
+   * unsaved model can be tested; otherwise fall back to the stored key of an
+   * existing model looked up by id. The decrypted key never leaves the backend.
+   */
+  async testModel(params: {
+    modelId?: string;
+    name?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    provider?: ModelProvider;
+  }): Promise<ModelTestResult> {
+    const { modelId, apiKey } = params;
+
+    let modelName = params.name;
+    let baseUrl = params.baseUrl;
+    let provider = params.provider;
+    let resolvedApiKey: string | null = null;
+
+    if (apiKey && apiKey !== MASKED_API_KEY) {
+      resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
+    }
+
+    // Fill in any missing fields (and the key, if no usable one was supplied)
+    // from the stored model record.
+    if (modelId) {
+      const stored = await this.getModel(modelId);
+      if (stored) {
+        modelName = modelName || stored.name;
+        baseUrl = baseUrl || stored.baseUrl;
+        provider = provider || stored.provider;
+        if (!resolvedApiKey) {
+          resolvedApiKey = await resolveAndDecryptApiKey(stored.ApiKey);
+        }
+      }
+    }
+
+    if (!modelName) {
+      throw new Error('Model name is required to run a test');
+    }
+    if (!resolvedApiKey) {
+      throw new Error('Could not resolve an API key for this model');
+    }
+
+    return testModelConnection({
+      modelName,
+      baseUrl,
+      apiKey: resolvedApiKey,
+      provider,
+    });
+  }
 
   // Re-export encryption methods for convenience
   encryptApiKey = encryptApiKey;
