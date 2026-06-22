@@ -1525,15 +1525,19 @@ const Chat: React.FC = () => {
       <Grid container sx={{ flex: 1, height: '100%' }}>
         {/* Chat Area */}
         <Grid item xs={debugPanelOpen ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: debugPanelOpen ? 1 : 0, borderColor: 'divider' }}>
-          {/* Flow selector - Use summary data */}
-          <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-            <FlowSelector
-              // Remove duplicate selectedFlowId prop
-              selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
-              onSelectFlow={handleFlowSelect}
-              disabled={isDebugPaused} // Disable flow selection when debugging
-            />
-          </Box>
+          {/* Flow selector - Use summary data. Only shown once a conversation is
+              selected; with no conversation it's confusing (nothing to assign a
+              flow to). */}
+          {currentConversationId && (
+            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+              <FlowSelector
+                // Remove duplicate selectedFlowId prop
+                selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+                onSelectFlow={handleFlowSelect}
+                disabled={isDebugPaused} // Disable flow selection when debugging
+              />
+            </Box>
+          )}
 
         {/* Chat messages - Use detailed data */}
         <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
