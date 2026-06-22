@@ -308,6 +308,21 @@ async function processChatCompletionInternal(
     }
   }
 
+  // --- Force a fresh compiled flow at the start of each user turn ---
+  // The engine caches the compiled (FlowConverter) graph per flowId and only
+  // invalidates it on saveFlow/deleteFlow. Edits made elsewhere (e.g. a model's
+  // settings on the Models page) don't touch that cache, and within a turn the
+  // many executeStep/resolveHandoff calls all reuse the cached graph. Dropping
+  // the cache once per genuine user turn guarantees the turn compiles from the
+  // current flow definition, while preserving the within-turn caching that the
+  // agent loop relies on. Skipped for internal resumes (debug step/continue,
+  // tool-approval respond) so we don't recompile mid-turn. Cost is one graph
+  // conversion per turn — negligible.
+  if (userTurn && sharedState.flowId) {
+    FlowExecutor.clearFlowCache(sharedState.flowId);
+    log.debug(`Cleared compiled-flow cache for ${sharedState.flowId} at start of user turn ${effectiveConvId}.`);
+  }
+
   // --- 2. Main Execution Logic ---
   let currentAction: string | undefined = undefined;
   const MAX_INTERNAL_ITERATIONS = 150; // Safety break for non-debug flujo=true loop

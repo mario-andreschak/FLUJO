@@ -22,6 +22,77 @@ const log = createLogger('backend/flow/execution/handlers/ModelHandler'
 
 export class ModelHandler {
   /**
+   * Normalize a provider error body into a detailed, human-readable message
+   * plus structured detail fields.
+   *
+   * The same provider error shape reaches us two ways: when the provider
+   * returns HTTP 200 with an `error` object in the body, and when the SDK
+   * throws an `OpenAI.APIError` (whose `.error` is that same body). Both paths
+   * call this so the extraction stays consistent. OpenRouter in particular
+   * nests the real upstream reason under `metadata` — `raw` is usually a plain
+   * human-readable string (occasionally a JSON string), and `provider_name` /
+   * `retry_after_seconds` are the actionable bits.
+   *
+   * @param body       The provider error object (chatCompletion.error or APIError.error).
+   * @param baseMessage Optional prefix (e.g. the SDK's "429 ..." message) to build on.
+   */
+  private static extractProviderErrorDetails(
+    body: any,
+    baseMessage?: string
+  ): {
+    message: string;
+    code?: unknown;
+    type?: unknown;
+    param?: unknown;
+    retryAfter?: string;
+    providerError?: unknown;
+  } {
+    let message =
+      baseMessage || body?.message || 'Provider returned an unspecified error in the response body.';
+
+    // When a base message is supplied (SDK path), append the body's own message
+    // if it adds something beyond the prefix.
+    if (
+      baseMessage &&
+      typeof body?.message === 'string' &&
+      body.message &&
+      body.message !== baseMessage
+    ) {
+      message = `${baseMessage} - ${body.message}`;
+    }
+
+    const meta = body?.metadata;
+    if (meta) {
+      let rawMsg: string | undefined;
+      if (typeof meta.raw === 'string') {
+        try {
+          const parsed = JSON.parse(meta.raw);
+          rawMsg = parsed?.error?.message || parsed?.message || meta.raw;
+        } catch {
+          rawMsg = meta.raw; // not JSON — use the string as-is
+        }
+      } else if (meta.raw && typeof meta.raw === 'object') {
+        rawMsg = meta.raw.error?.message || meta.raw.message;
+      }
+      const upstreamParts: string[] = [];
+      if (meta.provider_name) upstreamParts.push(String(meta.provider_name));
+      if (rawMsg) upstreamParts.push(rawMsg);
+      if (upstreamParts.length > 0) {
+        message = `${message} (upstream: ${upstreamParts.join(': ')})`;
+      }
+    }
+
+    return {
+      message,
+      code: body?.code,
+      type: body?.type,
+      param: body?.param,
+      retryAfter: meta?.retry_after_seconds != null ? String(meta.retry_after_seconds) : undefined,
+      providerError: body,
+    };
+  }
+
+  /**
    * Call model with tool support - performs a SINGLE API call.
    * Does NOT handle tool execution loops internally.
    */
@@ -258,35 +329,23 @@ export class ModelHandler {
         log.warn('API call returned successfully but contained an error object:', JSON.stringify(chatCompletion.error));
         const errorObj = chatCompletion.error as any; // Type assertion for easier access
 
-        // --- Attempt to extract detailed message from metadata.raw ---
-        let detailedMessage = errorObj.message || 'Provider returned an unspecified error in the response body.';
-        try {
-          if (errorObj.metadata?.raw) {
-            const rawErrorData = JSON.parse(errorObj.metadata.raw);
-            if (rawErrorData?.error?.message) {
-              detailedMessage = rawErrorData.error.message;
-              log.info('Extracted detailed error message from metadata.raw:', detailedMessage);
-            }
-          }
-        } catch (parseError) {
-          log.warn('Failed to parse metadata.raw for detailed error message:', parseError);
-        }
-        // --- End extraction attempt ---
+        // Shape the message + details consistently with the thrown-error path.
+        const extracted = ModelHandler.extractProviderErrorDetails(errorObj);
 
         const errorResult: Result<ModelCallResult> = {
             success: false,
             error: createModelError(
                 'api_error', // Treat as API error
-                detailedMessage, // Use the extracted detailed message
+                extracted.message,
                 modelId,
                 undefined,
                 {
-                    // Extract details if available
-                    code: errorObj.code,
-                    type: errorObj.type,
-                    param: errorObj.param,
-                    // Include the raw error object for more context
-                    rawError: errorObj
+                    code: extracted.code,
+                    type: extracted.type,
+                    param: extracted.param,
+                    retryAfter: extracted.retryAfter,
+                    // The full parsed provider body is the richest source of truth.
+                    providerError: extracted.providerError,
                 }
             )
         };
@@ -353,35 +412,18 @@ export class ModelHandler {
       // Handle API errors
       if (error instanceof OpenAI.APIError) {
         // The SDK's APIError.message is often terse (e.g. "429 Provider returned
-        // error"). Providers like OpenRouter carry the *real* reason deeper in
-        // the parsed response body (error.error) - frequently in
-        // `metadata.raw`, which is itself a JSON string from the upstream
-        // provider. Dig it out so the user sees something actionable (e.g. the
-        // actual rate-limit / upstream message) instead of a generic line.
-        let detailedMessage = error.message;
+        // error"). The real reason lives in the parsed response body
+        // (error.error); extractProviderErrorDetails digs it out so the user
+        // sees something actionable instead of a generic line.
         const body = (error as any).error as any; // parsed response body, if any
-        try {
-          const providerMsg = body?.message;
-          if (typeof providerMsg === 'string' && providerMsg && providerMsg !== detailedMessage) {
-            detailedMessage = `${detailedMessage} - ${providerMsg}`;
-          }
-          if (body?.metadata?.raw) {
-            const raw = typeof body.metadata.raw === 'string'
-              ? JSON.parse(body.metadata.raw)
-              : body.metadata.raw;
-            const rawMsg = raw?.error?.message || raw?.message;
-            if (typeof rawMsg === 'string' && rawMsg) {
-              detailedMessage = `${detailedMessage} (upstream: ${rawMsg})`;
-            }
-          }
-        } catch (parseError) {
-          log.warn('Failed to extract detailed message from APIError body', parseError);
-        }
+        const extracted = ModelHandler.extractProviderErrorDetails(body, error.message);
 
-        // Surface rate-limit / retry hints from the response headers so the
-        // verbose error and any UI can show *when* a retry would succeed.
+        // Prefer the response header retry-after; fall back to the body's
+        // metadata.retry_after_seconds (already surfaced by the helper).
         const headers = (error.headers || {}) as Record<string, unknown>;
-        const retryAfter = headers['retry-after'] ?? headers['Retry-After'];
+        const headerRetryAfter = headers['retry-after'] ?? headers['Retry-After'];
+        const retryAfter =
+          headerRetryAfter !== undefined ? String(headerRetryAfter) : extracted.retryAfter;
         const rateLimitReset =
           headers['x-ratelimit-reset'] ?? headers['x-ratelimit-reset-requests'];
 
@@ -389,18 +431,19 @@ export class ModelHandler {
           success: false,
           error: createModelError(
             'api_error',
-            detailedMessage,
+            extracted.message,
             modelId,
             undefined,
             {
               status: error.status,
-              type: error.type,
-              code: error.code,
-              param: error.param,
-              retryAfter: retryAfter !== undefined ? String(retryAfter) : undefined,
+              // Prefer the body's values; fall back to the SDK's.
+              type: extracted.type ?? error.type,
+              code: extracted.code ?? error.code,
+              param: extracted.param ?? error.param,
+              retryAfter,
               rateLimitReset: rateLimitReset !== undefined ? String(rateLimitReset) : undefined,
               // The full parsed provider body is the richest source of truth.
-              providerError: body,
+              providerError: extracted.providerError,
               // Include stack trace if available
               stack: error.stack
             }

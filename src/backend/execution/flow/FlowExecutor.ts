@@ -181,11 +181,23 @@ export class FlowExecutor {
       const nodeIdentifier = attemptedNodeId || 'unknown node';
       log.error(`Error during node execution step for ${nodeIdentifier} in conversation ${conversationId}`, { error });
 
-      // Ensure sharedState reflects the error
+      // Model errors thrown by ProcessNode carry a `.details` payload (HTTP
+      // status, provider code/type, retry hints, the raw provider body). Merge
+      // it into errorDetails so downstream response formatting reports the
+      // *real* failure (e.g. a 429 rate limit) instead of collapsing everything
+      // to a generic 500/internal_error.
+      const modelDetails = (error as any)?.details;
       sharedState.lastResponse = {
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        errorDetails: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { message: String(error) }
+        errorDetails: error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+              ...(modelDetails && typeof modelDetails === 'object' ? modelDetails : {}),
+            }
+          : { message: String(error) }
       };
       // Keep track of where the error occurred
       sharedState.currentNodeId = attemptedNodeId;
