@@ -199,7 +199,7 @@ async function attemptViaAdapter(model: Model, apiKey: string): Promise<ModelTes
   const started = Date.now();
   try {
     const adapter = getCompletionAdapter(model);
-    const completion = await adapter.createCompletion({
+    const { completion } = await adapter.createCompletion({
       model,
       apiKey,
       messages: [...TEST_MESSAGES],

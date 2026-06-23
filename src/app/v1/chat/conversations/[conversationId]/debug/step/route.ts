@@ -77,7 +77,7 @@ export async function POST(
     const response = await processChatCompletion(
       simulatedRequestData,
       true, // flujo
-      sharedState.originalRequireApproval ?? false,
+      sharedState.requireApproval ?? false,
       false, // flujodebug param ignored on resume (debugMode already set in state)
       conversationId,
       false // continueDebug: false → single step then pause

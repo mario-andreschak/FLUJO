@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
-import { CompletionAdapter, CompletionInput } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, parseToolArgs } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
@@ -174,7 +174,7 @@ export class AnthropicAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
-  }: CompletionInput): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  }: CompletionInput): Promise<CompletionResult> {
     const client = new Anthropic({
       apiKey,
       // Honour a custom base URL if one was configured; otherwise the SDK
@@ -201,6 +201,6 @@ export class AnthropicAdapter implements CompletionAdapter {
     });
 
     const resp = await client.messages.create(params);
-    return toChatCompletion(model.name, resp);
+    return { completion: toChatCompletion(model.name, resp) };
   }
 }

@@ -29,14 +29,38 @@ export interface CompletionInput {
    * FLUJO drives the loop. Falls back to a sane default when unset.
    */
   maxTurns?: number;
+  /**
+   * Optional human-in-the-loop gate for self-orchestrating adapters. When
+   * provided, the adapter calls it before each tool runs and awaits the verdict
+   * (true = allow, false = reject). Built by the execution layer to bridge to
+   * FLUJO's tool-approval UI; omitted means auto-approve.
+   */
+  requestToolApproval?: (call: {
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+  }) => Promise<boolean>;
+}
+
+/**
+ * What an adapter returns. The OpenAI-shaped `completion` carries the final
+ * answer + usage + any routing tool_calls (so downstream consumers work
+ * unchanged). `transcript` is for self-orchestrating adapters (Claude
+ * subscription) that run an internal agentic loop: it's the ordered
+ * assistant/tool messages produced during that loop, so the caller can record
+ * them in the conversation. Request/response adapters omit it.
+ */
+export interface CompletionResult {
+  completion: OpenAI.Chat.Completions.ChatCompletion;
+  transcript?: OpenAI.ChatCompletionMessageParam[];
 }
 
 /**
  * A completion adapter turns FLUJO's OpenAI-shaped request into a call against a
- * specific provider/SDK and returns an OpenAI-shaped ChatCompletion, so every
- * downstream consumer (ModelHandler, token-usage parsing, tool-call handling)
- * keeps working unchanged regardless of the underlying provider or transport.
+ * specific provider/SDK and returns an OpenAI-shaped result, so every downstream
+ * consumer (ModelHandler, token-usage parsing, tool-call handling) keeps working
+ * unchanged regardless of the underlying provider or transport.
  */
 export interface CompletionAdapter {
-  createCompletion(input: CompletionInput): Promise<OpenAI.Chat.Completions.ChatCompletion>;
+  createCompletion(input: CompletionInput): Promise<CompletionResult>;
 }

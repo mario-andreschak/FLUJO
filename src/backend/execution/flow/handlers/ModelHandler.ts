@@ -14,6 +14,8 @@ import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mcpService } from '@/backend/services/mcp';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
@@ -98,7 +100,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, tools, nodeName, nodeId, toolNameMap, maxIterations } = input; // Added nodeId
+    const { modelId, prompt, messages, tools, nodeName, nodeId, toolNameMap, maxIterations, conversationId, requireToolApproval } = input; // Added nodeId
 
     // Fetch model information for display name
     let modelDisplayName = '';
@@ -125,8 +127,33 @@ export class ModelHandler {
     // Add verbose logging of the entire input
     log.verbose('callModel input', JSON.stringify(input));
 
+    // When approval is required and we have a conversation to surface it on, build
+    // a human-in-the-loop gate for self-orchestrating adapters (Claude
+    // subscription). It registers each tool call in the shared approval registry,
+    // announces it on the conversation's event stream (the existing
+    // run:awaiting_approval UI), and blocks until the /respond route resolves it.
+    const requestToolApproval =
+      requireToolApproval && conversationId
+        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
+            const toolCall: OpenAI.ChatCompletionMessageToolCall = {
+              id: call.id,
+              type: 'function',
+              function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
+            };
+            const emit = executionEventBus.emitterFor(conversationId);
+            return new Promise<boolean>((resolve) => {
+              registerPendingApproval(conversationId, toolCall, resolve);
+              emit({ type: 'run:awaiting_approval', pendingToolCalls: listPendingToolCalls(conversationId) });
+            });
+          }
+        : undefined;
+
     // Call generateCompletion ONCE
-    const response = await this.generateCompletion(modelId, prompt, messages, tools, { toolNameMap, maxTurns: maxIterations });
+    const response = await this.generateCompletion(modelId, prompt, messages, tools, {
+      toolNameMap,
+      maxTurns: maxIterations,
+      requestToolApproval,
+    });
 
     if (!response.success) {
       // Add verbose logging of the error response
@@ -164,18 +191,37 @@ export class ModelHandler {
         }
       : undefined;
 
-    // Create the assistant message with timestamp and ID
-    const assistantMessage: FlujoChatMessage = {
-      id: uuidv4(), // Generate unique ID
-      role: 'assistant',
-      content: prefixedContent,
-      // IMPORTANT: Include tool_calls if they exist in the raw response
-      tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
-      timestamp: Date.now(), // Add timestamp
-      processNodeId: nodeId, // Attach the process node ID
-      ...(usage ? { usage } : {}),
-    };
-    finalMessages.push(assistantMessage);
+    if (modelResponse.transcript && modelResponse.transcript.length > 0) {
+      // Self-orchestrating adapter (Claude subscription): the adapter already ran
+      // the agentic tool loop in-process and handed back the full assistant/tool
+      // sequence. Materialize each into the conversation so the tool calls +
+      // results are visible, attaching usage to the final message.
+      const baseTs = Date.now();
+      const transcript = modelResponse.transcript;
+      transcript.forEach((msg, idx) => {
+        const isLast = idx === transcript.length - 1;
+        finalMessages.push({
+          ...msg,
+          id: uuidv4(),
+          timestamp: baseTs + idx, // keep ordering stable
+          processNodeId: nodeId,
+          ...(isLast && usage ? { usage } : {}),
+        } as FlujoChatMessage);
+      });
+    } else {
+      // Create the assistant message with timestamp and ID
+      const assistantMessage: FlujoChatMessage = {
+        id: uuidv4(), // Generate unique ID
+        role: 'assistant',
+        content: prefixedContent,
+        // IMPORTANT: Include tool_calls if they exist in the raw response
+        tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
+        timestamp: Date.now(), // Add timestamp
+        processNodeId: nodeId, // Attach the process node ID
+        ...(usage ? { usage } : {}),
+      };
+      finalMessages.push(assistantMessage);
+    }
 
     // Map tool calls for the result structure (if they exist)
     // This provides structured info about requested calls, but doesn't execute them
@@ -203,7 +249,7 @@ export class ModelHandler {
     const result: Result<ModelCallResult> = {
       success: true,
       value: {
-        content: typeof assistantMessage.content === 'string' ? assistantMessage.content : content, // Use prefixed content
+        content, // Final assistant text (from the model response / adapter)
         messages: finalMessages, // Include the new assistant message (now FlujoChatMessage[])
         fullResponse: modelResponse.fullResponse,
         toolCalls // Pass the structured tool calls info
@@ -227,6 +273,11 @@ export class ModelHandler {
     opts?: {
       toolNameMap?: Record<string, { server: string; tool: string }>;
       maxTurns?: number;
+      requestToolApproval?: (call: {
+        id: string;
+        name: string;
+        args: Record<string, unknown>;
+      }) => Promise<boolean>;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -310,7 +361,7 @@ export class ModelHandler {
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
       // Make the API request through the selected adapter.
-      const chatCompletion = await adapter.createCompletion({
+      const { completion: chatCompletion, transcript } = await adapter.createCompletion({
         model,
         apiKey: decryptedApiKey,
         messages: apiMessages,
@@ -318,6 +369,7 @@ export class ModelHandler {
         temperature,
         toolNameMap: opts?.toolNameMap,
         maxTurns: opts?.maxTurns,
+        requestToolApproval: opts?.requestToolApproval,
       });
 
       // --- Log the raw response received ---
@@ -382,7 +434,8 @@ export class ModelHandler {
         value: {
           content: choice.message?.content || '',
           messages: [...messages], // Return original messages with timestamps
-          fullResponse: chatCompletion // Return the full original response
+          fullResponse: chatCompletion, // Return the full original response
+          transcript // Present only for self-orchestrating adapters (Claude subscription)
         }
       };
 

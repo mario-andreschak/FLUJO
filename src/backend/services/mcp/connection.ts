@@ -32,7 +32,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   return new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '0.2.4',
+      version: '0.2.5',
     },
     {
       // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the

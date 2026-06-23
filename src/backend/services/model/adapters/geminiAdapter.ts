@@ -2,7 +2,7 @@ import { GoogleGenAI, Content, Part, FunctionDeclaration, GenerateContentRespons
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { CompletionAdapter, CompletionInput } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, parseToolArgs } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
@@ -179,7 +179,7 @@ export class GeminiAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
-  }: CompletionInput): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  }: CompletionInput): Promise<CompletionResult> {
     const ai = new GoogleGenAI({ apiKey });
 
     const { systemInstruction, contents } = toGeminiContents(messages);
@@ -201,6 +201,6 @@ export class GeminiAdapter implements CompletionAdapter {
       },
     });
 
-    return toChatCompletion(model.name, resp);
+    return { completion: toChatCompletion(model.name, resp) };
   }
 }

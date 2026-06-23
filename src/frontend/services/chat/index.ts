@@ -117,6 +117,20 @@ class ChatService {
     return parse<ConversationListItem>(response);
   }
 
+  /** PATCH /v1/chat/conversations/{id} — update the conversation's tool-approval setting. */
+  async updateConversationApproval(
+    id: string,
+    requireApproval: boolean
+  ): Promise<ConversationListItem> {
+    log.debug('updateConversationApproval: Entering method', { conversationId: id, requireApproval });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requireApproval }),
+    });
+    return parse<ConversationListItem>(response);
+  }
+
   /** DELETE /v1/chat/conversations/{id}. Resolves on success (204). */
   async deleteConversation(id: string): Promise<void> {
     log.debug('deleteConversation: Entering method', { conversationId: id });

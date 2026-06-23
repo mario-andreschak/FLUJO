@@ -6,6 +6,7 @@ import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
@@ -46,6 +47,22 @@ export async function POST(
 
   const { action, toolCallId } = requestBody;
   log.info(`Processing response action`, { requestId, conversationId, action, toolCallId });
+
+  // In-request agentic approval (Claude subscription): the run is still live and
+  // blocked inside the adapter's canUseTool. Resolving the pending approval
+  // unblocks it — the SDK then executes the tool and continues the loop within
+  // the original (still-open) request. We must NOT execute the tool or resume
+  // here (that's the normal pause/resume path below). The live SSE stream carries
+  // ongoing events; we just report the remaining approval state.
+  if (resolvePendingApproval(conversationId, toolCallId, action === 'approve')) {
+    const remaining = listPendingToolCalls(conversationId);
+    log.info('Resolved in-request tool approval', { requestId, conversationId, action, toolCallId, remaining: remaining.length });
+    return NextResponse.json(
+      remaining.length > 0
+        ? { status: 'awaiting_tool_approval', conversation_id: conversationId, pendingToolCalls: remaining }
+        : { status: 'running', conversation_id: conversationId }
+    );
+  }
 
   try {
     let sharedState: SharedState | undefined = undefined;
@@ -186,7 +203,7 @@ export async function POST(
       true, // flujo
       // Got here via approval, so keep requiring approval for later calls unless
       // the run explicitly recorded otherwise.
-      sharedState.originalRequireApproval ?? true,
+      sharedState.requireApproval ?? true,
       false, // flujodebug param ignored on resume (debugMode already in state)
       conversationId
     );

@@ -195,7 +195,11 @@ export class ProcessNode extends BaseNode {
     currentPrompt: completePrompt,
     boundModel,
     availableTools: availableTools,
-    messages: [] // Will be populated after reordering
+    messages: [], // Will be populated after reordering
+    // Forwarded so self-orchestrating adapters can surface mid-run tool-approval
+    // prompts on this conversation's event stream and honour the approval setting.
+    conversationId: sharedState.conversationId,
+    requireToolApproval: sharedState.requireApproval ?? false,
   };
 
     // Reorder messages to ensure system messages are at the top
@@ -306,7 +310,9 @@ export class ProcessNode extends BaseNode {
         maxIterations: 30, // Also the agentic-turn cap for self-orchestrating adapters (Claude subscription)
           nodeName, // Pass the node name to be included in the response header
           nodeId: prepResult.nodeId, // Pass the node ID
-          toolNameMap // Lets self-orchestrating adapters dispatch tool calls to mcpService
+          toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
+          conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
+          requireToolApproval: prepResult.requireToolApproval // Gate tool calls on user approval
         });
 
         // --- Log successful model call result (check success first) ---

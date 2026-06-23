@@ -194,12 +194,16 @@ async function processChatCompletionInternal(
       updatedAt: Date.now(),
       debugMode: flujodebug,
       executionTrace: (flujodebug && FEATURES.ENABLE_EXECUTION_TRACKER) ? [] : undefined,
-      // Persist the approval intent for every run (not just debug) so a
-      // resume after tool approval keeps requiring approval for later calls.
-      originalRequireApproval: requireApproval
+      // requireApproval is set unconditionally below (single source of truth).
     };
     // stateSource is already 'new'
   }
+
+  // The conversation's approval setting (single source of truth). Refreshed from
+  // the request on every run, persisted with the state, and read live by the chat
+  // loop and by self-orchestrating adapters (Claude subscription). Resume routes
+  // pass the persisted value back in, so this stays consistent across pause/resume.
+  sharedState.requireApproval = requireApproval;
 
   // --- Configure State Based on Source ---
   if (stateSource === 'new') {
@@ -272,10 +276,6 @@ async function processChatCompletionInternal(
     if (sharedState.debugMode) {
         if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
             sharedState.executionTrace = []; // Initialize trace if resuming into debug mode
-        }
-        // Store original requireApproval if resuming into debug mode and not already set
-        if (sharedState.originalRequireApproval === undefined) {
-            sharedState.originalRequireApproval = requireApproval;
         }
     }
   }

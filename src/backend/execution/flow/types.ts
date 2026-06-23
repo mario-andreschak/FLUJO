@@ -144,8 +144,12 @@ export interface SharedState {
     debugMode?: boolean;
     /** Stores the sequence of steps taken during execution for debugging. */
     executionTrace?: DebugStep[];
-    /** Stores the original requireApproval setting from the request that initiated the debug session. */
-    originalRequireApproval?: boolean;
+    /** Whether tool calls require user approval for this conversation. A single
+     *  persisted per-conversation setting: the chat UI's "Require Tool Approval"
+     *  checkbox writes it immediately (PATCH) and every run/resume reads it live.
+     *  Read by the chat loop (OpenAI path) and by self-orchestrating adapters
+     *  (Claude subscription) to gate tool calls. */
+    requireApproval?: boolean;
     /** Node IDs with an active breakpoint (used by the visual debugger). */
     breakpoints?: string[];
     /** The node we most recently paused at for a breakpoint, so a resume from it does not immediately re-break. */
@@ -244,6 +248,12 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     mcpContext?: MCPContext;
     messages: FlujoChatMessage[]; // Use timestamped type
     toolCalls?: ToolCallInfo[];
+    /** Conversation id, forwarded so self-orchestrating adapters can surface
+     *  mid-run tool-approval prompts on the conversation's event stream. */
+    conversationId?: string;
+    /** Whether tool calls require user approval (mirrors the run's requireApproval).
+     *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
+    requireToolApproval?: boolean;
 }
 
 // FinishNode prep result

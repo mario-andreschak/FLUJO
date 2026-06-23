@@ -45,6 +45,7 @@ export interface Conversation {
   title: string;
   messages: ChatMessage[];
   flowId: string | null;
+  requireApproval?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -301,6 +302,11 @@ const Chat: React.FC = () => {
   }, [fetchConversations, setCurrentConversationId]); // currentConversationId read via ref
 
   useEffect(() => {
+    // Switching conversations: drop any approval prompt belonging to the previous
+    // one so it can't linger on the newly-viewed conversation. The correct prompt
+    // re-appears from the (replayed) event stream if the now-viewed conversation
+    // is itself awaiting approval.
+    setPendingToolCalls(null);
     if (currentConversationId) {
       fetchDetailedConversation(currentConversationId);
     } else {
@@ -310,6 +316,30 @@ const Chat: React.FC = () => {
       setDetailsError(null);
     }
   }, [currentConversationId, fetchDetailedConversation]); // Trigger fetch when selection changes
+
+  // Reflect the viewed conversation's persisted "Require Tool Approval" setting in
+  // the checkbox. Keyed on the conversation id so it only re-syncs on a switch, not
+  // on every content refresh (which would clobber a just-toggled value mid-run).
+  useEffect(() => {
+    if (detailedConversation) {
+      setRequireApproval(detailedConversation.requireApproval ?? false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailedConversation?.id]);
+
+  // Toggle handler: update the checkbox and immediately persist the setting on the
+  // conversation. A brand-new, not-yet-persisted conversation may 404 — harmless,
+  // since the value is also sent with the next run and persisted onto the state then.
+  const handleRequireApprovalChange = useCallback(async (value: boolean) => {
+    setRequireApproval(value);
+    if (currentConversationId) {
+      try {
+        await chatService.updateConversationApproval(currentConversationId, value);
+      } catch (err) {
+        log.warn('Failed to persist requireApproval setting', { conversationId: currentConversationId, err });
+      }
+    }
+  }, [currentConversationId]);
 
   // --- Conversation Management Functions ---
 
@@ -466,7 +496,14 @@ const Chat: React.FC = () => {
         touch({ activeNode: `→ ${event.toNodeId}` });
         break;
       case 'run:awaiting_approval':
-        setPendingToolCalls(event.pendingToolCalls || []);
+        // Only surface the approval prompt for the conversation actually being
+        // viewed. A background run (or a stale stream) emitting this event must
+        // not bleed its pending tool calls into whatever conversation is on
+        // screen — that previously showed the wrong conversation's prompt and
+        // made Reject target the wrong conversation.
+        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+          setPendingToolCalls(event.pendingToolCalls || []);
+        }
         break;
       case 'breakpoint:hit':
       case 'run:paused':
@@ -1672,7 +1709,7 @@ const Chat: React.FC = () => {
             // isDebugPaused are viewed-conversation states.
             disabled={isLoadingDetails || (!!currentConversationId && runningConvs.has(currentConversationId)) || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
-            onRequireApprovalChange={setRequireApproval}
+            onRequireApprovalChange={handleRequireApprovalChange}
             executeInDebugger={executeInDebugger} // Pass debugger state
             onExecuteInDebuggerChange={setExecuteInDebugger} // Pass debugger handler
           />

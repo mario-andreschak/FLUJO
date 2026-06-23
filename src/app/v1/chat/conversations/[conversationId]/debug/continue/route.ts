@@ -73,8 +73,8 @@ export async function POST(
     };
 
     // 4. Call processChatCompletion, forcing debug mode OFF for this run
-    // Use the original requireApproval setting stored in the state
-    const useRequireApproval = sharedState.originalRequireApproval ?? false; // Default to false if not set
+    // Use the conversation's persisted requireApproval setting.
+    const useRequireApproval = sharedState.requireApproval ?? false; // Default to false if not set
     log.info(`Calling processChatCompletion to continue execution`, {
         requestId,
         conversationId,

@@ -21,6 +21,11 @@ export interface ModelCallInput {
    * can dispatch tool calls to mcpService. Built from SharedState.toolNameMap.
    */
   toolNameMap?: Record<string, { server: string; tool: string }>;
+  /** Conversation id — lets self-orchestrating adapters surface mid-run tool
+   *  approval prompts on the conversation's event stream. */
+  conversationId?: string;
+  /** Whether tool calls require user approval (mirrors the run's requireApproval). */
+  requireToolApproval?: boolean;
 }
 
 // Result of model call
@@ -29,6 +34,14 @@ export interface ModelCallResult {
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   toolCalls?: ToolCallInfo[];
   fullResponse?: OpenAI.ChatCompletion;
+  /**
+   * For self-orchestrating adapters (Claude subscription): the ordered
+   * assistant/tool messages produced during the internal agentic loop, in OpenAI
+   * wire format. callModel materializes these into the conversation so the tool
+   * calls + results are visible, instead of the single assistant message it
+   * builds for request/response adapters.
+   */
+  transcript?: OpenAI.ChatCompletionMessageParam[];
 }
 
 // Tool call processing input

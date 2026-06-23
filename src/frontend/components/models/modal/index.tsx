@@ -354,6 +354,40 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   helperText={errors.displayName || "The name shown in the UI"}
                 />
 
+                <FormControl fullWidth margin="dense">
+                  <InputLabel id="provider-profile-label">Provider</InputLabel>
+                  <Select
+                    labelId="provider-profile-label"
+                    label="Provider"
+                    value={currentProfile.id}
+                    onChange={(e) => handleSelectProfile(e.target.value)}
+                  >
+                    {PROVIDER_PROFILES.map(profile => (
+                      <MenuItem key={profile.id} value={profile.id}>
+                        {profile.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, mb: 1, display: 'block' }}>
+                  Uses the <strong>{currentProfile.sdkLabel}</strong>
+                  {currentProfile.adapter === 'claude-cli'
+                    ? '. Paste an OAuth token from `claude setup-token` into the API Key field.'
+                    : ''}
+                </Typography>
+
+                {currentProfile.showBaseUrl && (
+                  <TextField
+                    margin="dense"
+                    label="Base URL"
+                    fullWidth
+                    value={formState.baseUrl || ''}
+                    onChange={(e) => handleChange('baseUrl', e.target.value)}
+                    helperText="Endpoint for the OpenAI-compatible API."
+                  />
+                )}
+
                 <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
                   <TextField
                     margin="dense"
@@ -391,40 +425,6 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     }}
                   />
                 </Box>
-
-                <FormControl fullWidth margin="dense">
-                  <InputLabel id="provider-profile-label">Provider</InputLabel>
-                  <Select
-                    labelId="provider-profile-label"
-                    label="Provider"
-                    value={currentProfile.id}
-                    onChange={(e) => handleSelectProfile(e.target.value)}
-                  >
-                    {PROVIDER_PROFILES.map(profile => (
-                      <MenuItem key={profile.id} value={profile.id}>
-                        {profile.label}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, mb: 1, display: 'block' }}>
-                  Uses the <strong>{currentProfile.sdkLabel}</strong>
-                  {currentProfile.adapter === 'claude-cli'
-                    ? '. Paste an OAuth token from `claude setup-token` into the API Key field.'
-                    : ''}
-                </Typography>
-
-                {currentProfile.showBaseUrl && (
-                  <TextField
-                    margin="dense"
-                    label="Base URL"
-                    fullWidth
-                    value={formState.baseUrl || ''}
-                    onChange={(e) => handleChange('baseUrl', e.target.value)}
-                    helperText="Endpoint for the OpenAI-compatible API."
-                  />
-                )}
 
                 <Autocomplete
                   freeSolo

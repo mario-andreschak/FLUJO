@@ -74,6 +74,7 @@ export async function GET(
         title: sharedState.title || 'Untitled Conversation',
         messages: messagesWithIds, // Use messages with guaranteed IDs
         flowId: sharedState.flowId || null, // Ensure flowId is included
+        requireApproval: sharedState.requireApproval ?? false, // Per-conversation tool-approval setting
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
         // Include other relevant fields if the frontend Conversation type needs them
@@ -125,20 +126,27 @@ export async function PATCH(
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  // Validate allowed fields (currently only flowId)
-  if (updateData.flowId === undefined || typeof updateData.flowId !== 'string') {
-     if (Object.keys(updateData).length === 1 && updateData.flowId === null) {
-        // Allow setting flowId to null explicitly if needed in the future
-        // For now, we require a string flowId
-     } else {
-        log.warn('Invalid or missing flowId in PATCH request body', { requestId, conversationId, updateData: JSON.stringify(updateData) });
-        return NextResponse.json({ error: 'Invalid or missing flowId in request body' }, { status: 400 });
-     }
+  // Build the set of allowed updates from whichever recognized fields are present
+  // (flowId and/or requireApproval). Other fields are ignored.
+  const allowedUpdates: Partial<SharedState> = {};
+  if ('flowId' in updateData) {
+    if (typeof updateData.flowId !== 'string' && updateData.flowId !== null) {
+      log.warn('Invalid flowId in PATCH request body', { requestId, conversationId });
+      return NextResponse.json({ error: 'Invalid flowId in request body' }, { status: 400 });
+    }
+    allowedUpdates.flowId = updateData.flowId;
   }
-  // Prevent updating other fields via this endpoint for now
-  const allowedUpdates: Partial<SharedState> = {
-     flowId: updateData.flowId,
-  };
+  if ('requireApproval' in updateData) {
+    if (typeof updateData.requireApproval !== 'boolean') {
+      log.warn('Invalid requireApproval in PATCH request body', { requestId, conversationId });
+      return NextResponse.json({ error: 'requireApproval must be a boolean' }, { status: 400 });
+    }
+    allowedUpdates.requireApproval = updateData.requireApproval;
+  }
+  if (Object.keys(allowedUpdates).length === 0) {
+    log.warn('No updatable fields in PATCH request body', { requestId, conversationId, updateData: JSON.stringify(updateData) });
+    return NextResponse.json({ error: 'No updatable fields provided (flowId, requireApproval)' }, { status: 400 });
+  }
 
 
   const storageKey = `conversations/${conversationId}` as StorageKey;
@@ -152,11 +160,17 @@ export async function PATCH(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    // 2. Update the state
+    // 2. Update the state. Settings-only changes (e.g. toggling requireApproval)
+    // must NOT bump updatedAt — otherwise flipping a checkbox would re-sort the
+    // conversation to the top. Only content/flow changes refresh the timestamp.
+    const SETTINGS_ONLY_FIELDS = new Set(['requireApproval']);
+    const isSettingsOnly = Object.keys(allowedUpdates).every(k => SETTINGS_ONLY_FIELDS.has(k));
+    const nextUpdatedAt = isSettingsOnly ? existingState.updatedAt : Date.now();
+
     const updatedState: SharedState = {
       ...existingState,
       ...allowedUpdates, // Apply validated updates
-      updatedAt: Date.now(), // Always update the timestamp
+      updatedAt: nextUpdatedAt,
     };
 
     // 3. Save updated state back to storage

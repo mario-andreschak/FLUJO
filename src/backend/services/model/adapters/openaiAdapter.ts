@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient } from '../openaiClient';
-import { CompletionAdapter, CompletionInput } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
 
@@ -18,7 +18,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
-  }: CompletionInput): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({ apiKey, baseURL: model.baseUrl });
 
     const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
@@ -37,8 +37,9 @@ export class OpenAiAdapter implements CompletionAdapter {
     });
 
     // No `stream: true`, so the SDK resolves to a ChatCompletion.
-    return (await openai.chat.completions.create(
+    const completion = (await openai.chat.completions.create(
       requestParams
     )) as OpenAI.Chat.Completions.ChatCompletion;
+    return { completion };
   }
 }
