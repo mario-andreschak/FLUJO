@@ -26,6 +26,7 @@ import useHandoffTools from './ProcessNodePropertiesModal/hooks/useHandoffTools'
 import NodeConfiguration from './ProcessNodePropertiesModal/NodeConfiguration'; // Adjusted path
 import ModelBinding from './ProcessNodePropertiesModal/ModelBinding/index'; // Adjusted path
 import ServerTools from './ProcessNodePropertiesModal/ServerTools/ServerTools'; // Adjusted path
+import ServerResources from './ProcessNodePropertiesModal/ServerTools/ServerResources'; // Adjusted path
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
@@ -141,6 +142,21 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     // when we insert the text, which will update the promptTemplate state
   };
 
+  const handleInsertResourceBinding = (serverName: string, uri: string): void => {
+    if (!serverName || !uri) {
+      log.warn('Invalid parameters for handleInsertResourceBinding:', { serverName, uri });
+      return;
+    }
+    const binding = encodeBindingPill('resource', serverName, uri);
+    const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
+    const textToInsert = (needsSpace ? ' ' : '') + binding;
+    if (promptBuilderRef.current) {
+      promptBuilderRef.current.insertText(textToInsert);
+    } else {
+      log.warn('promptBuilderRef.current is null, cannot insert resource binding');
+    }
+  };
+
   const handleSave = () => {
     if (node && nodeData) {
       // Make sure to include the prompt template and toggle states in the saved data
@@ -230,6 +246,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
                 <Tabs value={activeTab} onChange={(_, newValue: string) => setActiveTab(newValue)}>
                   <Tab label="Server Tools" value="server" />
+                  <Tab label="Resources" value="resources" />
                   <Tab label="Agent Tools" value="agent" />
                 </Tabs>
               </Box>
@@ -253,6 +270,15 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 />
               )}
               
+              {/* Show Resources tab content */}
+              {activeTab === 'resources' && (
+                <ServerResources
+                  connectedMcpNodes={connectedMcpNodes}
+                  handleInsertResourceBinding={handleInsertResourceBinding}
+                  promptBuilderRef={promptBuilderRef}
+                />
+              )}
+
               {/* Show Agent Tools tab content */}
               {activeTab === 'agent' && (
                 <AgentTools
