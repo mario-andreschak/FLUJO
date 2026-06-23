@@ -17,6 +17,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
+import { encodeBindingPill } from '@/utils/shared/mcpBinding';
 import { ProcessNodePropertiesModalProps } from './ProcessNodePropertiesModal/types'; // Adjusted path
 import useModelManagement from './ProcessNodePropertiesModal/hooks/useModelManagement'; // Adjusted path
 import useServerConnection from './ProcessNodePropertiesModal/hooks/useServerConnection'; // Adjusted path
@@ -116,11 +117,11 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     const tool = tools.find((t: any) => t.name === toolName);
     const toolDescription = tool?.description || '';
     
-    // Create the binding in the format that will be visually displayed as a pill
-    // For handoff tools, use a different format to distinguish them
-    const binding = toolType === 'handoff' 
-      ? `\${_-_-_handoff_-_-_${toolName}}` 
-      : `\${_-_-_${serverName}_-_-_${toolName}}`;
+    // Create the binding pill (canonical format). Handoff tools use the pseudo-server
+    // `handoff` so they're visually distinguished and routed correctly downstream.
+    const binding = toolType === 'handoff'
+      ? encodeBindingPill('tool', 'handoff', toolName)
+      : encodeBindingPill('tool', serverName, toolName);
     
     // Add a space before the binding if needed
     const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
