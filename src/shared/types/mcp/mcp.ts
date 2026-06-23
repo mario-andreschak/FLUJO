@@ -1,4 +1,4 @@
-import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { Tool, Resource, ResourceTemplate, ReadResourceResult, Prompt, GetPromptResult } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -80,6 +80,14 @@ export interface MCPServiceResponse<T = unknown> {
 // Using the official type from MCP SDK (the SDK exports the inferred TS type directly,
 // avoiding a cross-zod-version inference mismatch).
 export type MCPToolResponse = Tool;
+
+// #15 MCP capabilities — resources & prompts. Re-export the SDK's inferred types so the
+// rest of FLUJO stays decoupled from the SDK import path (mirrors MCPToolResponse above).
+export type MCPResource = Resource;
+export type MCPResourceTemplate = ResourceTemplate;
+export type MCPReadResourceResult = ReadResourceResult;
+export type MCPPrompt = Prompt;
+export type MCPGetPromptResult = GetPromptResult;
 
 export interface MCPConnectionAttempt {
   requestId: string;

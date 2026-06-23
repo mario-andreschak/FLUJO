@@ -19,6 +19,9 @@ class MCPService {
   
   // Cache for tools to improve performance and reduce API calls
   private toolsCache: Map<string, { tools: any[], timestamp: number }> = new Map();
+  // #15: parallel caches for resources/prompts listings (same TTL/eviction as tools).
+  private resourcesCache: Map<string, { data: any, timestamp: number }> = new Map();
+  private promptsCache: Map<string, { prompts: any[], timestamp: number }> = new Map();
   private CACHE_TTL = 60000; // 1 minute cache TTL
 
   /**
@@ -96,6 +99,119 @@ class MCPService {
     } else {
       this.toolsCache.clear();
       log.debug('Cleared all tools cache');
+    }
+  }
+
+  /**
+   * List resources and resource templates published by an MCP server (#15), with caching.
+   * Returns `{ resources, resourceTemplates, error? }`.
+   */
+  async listServerResources(serverName: string) {
+    try {
+      const cached = this.resourcesCache.get(serverName);
+      const now = Date.now();
+      if (cached && now - cached.timestamp < this.CACHE_TTL) {
+        log.debug(`Using cached resources for server ${serverName}`);
+        return cached.data;
+      }
+
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/resources`);
+      const data = await response.json();
+
+      const result = {
+        resources: Array.isArray(data.resources) ? data.resources : [],
+        resourceTemplates: Array.isArray(data.resourceTemplates) ? data.resourceTemplates : [],
+        error: data.error,
+      };
+
+      if (!result.error) {
+        this.resourcesCache.set(serverName, { data: result, timestamp: now });
+      }
+      return result;
+    } catch (error) {
+      log.warn(`Failed to list resources for server ${serverName}:`, error);
+      return {
+        resources: [],
+        resourceTemplates: [],
+        error: `Failed to list resources: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      };
+    }
+  }
+
+  /**
+   * Read a single resource's contents from an MCP server (#15).
+   */
+  async readResource(serverName: string, uri: string) {
+    try {
+      const response = await fetch(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/resources/read?uri=${encodeURIComponent(uri)}`
+      );
+      return await response.json();
+    } catch (error) {
+      log.warn(`Failed to read resource ${uri} on server ${serverName}:`, error);
+      return { success: false, error: `Failed to read resource` };
+    }
+  }
+
+  /**
+   * List prompt templates published by an MCP server (#15), with caching.
+   */
+  async listServerPrompts(serverName: string) {
+    try {
+      const cached = this.promptsCache.get(serverName);
+      const now = Date.now();
+      if (cached && now - cached.timestamp < this.CACHE_TTL) {
+        log.debug(`Using cached prompts for server ${serverName}`);
+        return { prompts: cached.prompts };
+      }
+
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/prompts`);
+      const data = await response.json();
+
+      if (data.error) {
+        log.warn(`Error listing prompts for server ${serverName}:`, data.error);
+        return { prompts: [], error: data.error };
+      }
+
+      const prompts = Array.isArray(data.prompts) ? data.prompts : [];
+      this.promptsCache.set(serverName, { prompts, timestamp: now });
+      return { prompts };
+    } catch (error) {
+      log.warn(`Failed to list prompts for server ${serverName}:`, error);
+      return {
+        prompts: [],
+        error: `Failed to list prompts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      };
+    }
+  }
+
+  /**
+   * Fetch a prompt template expanded with arguments from an MCP server (#15).
+   */
+  async getPrompt(serverName: string, promptName: string, args?: Record<string, string>) {
+    try {
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/prompts/get`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: promptName, arguments: args }),
+      });
+      return await response.json();
+    } catch (error) {
+      log.warn(`Failed to get prompt ${promptName} on server ${serverName}:`, error);
+      return { success: false, error: `Failed to get prompt` };
+    }
+  }
+
+  /**
+   * Clear the resources/prompts caches for a specific server or all servers.
+   */
+  clearCapabilitiesCache(serverName?: string) {
+    if (serverName) {
+      this.resourcesCache.delete(serverName);
+      this.promptsCache.delete(serverName);
+    } else {
+      this.resourcesCache.clear();
+      this.promptsCache.clear();
     }
   }
 

@@ -39,6 +39,19 @@ import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolRespon
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
 import {
+  listServerResources as listResources,
+  listServerResourceTemplates as listResourceTemplates,
+  readResource as readResourceFn,
+} from './resources';
+import { listServerPrompts as listPrompts, getPrompt as getPromptFn } from './prompts';
+import {
+  MCPResource,
+  MCPResourceTemplate,
+  MCPReadResourceResult,
+  MCPPrompt,
+  MCPGetPromptResult,
+} from '@/shared/types/mcp';
+import {
   enhanceConnectionErrorMessage,
   formatErrorChain,
   formatErrorResponse
@@ -799,7 +812,101 @@ export class MCPService {
     
     const result = await callToolFunction(client, serverName, toolName, args, timeout);
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
-    
+
+    return result;
+  }
+
+  /**
+   * Run a list-capability call, reconnecting once if the cached client is stale/dead.
+   *
+   * Same rationale as listServerTools: a client object in the map does not guarantee a
+   * live connection, so a recoverable blip should not silently strip a node's bound
+   * resources/prompts. `lister` returns its own typed shape carrying an optional `error`;
+   * a present `error` triggers a single force-reconnect-and-retry. Capability-absent
+   * servers return an empty list with NO error (see resources.ts/prompts.ts), so they do
+   * not trigger a pointless reconnect.
+   */
+  private async listWithReconnect<T extends { error?: string }>(
+    serverName: string,
+    lister: (client: Client | undefined, serverName: string) => Promise<T>,
+    emptyResult: T
+  ): Promise<T> {
+    let client = this.clients.get(serverName);
+    if (!client) {
+      log.warn(`listWithReconnect: Client not found for ${serverName}`);
+    }
+
+    let result = await lister(client, serverName);
+    if (!result.error) {
+      return result;
+    }
+
+    log.warn(`listWithReconnect: Listing for ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+    const reconnect = await this.forceReconnect(serverName);
+    if (!reconnect.success) {
+      log.warn(`listWithReconnect: Reconnect for ${serverName} failed: ${reconnect.error}`);
+      return { ...emptyResult, error: reconnect.error || result.error };
+    }
+
+    client = this.clients.get(serverName);
+    result = await lister(client, serverName);
+    if (result.error) {
+      log.warn(`listWithReconnect: Retry after reconnect still failed for ${serverName}:`, result.error);
+    } else {
+      log.info(`listWithReconnect: Recovered after reconnect for ${serverName}`);
+    }
+    return result;
+  }
+
+  /**
+   * List the resources a server publishes (#15). Reconnect-and-retry like listServerTools.
+   */
+  async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
+    log.debug(`listServerResources: Entering method for server ${serverName}`);
+    return this.listWithReconnect(serverName, listResources, { resources: [] });
+  }
+
+  /**
+   * List the resource templates a server publishes (#15).
+   */
+  async listServerResourceTemplates(serverName: string): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
+    log.debug(`listServerResourceTemplates: Entering method for server ${serverName}`);
+    return this.listWithReconnect(serverName, listResourceTemplates, { resourceTemplates: [] });
+  }
+
+  /**
+   * Read a resource's contents from a server (#15).
+   */
+  async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+    log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
+    const client = this.clients.get(serverName);
+    if (!client) {
+      log.warn(`readResource: Client not found for ${serverName}`);
+    }
+    const result = await readResourceFn(client, serverName, uri);
+    log.info(`readResource: Read resource ${uri} on ${serverName}`);
+    return result;
+  }
+
+  /**
+   * List the prompt templates a server publishes (#15).
+   */
+  async listServerPrompts(serverName: string): Promise<{ prompts: MCPPrompt[]; error?: string }> {
+    log.debug(`listServerPrompts: Entering method for server ${serverName}`);
+    return this.listWithReconnect(serverName, listPrompts, { prompts: [] });
+  }
+
+  /**
+   * Fetch a prompt template, expanded with arguments, from a server (#15).
+   */
+  async getPrompt(serverName: string, promptName: string, args?: Record<string, string>): Promise<MCPServiceResponse<MCPGetPromptResult>> {
+    log.debug(`getPrompt: Entering method for server ${serverName}, prompt ${promptName}`);
+    const client = this.clients.get(serverName);
+    if (!client) {
+      log.warn(`getPrompt: Client not found for ${serverName}`);
+    }
+    const result = await getPromptFn(client, serverName, promptName, args);
+    log.info(`getPrompt: Got prompt ${promptName} on ${serverName}`);
     return result;
   }
 
