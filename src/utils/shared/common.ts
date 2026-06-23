@@ -27,7 +27,14 @@ export const displayToolName = (fnName: string): string => {
     return parts.length === 3 ? parts[2] : fnName;
   }
   const match = /^mcp_(.+)_[0-9a-z]+$/.exec(fnName);
-  return match && match[1] ? match[1] : fnName;
+  if (match && match[1]) return match[1];
+  // Claude adapter / canonical readable scheme: `server__tool` -> show the tool part.
+  // Split on the FIRST `__` (server has no `__`); tool may contain `__`.
+  const sep = fnName.indexOf('__');
+  if (sep > 0 && sep + 2 < fnName.length) {
+    return fnName.slice(sep + 2);
+  }
+  return fnName;
 };
 
 // Construct the new regex using the source of the first one
