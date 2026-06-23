@@ -270,6 +270,16 @@ export class ProcessNode extends BaseNode {
         tools = toolsResult.value.tools;
       }
 
+      // Rebuild the model-facing-name -> (server, tool) map from the bound tools
+      // (mirrors prep()'s SharedState.toolNameMap) so adapters that run their own
+      // agentic tool loop (Claude subscription) can dispatch calls to mcpService.
+      const toolNameMap: Record<string, { server: string; tool: string }> = {};
+      for (const t of prepResult.availableTools ?? []) {
+        if (t.server && t.originalName) {
+          toolNameMap[t.name] = { server: t.server, tool: t.originalName };
+        }
+      }
+
       // Get the node name for display
       const nodeName = node_params?.label || node_params?.properties?.name || 'Process Node';
 
@@ -293,9 +303,10 @@ export class ProcessNode extends BaseNode {
         messages: prepResult.messages,
         tools,
         iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
-        maxIterations: 30, // Max iterations no longer handled by ModelHandler
+        maxIterations: 30, // Also the agentic-turn cap for self-orchestrating adapters (Claude subscription)
           nodeName, // Pass the node name to be included in the response header
-          nodeId: prepResult.nodeId // Pass the node ID
+          nodeId: prepResult.nodeId, // Pass the node ID
+          toolNameMap // Lets self-orchestrating adapters dispatch tool calls to mcpService
         });
 
         // --- Log successful model call result (check success first) ---

@@ -2,7 +2,10 @@ import axios, { AxiosError } from 'axios';
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
+import { Model } from '@/shared/types/model';
+import { ModelAdapter } from '@/shared/types/model/provider';
 import { createOpenAIClient } from './openaiClient';
+import { getCompletionAdapter } from './adapters';
 
 const log = createLogger('backend/services/model/testConnection');
 
@@ -186,6 +189,50 @@ async function attemptViaAxios(modelName: string, baseUrl: string | undefined, a
   }
 }
 
+/**
+ * Native-adapter test: run a minimal completion through the model's adapter
+ * (Anthropic / Gemini / Claude subscription). These providers don't speak the
+ * OpenAI wire protocol, so the SDK+axios cross-check doesn't apply — a single
+ * adapter round-trip is the authoritative check.
+ */
+async function attemptViaAdapter(model: Model, apiKey: string): Promise<ModelTestAttempt> {
+  const started = Date.now();
+  try {
+    const adapter = getCompletionAdapter(model);
+    const completion = await adapter.createCompletion({
+      model,
+      apiKey,
+      messages: [...TEST_MESSAGES],
+      temperature: 0,
+    });
+    const durationMs = Date.now() - started;
+
+    const maybeError = (completion as { error?: { message?: string } } | undefined)?.error;
+    if (maybeError) {
+      return { ok: false, durationMs, error: { message: maybeError.message || 'Provider returned an error' } };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      durationMs,
+      content: completion.choices?.[0]?.message?.content?.slice(0, 500) ?? '',
+      usage: completion.usage as unknown as Record<string, unknown> | undefined,
+    };
+  } catch (error) {
+    const durationMs = Date.now() - started;
+    return {
+      ok: false,
+      durationMs,
+      error: {
+        name: error instanceof Error ? error.name : undefined,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+    };
+  }
+}
+
 function buildDiagnosis(sdk: ModelTestAttempt, axiosAttempt: ModelTestAttempt): string {
   if (sdk.ok && axiosAttempt.ok) {
     return 'Both the SDK and axios reached the provider successfully. The model, key, and base URL are working.';
@@ -234,9 +281,28 @@ export async function testModelConnection(params: {
   baseUrl?: string;
   apiKey: string;
   provider?: string;
+  adapter?: ModelAdapter;
+  model?: Model;
 }): Promise<ModelTestResult> {
-  const { modelName, baseUrl, apiKey, provider } = params;
-  log.info('Testing model connection', { modelName, baseUrl, provider, hasApiKey: Boolean(apiKey) });
+  const { modelName, baseUrl, apiKey, provider, adapter, model } = params;
+  log.info('Testing model connection', { modelName, baseUrl, provider, adapter, hasApiKey: Boolean(apiKey) });
+
+  // Native adapters (Anthropic / Gemini / Claude subscription) don't speak the
+  // OpenAI protocol, so run a single adapter round-trip instead of the
+  // SDK+axios cross-check. Requires the stored Model object.
+  if (adapter && adapter !== 'openai' && model) {
+    const sdk = await attemptViaAdapter(model, apiKey);
+    const naAxios: ModelTestAttempt = {
+      ok: sdk.ok,
+      durationMs: 0,
+      content: 'n/a — native SDK adapter; the axios cross-check applies only to OpenAI-compatible endpoints.',
+    };
+    const diagnosis = sdk.ok
+      ? `Connected successfully via the ${adapter} adapter (native SDK). The model and credentials are working.`
+      : `The native ${adapter} adapter failed: ${sdk.error?.message ?? 'unknown error'}. ` +
+        `Check the model name and the ${adapter === 'claude-cli' ? 'OAuth token (claude setup-token) and that the `claude` CLI is installed' : 'API key'}.`;
+    return { ok: sdk.ok, model: modelName, baseUrl, provider, sdk, axios: naAxios, diagnosis };
+  }
 
   // Run both transports in parallel — they are independent and this halves the
   // wait. Each fully captures its own outcome, so neither can fail the other.

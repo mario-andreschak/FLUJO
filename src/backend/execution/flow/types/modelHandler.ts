@@ -15,6 +15,12 @@ export interface ModelCallInput {
   maxIterations: number;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
+  /**
+   * Maps model-facing MCP tool names back to (server, tool). Forwarded to
+   * adapters that run their own agentic tool loop (Claude subscription) so they
+   * can dispatch tool calls to mcpService. Built from SharedState.toolNameMap.
+   */
+  toolNameMap?: Record<string, { server: string; tool: string }>;
 }
 
 // Result of model call

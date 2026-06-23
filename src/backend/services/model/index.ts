@@ -9,7 +9,7 @@ import {
   CompletionResponse,
   NormalizedModel
 } from '@/shared/types/model/response';
-import { ModelProvider } from '@/shared/types/model/provider';
+import { ModelProvider, ModelAdapter } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import {
   encryptApiKey,
@@ -447,12 +447,15 @@ class ModelService {
     baseUrl?: string;
     apiKey?: string;
     provider?: ModelProvider;
+    adapter?: ModelAdapter;
   }): Promise<ModelTestResult> {
     const { modelId, apiKey } = params;
 
     let modelName = params.name;
     let baseUrl = params.baseUrl;
     let provider = params.provider;
+    let adapter = params.adapter;
+    let storedModel: Model | null = null;
     let resolvedApiKey: string | null = null;
 
     if (apiKey && apiKey !== MASKED_API_KEY) {
@@ -462,13 +465,14 @@ class ModelService {
     // Fill in any missing fields (and the key, if no usable one was supplied)
     // from the stored model record.
     if (modelId) {
-      const stored = await this.getModel(modelId);
-      if (stored) {
-        modelName = modelName || stored.name;
-        baseUrl = baseUrl || stored.baseUrl;
-        provider = provider || stored.provider;
+      storedModel = await this.getModel(modelId);
+      if (storedModel) {
+        modelName = modelName || storedModel.name;
+        baseUrl = baseUrl || storedModel.baseUrl;
+        provider = provider || storedModel.provider;
+        adapter = adapter || storedModel.adapter;
         if (!resolvedApiKey) {
-          resolvedApiKey = await resolveAndDecryptApiKey(stored.ApiKey);
+          resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
         }
       }
     }
@@ -485,6 +489,9 @@ class ModelService {
       baseUrl,
       apiKey: resolvedApiKey,
       provider,
+      adapter,
+      // Native adapters need a Model-shaped object to run via getCompletionAdapter.
+      model: storedModel ?? undefined,
     });
   }
 

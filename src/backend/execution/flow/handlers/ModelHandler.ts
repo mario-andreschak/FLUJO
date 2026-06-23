@@ -12,7 +12,7 @@ import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName } from './toolNamespace';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
-import { createOpenAIClient } from '@/backend/services/model/openaiClient';
+import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mcpService } from '@/backend/services/mcp';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -98,7 +98,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, tools, nodeName, nodeId } = input; // Added nodeId
+    const { modelId, prompt, messages, tools, nodeName, nodeId, toolNameMap, maxIterations } = input; // Added nodeId
 
     // Fetch model information for display name
     let modelDisplayName = '';
@@ -126,7 +126,7 @@ export class ModelHandler {
     log.verbose('callModel input', JSON.stringify(input));
 
     // Call generateCompletion ONCE
-    const response = await this.generateCompletion(modelId, prompt, messages, tools);
+    const response = await this.generateCompletion(modelId, prompt, messages, tools, { toolNameMap, maxTurns: maxIterations });
 
     if (!response.success) {
       // Add verbose logging of the error response
@@ -223,7 +223,11 @@ export class ModelHandler {
     modelId: string,
     prompt: string,
     messages: FlujoChatMessage[], // Expect FlujoChatMessage
-    tools?: OpenAI.ChatCompletionTool[]
+    tools?: OpenAI.ChatCompletionTool[],
+    opts?: {
+      toolNameMap?: Record<string, { server: string; tool: string }>;
+      maxTurns?: number;
+    }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
     log.verbose('generateCompletion input', JSON.stringify({
@@ -263,31 +267,18 @@ export class ModelHandler {
       }
       log.verbose(`decrypted api key ${decryptedApiKey}`)
       log.verbose(` baseurl ${model.baseUrl}`)
-      // Initialize the OpenAI client. Use the shared factory so the Node
-      // transport is tuned to avoid intermittent "Premature close" failures
-      // (keep-alive connection reuse). See createOpenAIClient for the rationale.
-      const openai = createOpenAIClient({
-        apiKey: decryptedApiKey,
-        baseURL: model.baseUrl
-      });
 
-      // Create the request parameters - OpenAI expects ChatCompletionMessageParam, not FlujoChatMessage
-      // We need to strip the timestamp before sending
+      // Create the request parameters - the adapters expect ChatCompletionMessageParam,
+      // not FlujoChatMessage, so strip the FLUJO-internal timestamp before sending.
       const apiMessages: OpenAI.ChatCompletionMessageParam[] = messages.map(({ timestamp, ...rest }) => rest);
 
-      const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
-        model: model.name,
-        messages: apiMessages, // Send messages without timestamp
-        temperature
-      };
-
-      // Add tools if available
+      // Sanitize tool schemas for broad provider compatibility (handles string
+      // properties with unsupported `format` values, etc.). Done once here so
+      // every adapter receives clean tool definitions.
+      let sanitizedTools: OpenAI.ChatCompletionTool[] | undefined;
       if (tools && tools.length > 0) {
-        // Use the sanitizeSchema function from ToolHandler to ensure compatibility with all LLM providers
-        // This handles all string properties with unsupported format values, not just specific properties
         const { ToolHandler } = require('../handlers/ToolHandler');
-        
-        const sanitizedTools = tools.map(tool => {
+        sanitizedTools = tools.map(tool => {
           if (tool.type === 'function' && tool.function.parameters) {
             return {
               ...tool,
@@ -299,22 +290,35 @@ export class ModelHandler {
           }
           return tool;
         });
-        
-        requestParams.tools = sanitizedTools;
       }
 
+      // Select the completion adapter for this model's provider/SDK. The
+      // OpenAI-compatible adapter wraps the original hardened-client path; the
+      // native adapters (Anthropic, Gemini, Claude CLI) translate to/from their
+      // own APIs but return the same OpenAI-shaped response, so everything below
+      // is provider-agnostic.
+      const adapter = getCompletionAdapter(model);
 
       log.debug(`calling chatcompletion`)
-      log.verbose(`calling chatcompletion now with MODEL ${ JSON.stringify(requestParams.model)}`)
-      log.verbose(`calling chatcompletion now with TEMP ${ JSON.stringify(requestParams.temperature)}`)
-      log.verbose(`calling chatcompletion now with MESSAGES ${ JSON.stringify(requestParams.messages)}`)
-      log.verbose(`calling chatcompletion now with TOOLS ${ JSON.stringify(requestParams.tools)}`)
+      log.verbose(`calling chatcompletion now with ADAPTER ${JSON.stringify(model.adapter || 'openai')}`)
+      log.verbose(`calling chatcompletion now with MODEL ${ JSON.stringify(model.name)}`)
+      log.verbose(`calling chatcompletion now with TEMP ${ JSON.stringify(temperature)}`)
+      log.verbose(`calling chatcompletion now with MESSAGES ${ JSON.stringify(apiMessages)}`)
+      log.verbose(`calling chatcompletion now with TOOLS ${ JSON.stringify(sanitizedTools)}`)
 
       // --- Log the exact request being sent ---
-      log.debug('[ModelHandler.generateCompletion] Sending request to OpenAI API', { requestParams: JSON.stringify(requestParams) }); // Use debug level
+      log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
-      // Make the API request using the OpenAI client
-      const chatCompletion = await openai.chat.completions.create(requestParams);
+      // Make the API request through the selected adapter.
+      const chatCompletion = await adapter.createCompletion({
+        model,
+        apiKey: decryptedApiKey,
+        messages: apiMessages,
+        tools: sanitizedTools,
+        temperature,
+        toolNameMap: opts?.toolNameMap,
+        maxTurns: opts?.maxTurns,
+      });
 
       // --- Log the raw response received ---
       log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: JSON.stringify(chatCompletion) }); // Use debug level

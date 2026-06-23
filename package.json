@@ -12,8 +12,11 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.186",
+    "@anthropic-ai/sdk": "^0.105.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
+    "@google/genai": "^2.9.0",
     "@isomorphic-git/lightning-fs": "^4.6.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mui/icons-material": "^6.4.5",
@@ -42,7 +45,11 @@
     "slate": "^0.112.0",
     "slate-history": "^0.110.3",
     "slate-react": "^0.112.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "zod": "^4.4.3"
+  },
+  "overrides": {
+    "zod": "$zod"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

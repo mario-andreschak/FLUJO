@@ -17,12 +17,21 @@ import {
   IconButton,
   Autocomplete,
   CircularProgress,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import { Link as LinkIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { Model } from '@/shared/types';
-import { ModelProvider, PROVIDER_INFO } from '@/shared/types/model/provider';
+import {
+  ModelProvider,
+  ModelAdapter,
+  PROVIDER_PROFILES,
+  getProviderProfile,
+} from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
 
@@ -180,8 +189,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         displayName: '',
         description: '',
         ApiKey: '',
-        baseUrl: '',
+        baseUrl: 'https://api.openai.com/v1',
         provider: 'openai' as ModelProvider,
+        adapter: 'openai' as ModelAdapter,
         promptTemplate: '',
         temperature: '0.0',
       });
@@ -196,27 +206,24 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   // to the provider-fetch endpoint for listing models, and only saved (encrypted) when the
   // user clicks Save. This avoids writing a half-configured model + plaintext key to disk.
 
-  // Update provider when baseUrl changes
-  useEffect(() => {
-    if (!formState.baseUrl) return;
-    
-    let provider: ModelProvider = 'openai';
-    if (formState.baseUrl.includes('openrouter.ai')) {
-      provider = 'openrouter';
-    } else if (formState.baseUrl.includes('api.x.ai')) {
-      provider = 'xai';
-    } else if (formState.baseUrl.includes('generativelanguage.googleapis.com')) {
-      provider = 'gemini';
-    } else if (formState.baseUrl.includes('api.anthropic.com')) {
-      provider = 'anthropic';
-    } else if (formState.baseUrl.includes('localhost:11434') || formState.baseUrl.includes('127.0.0.1:11434')) {
-      provider = 'ollama';
-    } else if (formState.baseUrl.includes('api.mistral.ai')) {
-      provider = 'mistral';
-    }
-    
-    setFormState(prev => ({ ...prev, provider }));
-  }, [formState.baseUrl]);
+  // The provider/SDK is now chosen explicitly via the Provider dropdown (no
+  // longer inferred from the base URL). The currently-selected profile is
+  // derived from the stored provider + adapter.
+  const currentProfile = getProviderProfile(formState.provider, formState.adapter);
+
+  // Apply a provider profile: pins the vendor (provider) and SDK (adapter) and
+  // prefills the default base URL (empty for native SDK / CLI providers).
+  const handleSelectProfile = (profileId: string) => {
+    const profile = PROVIDER_PROFILES.find(p => p.id === profileId);
+    if (!profile) return;
+    setFormState(prev => ({
+      ...prev,
+      provider: profile.provider,
+      adapter: profile.adapter,
+      baseUrl: profile.baseUrl,
+    }));
+    setErrors(prev => ({ ...prev, baseUrl: '' }));
+  };
 
   const handleChange = (field: keyof Model, value: string) => {
     setFormState(prev => ({ ...prev, [field]: value }));
@@ -276,6 +283,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         ApiKey: formState.ApiKey,
         baseUrl: formState.baseUrl,
         provider: formState.provider!,
+        adapter: formState.adapter || 'openai',
         promptTemplate: formState.promptTemplate,
         temperature: formState.temperature,
       } as Model);
@@ -345,29 +353,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   error={!!errors.displayName}
                   helperText={errors.displayName || "The name shown in the UI"}
                 />
-                
-                <TextField
-                  margin="dense"
-                  label="Base URL (Optional)"
-                  fullWidth
-                  value={formState.baseUrl || ''}
-                  onChange={(e) => handleChange('baseUrl', e.target.value)}
-                />
-                
-                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1, mb: 2 }}>
-                  {Object.entries(PROVIDER_INFO).map(([providerKey, providerData]) => (
-                    <Button
-                      key={providerKey}
-                      size="small"
-                      variant="outlined"
-                      onClick={() => handleChange('baseUrl', providerData.baseUrl)}
-                    >
-                      {providerData.label}
-                    </Button>
-                  ))}
-                </Box>
-                
-                <Box sx={{ position: 'relative', mt: 2, mb: 1 }}>
+
+                <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
                   <TextField
                     margin="dense"
                     label="API Key"
@@ -383,7 +370,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       endAdornment: (
                         <Box sx={{ display: 'flex', alignItems: 'center' }}>
                           {isApiKeyBound ? (
-                            <IconButton 
+                            <IconButton
                               onClick={handleUnbindApiKey}
                               size="small"
                               title="Unbind from global variable"
@@ -391,7 +378,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                               <CancelIcon />
                             </IconButton>
                           ) : (
-                            <IconButton 
+                            <IconButton
                               onClick={handleBindApiKey}
                               size="small"
                               title="Bind to global variable"
@@ -405,10 +392,48 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   />
                 </Box>
 
+                <FormControl fullWidth margin="dense">
+                  <InputLabel id="provider-profile-label">Provider</InputLabel>
+                  <Select
+                    labelId="provider-profile-label"
+                    label="Provider"
+                    value={currentProfile.id}
+                    onChange={(e) => handleSelectProfile(e.target.value)}
+                  >
+                    {PROVIDER_PROFILES.map(profile => (
+                      <MenuItem key={profile.id} value={profile.id}>
+                        {profile.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, mb: 1, display: 'block' }}>
+                  Uses the <strong>{currentProfile.sdkLabel}</strong>
+                  {currentProfile.adapter === 'claude-cli'
+                    ? '. Paste an OAuth token from `claude setup-token` into the API Key field.'
+                    : ''}
+                </Typography>
+
+                {currentProfile.showBaseUrl && (
+                  <TextField
+                    margin="dense"
+                    label="Base URL"
+                    fullWidth
+                    value={formState.baseUrl || ''}
+                    onChange={(e) => handleChange('baseUrl', e.target.value)}
+                    helperText="Endpoint for the OpenAI-compatible API."
+                  />
+                )}
+
                 <Autocomplete
                   freeSolo
                   loading={isLoadingModels}
-                  options={openRouterModels.map(model => model.id)}
+                  options={
+                    currentProfile.showBaseUrl
+                      ? openRouterModels.map(model => model.id)
+                      : (currentProfile.defaultModels ?? [])
+                  }
                   value={formState.name || ''}
                   onChange={(_, newValue) => {
                     handleChange('name', newValue || '');
@@ -499,17 +524,6 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   rows={3}
                   value={formState.description || ''}
                   onChange={(e) => handleChange('description', e.target.value)}
-                />
-                
-                <TextField
-                  margin="dense"
-                  label="Temperature"
-                  fullWidth
-                  type="number"
-                  inputProps={{ min: 0, max: 1, step: 0.1 }}
-                  value={formState.temperature || '0.0'}
-                  onChange={(e) => handleChange('temperature', e.target.value)}
-                  helperText="Value between 0 and 1. Lower values make output more deterministic."
                 />
               </Box>
             </Grid>

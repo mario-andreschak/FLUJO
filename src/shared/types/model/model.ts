@@ -1,4 +1,4 @@
-import { ModelProvider } from './provider';
+import { ModelProvider, ModelAdapter } from './provider';
 
 export interface Model {
     id: string;
@@ -8,6 +8,12 @@ export interface Model {
     ApiKey: string;
     baseUrl?: string;
     provider?: ModelProvider;
+    /**
+     * Which completion adapter/SDK drives this model. Optional for backward
+     * compatibility: models saved before this field existed are treated as
+     * 'openai' (the OpenAI-compatible path), which is how they always behaved.
+     */
+    adapter?: ModelAdapter;
     promptTemplate?: string;
     // New fields
     reasoningSchema?: string;

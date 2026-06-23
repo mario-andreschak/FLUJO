@@ -154,6 +154,15 @@ if ($manifest -and $manifest.prerequisites) {
     }
 }
 
+# Claude Code CLI (npm global) - offer removal only if FLUJO installed it (and it
+# wasn't already present), mirroring the prereq default-to-remove behavior.
+$removeClaudeCli = $false
+if ($manifest -and $manifest.claudeCli -and $manifest.claudeCli.installed -and `
+    -not $manifest.claudeCli.preexisting -and (Test-Command 'claude')) {
+    $pkg = if ($manifest.claudeCli.npmPackage) { [string]$manifest.claudeCli.npmPackage } else { '@anthropic-ai/claude-code' }
+    $removeClaudeCli = Read-YesNo "Remove the Claude Code CLI that FLUJO installed (npm: $pkg)?" $true
+}
+
 # Execution policy revert - only offered if the manifest records that FLUJO set it.
 $revertPolicy = $false
 if ($manifest -and $manifest.executionPolicyChanged) {
@@ -204,6 +213,18 @@ foreach ($p in $toRemove) {
         Write-Ok "$($p.displayName) removed (or removal started)."
     } catch {
         Write-Warn2 "Could not remove $($p.displayName): $($_.Exception.Message)"
+    }
+}
+
+# 5b-2. Remove the Claude Code CLI (npm global) if FLUJO installed it.
+if ($removeClaudeCli) {
+    $pkg = if ($manifest.claudeCli.npmPackage) { [string]$manifest.claudeCli.npmPackage } else { '@anthropic-ai/claude-code' }
+    Write-Step "Removing Claude Code CLI via npm ($pkg)"
+    try {
+        npm uninstall -g $pkg | Out-Host
+        Write-Ok "Claude CLI removed (or removal started)."
+    } catch {
+        Write-Warn2 "Could not remove the Claude CLI: $($_.Exception.Message)"
     }
 }
 

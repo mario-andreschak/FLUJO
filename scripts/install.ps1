@@ -122,6 +122,38 @@ function Install-Prereq {
     }
 }
 
+# Install the Claude Code CLI (provides the `claude` command) via npm. This is
+# only needed for the "Claude Subscription" model provider, which drives a Claude
+# Pro/Max subscription through the Claude Agent SDK and authenticates with the
+# OAuth token from `claude setup-token`. npm is available because Node.js was
+# installed above. Returns a record folded into the uninstall manifest.
+function Install-ClaudeCli {
+    $preexisting = Test-Command 'claude'
+    if ($preexisting) {
+        Write-Ok "Claude CLI already installed ($((Get-Command claude).Source))"
+    } else {
+        Write-Step "Installing Claude Code CLI via npm (@anthropic-ai/claude-code)"
+        Write-Warn2 "(Only needed for the 'Claude Subscription' model provider; safe to skip otherwise.)"
+        try {
+            npm install -g '@anthropic-ai/claude-code' | Out-Host
+            Update-SessionEnvironment
+            if (Test-Command 'claude') {
+                Write-Ok "Claude CLI installed. Authenticate your subscription later with: claude setup-token"
+            } else {
+                Write-Warn2 "Claude CLI installed but 'claude' is not yet on PATH. Reopen the terminal."
+            }
+        } catch {
+            Write-Warn2 "Could not install the Claude CLI: $($_.Exception.Message)"
+            Write-Warn2 "Install it later (only for Claude Subscription) with: npm install -g @anthropic-ai/claude-code"
+        }
+    }
+    return [PSCustomObject]@{
+        Installed   = [bool](Test-Command 'claude')
+        Preexisting = $preexisting
+        NpmPackage  = '@anthropic-ai/claude-code'
+    }
+}
+
 # Create a global 'flujo' command so FLUJO can be started from any folder by
 # typing `flujo`. Writes a tiny launcher to a bin dir on the user's PATH, with
 # the chosen install location baked in.
@@ -193,7 +225,8 @@ function Write-InstallManifest {
         [string]$AppDir,
         [object[]]$Prereqs,
         [bool]$DesktopShortcut,
-        [bool]$ExecutionPolicyChanged
+        [bool]$ExecutionPolicyChanged,
+        [object]$ClaudeCli
     )
     try {
         $binDir = Join-Path $env:LOCALAPPDATA 'FLUJO-cli'
@@ -207,6 +240,13 @@ function Write-InstallManifest {
             repoUrl                = $RepoUrl
             desktopShortcut        = $DesktopShortcut
             executionPolicyChanged = $ExecutionPolicyChanged
+            claudeCli              = if ($ClaudeCli) {
+                [PSCustomObject]@{
+                    installed   = [bool]$ClaudeCli.Installed
+                    preexisting = [bool]$ClaudeCli.Preexisting
+                    npmPackage  = [string]$ClaudeCli.NpmPackage
+                }
+            } else { $null }
             prerequisites          = @($Prereqs | Where-Object { $_ } | ForEach-Object {
                 [PSCustomObject]@{
                     command     = $_.Command
@@ -359,6 +399,10 @@ $prereqResults = @(
 
 Update-SessionEnvironment
 
+# Claude Code CLI (npm global) — needed only by the optional "Claude Subscription"
+# model provider. Installed after Node/npm are present.
+$claudeCliResult = Install-ClaudeCli
+
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
@@ -404,7 +448,8 @@ try {
 
     # Record everything we did, so scripts\uninstall.ps1 can reverse it precisely.
     Write-InstallManifest -AppDir $InstallDir -Prereqs $prereqResults `
-        -DesktopShortcut $makeShortcut -ExecutionPolicyChanged $policyChanged
+        -DesktopShortcut $makeShortcut -ExecutionPolicyChanged $policyChanged `
+        -ClaudeCli $claudeCliResult
 
     if ($startAfter) {
         Write-Step "Starting FLUJO (npm start) - open http://localhost:4200"
