@@ -132,15 +132,18 @@ export class ModelHandler {
     // subscription). It registers each tool call in the shared approval registry,
     // announces it on the conversation's event stream (the existing
     // run:awaiting_approval UI), and blocks until the /respond route resolves it.
+    // One emit function bound to this conversation, reused for the approval gate
+    // and the live transcript sink below.
+    const emit = conversationId ? executionEventBus.emitterFor(conversationId) : undefined;
+
     const requestToolApproval =
-      requireToolApproval && conversationId
+      requireToolApproval && emit && conversationId
         ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
             const toolCall: OpenAI.ChatCompletionMessageToolCall = {
               id: call.id,
               type: 'function',
               function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
             };
-            const emit = executionEventBus.emitterFor(conversationId);
             return new Promise<boolean>((resolve) => {
               registerPendingApproval(conversationId, toolCall, resolve);
               emit({ type: 'run:awaiting_approval', pendingToolCalls: listPendingToolCalls(conversationId) });
@@ -148,11 +151,26 @@ export class ModelHandler {
           }
         : undefined;
 
+    // Live sink for self-orchestrating adapters (Claude subscription): surface
+    // each assistant/tool message on the conversation's event stream AS it is
+    // produced inside the adapter's agentic loop, rather than only when the whole
+    // (possibly hour-long) call returns. The message carries a stable id that the
+    // transcript materialization below reuses, so this live copy and the final
+    // persisted copy dedupe in the UI. Emitting also keeps the frontend's
+    // "no activity" timer reset while background tool calls are in flight.
+    const onTranscriptMessage = emit
+      ? (message: FlujoChatMessage) => {
+          const withNode: FlujoChatMessage = nodeId ? { ...message, processNodeId: nodeId } : message;
+          emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
+        }
+      : undefined;
+
     // Call generateCompletion ONCE
     const response = await this.generateCompletion(modelId, prompt, messages, tools, {
       toolNameMap,
       maxTurns: maxIterations,
       requestToolApproval,
+      onTranscriptMessage,
     });
 
     if (!response.success) {
@@ -202,8 +220,11 @@ export class ModelHandler {
         const isLast = idx === transcript.length - 1;
         finalMessages.push({
           ...msg,
-          id: uuidv4(),
-          timestamp: baseTs + idx, // keep ordering stable
+          // Preserve the id/timestamp the adapter assigned (and live-emitted via
+          // onTranscriptMessage) so the persisted message dedupes against the
+          // already-streamed copy instead of duplicating it in the UI.
+          id: msg.id ?? uuidv4(),
+          timestamp: msg.timestamp ?? baseTs + idx, // keep ordering stable
           processNodeId: nodeId,
           ...(isLast && usage ? { usage } : {}),
         } as FlujoChatMessage);
@@ -278,6 +299,7 @@ export class ModelHandler {
         name: string;
         args: Record<string, unknown>;
       }) => Promise<boolean>;
+      onTranscriptMessage?: (message: FlujoChatMessage) => void;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -370,6 +392,7 @@ export class ModelHandler {
         toolNameMap: opts?.toolNameMap,
         maxTurns: opts?.maxTurns,
         requestToolApproval: opts?.requestToolApproval,
+        onTranscriptMessage: opts?.onTranscriptMessage,
       });
 
       // --- Log the raw response received ---

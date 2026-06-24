@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import OpenAI from 'openai';
+import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
 /**
  * Options for {@link createOpenAIClient}.
@@ -36,7 +37,7 @@ export interface CreateOpenAIClientOptions {
  * SDK retries on so transient 429/5xx still get a second chance.
  */
 export function createOpenAIClient(opts: CreateOpenAIClientOptions): OpenAI {
-  const { apiKey, baseURL, maxRetries = 2, timeout = 10 * 60 * 1000 } = opts;
+  const { apiKey, baseURL, maxRetries = 2, timeout = LLM_REQUEST_TIMEOUT_MS } = opts;
 
   const useHttps = !baseURL || baseURL.trim().toLowerCase().startsWith('https');
   const httpAgent = useHttps

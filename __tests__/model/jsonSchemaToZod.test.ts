@@ -45,4 +45,41 @@ describe('jsonSchemaToZod', () => {
     const anyZod = jsonSchemaNodeToZod({ description: 'mystery' });
     expect(anyZod.safeParse({ whatever: true }).success).toBe(true);
   });
+
+  // Regression: an open-ended object param (e.g. SAP's `importing`) used to
+  // become z.object({}), whose strip mode silently emptied every key the model
+  // sent — so the tool received {} and SAP rejected the call.
+  it('preserves arbitrary keys for a free-form object (no declared properties)', () => {
+    const zt = jsonSchemaNodeToZod({ type: 'object' });
+    const parsed = zt.safeParse({ REQUTEXT: 'Hello from MCP' });
+    expect(parsed.success).toBe(true);
+    expect((parsed as any).data).toEqual({ REQUTEXT: 'Hello from MCP' });
+  });
+
+  it('keeps declared keys AND passes through extra keys for a shaped object', () => {
+    const zt = jsonSchemaNodeToZod({
+      type: 'object',
+      properties: { action: { type: 'string' } },
+      required: ['action'],
+    });
+    const parsed = zt.safeParse({ action: 'call', commit_mode: 'none' });
+    expect(parsed.success).toBe(true);
+    // The undeclared `commit_mode` survives instead of being stripped.
+    expect((parsed as any).data).toEqual({ action: 'call', commit_mode: 'none' });
+  });
+
+  it('round-trips inner keys of a nested free-form object property', () => {
+    const shape = jsonSchemaToZodShape({
+      type: 'object',
+      properties: {
+        function: { type: 'string' },
+        importing: { type: 'object' }, // free-form object property
+      },
+      required: ['function'],
+    });
+    // The nested object preserves the model-supplied key.
+    const parsed = shape.importing.safeParse({ REQUTEXT: 'x' });
+    expect(parsed.success).toBe(true);
+    expect((parsed as any).data).toEqual({ REQUTEXT: 'x' });
+  });
 });

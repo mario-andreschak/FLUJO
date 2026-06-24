@@ -48,9 +48,24 @@ export function jsonSchemaNodeToZod(node: unknown): z.ZodTypeAny {
     case 'array':
       zt = z.array(jsonSchemaNodeToZod(schema.items));
       break;
-    case 'object':
-      zt = z.object(shapeFromProperties(schema));
+    case 'object': {
+      const hasProps =
+        schema.properties &&
+        typeof schema.properties === 'object' &&
+        Object.keys(schema.properties as object).length > 0;
+      if (!hasProps) {
+        // Free-form object (`{type:'object'}` with no declared properties, e.g.
+        // SAP's `importing`/`exporting`/`tables` params). `z.object({})` runs in
+        // strip mode and would silently drop every key the model supplied, so
+        // the tool receives `{}`. A record preserves the arbitrary keys.
+        zt = z.record(z.string(), z.any());
+      } else {
+        // A declared shape, but passthrough so nested/extra keys the model
+        // legitimately sends aren't stripped either.
+        zt = z.object(shapeFromProperties(schema)).passthrough();
+      }
       break;
+    }
     default:
       zt = z.any();
   }

@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, parseToolArgs } from './messageUtils';
+import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
 
@@ -192,7 +193,9 @@ export class GeminiAdapter implements CompletionAdapter {
     tools,
     temperature,
   }: CompletionInput): Promise<CompletionResult> {
-    const ai = new GoogleGenAI({ apiKey });
+    // Raise the per-request timeout (SDK default is short relative to a long
+    // agentic turn) via httpOptions; see shared timeouts config.
+    const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
 
     const { systemInstruction, contents } = toGeminiContents(messages);
     const functionDeclarations = toGeminiTools(tools);

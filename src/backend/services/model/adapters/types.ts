@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { Model } from '@/shared/types/model';
+import { FlujoChatMessage } from '@/shared/types/chat';
 
 /**
  * Everything an adapter needs to perform a single chat completion. The caller
@@ -40,6 +41,20 @@ export interface CompletionInput {
     name: string;
     args: Record<string, unknown>;
   }) => Promise<boolean>;
+  /**
+   * Optional live sink for self-orchestrating adapters (Claude subscription)
+   * that run their own agentic loop inside a single createCompletion call. It is
+   * called as each assistant/tool message is produced, so the execution layer
+   * can surface it on the conversation's live event stream immediately — instead
+   * of only after the whole (possibly very long) call returns. Without it a long
+   * agentic run shows nothing in the UI until it finishes, the "no activity"
+   * hint fires, and a timeout would discard every interim tool call/result.
+   *
+   * Each streamed message carries a stable `id`; the SAME message (same id) is
+   * also present in the returned `transcript`, so the live copy and the final
+   * persisted copy dedupe in the UI rather than duplicating.
+   */
+  onTranscriptMessage?: (message: FlujoChatMessage) => void;
 }
 
 /**
@@ -52,7 +67,13 @@ export interface CompletionInput {
  */
 export interface CompletionResult {
   completion: OpenAI.Chat.Completions.ChatCompletion;
-  transcript?: OpenAI.ChatCompletionMessageParam[];
+  /**
+   * Ordered assistant/tool messages produced by a self-orchestrating adapter's
+   * internal agentic loop. Each carries a stable `id` (and timestamp) so it
+   * matches the live-streamed copy emitted via `onTranscriptMessage`. The caller
+   * preserves these ids when materializing the messages into the conversation.
+   */
+  transcript?: FlujoChatMessage[];
 }
 
 /**

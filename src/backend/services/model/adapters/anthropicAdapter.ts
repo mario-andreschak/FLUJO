@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType, parseToolArgs } from './messageUtils';
+import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -201,6 +202,9 @@ export class AnthropicAdapter implements CompletionAdapter {
       // Honour a custom base URL if one was configured; otherwise the SDK
       // default (api.anthropic.com) is used.
       ...(model.baseUrl ? { baseURL: model.baseUrl } : {}),
+      // The SDK defaults to a ~10-minute per-request timeout; raise it so a slow
+      // turn in a long flow isn't aborted (see shared timeouts config).
+      timeout: LLM_REQUEST_TIMEOUT_MS,
     });
 
     const { system, messages: anthropicMessages } = toAnthropicMessages(messages);

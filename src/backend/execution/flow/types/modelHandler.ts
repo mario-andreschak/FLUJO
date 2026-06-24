@@ -41,7 +41,7 @@ export interface ModelCallResult {
    * calls + results are visible, instead of the single assistant message it
    * builds for request/response adapters.
    */
-  transcript?: OpenAI.ChatCompletionMessageParam[];
+  transcript?: FlujoChatMessage[];
 }
 
 // Tool call processing input

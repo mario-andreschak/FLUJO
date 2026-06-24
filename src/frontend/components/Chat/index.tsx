@@ -23,6 +23,7 @@ import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; 
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
+import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -187,6 +188,10 @@ const Chat: React.FC = () => {
       apiKey: 'FLUJO', // Replace with actual key if needed, though likely handled by backend proxy
       dangerouslyAllowBrowser: true,
       maxRetries: 0, // Add this line to disable automatic retries
+      // A flow run is one blocking request that can take a long time (long
+      // agentic loops, slow external tools). Use the shared generous ceiling so
+      // the browser doesn't abort a healthy run and discard the whole result.
+      timeout: LLM_REQUEST_TIMEOUT_MS,
     });
   }, []);
 

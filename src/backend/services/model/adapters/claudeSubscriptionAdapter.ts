@@ -7,6 +7,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
@@ -130,8 +131,10 @@ interface ToolInteraction {
  * in-process MCP server whose handlers dispatch to `mcpService` — so every tool
  * call executes AND is observed inside FLUJO. Because the calls route through our
  * own handlers, we capture each call + result there (structured) rather than
- * parsing the SDK's streamed messages, and replay them into the conversation as
- * a `transcript`. Handoff tools are exposed too: invoking one records the handoff
+ * parsing the SDK's streamed messages. Each captured assistant/tool message is
+ * BOTH streamed live (via `onTranscriptMessage`, so the UI sees tool calls as
+ * they happen instead of an hour later) AND collected into the returned
+ * `transcript` for persistence. Handoff tools are exposed too: invoking one records the handoff
  * and aborts the run, surfacing it as a tool_call so FLUJO's edge routing fires.
  * `canUseTool` auto-approves FLUJO's tools (the seam for an interactive approval
  * UI); `maxTurns` bounds the loop.
@@ -149,6 +152,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     toolNameMap,
     maxTurns,
     requestToolApproval,
+    onTranscriptMessage,
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
@@ -158,9 +162,31 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const { systemPrompt, content: userContent } = buildUserMessage(messages);
 
     const usedNames = new Set<string>();
-    const toolInteractions: ToolInteraction[] = [];
     let handoffCall: { name: string; args: Record<string, unknown> } | null = null;
     const abortController = new AbortController();
+
+    // The conversation messages produced by this run, in order. Each is given a
+    // stable id and streamed live as it is recorded; the same array is returned
+    // as the transcript so the caller can persist (and re-emit) them with
+    // matching ids. `txSeq` keeps timestamps monotonic within the run.
+    const transcript: FlujoChatMessage[] = [];
+    const baseTs = Date.now();
+    let txSeq = 0;
+    const recordMessage = (msg: OpenAI.ChatCompletionMessageParam): void => {
+      const full = { ...msg, id: `m_${uuidv4()}`, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
+      transcript.push(full);
+      onTranscriptMessage?.(full);
+    };
+    // Materialize an executed (or rejected) tool call as the OpenAI-shaped
+    // assistant(tool_call) + tool(result) pair, streaming both live.
+    const recordToolPair = (ti: ToolInteraction): void => {
+      recordMessage({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
+      });
+      recordMessage({ role: 'tool', tool_call_id: ti.id, content: ti.resultContent });
+    };
 
     // Build the in-process MCP server from the node's tools. MCP tools dispatch to
     // mcpService; handoff tools record the handoff and abort. Other tool kinds
@@ -201,7 +227,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             resultContent = `Error: ${result.error ?? 'Unknown error'}`;
             callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
           }
-          toolInteractions.push({
+          recordToolPair({
             id: `call_${uuidv4()}`,
             name: readableName,
             argsJson: JSON.stringify(args ?? {}),
@@ -275,7 +301,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // On rejection the SDK never calls the tool handler, so record the
             // rejected call here — otherwise it (and the rejection) wouldn't show
             // up in the conversation transcript at all.
-            toolInteractions.push({
+            recordToolPair({
               id: opts.toolUseID,
               name: readableName,
               argsJson: JSON.stringify(input ?? {}),
@@ -321,19 +347,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const promptTokens = usage?.input_tokens ?? 0;
     const completionTokens = usage?.output_tokens ?? 0;
 
-    // Replay the in-process tool calls into the conversation: one assistant
-    // (tool_call) + tool (result) pair each, in call order.
-    const transcript: OpenAI.ChatCompletionMessageParam[] = [];
-    for (const ti of toolInteractions) {
-      transcript.push({
-        role: 'assistant',
-        content: '',
-        tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
-      });
-      transcript.push({ role: 'tool', tool_call_id: ti.id, content: ti.resultContent });
-    }
-
-    // The final assistant turn: a handoff tool_call (for routing) or plain text.
+    // The per-tool assistant(tool_call)+tool(result) pairs were already recorded
+    // and streamed live as they happened (see recordToolPair). Here we only add
+    // the final assistant turn: a handoff tool_call (for routing) or plain text.
     let finalToolCalls: OpenAI.ChatCompletionMessageToolCall[] | undefined;
     if (handoffCall) {
       const h = handoffCall as { name: string; args: Record<string, unknown> };
@@ -341,7 +357,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         { id: `call_${uuidv4()}`, type: 'function', function: { name: h.name, arguments: JSON.stringify(h.args) } },
       ];
     }
-    transcript.push({
+    recordMessage({
       role: 'assistant',
       content: finalText || (finalToolCalls ? null : ''),
       ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}),
