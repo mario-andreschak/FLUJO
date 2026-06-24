@@ -34,7 +34,7 @@ if (typeof global.__mcp_starting_up === 'undefined') {
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
 import {
@@ -805,33 +805,28 @@ export class MCPService {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
 
     let client = this.clients.get(serverName);
+
+    // Self-heal BEFORE invoking the tool, and only when there is NO client in the map
+    // (e.g. right after a FLUJO restart, or a dropped connection that cleared the map).
+    // This is the case that matters for "a flow runs right after a restart". Crucially,
+    // we reconnect *before* the call, never retry *after* a failure: the tool has not run
+    // yet, so this can never double-execute a side-effecting tool. We deliberately do NOT
+    // try to interpret a failed result as "disconnected" — tools.ts maps MCP -32601
+    // (method-not-found) and any tool whose own error text contains "not found"/"404" to
+    // statusCode 404, none of which mean the connection is dead. A dead-but-present client
+    // (e.g. expired HTTP session) is healed by the listServerTools reconnect that the flow
+    // path runs before calling tools.
     if (!client) {
-      log.warn(`callTool: Client not found for ${serverName}`);
-    }
-
-    let result = await callToolFunction(client, serverName, toolName, args, timeout);
-
-    // Self-heal a stale/dead connection: a client in the map does not guarantee a live
-    // session (expired streamable-HTTP session, crashed process after a restart, etc.).
-    // Mirror listServerTools — force one reconnect and retry. This is what lets a flow
-    // run successfully right after a FLUJO restart instead of failing with "not found".
-    // Only retry connection-level failures (no client / not found / 404), not a tool that
-    // legitimately errored, so we don't double-execute a tool with side effects.
-    const looksDisconnected =
-      !client ||
-      result.statusCode === 404 ||
-      (result.error?.toLowerCase().includes('not found') ?? false);
-    if (!result.success && looksDisconnected) {
-      log.warn(`callTool: ${toolName} on ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+      log.warn(`callTool: No client for ${serverName}; forcing reconnect before calling ${toolName}`);
       const reconnect = await this.forceReconnect(serverName);
       if (reconnect.success) {
         client = this.clients.get(serverName);
-        result = await callToolFunction(client, serverName, toolName, args, timeout);
       } else {
         log.warn(`callTool: Reconnect for ${serverName} failed: ${reconnect.error}`);
       }
     }
 
+    const result = await callToolFunction(client, serverName, toolName, args, timeout);
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
   }

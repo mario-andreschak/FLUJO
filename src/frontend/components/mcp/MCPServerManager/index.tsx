@@ -7,8 +7,7 @@ import ServerDetailsModal from './ServerDetailsModal';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { createLogger } from '@/utils/logger';
-import { useThemeUtils } from '@/frontend/utils/theme';
-import { 
+import {
   Button, 
   useTheme, 
   Box, 
@@ -26,8 +25,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogContentText,
-  DialogActions,
-  useMediaQuery
+  DialogActions
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import AddIcon from '@mui/icons-material/Add';
@@ -36,11 +34,7 @@ import SortIcon from '@mui/icons-material/Sort';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
-import ErrorIcon from '@mui/icons-material/Error';
 import TerminalIcon from '@mui/icons-material/Terminal';
-import WifiIcon from '@mui/icons-material/Wifi';
-import StreamIcon from '@mui/icons-material/Stream';
-import HttpIcon from '@mui/icons-material/Http';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import SelectAllIcon from '@mui/icons-material/SelectAll';
@@ -115,7 +109,6 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [bulkActionDialog, setBulkActionDialog] = useState<{open: boolean; action: 'enable' | 'disable' | null}>({open: false, action: null});
   
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const handleServerToggle = async (serverName: string, enabled: boolean) => {
     log.debug(`Toggling server ${serverName} to ${enabled ? 'enabled' : 'disabled'}`);
@@ -326,9 +319,6 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     handleSortMenuClose();
   };
 
-  const { getThemeValue } = useThemeUtils();
-  const muiTheme = useTheme();
-  
   return (
     <Box sx={{ color: 'text.primary' }}>
       <Box

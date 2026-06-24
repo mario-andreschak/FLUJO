@@ -57,21 +57,28 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
     setIsLoading(true);
     setError(undefined);
     try {
+      // Only fetch what this view shows — fetching the other capability would issue a
+      // needless round-trip (and on a stale server pay a reconnect) and could surface its
+      // unrelated error on this tab.
       const [res, prm] = await Promise.all([
-        mcpService.listServerResources(serverName),
-        mcpService.listServerPrompts(serverName),
+        showResources ? mcpService.listServerResources(serverName) : Promise.resolve(null),
+        showPrompts ? mcpService.listServerPrompts(serverName) : Promise.resolve(null),
       ]);
-      setResources(res.resources || []);
-      setResourceTemplates(res.resourceTemplates || []);
-      setPrompts(prm.prompts || []);
-      setError(res.error || prm.error);
+      if (res) {
+        setResources(res.resources || []);
+        setResourceTemplates(res.resourceTemplates || []);
+      }
+      if (prm) {
+        setPrompts(prm.prompts || []);
+      }
+      setError(res?.error || prm?.error);
     } catch (e) {
       log.warn('Failed to load capabilities', e);
       setError(e instanceof Error ? e.message : 'Failed to load capabilities');
     } finally {
       setIsLoading(false);
     }
-  }, [serverName]);
+  }, [serverName, showResources, showPrompts]);
 
   useEffect(() => {
     // Reset preview when switching servers.

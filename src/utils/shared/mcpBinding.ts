@@ -11,9 +11,11 @@
  *
  * The `__` separates server from tool/uri. Server is everything up to the FIRST `__`,
  * so tool names and resource URIs may themselves contain `__` (and URIs their usual
- * `://`, `/`, etc.) — server names must NOT contain `__` (enforced on save). The pill
- * is `}`-terminated, so any `}` inside a URI would break it (not a real-world concern
- * for file://, https://, etc.).
+ * `://`, `/`, etc.). LIMITATION: a server name that itself contains `__` cannot be
+ * round-tripped (it would split at the wrong point); MCP server names with `__` are
+ * uncommon, and this matches the old `_-_-_` scheme's analogous constraint. The pill is
+ * `}`-terminated, so any `}` inside a URI would break it (not a real-world concern for
+ * file://, https://, etc.).
  *
  * IMPORTANT — this is a FLUJO-internal, design-time, non-SDK-facing format. It is NOT
  * the name sent to an LLM as a callable function. The OpenAI API constrains function
