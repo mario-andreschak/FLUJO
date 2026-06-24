@@ -24,6 +24,8 @@ const log = createLogger('frontend/components/mcp/MCPCapabilitiesManager');
 
 interface MCPCapabilitiesManagerProps {
   serverName: string;
+  /** Which capability to show. Defaults to both (kept for any standalone usage). */
+  show?: 'resources' | 'prompts' | 'both';
 }
 
 /**
@@ -32,7 +34,9 @@ interface MCPCapabilitiesManagerProps {
  * protocol's own vocabulary. The non-technical "give this step access to…" binding lives in
  * the flow builder instead.
  */
-const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverName }) => {
+const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverName, show = 'both' }) => {
+  const showResources = show === 'both' || show === 'resources';
+  const showPrompts = show === 'both' || show === 'prompts';
   const [resources, setResources] = useState<MCPResource[]>([]);
   const [resourceTemplates, setResourceTemplates] = useState<MCPResourceTemplate[]>([]);
   const [prompts, setPrompts] = useState<MCPPrompt[]>([]);
@@ -121,14 +125,21 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
   const hasNothing =
     !isLoading &&
     !error &&
-    resources.length === 0 &&
-    resourceTemplates.length === 0 &&
-    prompts.length === 0;
+    (!showResources || (resources.length === 0 && resourceTemplates.length === 0)) &&
+    (!showPrompts || prompts.length === 0);
+
+  const heading = show === 'resources' ? 'Resources' : show === 'prompts' ? 'Prompts' : 'Resources & Prompts';
+  const emptyText =
+    show === 'resources'
+      ? "This server doesn't publish any resources."
+      : show === 'prompts'
+        ? "This server doesn't publish any prompts."
+        : "This server doesn't publish any resources or prompts.";
 
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-        <Typography variant="h6">Resources &amp; Prompts</Typography>
+        <Typography variant="h6">{heading}</Typography>
         <Button size="small" onClick={() => { mcpService.clearCapabilitiesCache(serverName); load(); }} disabled={isLoading}>
           Refresh
         </Button>
@@ -149,13 +160,13 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
 
       {hasNothing && (
         <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
-          This server doesn&apos;t publish any resources or prompts.
+          {emptyText}
         </Typography>
       )}
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <Box sx={{ flex: '1 1 360px', minWidth: 280 }}>
-          {(resources.length > 0 || resourceTemplates.length > 0) && (
+          {showResources && (resources.length > 0 || resourceTemplates.length > 0) && (
             <>
               <Typography variant="subtitle2" sx={{ mt: 1 }}>Resources</Typography>
               <List dense disablePadding>
@@ -192,9 +203,9 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
             </>
           )}
 
-          {prompts.length > 0 && (
+          {showPrompts && prompts.length > 0 && (
             <>
-              <Divider sx={{ my: 1 }} />
+              {show === 'both' && <Divider sx={{ my: 1 }} />}
               <Typography variant="subtitle2">Prompts</Typography>
               <Stack spacing={1} sx={{ mt: 0.5 }}>
                 {prompts.map((p) => (
