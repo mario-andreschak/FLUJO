@@ -16,6 +16,9 @@ import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mcpService } from '@/backend/services/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
+import { StorageKey } from '@/shared/types/storage';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
@@ -95,6 +98,46 @@ export class ModelHandler {
   }
 
   /**
+   * Incrementally persist a message streamed from a self-orchestrating adapter
+   * (Claude subscription) AS it is produced, rather than only at end-of-run.
+   *
+   * Folds the message into the conversation's live in-memory SharedState (keyed
+   * by id, so it is idempotent w.r.t. the same message being materialized again
+   * at end-of-run) and writes the state to disk immediately. This is what makes
+   * a long agentic run crash/error-safe: if the run throws mid-loop — before the
+   * adapter returns its transcript and before the normal end-of-run save — the
+   * tool calls/results that already executed (SAP objects created, tickets
+   * opened, ...) are still on disk instead of being lost.
+   *
+   * Best-effort: it must never throw into (or block) the streaming path. The
+   * in-memory SharedState is the same object the execution loop persists at
+   * end-of-run, so on success the transcript materialization replaces these
+   * messages (same ids) with no duplication.
+   */
+  private static persistStreamedMessage(conversationId: string, message: FlujoChatMessage): void {
+    try {
+      // Lazy require to avoid a static import cycle
+      // (FlowExecutor -> ProcessNode -> ModelHandler).
+      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const state = FlowExecutor.conversationStates.get(conversationId);
+      if (!state || !Array.isArray(state.messages)) {
+        // Conversation not tracked in memory yet; the normal end-of-run save covers it.
+        return;
+      }
+      upsertMessageById(state.messages, message);
+      state.updatedAt = Date.now();
+      const storageKey = `conversations/${conversationId}` as StorageKey;
+      // Fire-and-forget; saves are serialized + atomic per key, so the trailing
+      // end-of-run save still wins. A persistence hiccup must not break streaming.
+      void persistConversationState(storageKey, state).catch((err: unknown) =>
+        log.warn(`Incremental persist failed for conversation ${conversationId}`, { err })
+      );
+    } catch (err) {
+      log.warn(`Failed to persist streamed message for conversation ${conversationId}`, { err });
+    }
+  }
+
+  /**
    * Call model with tool support - performs a SINGLE API call.
    * Does NOT handle tool execution loops internally.
    */
@@ -162,6 +205,10 @@ export class ModelHandler {
       ? (message: FlujoChatMessage) => {
           const withNode: FlujoChatMessage = nodeId ? { ...message, processNodeId: nodeId } : message;
           emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
+          // Also fold it into the live shared state and persist immediately, so a
+          // failure mid-loop (before the normal end-of-run save) doesn't discard
+          // tool calls/results that already executed (e.g. SAP objects, tickets).
+          if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
         }
       : undefined;
 
