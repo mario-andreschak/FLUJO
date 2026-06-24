@@ -3,11 +3,11 @@
 import React, { useState, useMemo } from 'react';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
+import ServerDetailsModal from './ServerDetailsModal';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { createLogger } from '@/utils/logger';
-import { useThemeUtils } from '@/frontend/utils/theme';
-import { 
+import {
   Button, 
   useTheme, 
   Box, 
@@ -25,8 +25,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogContentText,
-  DialogActions,
-  useMediaQuery
+  DialogActions
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import AddIcon from '@mui/icons-material/Add';
@@ -35,11 +34,7 @@ import SortIcon from '@mui/icons-material/Sort';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
-import ErrorIcon from '@mui/icons-material/Error';
 import TerminalIcon from '@mui/icons-material/Terminal';
-import WifiIcon from '@mui/icons-material/Wifi';
-import StreamIcon from '@mui/icons-material/Stream';
-import HttpIcon from '@mui/icons-material/Http';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import SelectAllIcon from '@mui/icons-material/SelectAll';
@@ -50,11 +45,11 @@ type SortOption = 'name-asc' | 'name-desc' | 'status-connected' | 'status-discon
 type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'sse' | 'streamable';
 
 interface ServerManagerProps {
-  onServerSelect: (serverName: string) => void;
-  onServerModalToggle: (isOpen: boolean) => void;
+  // Optional: notified when the add/edit modal opens/closes (kept for callers that care).
+  onServerModalToggle?: (isOpen: boolean) => void;
 }
 
-const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerModalToggle }) => {
+const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) => {
   const {
     servers,
     isLoading,
@@ -64,11 +59,45 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     retryServer,
     deleteServer,
     addServer,
-    updateServer
+    updateServer,
+    saveEnv
   } = useServerStatus();
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServerConfig | null>(null);
+  // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
+  const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
+
+  // Open the details modal only for ENABLED servers — a disabled server has no live
+  // connection, so there's nothing to inspect (no modal, per design).
+  const handleOpenDetails = (serverName: string) => {
+    const server = servers.find((s) => s.name === serverName);
+    if (!server || server.disabled) {
+      log.debug(`Not opening details for ${serverName} (missing or disabled)`);
+      return;
+    }
+    setDetailsServerName(serverName);
+  };
+
+  const handleCloseDetails = () => {
+    const name = detailsServerName;
+    setDetailsServerName(null);
+    // Opening the modal (Tool tester / resources) self-heals a stale connection via the
+    // backend's reconnect-on-use; refresh this card's status so it stops showing a stale
+    // "crashed" message without a full page reload.
+    if (name) {
+      retryServer(name);
+    }
+  };
+
+  const handleEnvRestart = async (serverName: string) => {
+    await toggleServer(serverName, false);
+    await toggleServer(serverName, true);
+  };
+
+  const detailsServer = detailsServerName
+    ? servers.find((s) => s.name === detailsServerName) || null
+    : null;
   
   // Toolbar state
   const [searchTerm, setSearchTerm] = useState('');
@@ -80,7 +109,6 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
   const [bulkActionDialog, setBulkActionDialog] = useState<{open: boolean; action: 'enable' | 'disable' | null}>({open: false, action: null});
   
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const handleServerToggle = async (serverName: string, enabled: boolean) => {
     log.debug(`Toggling server ${serverName} to ${enabled ? 'enabled' : 'disabled'}`);
@@ -101,7 +129,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     log.debug(`Editing server: ${server.name}`);
     setEditingServer(server);
     setShowAddModal(true);
-    onServerModalToggle(true);
+    onServerModalToggle?.(true);
   };
 
   const handleAddServer = async (config: MCPServerConfig) => {
@@ -109,7 +137,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     await addServer(config);
     setShowAddModal(false);
     setEditingServer(null); // Ensure editing server is reset
-    onServerModalToggle(false);
+    onServerModalToggle?.(false);
   };
 
   const handleUpdateServer = async (config: MCPServerConfig) => {
@@ -117,7 +145,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     await updateServer(config);
     setShowAddModal(false);
     setEditingServer(null);
-    onServerModalToggle(false);
+    onServerModalToggle?.(false);
   };
 
   const handleExportConfig = () => {
@@ -291,9 +319,6 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
     handleSortMenuClose();
   };
 
-  const { getThemeValue } = useThemeUtils();
-  const muiTheme = useTheme();
-  
   return (
     <Box sx={{ color: 'text.primary' }}>
       <Box
@@ -329,7 +354,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
               // Ensure editing server is null when adding a new server
               setEditingServer(null);
               setShowAddModal(true);
-              onServerModalToggle(true);
+              onServerModalToggle?.(true);
             }}
             startIcon={<AddIcon />}
             sx={{
@@ -469,7 +494,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
           }))}
           isLoading={isLoading}
           loadError={loadError}
-          onServerSelect={onServerSelect}
+          onServerSelect={handleOpenDetails}
           onServerToggle={handleServerToggle}
           onServerRetry={handleServerRetry}
           onServerDelete={handleServerDelete}
@@ -568,11 +593,18 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerSelect, onServerM
         onClose={() => {
           setShowAddModal(false);
           setEditingServer(null);
-          onServerModalToggle(false);
+          onServerModalToggle?.(false);
         }}
         initialConfig={editingServer}
         onUpdate={handleUpdateServer}
         onRestartAfterUpdate={handleServerRetry}
+      />
+
+      <ServerDetailsModal
+        server={detailsServer ? { name: detailsServer.name, status: detailsServer.status, env: detailsServer.env } : null}
+        onClose={handleCloseDetails}
+        onSaveEnv={saveEnv}
+        onServerRestart={handleEnvRestart}
       />
     </Box>
   );

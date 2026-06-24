@@ -2,7 +2,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
-import { toolNameInternalRegex } from '@/utils/shared';
+import { findBindings } from '@/utils/shared';
 
 const log = createLogger('backend/utils/PromptRenderer');
 
@@ -104,8 +104,8 @@ export class PromptRenderer {
       completePrompt += nodePrompt + `\n`;
     }
 
-    // 4. Resolve tool pills with function calling schema
-    completePrompt = await this.resolveToolPills(completePrompt, renderMode, functionCallingSchema);
+    // 4. Resolve binding pills: tool pills per renderMode, resource pills always inlined
+    completePrompt = await this.resolveBindings(completePrompt, renderMode, functionCallingSchema);
 
     // 5. Add placeholder for conversation history if requested
     if (includeConversationHistory) {
@@ -266,155 +266,150 @@ export class PromptRenderer {
   }
 
   /**
-   * Resolve tool pills in a prompt, replacing them with detailed tool information.
-   * Retries up to 3 times on failure.
-   * 
-   * @param prompt - The prompt containing tool pills
-   * @param renderMode - Whether to render tool pills as raw or with descriptions
-   * @param functionCallingSchema - Optional schema format to use for structuring tool descriptions
-   * @returns The prompt with resolved tool pills
+   * Resolve binding pills (`${tool:...}` / `${resource:...}`, plus legacy `${_-_-_..}`).
+   *
+   * Tool pills follow renderMode (raw = left as the readable pill for the model to
+   * reference; rendered = expanded into a tool description). Resource pills are ALWAYS
+   * resolved to their contents regardless of renderMode — a literal `${resource:...}` in
+   * the prompt would be meaningless to the model; the whole point of binding a resource is
+   * to inline its data at run time.
+   *
+   * Walks matches by index against the original string so duplicate pills resolve
+   * independently (no fragile first-occurrence `.replace`).
    */
-  private async resolveToolPills(
-    prompt: string, 
+  private async resolveBindings(
+    prompt: string,
     renderMode: 'raw' | 'rendered',
     functionCallingSchema?: string | null
   ): Promise<string> {
-    renderMode = 'raw' // for now, lets keep it raw.
+    renderMode = 'raw'; // for now, keep tool pills raw (resources still always resolve)
 
-    log.debug(`Resolving tool pills in prompt`, { 
-      renderMode,
-      promptLength: prompt.length,
-      hasFunctionCallingSchema: !!functionCallingSchema
-    });
-
-    if (renderMode === 'raw') {
-      log.debug('Using raw mode, not resolving tool pills');
-      return prompt; // Return the raw prompt with tool pills
+    const matches = findBindings(prompt);
+    if (matches.length === 0) {
+      return prompt;
     }
+    log.debug(`Resolving ${matches.length} binding pills`, { renderMode });
 
-    // Determine format based on functionCallingSchema
-    let formatType: 'json' | 'xml' | 'text' = 'text'; // Default to text
+    const formatType = this.resolveFormatType(functionCallingSchema);
 
-    if (functionCallingSchema) {
-      // Check if schema matches JSON or XML pattern
-      if (functionCallingSchema.includes('"tool"') && functionCallingSchema.includes('"parameters"')) {
-        formatType = 'json';
-        log.debug('Using JSON format for tool descriptions');
-      } else if (functionCallingSchema.includes('<') && functionCallingSchema.includes('</')) {
-        formatType = 'xml';
-        log.debug('Using XML format for tool descriptions');
+    let result = '';
+    let cursor = 0;
+    for (const m of matches) {
+      result += prompt.slice(cursor, m.index);
+      cursor = m.index + m.fullMatch.length;
+
+      if (m.kind === 'resource') {
+        result += await this.renderResourceBinding(m.server, m.name);
+      } else if (renderMode === 'raw') {
+        // Leave the readable tool pill in place for the model to reference.
+        result += m.fullMatch;
       } else {
-        log.debug('Using text format for tool descriptions (unrecognized schema format)');
+        result += await this.renderToolBinding(m.server, m.name, formatType, m.fullMatch);
       }
-    } else {
-      log.debug('No function calling schema provided, using text format');
     }
+    result += prompt.slice(cursor);
 
-    // Regular expression to find tool pills: ${_-_-_serverName_-_-_toolName}
-    const toolPillRegex = toolNameInternalRegex
+    log.debug('Resolved binding pills');
+    return result;
+  }
 
-    // Replace each tool pill with its description
-    let resolvedPrompt = prompt;
-    let match;
-
-    // Create a copy of the prompt to work with
-    const promptCopy = prompt.slice();
-
-    // Find all matches first
-    const matches: Array<{
-      fullMatch: string;
-      serverName: string;
-      toolName: string;
-      index: number;
-    }> = [];
-
-    while ((match = toolPillRegex.exec(promptCopy)) !== null) {
-      matches.push({
-        fullMatch: match[0],
-        serverName: match[1],
-        toolName: match[2],
-        index: match.index
-      });
+  /** Pick the tool-description format from the model's function-calling schema. */
+  private resolveFormatType(functionCallingSchema?: string | null): 'json' | 'xml' | 'text' {
+    if (!functionCallingSchema) return 'text';
+    if (functionCallingSchema.includes('"tool"') && functionCallingSchema.includes('"parameters"')) {
+      return 'json';
     }
+    if (functionCallingSchema.includes('<') && functionCallingSchema.includes('</')) {
+      return 'xml';
+    }
+    return 'text';
+  }
 
-    log.debug(`Found ${matches.length} tool pills to resolve with format: ${formatType}`);
+  /** Ensure a server is connected, force-connecting once if needed. */
+  private async ensureConnected(serverName: string): Promise<boolean> {
+    let status = await mcpService.getServerStatus(serverName);
+    if (status.status !== 'connected') {
+      log.debug(`force connect ${serverName}`);
+      await mcpService.connectServer(serverName);
+      status = await mcpService.getServerStatus(serverName);
+    }
+    return status.status === 'connected';
+  }
 
-    // Process each match with retries
-    for (const { fullMatch, serverName, toolName } of matches) {
-      let resolved = false;
-      let retryCount = 0;
-      let description = '';
-
-      while (!resolved && retryCount < 3) {
-        try {
-          // Get the server status
-          let serverStatus = await mcpService.getServerStatus(serverName);
-          log.debug(`Server in status ${serverStatus}`);
-
-          if (serverStatus.status !== 'connected') {
-            log.debug(`force connect ${serverName}`);            
-            await mcpService.connectServer(serverName);
-            serverStatus = await mcpService.getServerStatus(serverName);
-            log.debug(`Server in status ${serverStatus.status} after force connecting`);
-            log.debug(`Server in status ${serverStatus.message?.toString()} after force connecting`);
-          }
-          
-          if (serverStatus.status === 'connected') {
-            // Get the tools for this server
-            const toolsResult = await mcpService.listServerTools(serverName);
-            log.debug(`toolResult.status is ${toolsResult.error?.toString()}`)
-            if (toolsResult.tools && toolsResult.tools.length > 0) {
-              log.debug(`listed ${toolsResult.tools.length} tools from ${serverName} for tool render`);
-              // Find the specific tool
-              const tool = toolsResult.tools.find(t => t.name === toolName);
-
-              if (tool) {
-                // Generate description based on format type
-                switch (formatType) {
-                  case 'json':
-                    description = this.formatToolDescriptionJSON(serverName, toolName, tool);
-                    break;
-                  case 'xml':
-                    description = this.formatToolDescriptionXML(serverName, toolName, tool);
-                    break;
-                  default:
-                    // Use existing text format
-                    const paramsText = this.formatToolParameters(tool);
-                    description = `[The user is referencing a tool \`_-_-_${serverName}_-_-_${toolName}\` (${tool.description || 'No description'})${paramsText}]`;
-                }
-
-                // Replace the tool pill
-                resolvedPrompt = resolvedPrompt.replace(fullMatch, description);
-                resolved = true;
-              } else {
-                log.warn(`Tool not found: ${toolName} in server ${serverName}`);
-                retryCount++;
-                await this.delay(Math.pow(2, retryCount) * 100);
+  /** Expand a tool pill into a description (rendered mode), retrying a few times. */
+  private async renderToolBinding(
+    serverName: string,
+    toolName: string,
+    formatType: 'json' | 'xml' | 'text',
+    fullMatch: string
+  ): Promise<string> {
+    for (let retryCount = 0; retryCount < 3; retryCount++) {
+      try {
+        if (await this.ensureConnected(serverName)) {
+          const toolsResult = await mcpService.listServerTools(serverName);
+          const tool = toolsResult.tools?.find(t => t.name === toolName);
+          if (tool) {
+            switch (formatType) {
+              case 'json':
+                return this.formatToolDescriptionJSON(serverName, toolName, tool);
+              case 'xml':
+                return this.formatToolDescriptionXML(serverName, toolName, tool);
+              default: {
+                const paramsText = this.formatToolParameters(tool);
+                return `[The user is referencing a tool \`tool:${serverName}__${toolName}\` (${tool.description || 'No description'})${paramsText}]`;
               }
-            } else {
-              log.warn(`No tools available for server ${serverName}`);
-              retryCount++;
-              await this.delay(Math.pow(2, retryCount) * 100);
             }
-          } else {
-            log.warn(`Server not connected: ${serverName}, status: ${serverStatus.status}`);
-            retryCount++;
-            await this.delay(Math.pow(2, retryCount) * 100);
           }
-        } catch (error) {
-          // Error occurred, retry
-          retryCount++;
-          log.warn(`Error resolving tool pill (attempt ${retryCount}): ${fullMatch}`, error);
-          await this.delay(Math.pow(2, retryCount) * 100); // Exponential backoff
+          log.warn(`Tool not found: ${toolName} in server ${serverName}`);
+        } else {
+          log.warn(`Server not connected: ${serverName}`);
         }
+      } catch (error) {
+        log.warn(`Error resolving tool pill (attempt ${retryCount + 1}): ${fullMatch}`, error);
       }
-      if (!resolved) {
-        log.error(`Failed to resolve tool pill after multiple retries: ${fullMatch}`);
-      }
+      await this.delay(Math.pow(2, retryCount + 1) * 100);
     }
+    log.error(`Failed to resolve tool pill after multiple retries: ${fullMatch}`);
+    return fullMatch; // leave the pill rather than dropping the reference
+  }
 
-    log.debug(`Resolved tool pills`);
-    return resolvedPrompt;
+  /**
+   * Resolve a resource pill into its contents, inlined as a clearly-delimited block.
+   * On failure, emits a visible note rather than leaving the meaningless raw pill.
+   */
+  private async renderResourceBinding(serverName: string, uri: string): Promise<string> {
+    for (let retryCount = 0; retryCount < 3; retryCount++) {
+      try {
+        if (await this.ensureConnected(serverName)) {
+          const result = await mcpService.readResource(serverName, uri);
+          if (result.success && result.data) {
+            const text = this.formatResourceContents(result.data);
+            return `\n[Resource ${uri} (from ${serverName})]:\n${text}\n`;
+          }
+          log.warn(`Failed to read resource ${uri} from ${serverName}: ${result.error}`);
+          // A genuine read error (bad uri, etc.) won't fix itself on retry — stop early.
+          return `[Resource ${uri} from ${serverName} could not be read: ${result.error || 'unknown error'}]`;
+        }
+        log.warn(`Server not connected for resource read: ${serverName}`);
+      } catch (error) {
+        log.warn(`Error resolving resource pill (attempt ${retryCount + 1}): ${uri}`, error);
+      }
+      await this.delay(Math.pow(2, retryCount + 1) * 100);
+    }
+    return `[Resource ${uri} from ${serverName} is currently unavailable]`;
+  }
+
+  /** Flatten an MCP ReadResourceResult into plain text for prompt inlining. */
+  private formatResourceContents(data: any): string {
+    const contents = data?.contents;
+    if (!Array.isArray(contents) || contents.length === 0) return '(empty resource)';
+    return contents
+      .map((c: any) => {
+        if (typeof c.text === 'string') return c.text;
+        if (typeof c.blob === 'string') return `[binary ${c.mimeType || 'data'} omitted]`;
+        return JSON.stringify(c);
+      })
+      .join('\n\n');
   }
 
   /**
@@ -440,7 +435,7 @@ export class PromptRenderer {
     }
     
     // Return stringified JSON with explanation
-    return `[Tool: \`_-_-_${serverName}_-_-_${toolName}\` (${tool.description || 'No description'})
+    return `[Tool: \`tool:${serverName}__${toolName}\` (${tool.description || 'No description'})
 Example usage:
 ${JSON.stringify(toolObj, null, 2)}]`;
   }
@@ -464,7 +459,7 @@ ${JSON.stringify(toolObj, null, 2)}]`;
     xmlExample += `</${toolName}>`;
     
     // Return XML with explanation
-    return `[Tool: \`_-_-_${serverName}_-_-_${toolName}\` (${tool.description || 'No description'})
+    return `[Tool: \`tool:${serverName}__${toolName}\` (${tool.description || 'No description'})
 Example usage:
 ${xmlExample}]`;
   }

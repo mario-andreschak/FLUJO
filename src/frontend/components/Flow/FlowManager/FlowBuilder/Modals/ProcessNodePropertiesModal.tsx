@@ -17,6 +17,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
+import { encodeBindingPill } from '@/utils/shared/mcpBinding';
 import { ProcessNodePropertiesModalProps } from './ProcessNodePropertiesModal/types'; // Adjusted path
 import useModelManagement from './ProcessNodePropertiesModal/hooks/useModelManagement'; // Adjusted path
 import useServerConnection from './ProcessNodePropertiesModal/hooks/useServerConnection'; // Adjusted path
@@ -25,6 +26,7 @@ import useHandoffTools from './ProcessNodePropertiesModal/hooks/useHandoffTools'
 import NodeConfiguration from './ProcessNodePropertiesModal/NodeConfiguration'; // Adjusted path
 import ModelBinding from './ProcessNodePropertiesModal/ModelBinding/index'; // Adjusted path
 import ServerTools from './ProcessNodePropertiesModal/ServerTools/ServerTools'; // Adjusted path
+import ServerResources from './ProcessNodePropertiesModal/ServerTools/ServerResources'; // Adjusted path
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
@@ -116,11 +118,11 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     const tool = tools.find((t: any) => t.name === toolName);
     const toolDescription = tool?.description || '';
     
-    // Create the binding in the format that will be visually displayed as a pill
-    // For handoff tools, use a different format to distinguish them
-    const binding = toolType === 'handoff' 
-      ? `\${_-_-_handoff_-_-_${toolName}}` 
-      : `\${_-_-_${serverName}_-_-_${toolName}}`;
+    // Create the binding pill (canonical format). Handoff tools use the pseudo-server
+    // `handoff` so they're visually distinguished and routed correctly downstream.
+    const binding = toolType === 'handoff'
+      ? encodeBindingPill('tool', 'handoff', toolName)
+      : encodeBindingPill('tool', serverName, toolName);
     
     // Add a space before the binding if needed
     const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
@@ -138,6 +140,21 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     // Update the promptTemplate state to reflect the change
     // Note: We don't need to manually update the state here as the PromptBuilder's onChange handler will be triggered
     // when we insert the text, which will update the promptTemplate state
+  };
+
+  const handleInsertResourceBinding = (serverName: string, uri: string): void => {
+    if (!serverName || !uri) {
+      log.warn('Invalid parameters for handleInsertResourceBinding:', { serverName, uri });
+      return;
+    }
+    const binding = encodeBindingPill('resource', serverName, uri);
+    const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
+    const textToInsert = (needsSpace ? ' ' : '') + binding;
+    if (promptBuilderRef.current) {
+      promptBuilderRef.current.insertText(textToInsert);
+    } else {
+      log.warn('promptBuilderRef.current is null, cannot insert resource binding');
+    }
   };
 
   const handleSave = () => {
@@ -229,6 +246,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
                 <Tabs value={activeTab} onChange={(_, newValue: string) => setActiveTab(newValue)}>
                   <Tab label="Server Tools" value="server" />
+                  <Tab label="Resources" value="resources" />
                   <Tab label="Agent Tools" value="agent" />
                 </Tabs>
               </Box>
@@ -252,6 +270,15 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 />
               )}
               
+              {/* Show Resources tab content */}
+              {activeTab === 'resources' && (
+                <ServerResources
+                  connectedMcpNodes={connectedMcpNodes}
+                  handleInsertResourceBinding={handleInsertResourceBinding}
+                  promptBuilderRef={promptBuilderRef}
+                />
+              )}
+
               {/* Show Agent Tools tab content */}
               {activeTab === 'agent' && (
                 <AgentTools

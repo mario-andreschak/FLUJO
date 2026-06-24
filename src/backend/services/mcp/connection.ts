@@ -13,6 +13,11 @@ import { ChildProcess } from 'child_process';
 import { createOAuthClientProvider } from './oauth';
 import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
 import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
+import { hasRoots, registerRootsHandler, rootsConfigKey } from './roots';
+
+// We stash the roots config key on the client so shouldRecreateClient can detect a roots
+// change (the SDK doesn't expose a client's own declared capabilities publicly).
+interface ClientWithRootsKey { __flujoRootsKey?: string }
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -29,21 +34,34 @@ interface StdioTransportParameters {
  */
 export function createNewClient(config: MCPServerConfig): Client {
   log.debug('Entering createNewClient method');
-  return new Client(
+
+  // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the server —
+  // e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER capabilities and
+  // are consumed regardless of what we declare here, so they do not belong here.
+  //
+  // Roots (#15) are declared ONLY when this server has workspace folders configured.
+  // Advertising roots with an empty list could make a roots-aware server refuse
+  // everything, so servers without roots behave exactly as they did before.
+  const serverHasRoots = hasRoots(config);
+  const client = new Client(
     {
       name: `flujo-${config.name}-client`,
       version: '0.2.5',
     },
     {
-      // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the
-      // server — e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER
-      // capabilities and are consumed regardless of what we declare here, so they do
-      // not belong in this object. (#15 will add roots/sampling here.)
       capabilities: {
         experimental: {},
+        ...(serverHasRoots ? { roots: { listChanged: true } } : {}),
       }
     }
   );
+
+  if (serverHasRoots) {
+    registerRootsHandler(client, config);
+  }
+  (client as unknown as ClientWithRootsKey).__flujoRootsKey = rootsConfigKey(config);
+
+  return client;
 }
 
 /**
@@ -310,7 +328,14 @@ export function shouldRecreateClient(
   config: MCPServerConfig
 ): { needsNewClient: boolean; reason?: string } {
   log.debug('Entering shouldRecreateClient method');
-  
+
+  // A roots change must rebuild the client: it alters both the declared client capability
+  // (none<->some) and the config the roots/list handler closes over.
+  const currentRootsKey = (client as unknown as ClientWithRootsKey).__flujoRootsKey ?? '[]';
+  if (currentRootsKey !== rootsConfigKey(config)) {
+    return { needsNewClient: true, reason: 'Roots configuration changed' };
+  }
+
   // Check if transport type has changed
   if (config.transport === 'websocket') {
     if (!(client.transport instanceof WebSocketClientTransport)) {

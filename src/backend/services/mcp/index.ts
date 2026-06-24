@@ -4,7 +4,6 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { executeCommand } from '@/utils/mcp/directExecution';
 
 // Global recovery map to persist clients across hot reloads
 declare global {
@@ -35,9 +34,22 @@ if (typeof global.__mcp_starting_up === 'undefined') {
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction } from './tools';
+import {
+  listServerResources as listResources,
+  listServerResourceTemplates as listResourceTemplates,
+  readResource as readResourceFn,
+} from './resources';
+import { listServerPrompts as listPrompts, getPrompt as getPromptFn } from './prompts';
+import {
+  MCPResource,
+  MCPResourceTemplate,
+  MCPReadResourceResult,
+  MCPPrompt,
+  MCPGetPromptResult,
+} from '@/shared/types/mcp';
 import {
   enhanceConnectionErrorMessage,
   formatErrorChain,
@@ -235,13 +247,26 @@ export class MCPService {
    * Get a client by server name
    */
   getClient(serverName: string): Client | undefined {
-    // If recovery hasn't been attempted yet, try to recover
-    if (!this.recover_attempted) {
-      log.debug(`getClient: Recovery not yet attempted, trying to recover clients`);
-      this.attemptRecovery();
+    let client = this.clients.get(serverName);
+
+    // Cross-instance bridge. In production (`next start`) the module instance that ran
+    // startup and CONNECTED the servers is usually NOT the one serving this request, so
+    // this.clients is empty here even though the server is connected and healthy — which
+    // is why every server showed a misleading "configured but not connected" error right
+    // after startup while clicking a card (which force-connects in THIS instance) fixed
+    // it. The live client lives in the shared global recovery map (the same mechanism
+    // that already bridges the "connecting" status across instances), so adopt it.
+    // onclose/onerror delete dead clients from that map, so we never adopt a known-dead
+    // one; a stale-but-present client self-heals on use via listServerTools/callTool.
+    if (!client) {
+      const recovered = global.__mcp_recovery?.get(serverName);
+      if (recovered) {
+        this.clients.set(serverName, recovered);
+        client = recovered;
+        log.debug(`getClient: adopted ${serverName} from the global recovery map`);
+      }
     }
-    
-    const client = this.clients.get(serverName);
+
     log.debug(`getClient: Looking for client: ${serverName}`, client ? 'Found' : 'Not found');
     return client;
   }
@@ -753,7 +778,7 @@ export class MCPService {
   async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
     log.debug(`listServerTools: Entering method for server ${serverName}`);
 
-    let client = this.clients.get(serverName);
+    let client = this.getClient(serverName);
     if (!client) {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
@@ -791,15 +816,125 @@ export class MCPService {
    */
   async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
-    
-    const client = this.clients.get(serverName);
+
+    let client = this.getClient(serverName);
+
+    // Self-heal BEFORE invoking the tool, and only when there is NO client in the map
+    // (e.g. right after a FLUJO restart, or a dropped connection that cleared the map).
+    // This is the case that matters for "a flow runs right after a restart". Crucially,
+    // we reconnect *before* the call, never retry *after* a failure: the tool has not run
+    // yet, so this can never double-execute a side-effecting tool. We deliberately do NOT
+    // try to interpret a failed result as "disconnected" — tools.ts maps MCP -32601
+    // (method-not-found) and any tool whose own error text contains "not found"/"404" to
+    // statusCode 404, none of which mean the connection is dead. A dead-but-present client
+    // (e.g. expired HTTP session) is healed by the listServerTools reconnect that the flow
+    // path runs before calling tools.
     if (!client) {
-      log.warn(`callTool: Client not found for ${serverName}`);
+      log.warn(`callTool: No client for ${serverName}; forcing reconnect before calling ${toolName}`);
+      const reconnect = await this.forceReconnect(serverName);
+      if (reconnect.success) {
+        client = this.clients.get(serverName);
+      } else {
+        log.warn(`callTool: Reconnect for ${serverName} failed: ${reconnect.error}`);
+      }
     }
-    
+
     const result = await callToolFunction(client, serverName, toolName, args, timeout);
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
-    
+    return result;
+  }
+
+  /**
+   * Run a list-capability call, reconnecting once if the cached client is stale/dead.
+   *
+   * Same rationale as listServerTools: a client object in the map does not guarantee a
+   * live connection, so a recoverable blip should not silently strip a node's bound
+   * resources/prompts. `lister` returns its own typed shape carrying an optional `error`;
+   * a present `error` triggers a single force-reconnect-and-retry. Capability-absent
+   * servers return an empty list with NO error (see resources.ts/prompts.ts), so they do
+   * not trigger a pointless reconnect.
+   */
+  private async listWithReconnect<T extends { error?: string }>(
+    serverName: string,
+    lister: (client: Client | undefined, serverName: string) => Promise<T>,
+    emptyResult: T
+  ): Promise<T> {
+    let client = this.clients.get(serverName);
+    if (!client) {
+      log.warn(`listWithReconnect: Client not found for ${serverName}`);
+    }
+
+    let result = await lister(client, serverName);
+    if (!result.error) {
+      return result;
+    }
+
+    log.warn(`listWithReconnect: Listing for ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+    const reconnect = await this.forceReconnect(serverName);
+    if (!reconnect.success) {
+      log.warn(`listWithReconnect: Reconnect for ${serverName} failed: ${reconnect.error}`);
+      return { ...emptyResult, error: reconnect.error || result.error };
+    }
+
+    client = this.clients.get(serverName);
+    result = await lister(client, serverName);
+    if (result.error) {
+      log.warn(`listWithReconnect: Retry after reconnect still failed for ${serverName}:`, result.error);
+    } else {
+      log.info(`listWithReconnect: Recovered after reconnect for ${serverName}`);
+    }
+    return result;
+  }
+
+  /**
+   * List the resources a server publishes (#15). Reconnect-and-retry like listServerTools.
+   */
+  async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
+    log.debug(`listServerResources: Entering method for server ${serverName}`);
+    return this.listWithReconnect(serverName, listResources, { resources: [] });
+  }
+
+  /**
+   * List the resource templates a server publishes (#15).
+   */
+  async listServerResourceTemplates(serverName: string): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
+    log.debug(`listServerResourceTemplates: Entering method for server ${serverName}`);
+    return this.listWithReconnect(serverName, listResourceTemplates, { resourceTemplates: [] });
+  }
+
+  /**
+   * Read a resource's contents from a server (#15).
+   */
+  async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+    log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
+    const client = this.clients.get(serverName);
+    if (!client) {
+      log.warn(`readResource: Client not found for ${serverName}`);
+    }
+    const result = await readResourceFn(client, serverName, uri);
+    log.info(`readResource: Read resource ${uri} on ${serverName}`);
+    return result;
+  }
+
+  /**
+   * List the prompt templates a server publishes (#15).
+   */
+  async listServerPrompts(serverName: string): Promise<{ prompts: MCPPrompt[]; error?: string }> {
+    log.debug(`listServerPrompts: Entering method for server ${serverName}`);
+    return this.listWithReconnect(serverName, listPrompts, { prompts: [] });
+  }
+
+  /**
+   * Fetch a prompt template, expanded with arguments, from a server (#15).
+   */
+  async getPrompt(serverName: string, promptName: string, args?: Record<string, string>): Promise<MCPServiceResponse<MCPGetPromptResult>> {
+    log.debug(`getPrompt: Entering method for server ${serverName}, prompt ${promptName}`);
+    const client = this.clients.get(serverName);
+    if (!client) {
+      log.warn(`getPrompt: Client not found for ${serverName}`);
+    }
+    const result = await getPromptFn(client, serverName, promptName, args);
+    log.info(`getPrompt: Got prompt ${promptName} on ${serverName}`);
     return result;
   }
 
@@ -921,13 +1056,21 @@ export class MCPService {
       // If the server should be enabled but isn't connected, connect it
       log.info(`handleConnectionStateChange: Connecting previously disabled server ${serverName}`);
       await this.connectServer(config);
+    } else if (isCurrentlyConnected && shouldBeConnected) {
+      // Server stays enabled, but its config may have changed (a new root/workspace
+      // folder, command, args, env, URL...). Re-run connectServer: shouldRecreateClient
+      // rebuilds the connection only when something meaningful actually changed (otherwise
+      // it's a cheap no-op). Without this, edits to a CONNECTED server — e.g. assigning a
+      // root to the filesystem server — silently did nothing until a manual restart,
+      // because the MCP capabilities (roots) are negotiated at connect time.
+      log.info(`handleConnectionStateChange: Re-applying config to connected server ${serverName}`);
+      await this.connectServer(config);
     } else if (!shouldBeConnected) {
       // If server should be disabled, also clear any pending retry timers
       log.info(`handleConnectionStateChange: Clearing retry timers for disabled server ${serverName}`);
       this.clearRetryTimer(serverName);
       this.connectionRetryAttempts.delete(serverName);
     }
-    // No reconnection logic for already connected servers
   }
 
   /**
@@ -1064,8 +1207,11 @@ export class MCPService {
     // The last persisted connection failure (survives the per-attempt stderr buffer reset).
     const persistedError = this.lastConnectionError.get(serverName);
 
-    // Check if the client exists in our map
-    const clientExists = this.clients.has(serverName);
+    // Check if the client exists — via getClient so we adopt a client connected by the
+    // startup module instance (the global recovery map), not just one in THIS instance's
+    // local map. Without this, a freshly started server shows "not connected" on the page
+    // even though startup connected it in a different instance.
+    const clientExists = !!this.getClient(serverName);
 
     if (clientExists) {
       log.info(`getServerStatus: Server ${serverName} is connected`);
@@ -1111,53 +1257,20 @@ export class MCPService {
           message: effectiveError,
           stderrOutput: stderrOutput || undefined
         };
-      } else {
-        // No stderr output available, try direct execution to capture error
-        log.info(`getServerStatus: No stderr output available for ${serverName}, attempting direct execution to capture error`);
-        
-        // Handle different transport types
-        if (config.transport === 'stdio') {
-          try {
-            // Generate a request ID for logging
-            const requestId = uuidv4();
-            
-            // Get the server path
-            const serverPath = config.rootPath || `${SERVER_DIR_PREFIX}/${config.name}`;
-            
-            // Execute the command directly to capture any error output
-            const result = await executeCommand({
-              savePath: serverPath,
-              command: config.command,
-              args: config.args,
-              env: config.env,
-              actionName: 'ErrorCapture',
-              requestId,
-              timeout: 5000 // 5 second timeout to avoid hanging
-            });
-            
-            // If we got output, use it as the error message
-            if (result.commandOutput) {
-              log.info(`getServerStatus: Direct execution captured output for ${serverName}`);
-              return {
-                status: 'error',
-                message: result.commandOutput,
-                stderrOutput: result.commandOutput
-              };
-            }
-          } catch (execError) {
-            // If direct execution also fails, log but continue to default message
-            log.warn(`getServerStatus: Direct execution failed for ${serverName}:`, execError);
-          }
-        }
-
-        // Fall back to generic message if all else fails
-        log.info(`getServerStatus: No specific error details available for ${serverName}`);
-        return {
-          status: 'error',
-          message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
-          stderrOutput: undefined
-        };
       }
+
+      // No stderr and no persisted error. We deliberately do NOT spawn the server process
+      // here to "capture an error" — that direct-execution probe ran with a 5s timeout PER
+      // disconnected stdio server and was the dominant cost of loading the /mcp page (N
+      // servers x up to 5s). The connection itself (and its real error) is established by
+      // connectServer / the on-demand reconnect in listServerTools & callTool, which is
+      // where errors get persisted. Just report the generic state instantly.
+      log.info(`getServerStatus: No specific error details available for ${serverName}`);
+      return {
+        status: 'error',
+        message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
+        stderrOutput: undefined
+      };
     }
   }
 
@@ -1186,22 +1299,24 @@ export class MCPService {
       log.info(`Found ${enabledServers.length} enabled servers to start`);
       log.debug(`${enabledServers}`);
 
-      // Mark every enabled server as "connecting" up front. We connect them one at
-      // a time below, so without this the servers still waiting in the queue would
-      // report an error on the MCP page until their turn comes. connectServer()
-      // clears each entry as its attempt settles.
+      // Mark every enabled server as "connecting" up front so the MCP page shows a
+      // spinner for all of them while the sweep runs. connectServer() clears each
+      // entry as its attempt settles.
       enabledServers.forEach(config => this.connectingServers.add(config.name));
 
-      // Connect each enabled server
-      for (const config of enabledServers) {
-        try {
+      // Connect all enabled servers in PARALLEL. Connecting sequentially made startup
+      // scale with the SUM of every server's connect time (one slow/hanging server
+      // delayed all the others, and the page sat in "connecting"/error far too long).
+      // Each connectServer() already catches its own failures and never rejects.
+      await Promise.all(
+        enabledServers.map(config => {
           log.info(`Starting server: ${config.name}`);
-          await this.connectServer(config);
-        } catch (error) {
-          log.error(`Failed to start server ${config.name}:`, error);
-          // Continue with other servers even if one fails
-        }
-      }
+          return this.connectServer(config).catch(error => {
+            log.error(`Failed to start server ${config.name}:`, error);
+            // Swallow so one failure doesn't abort the others.
+          });
+        })
+      );
     } finally {
       // Always reset the flag when done, even if there were errors
       this.setStartingUp(false);
