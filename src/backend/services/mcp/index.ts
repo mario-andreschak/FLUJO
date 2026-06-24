@@ -247,13 +247,26 @@ export class MCPService {
    * Get a client by server name
    */
   getClient(serverName: string): Client | undefined {
-    // If recovery hasn't been attempted yet, try to recover
-    if (!this.recover_attempted) {
-      log.debug(`getClient: Recovery not yet attempted, trying to recover clients`);
-      this.attemptRecovery();
+    let client = this.clients.get(serverName);
+
+    // Cross-instance bridge. In production (`next start`) the module instance that ran
+    // startup and CONNECTED the servers is usually NOT the one serving this request, so
+    // this.clients is empty here even though the server is connected and healthy — which
+    // is why every server showed a misleading "configured but not connected" error right
+    // after startup while clicking a card (which force-connects in THIS instance) fixed
+    // it. The live client lives in the shared global recovery map (the same mechanism
+    // that already bridges the "connecting" status across instances), so adopt it.
+    // onclose/onerror delete dead clients from that map, so we never adopt a known-dead
+    // one; a stale-but-present client self-heals on use via listServerTools/callTool.
+    if (!client) {
+      const recovered = global.__mcp_recovery?.get(serverName);
+      if (recovered) {
+        this.clients.set(serverName, recovered);
+        client = recovered;
+        log.debug(`getClient: adopted ${serverName} from the global recovery map`);
+      }
     }
-    
-    const client = this.clients.get(serverName);
+
     log.debug(`getClient: Looking for client: ${serverName}`, client ? 'Found' : 'Not found');
     return client;
   }
@@ -765,7 +778,7 @@ export class MCPService {
   async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
     log.debug(`listServerTools: Entering method for server ${serverName}`);
 
-    let client = this.clients.get(serverName);
+    let client = this.getClient(serverName);
     if (!client) {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
@@ -804,7 +817,7 @@ export class MCPService {
   async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
 
-    let client = this.clients.get(serverName);
+    let client = this.getClient(serverName);
 
     // Self-heal BEFORE invoking the tool, and only when there is NO client in the map
     // (e.g. right after a FLUJO restart, or a dropped connection that cleared the map).
@@ -1186,8 +1199,11 @@ export class MCPService {
     // The last persisted connection failure (survives the per-attempt stderr buffer reset).
     const persistedError = this.lastConnectionError.get(serverName);
 
-    // Check if the client exists in our map
-    const clientExists = this.clients.has(serverName);
+    // Check if the client exists — via getClient so we adopt a client connected by the
+    // startup module instance (the global recovery map), not just one in THIS instance's
+    // local map. Without this, a freshly started server shows "not connected" on the page
+    // even though startup connected it in a different instance.
+    const clientExists = !!this.getClient(serverName);
 
     if (clientExists) {
       log.info(`getServerStatus: Server ${serverName} is connected`);
