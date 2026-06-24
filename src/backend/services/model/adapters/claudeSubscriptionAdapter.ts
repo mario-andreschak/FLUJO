@@ -1,10 +1,14 @@
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+// Type-only imports (erased at compile time, so they don't trigger the ESM
+// runtime-load issue that forces the Agent SDK itself to be imported lazily).
+import type Anthropic from '@anthropic-ai/sdk';
+import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { extractText } from './messageUtils';
+import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
@@ -48,18 +52,26 @@ function isHandoffName(name: string): boolean {
 }
 
 /**
- * Flatten FLUJO's OpenAI-format messages for the Agent SDK, which takes a single
- * `systemPrompt` plus a `prompt`. System messages are hoisted; the remaining
- * user/assistant turns are rendered into the prompt. Tool-role messages are
- * dropped — in this adapter Claude runs the tool loop itself, so prior
- * FLUJO-side tool exchanges aren't replayed.
+ * Flatten FLUJO's OpenAI-format messages into the Agent SDK's structured input:
+ * a hoisted `systemPrompt` plus the content for a single streamed user message.
+ * System messages are hoisted; the remaining user/assistant turns are rendered
+ * into one text block (the SDK is driven with a single user message, so prior
+ * assistant turns are replayed as text rather than as distinct turns). Images
+ * from user turns become image content blocks so a vision-capable Claude can
+ * see them. Tool-role messages are dropped — Claude runs the tool loop itself
+ * here, so prior FLUJO-side tool exchanges aren't replayed.
+ *
+ * When there are no images the content is a plain string — byte-for-byte the
+ * prompt the old flat-string path produced — so non-image runs are unchanged;
+ * only the delivery channel (streaming input) differs.
  */
-function buildPrompt(messages: OpenAI.ChatCompletionMessageParam[]): {
+export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]): {
   systemPrompt?: string;
-  prompt: string;
+  content: string | Anthropic.ContentBlockParam[];
 } {
   const systemParts: string[] = [];
   const convo: Array<{ role: 'user' | 'assistant'; text: string }> = [];
+  const images: ReturnType<typeof extractImageParts> = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -72,21 +84,33 @@ function buildPrompt(messages: OpenAI.ChatCompletionMessageParam[]): {
 
     const text = extractText(msg.content ?? '');
     if (text) convo.push({ role: msg.role, text });
+    if (msg.role === 'user') images.push(...extractImageParts(msg.content));
   }
 
-  let prompt: string;
-  if (convo.length <= 1) {
-    prompt = convo[0]?.text ?? '';
-  } else {
-    prompt = convo
-      .map(c => `${c.role === 'assistant' ? 'Assistant' : 'Human'}: ${c.text}`)
-      .join('\n\n');
+  const promptText =
+    convo.length <= 1
+      ? convo[0]?.text ?? ''
+      : convo.map(c => `${c.role === 'assistant' ? 'Assistant' : 'Human'}: ${c.text}`).join('\n\n');
+
+  const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
+
+  if (images.length === 0) {
+    return { systemPrompt, content: promptText };
   }
 
-  return {
-    systemPrompt: systemParts.length > 0 ? systemParts.join('\n\n') : undefined,
-    prompt,
-  };
+  const blocks: Anthropic.ContentBlockParam[] = [];
+  if (promptText) blocks.push({ type: 'text', text: promptText });
+  for (const img of images) {
+    if (img.base64) {
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: toAnthropicImageMediaType(img.mimeType), data: img.base64 },
+      });
+    } else {
+      blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+    }
+  }
+  return { systemPrompt, content: blocks };
 }
 
 interface ToolInteraction {
@@ -112,8 +136,9 @@ interface ToolInteraction {
  * `canUseTool` auto-approves FLUJO's tools (the seam for an interactive approval
  * UI); `maxTurns` bounds the loop.
  *
- * NOTE: the live agentic/tool round-trip requires a real subscription token and
- * an installed `claude` CLI; the pure translation helpers are unit-tested.
+ * Input is delivered through the SDK's streaming-input channel (an
+ * `AsyncIterable<SDKUserMessage>`) rather than a flat string prompt, so a
+ * multimodal user turn can carry image content blocks alongside its text.
  */
 export class ClaudeSubscriptionAdapter implements CompletionAdapter {
   async createCompletion({
@@ -130,7 +155,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
 
-    const { systemPrompt, prompt } = buildPrompt(messages);
+    const { systemPrompt, content: userContent } = buildUserMessage(messages);
 
     const usedNames = new Set<string>();
     const toolInteractions: ToolInteraction[] = [];
@@ -197,15 +222,28 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
     delete childEnv.ANTHROPIC_API_KEY;
 
+    const hasImages = typeof userContent !== 'string';
     log.debug('createCompletion via Claude Agent SDK', {
       model: model.name,
       toolCount: sdkTools.length,
       hasSystem: Boolean(systemPrompt),
+      hasImages,
       maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
     });
 
+    // Drive the SDK via its streaming-input channel with a single user message.
+    // The generator yields once then completes, signaling end-of-input so the
+    // SDK processes the turn (and runs the agentic tool loop) to completion.
+    async function* promptStream(): AsyncGenerator<SDKUserMessage> {
+      yield {
+        type: 'user',
+        parent_tool_use_id: null,
+        message: { role: 'user', content: userContent },
+      };
+    }
+
     const response = query({
-      prompt,
+      prompt: promptStream(),
       options: {
         model: model.name,
         env: childEnv,

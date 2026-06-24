@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { extractText, parseToolArgs } from './messageUtils';
+import { extractText, extractImageParts, parseToolArgs } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
 
@@ -33,7 +33,19 @@ export function toGeminiContents(messages: OpenAI.ChatCompletionMessageParam[]):
     }
 
     if (msg.role === 'user') {
-      contents.push({ role: 'user', parts: [{ text: extractText(msg.content) }] });
+      const text = extractText(msg.content);
+      const parts: Part[] = [];
+      if (text) parts.push({ text });
+      // Inline base64 image parts (e.g. pasted screenshots). Remote image URLs
+      // are skipped here — Gemini's inlineData wants bytes, and fileData/fileUri
+      // requires a Files-API upload we don't perform.
+      for (const img of extractImageParts(msg.content)) {
+        if (img.base64 && img.mimeType) {
+          parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+        }
+      }
+      // Gemini rejects an empty parts array; keep a (possibly empty) text part.
+      contents.push({ role: 'user', parts: parts.length > 0 ? parts : [{ text: '' }] });
       continue;
     }
 

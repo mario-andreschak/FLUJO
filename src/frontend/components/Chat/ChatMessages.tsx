@@ -366,8 +366,36 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                     </ReactMarkdown>
                   // Box removed
                 )}
-                {/* Fallback for non-string content (e.g., assistant message with only tool calls) */}
-                {message.role !== 'tool' && typeof message.content !== 'string' && !hasToolCalls(message) && (
+                {/* Multipart content (text + images): a user turn that carried a
+                    pasted/attached image is stored as an OpenAI content-part
+                    array. Render text parts as markdown and image_url parts as
+                    inline images. */}
+                {message.role !== 'tool' && Array.isArray(message.content) && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {(message.content as any[]).map((part, partIndex) => {
+                      if (part?.type === 'text') {
+                        return (
+                          <ReactMarkdown key={partIndex} remarkPlugins={[remarkGfm]}>
+                            {part.text}
+                          </ReactMarkdown>
+                        );
+                      }
+                      if (part?.type === 'image_url' && part.image_url?.url) {
+                        return (
+                          <img
+                            key={partIndex}
+                            src={part.image_url.url}
+                            alt={`Image ${partIndex + 1}`}
+                            style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
+                          />
+                        );
+                      }
+                      return null;
+                    })}
+                  </Box>
+                )}
+                {/* Fallback for non-string, non-array content (e.g., assistant message with only tool calls) */}
+                {message.role !== 'tool' && typeof message.content !== 'string' && !Array.isArray(message.content) && !hasToolCalls(message) && (
                    <Typography variant="body2" fontStyle="italic" color="text.secondary">
                      [No text content]
                    </Typography>
@@ -563,20 +591,30 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                 </Typography>
 
                 {message.attachments.map((attachment) => (
-                  <Box
-                    key={attachment.id}
-                    sx={{ display: 'flex', alignItems: 'center', p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.04)', mb: 0.5 }}
-                  >
-                    {attachment.type === 'document' ? (
-                      <AttachFileIcon fontSize="small" sx={{ mr: 1 }} />
-                    ) : (
-                      <MicIcon fontSize="small" sx={{ mr: 1 }} />
-                    )}
-                    {/* Ensure attachment names wrap */}
-                    <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                      {attachment.originalName || `${attachment.type} attachment`}
-                    </Typography>
-                  </Box>
+                  attachment.type === 'image' ? (
+                    <Box key={attachment.id} sx={{ mb: 0.5 }}>
+                      <img
+                        src={attachment.content}
+                        alt={attachment.originalName || 'image attachment'}
+                        style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
+                      />
+                    </Box>
+                  ) : (
+                    <Box
+                      key={attachment.id}
+                      sx={{ display: 'flex', alignItems: 'center', p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.04)', mb: 0.5 }}
+                    >
+                      {attachment.type === 'document' ? (
+                        <AttachFileIcon fontSize="small" sx={{ mr: 1 }} />
+                      ) : (
+                        <MicIcon fontSize="small" sx={{ mr: 1 }} />
+                      )}
+                      {/* Ensure attachment names wrap */}
+                      <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
+                        {attachment.originalName || `${attachment.type} attachment`}
+                      </Typography>
+                    </Box>
+                  )
                 ))}
               </Box>
             )}

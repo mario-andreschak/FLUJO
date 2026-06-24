@@ -29,7 +29,10 @@ const log = createLogger('frontend/components/Chat/index');
 // Define types for our chat data
 export interface Attachment {
   id: string;
-  type: 'document' | 'audio';
+  type: 'document' | 'audio' | 'image';
+  // For document/audio this is text (the contents / transcription). For an
+  // image it is a `data:` URL (e.g. `data:image/png;base64,...`) — the form a
+  // pasted screenshot is read into.
   content: string;
   originalName?: string;
 }
@@ -38,6 +41,34 @@ export interface Attachment {
 export type ChatMessage = FlujoChatMessage & {
   attachments?: Attachment[];
 };
+
+// Build the OpenAI-wire `content` for a message about to be sent to the API.
+// Text-only messages (and document/audio attachments, which are inlined as
+// text as before) collapse to a plain string; image attachments produce a
+// multipart array carrying `image_url` parts so vision-capable models actually
+// receive the image. Content that is already multipart (a prior turn replayed
+// from the backend) is passed through untouched.
+function buildApiContent(msg: ChatMessage): OpenAI.ChatCompletionUserMessageParam['content'] {
+  if (Array.isArray(msg.content)) {
+    return msg.content as OpenAI.ChatCompletionUserMessageParam['content'];
+  }
+  let text = typeof msg.content === 'string' ? msg.content : '';
+  const attachments = msg.attachments ?? [];
+  const docAudio = attachments.filter(a => a.type !== 'image');
+  const images = attachments.filter(a => a.type === 'image');
+  if (docAudio.length > 0) {
+    text += '\n\n' + docAudio.map(a => `[${a.type.toUpperCase()}]: ${a.content}`).join('\n\n');
+  }
+  if (images.length === 0) {
+    return text;
+  }
+  const parts: OpenAI.ChatCompletionContentPart[] = [];
+  if (text.trim()) parts.push({ type: 'text', text });
+  for (const img of images) {
+    parts.push({ type: 'image_url', image_url: { url: img.content } });
+  }
+  return parts;
+}
 
 // Represents the full conversation details including messages
 export interface Conversation {
@@ -1020,58 +1051,55 @@ const Chat: React.FC = () => {
       const messages = conversation.messages
         .filter(msg => !msg.disabled)
         .map(msg => {
-          let content = msg.content;
-          if (msg.attachments && msg.attachments.length > 0) {
-            content += '\n\n' + msg.attachments.map(att =>
-              `[${att.type.toUpperCase()}]: ${att.content}`
-            ).join('\n\n');
-          }
-          
+          // Collapse text/doc/audio to a string or, for image attachments, a
+          // multipart array (so vision models receive the image).
+          const content = buildApiContent(msg);
+
           // Include processNodeId in the message object if it exists
           const processNodeId = msg.processNodeId;
-          
+
           // Create properly typed message based on role
           if (msg.role === 'user') {
             // For user messages, include processNodeId as a custom property
-            return { 
-              role: 'user', 
+            return {
+              role: 'user',
               content,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
           }
           if (msg.role === 'assistant') {
-            return { 
-              role: 'assistant', 
-              content, 
+            return {
+              role: 'assistant',
+              content,
               tool_calls: msg.tool_calls,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionAssistantMessageParam & { processNodeId?: string };
           }
           if (msg.role === 'system') {
-            return { 
-              role: 'system', 
+            return {
+              role: 'system',
               content,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionSystemMessageParam & { processNodeId?: string };
           }
           if (msg.role === 'tool') {
             if (!msg.tool_call_id) {
-              return { 
-                role: 'user', 
-                content: `Tool result: ${content}`,
+              return {
+                role: 'user',
+                content: typeof content === 'string' ? `Tool result: ${content}` : content,
                 processNodeId // Include processNodeId if it exists
               } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
             }
-            return { 
-              role: 'tool', 
-              content, 
+            return {
+              role: 'tool',
+              content,
               tool_call_id: msg.tool_call_id,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionToolMessageParam & { processNodeId?: string };
           }
           // Fallback
-          return { 
-            role: 'user', 
+          return {
+            role: 'user',
             content,
             processNodeId // Include processNodeId if it exists
           } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
@@ -1236,18 +1264,15 @@ const Chat: React.FC = () => {
         const messages = updatedDetailedConv.messages
           .filter(msg => !msg.disabled)
           .map(msg => {
-            let content = msg.content;
-            if (msg.attachments && msg.attachments.length > 0) {
-              content += '\n\n' + msg.attachments.map(att =>
-                `[${att.type.toUpperCase()}]: ${att.content}`
-              ).join('\n\n');
-            }
+            // Same content shaping as the send path: string for text/doc/audio,
+            // multipart array when image attachments are present.
+            const content = buildApiContent(msg);
             // Create properly typed message based on role
             if (msg.role === 'user') return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam;
             if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls } as OpenAI.ChatCompletionAssistantMessageParam;
             if (msg.role === 'system') return { role: 'system', content } as OpenAI.ChatCompletionSystemMessageParam;
             if (msg.role === 'tool') {
-              if (!msg.tool_call_id) return { role: 'user', content: `Tool result: ${content}` } as OpenAI.ChatCompletionUserMessageParam;
+              if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content } as OpenAI.ChatCompletionUserMessageParam;
               return { role: 'tool', content, tool_call_id: msg.tool_call_id } as OpenAI.ChatCompletionToolMessageParam;
             }
             return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam; // Fallback

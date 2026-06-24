@@ -95,6 +95,42 @@ const ChatInput: React.FC<ChatInputProps> = ({
       handleSend();
     }
   };
+
+  // Handle pasting images (e.g. Ctrl+V of a screenshot) into the input. Each
+  // pasted image is read as a data URL and added as an image attachment; when
+  // images are found we preventDefault so the data URL text isn't also dumped
+  // into the textbox. Non-image pastes fall through to the default behavior.
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length === 0) return; // let normal text paste proceed
+    e.preventDefault();
+    log.debug('Pasting image attachment(s)', { count: imageFiles.length });
+    imageFiles.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result;
+        if (typeof dataUrl !== 'string') return;
+        const ext = (file.type.split('/')[1] || 'png').split('+')[0];
+        setAttachments(prev => [...prev, {
+          id: uuidv4(),
+          type: 'image',
+          content: dataUrl,
+          originalName: file.name && !/^image\.\w+$/i.test(file.name) ? file.name : `Pasted image.${ext}`,
+        }]);
+      };
+      reader.onerror = () => log.error('Failed to read pasted image');
+      reader.readAsDataURL(file);
+    });
+  };
   
   // Handle file selection
   const handleFileSelect = () => {
@@ -325,7 +361,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   bgcolor: 'background.default'
                 }}
               >
-                {attachment.type === 'document' ? (
+                {attachment.type === 'image' ? (
+                  <Box
+                    component="img"
+                    src={attachment.content}
+                    alt={attachment.originalName || 'pasted image'}
+                    sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, mr: 1 }}
+                  />
+                ) : attachment.type === 'document' ? (
                   <AttachFileIcon fontSize="small" sx={{ mr: 1 }} />
                 ) : (
                   <MicIcon fontSize="small" sx={{ mr: 1 }} />
@@ -356,6 +399,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             value={message}
             onChange={handleMessageChange}
             onKeyDown={handleKeyPress}
+            onPaste={handlePaste}
             disabled={disabled}
             variant="outlined"
             sx={{ mr: 1 }}

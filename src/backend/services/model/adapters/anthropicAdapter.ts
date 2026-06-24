@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { extractText, parseToolArgs } from './messageUtils';
+import { extractText, extractImageParts, toAnthropicImageMediaType, parseToolArgs } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -57,7 +57,28 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
     }
 
     if (msg.role === 'user') {
-      out.push({ role: 'user', content: extractText(msg.content) });
+      const text = extractText(msg.content);
+      const images = extractImageParts(msg.content);
+      if (images.length === 0) {
+        out.push({ role: 'user', content: text });
+        continue;
+      }
+      // Multimodal user turn: a text block (when present) followed by image
+      // blocks. Pasted screenshots arrive as base64 data URLs; remote URLs use
+      // Anthropic's URL image source.
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      if (text) blocks.push({ type: 'text', text });
+      for (const img of images) {
+        if (img.base64) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: toAnthropicImageMediaType(img.mimeType), data: img.base64 },
+          });
+        } else {
+          blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+        }
+      }
+      out.push({ role: 'user', content: blocks });
       continue;
     }
 

@@ -114,11 +114,30 @@ async function handleRequest(request: NextRequest) {
     // Create a truncated version of the data for logging
     const truncatedData = { ...completionData };
     if (truncatedData.messages && Array.isArray(truncatedData.messages)) {
-      truncatedData.messages = truncatedData.messages.map(msg => {
+      truncatedData.messages = truncatedData.messages.map((msg): any => {
         if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
           return {
             ...msg,
             content: msg.content.substring(0, 100) + `... (${msg.content.length - 100} more characters)`
+          };
+        }
+        // Multipart content: truncate long text parts and replace image_url
+        // payloads (often huge base64 data URLs) with a short placeholder so
+        // logging never dumps an entire pasted screenshot.
+        if (msg && Array.isArray(msg.content)) {
+          return {
+            ...msg,
+            content: msg.content.map((part: any) => {
+              if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 100) {
+                return { ...part, text: part.text.substring(0, 100) + `... (${part.text.length - 100} more characters)` };
+              }
+              if (part?.type === 'image_url') {
+                const url: string = part.image_url?.url ?? '';
+                const isData = url.startsWith('data:');
+                return { ...part, image_url: { ...part.image_url, url: isData ? `[image data url, ${url.length} chars]` : url } };
+              }
+              return part;
+            })
           };
         }
         return msg;

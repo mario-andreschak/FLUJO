@@ -1,6 +1,23 @@
 import OpenAI from 'openai';
 import { toAnthropicMessages, toAnthropicTools } from '@/backend/services/model/adapters/anthropicAdapter';
 import { toGeminiContents, toGeminiTools } from '@/backend/services/model/adapters/geminiAdapter';
+import { buildUserMessage } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
+
+// A 1x1 PNG as a base64 data URL — the shape a pasted screenshot arrives in.
+const PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+// A user turn carrying both text and an image, in OpenAI multipart form.
+const MULTIMODAL_CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
+  { role: 'system', content: 'You are helpful.' },
+  {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'What is in this image?' },
+      { type: 'image_url', image_url: { url: PNG_DATA_URL } },
+    ],
+  },
+];
 
 // A representative tool-using conversation in OpenAI wire format:
 // system + user, an assistant turn with a tool_call, then the tool result.
@@ -50,6 +67,19 @@ describe('anthropic translation', () => {
     expect(toolResult[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'call_1' });
   });
 
+  it('maps a multipart user turn to text + base64 image blocks', () => {
+    const { messages } = toAnthropicMessages(MULTIMODAL_CONVERSATION);
+    expect(messages).toHaveLength(1);
+    const blocks = messages[0].content as Array<{ type: string; text?: string; source?: any }>;
+    expect(blocks[0]).toMatchObject({ type: 'text', text: 'What is in this image?' });
+    expect(blocks[1]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png' },
+    });
+    // The base64 payload is forwarded without the data-URL prefix.
+    expect((blocks[1].source as any).data).toBe(PNG_DATA_URL.split(',')[1]);
+  });
+
   it('converts tools to Anthropic input_schema shape', () => {
     const tools = toAnthropicTools(TOOLS)!;
     expect(tools).toHaveLength(1);
@@ -84,6 +114,40 @@ describe('gemini translation', () => {
     expect(decls[0]).toMatchObject({ name: 'mcp_get_weather_abc', description: 'Get weather' });
     expect((decls[0] as { parametersJsonSchema?: unknown }).parametersJsonSchema).toMatchObject({
       type: 'object',
+    });
+  });
+
+  it('maps a multipart user turn to a text part + inlineData image part', () => {
+    const { contents } = toGeminiContents(MULTIMODAL_CONVERSATION);
+    expect(contents).toHaveLength(1);
+    const parts = contents[0].parts!;
+    expect(parts[0]).toMatchObject({ text: 'What is in this image?' });
+    expect((parts[1] as any).inlineData).toMatchObject({
+      mimeType: 'image/png',
+      data: PNG_DATA_URL.split(',')[1],
+    });
+  });
+});
+
+describe('claude subscription buildUserMessage', () => {
+  it('keeps plain-string content when there are no images (unchanged flat prompt)', () => {
+    const { systemPrompt, content } = buildUserMessage(CONVERSATION);
+    expect(systemPrompt).toBe('You are helpful.');
+    expect(typeof content).toBe('string');
+    // The tool-role message is dropped; user/assistant turns are flattened.
+    expect(content).toContain('Human: Weather in Berlin?');
+    expect(content).toContain('Assistant: Let me check.');
+  });
+
+  it('emits text + image content blocks for a multimodal turn', () => {
+    const { systemPrompt, content } = buildUserMessage(MULTIMODAL_CONVERSATION);
+    expect(systemPrompt).toBe('You are helpful.');
+    expect(Array.isArray(content)).toBe(true);
+    const blocks = content as Array<{ type: string; text?: string; source?: any }>;
+    expect(blocks[0]).toMatchObject({ type: 'text', text: 'What is in this image?' });
+    expect(blocks[1]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: PNG_DATA_URL.split(',')[1] },
     });
   });
 });
