@@ -35,7 +35,27 @@ export type MCPManagerConfig = {
    * capability so servers behave exactly as before. Advisory scoping, NOT a hard sandbox.
    */
   roots?: string[];
+  /**
+   * MCP sampling (#15): the design-time trust policy that lets this server ask FLUJO to
+   * run LLM calls on its behalf (server -> client `sampling/createMessage`). The MCP spec
+   * assumes a human approves each call, which can't happen in headless flows, so instead
+   * the user grants standing permission here. Opt-in: when absent/disabled, FLUJO declares
+   * NO sampling capability and rejects any request. Sampling terminates at FLUJO (never
+   * forwarded onward). Enabling this lets the server spend your model's API budget.
+   */
+  sampling?: MCPSamplingPolicy;
 }
+
+export type MCPSamplingPolicy = {
+  /** Master switch. When false/undefined, FLUJO does not advertise sampling at all. */
+  enabled: boolean;
+  /** Which FLUJO model answers sampling requests. Required when enabled. */
+  modelId?: string;
+  /** Hard cap on output tokens per call, regardless of what the server asks for. */
+  maxTokens?: number;
+  /** Max sampling calls allowed in a rolling 60s window (runaway-loop guard). */
+  maxCallsPerMinute?: number;
+};
 
 export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
   transport: 'stdio';

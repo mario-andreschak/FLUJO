@@ -14,10 +14,17 @@ import { createOAuthClientProvider } from './oauth';
 import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
 import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
 import { hasRoots, registerRootsHandler, rootsConfigKey } from './roots';
+import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
 
-// We stash the roots config key on the client so shouldRecreateClient can detect a roots
-// change (the SDK doesn't expose a client's own declared capabilities publicly).
-interface ClientWithRootsKey { __flujoRootsKey?: string }
+// We stash a capabilities key on the client so shouldRecreateClient can detect a change to
+// any client-declared MCP capability (roots, sampling) — these are negotiated at connect
+// time, and the SDK doesn't expose a client's own declared capabilities publicly.
+interface ClientWithCapKey { __flujoCapKey?: string }
+
+/** Combined key of the config that drives client-declared capabilities. */
+function capabilityKey(config: MCPServerConfig): string {
+  return `${rootsConfigKey(config)}|${samplingConfigKey(config)}`;
+}
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -41,8 +48,11 @@ export function createNewClient(config: MCPServerConfig): Client {
   //
   // Roots (#15) are declared ONLY when this server has workspace folders configured.
   // Advertising roots with an empty list could make a roots-aware server refuse
-  // everything, so servers without roots behave exactly as they did before.
+  // everything, so servers without roots behave exactly as they did before. Sampling is
+  // likewise declared only when the server has an enabled sampling trust policy, so a
+  // server can't ask FLUJO to run LLM calls unless the user opted in.
   const serverHasRoots = hasRoots(config);
+  const serverHasSampling = samplingEnabled(config);
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
@@ -52,6 +62,7 @@ export function createNewClient(config: MCPServerConfig): Client {
       capabilities: {
         experimental: {},
         ...(serverHasRoots ? { roots: { listChanged: true } } : {}),
+        ...(serverHasSampling ? { sampling: {} } : {}),
       }
     }
   );
@@ -59,7 +70,10 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (serverHasRoots) {
     registerRootsHandler(client, config);
   }
-  (client as unknown as ClientWithRootsKey).__flujoRootsKey = rootsConfigKey(config);
+  if (serverHasSampling) {
+    registerSamplingHandler(client, config);
+  }
+  (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
 
   return client;
 }
@@ -329,11 +343,12 @@ export function shouldRecreateClient(
 ): { needsNewClient: boolean; reason?: string } {
   log.debug('Entering shouldRecreateClient method');
 
-  // A roots change must rebuild the client: it alters both the declared client capability
-  // (none<->some) and the config the roots/list handler closes over.
-  const currentRootsKey = (client as unknown as ClientWithRootsKey).__flujoRootsKey ?? '[]';
-  if (currentRootsKey !== rootsConfigKey(config)) {
-    return { needsNewClient: true, reason: 'Roots configuration changed' };
+  // A change to any client-declared capability (roots, sampling) must rebuild the client:
+  // it alters both the declared capability (none<->some) and the config the request
+  // handlers close over. These are negotiated only at connect time.
+  const currentCapKey = (client as unknown as ClientWithCapKey).__flujoCapKey ?? '';
+  if (currentCapKey !== capabilityKey(config)) {
+    return { needsNewClient: true, reason: 'Client capabilities (roots/sampling) changed' };
   }
 
   // Check if transport type has changed
