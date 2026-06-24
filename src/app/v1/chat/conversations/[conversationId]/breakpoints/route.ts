@@ -1,24 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { SharedState } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/breakpoints/route');
-
-async function loadState(conversationId: string): Promise<SharedState | undefined> {
-  if (FlowExecutor.conversationStates.has(conversationId)) {
-    return FlowExecutor.conversationStates.get(conversationId);
-  }
-  const storageKey = `conversations/${conversationId}` as StorageKey;
-  const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
-  if (state) {
-    FlowExecutor.conversationStates.set(conversationId, state);
-  }
-  return state ?? undefined;
-}
 
 /**
  * Replace the set of breakpoint node IDs for a conversation (used by the
@@ -48,7 +35,7 @@ export async function PUT(
   }
 
   try {
-    const sharedState = await loadState(conversationId);
+    const sharedState = await loadConversationState(conversationId);
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }

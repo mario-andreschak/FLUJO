@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { SharedState, TOOL_CALL_ACTION } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { SharedState } from '@/backend/execution/flow/types';
 import { StorageKey } from '@/shared/types/storage';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
@@ -65,25 +65,10 @@ export async function POST(
   }
 
   try {
-    let sharedState: SharedState | undefined = undefined;
     const storageKey = `conversations/${conversationId}` as StorageKey;
 
     // 1. Load state (prefer memory, fallback to storage)
-    if (FlowExecutor.conversationStates.has(conversationId)) {
-      sharedState = FlowExecutor.conversationStates.get(conversationId);
-      log.debug(`Loaded state from memory`, { requestId, conversationId });
-    } else {
-      try {
-        sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
-        if (sharedState) {
-          log.debug(`Loaded state from storage`, { requestId, conversationId });
-          FlowExecutor.conversationStates.set(conversationId, sharedState); // Add to memory map
-        }
-      } catch (storageError) {
-        log.warn(`Error loading state from storage`, { requestId, conversationId, error: storageError });
-        // Proceed, maybe state just doesn't exist
-      }
-    }
+    const sharedState: SharedState | undefined = await loadConversationState(conversationId);
 
     // 2. Validate state
     if (!sharedState) {
