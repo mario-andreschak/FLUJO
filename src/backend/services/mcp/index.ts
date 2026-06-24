@@ -452,7 +452,15 @@ export class MCPService {
           log.error(`Error name: ${error.name}`);
           log.error(`Error message: ${error.message}`);
           log.error(`Error stack: ${error.stack}`);
-          log.error(`Error cause: ${error.cause}`);
+          // The MCP SDK folds the underlying error into the message string and never sets
+          // `error.cause` (see StreamableHTTPClientTransport), so logging it is always
+          // "undefined". Log the resolved cause chain instead, plus any HTTP status code
+          // carried by StreamableHTTPError (e.g. 502 for a Bad Gateway from the proxy).
+          const httpCode = (error as { code?: unknown }).code;
+          if (httpCode !== undefined) {
+            log.error(`Error code: ${httpCode}`);
+          }
+          log.error(`Error chain: ${formatErrorChain(error)}`);
         } else if (error && typeof error === 'object') {
           // Try to log individual properties of the error object
           log.error(`Error type: ${typeof error}`);

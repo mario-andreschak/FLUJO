@@ -6,6 +6,7 @@ import ServerModal from './Modals/ServerModal/index';
 import ServerDetailsModal from './ServerDetailsModal';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
+import { MCP_FORMATS, getMcpFormat, McpFormatId } from '@/utils/mcp/mcpFormats';
 import { createLogger } from '@/utils/logger';
 import {
   Button, 
@@ -28,6 +29,8 @@ import {
   DialogActions
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
+import UploadIcon from '@mui/icons-material/Upload';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import SortIcon from '@mui/icons-material/Sort';
@@ -65,6 +68,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServerConfig | null>(null);
+  // Import/export dialog + format-dropdown state.
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importFormat, setImportFormat] = useState<McpFormatId>('claude');
+  const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
+  const [importMenuAnchor, setImportMenuAnchor] = useState<null | HTMLElement>(null);
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
 
@@ -148,55 +159,102 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     onServerModalToggle?.(false);
   };
 
-  const handleExportConfig = () => {
-    log.debug('Exporting server configurations');
-    
-    const config = {
-      mcpServers: Object.fromEntries(
-        servers.map((server: any) => {
-          // Create a base config object with common properties
-          const baseConfig = {
-            env: server.env || {},
-            disabled: server.disabled,
-            autoApprove: server.autoApprove || [],
-            transport: server.transport
-          };
-          
-          // Add transport-specific properties
-          if (server.transport === 'stdio') {
-            return [
-              server.name,
-              {
-                ...baseConfig,
-                command: (server as any).command,
-                args: (server as any).args || [],
-              },
-            ];
-          } else if (server.transport === 'websocket') {
-            return [
-              server.name,
-              {
-                ...baseConfig,
-                websocketUrl: (server as any).websocketUrl,
-              },
-            ];
-          }
-          
-          // Fallback for unknown transport types
-          return [server.name, baseConfig];
-        })
-      ),
-    };
+  const handleExportConfig = (formatId: McpFormatId) => {
+    const format = getMcpFormat(formatId);
+    log.debug(`Exporting server configurations in ${format.label} format`);
+    setExportMenuAnchor(null);
+
+    // Emit the selected tool's shape (`type`/`url` rather than FLUJO's
+    // `transport`/`serverUrl`) so the file can be pasted into that tool's
+    // config. Servers exposed via FLUJO's mcp-proxy are emitted as http URLs
+    // against this origin (e.g. http://localhost:4200/mcp-proxy/<name>).
+    const config = format.export(servers as unknown as MCPServerConfig[], {
+      proxyBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
+    });
 
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'mcp_config.json';
+    a.download = format.fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const openImportDialog = (formatId: McpFormatId) => {
+    setImportFormat(formatId);
+    setImportText('');
+    setImportError(null);
+    setImportMenuAnchor(null);
+    setShowImportModal(true);
+  };
+
+  const handleImportConfig = async () => {
+    const format = getMcpFormat(importFormat);
+    log.debug(`Importing server configurations from ${format.label} format`);
+    setImportError(null);
+
+    const { servers: parsedServers, errors } = format.import(importText);
+
+    if (parsedServers.length === 0) {
+      setImportError(
+        errors.length > 0
+          ? errors.join('\n')
+          : 'No servers found in the pasted configuration.'
+      );
+      return;
+    }
+
+    setIsImporting(true);
+    const existingNames = new Set(servers.map((s) => s.name));
+    let added = 0;
+    let updated = 0;
+    const failures: string[] = [];
+
+    // Import sequentially so backend connection attempts don't stampede.
+    for (const config of parsedServers) {
+      try {
+        if (existingNames.has(config.name)) {
+          await updateServer(config);
+          updated++;
+        } else {
+          await addServer(config);
+          existingNames.add(config.name);
+          added++;
+        }
+      } catch (e) {
+        failures.push(`"${config.name}": ${(e as Error).message || 'failed to import'}`);
+      }
+    }
+
+    setIsImporting(false);
+
+    const allProblems = [...errors, ...failures];
+    if (added === 0 && updated === 0) {
+      setImportError(
+        allProblems.length > 0 ? allProblems.join('\n') : 'No servers could be imported.'
+      );
+      return;
+    }
+
+    // Some succeeded — close the dialog. Keep partial errors visible if any.
+    log.info(`Imported MCP servers: ${added} added, ${updated} updated`);
+    if (allProblems.length > 0) {
+      setImportError(
+        `Imported ${added} added / ${updated} updated. Some entries were skipped:\n${allProblems.join('\n')}`
+      );
+    } else {
+      setShowImportModal(false);
+      setImportText('');
+    }
+  };
+
+  const handleCloseImport = () => {
+    setShowImportModal(false);
+    setImportText('');
+    setImportError(null);
   };
 
   // Filter and sort servers
@@ -334,10 +392,35 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         <Typography variant="h5">MCP</Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
+            variant="outlined"
+            color="primary"
+            onClick={(e) => setImportMenuAnchor(e.currentTarget)}
+            startIcon={<UploadIcon />}
+            endIcon={<ArrowDropDownIcon />}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 500,
+            }}
+          >
+            Import
+          </Button>
+          <Menu
+            anchorEl={importMenuAnchor}
+            open={Boolean(importMenuAnchor)}
+            onClose={() => setImportMenuAnchor(null)}
+          >
+            {MCP_FORMATS.map((format) => (
+              <MenuItem key={format.id} onClick={() => openImportDialog(format.id)}>
+                <ListItemText primary={`${format.label} format`} />
+              </MenuItem>
+            ))}
+          </Menu>
+          <Button
             variant="contained"
             color="primary"
-            onClick={handleExportConfig}
+            onClick={(e) => setExportMenuAnchor(e.currentTarget)}
             startIcon={<DownloadIcon />}
+            endIcon={<ArrowDropDownIcon />}
             sx={{
               textTransform: 'none',
               fontWeight: 500,
@@ -346,6 +429,17 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           >
             Export
           </Button>
+          <Menu
+            anchorEl={exportMenuAnchor}
+            open={Boolean(exportMenuAnchor)}
+            onClose={() => setExportMenuAnchor(null)}
+          >
+            {MCP_FORMATS.map((format) => (
+              <MenuItem key={format.id} onClick={() => handleExportConfig(format.id)}>
+                <ListItemText primary={`${format.label} format`} />
+              </MenuItem>
+            ))}
+          </Menu>
           <Button
             variant="contained"
             color="primary"
@@ -583,6 +677,62 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             color={bulkActionDialog.action === 'enable' ? 'success' : 'error'}
           >
             {bulkActionDialog.action === 'enable' ? 'Enable' : 'Disable'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Import-from-Claude-format dialog */}
+      <Dialog
+        open={showImportModal}
+        onClose={handleCloseImport}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Import MCP Servers — {getMcpFormat(importFormat).label} format</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Paste a {getMcpFormat(importFormat).label}-style MCP configuration (the{' '}
+            <code>{'{ "mcpServers": { ... } }'}</code> JSON). FLUJO adds each server, preserving
+            commands, args, environment variables, URLs and custom headers. A server whose name
+            already exists is updated.
+          </DialogContentText>
+          <TextField
+            multiline
+            minRows={10}
+            maxRows={20}
+            fullWidth
+            value={importText}
+            onChange={(e) => {
+              setImportText(e.target.value);
+              if (importError) setImportError(null);
+            }}
+            placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "my-mcp-server"],\n      "env": { "API_KEY": "..." }\n    }\n  }\n}'}
+            variant="outlined"
+            spellCheck={false}
+            InputProps={{ sx: { fontFamily: 'monospace', fontSize: '0.85rem' } }}
+            disabled={isImporting}
+          />
+          {importError && (
+            <DialogContentText
+              component="pre"
+              sx={{ mt: 2, color: 'error.main', whiteSpace: 'pre-wrap', fontSize: '0.85rem' }}
+            >
+              {importError}
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseImport} disabled={isImporting}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleImportConfig}
+            variant="contained"
+            color="primary"
+            disabled={isImporting || importText.trim() === ''}
+            startIcon={<UploadIcon />}
+          >
+            {isImporting ? 'Importing...' : 'Import'}
           </Button>
         </DialogActions>
       </Dialog>
