@@ -93,6 +93,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         // Preserve transport-independent settings across a transport switch.
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
+        sampling: prev.sampling,
         transport: 'websocket',
         websocketUrl: websocketUrl
       } as MCPWebSocketConfig));
@@ -109,6 +110,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         // Preserve transport-independent settings across a transport switch.
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
+        sampling: prev.sampling,
         transport: 'sse',
         serverUrl: serverUrl,
         // Preserve any custom headers when switching between HTTP-based transports
@@ -127,6 +129,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         // Preserve transport-independent settings across a transport switch.
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
+        sampling: prev.sampling,
         transport: 'streamable',
         serverUrl: serverUrl,
         // Preserve any custom headers when switching between HTTP-based transports
@@ -147,6 +150,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         // Preserve transport-independent settings across a transport switch.
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
+        sampling: prev.sampling,
         transport: 'stdio'
       } as MCPStdioConfig));
     }
