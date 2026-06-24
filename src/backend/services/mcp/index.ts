@@ -1056,13 +1056,21 @@ export class MCPService {
       // If the server should be enabled but isn't connected, connect it
       log.info(`handleConnectionStateChange: Connecting previously disabled server ${serverName}`);
       await this.connectServer(config);
+    } else if (isCurrentlyConnected && shouldBeConnected) {
+      // Server stays enabled, but its config may have changed (a new root/workspace
+      // folder, command, args, env, URL...). Re-run connectServer: shouldRecreateClient
+      // rebuilds the connection only when something meaningful actually changed (otherwise
+      // it's a cheap no-op). Without this, edits to a CONNECTED server — e.g. assigning a
+      // root to the filesystem server — silently did nothing until a manual restart,
+      // because the MCP capabilities (roots) are negotiated at connect time.
+      log.info(`handleConnectionStateChange: Re-applying config to connected server ${serverName}`);
+      await this.connectServer(config);
     } else if (!shouldBeConnected) {
       // If server should be disabled, also clear any pending retry timers
       log.info(`handleConnectionStateChange: Clearing retry timers for disabled server ${serverName}`);
       this.clearRetryTimer(serverName);
       this.connectionRetryAttempts.delete(serverName);
     }
-    // No reconnection logic for already connected servers
   }
 
   /**
