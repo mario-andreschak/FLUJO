@@ -1,6 +1,6 @@
 {
   "name": "flujo",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev -p 4200",
