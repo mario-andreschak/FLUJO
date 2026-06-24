@@ -4,7 +4,6 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { executeCommand } from '@/utils/mcp/directExecution';
 
 // Global recovery map to persist clients across hot reloads
 declare global {
@@ -804,15 +803,36 @@ export class MCPService {
    */
   async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
-    
-    const client = this.clients.get(serverName);
+
+    let client = this.clients.get(serverName);
     if (!client) {
       log.warn(`callTool: Client not found for ${serverName}`);
     }
-    
-    const result = await callToolFunction(client, serverName, toolName, args, timeout);
-    log.info(`callTool: Called tool ${toolName} on ${serverName}`);
 
+    let result = await callToolFunction(client, serverName, toolName, args, timeout);
+
+    // Self-heal a stale/dead connection: a client in the map does not guarantee a live
+    // session (expired streamable-HTTP session, crashed process after a restart, etc.).
+    // Mirror listServerTools — force one reconnect and retry. This is what lets a flow
+    // run successfully right after a FLUJO restart instead of failing with "not found".
+    // Only retry connection-level failures (no client / not found / 404), not a tool that
+    // legitimately errored, so we don't double-execute a tool with side effects.
+    const looksDisconnected =
+      !client ||
+      result.statusCode === 404 ||
+      (result.error?.toLowerCase().includes('not found') ?? false);
+    if (!result.success && looksDisconnected) {
+      log.warn(`callTool: ${toolName} on ${serverName} failed (${result.error}); forcing reconnect and retrying once`);
+      const reconnect = await this.forceReconnect(serverName);
+      if (reconnect.success) {
+        client = this.clients.get(serverName);
+        result = await callToolFunction(client, serverName, toolName, args, timeout);
+      } else {
+        log.warn(`callTool: Reconnect for ${serverName} failed: ${reconnect.error}`);
+      }
+    }
+
+    log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
   }
 
@@ -1218,53 +1238,20 @@ export class MCPService {
           message: effectiveError,
           stderrOutput: stderrOutput || undefined
         };
-      } else {
-        // No stderr output available, try direct execution to capture error
-        log.info(`getServerStatus: No stderr output available for ${serverName}, attempting direct execution to capture error`);
-        
-        // Handle different transport types
-        if (config.transport === 'stdio') {
-          try {
-            // Generate a request ID for logging
-            const requestId = uuidv4();
-            
-            // Get the server path
-            const serverPath = config.rootPath || `${SERVER_DIR_PREFIX}/${config.name}`;
-            
-            // Execute the command directly to capture any error output
-            const result = await executeCommand({
-              savePath: serverPath,
-              command: config.command,
-              args: config.args,
-              env: config.env,
-              actionName: 'ErrorCapture',
-              requestId,
-              timeout: 5000 // 5 second timeout to avoid hanging
-            });
-            
-            // If we got output, use it as the error message
-            if (result.commandOutput) {
-              log.info(`getServerStatus: Direct execution captured output for ${serverName}`);
-              return {
-                status: 'error',
-                message: result.commandOutput,
-                stderrOutput: result.commandOutput
-              };
-            }
-          } catch (execError) {
-            // If direct execution also fails, log but continue to default message
-            log.warn(`getServerStatus: Direct execution failed for ${serverName}:`, execError);
-          }
-        }
-
-        // Fall back to generic message if all else fails
-        log.info(`getServerStatus: No specific error details available for ${serverName}`);
-        return {
-          status: 'error',
-          message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
-          stderrOutput: undefined
-        };
       }
+
+      // No stderr and no persisted error. We deliberately do NOT spawn the server process
+      // here to "capture an error" — that direct-execution probe ran with a 5s timeout PER
+      // disconnected stdio server and was the dominant cost of loading the /mcp page (N
+      // servers x up to 5s). The connection itself (and its real error) is established by
+      // connectServer / the on-demand reconnect in listServerTools & callTool, which is
+      // where errors get persisted. Just report the generic state instantly.
+      log.info(`getServerStatus: No specific error details available for ${serverName}`);
+      return {
+        status: 'error',
+        message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
+        stderrOutput: undefined
+      };
     }
   }
 
@@ -1293,22 +1280,24 @@ export class MCPService {
       log.info(`Found ${enabledServers.length} enabled servers to start`);
       log.debug(`${enabledServers}`);
 
-      // Mark every enabled server as "connecting" up front. We connect them one at
-      // a time below, so without this the servers still waiting in the queue would
-      // report an error on the MCP page until their turn comes. connectServer()
-      // clears each entry as its attempt settles.
+      // Mark every enabled server as "connecting" up front so the MCP page shows a
+      // spinner for all of them while the sweep runs. connectServer() clears each
+      // entry as its attempt settles.
       enabledServers.forEach(config => this.connectingServers.add(config.name));
 
-      // Connect each enabled server
-      for (const config of enabledServers) {
-        try {
+      // Connect all enabled servers in PARALLEL. Connecting sequentially made startup
+      // scale with the SUM of every server's connect time (one slow/hanging server
+      // delayed all the others, and the page sat in "connecting"/error far too long).
+      // Each connectServer() already catches its own failures and never rejects.
+      await Promise.all(
+        enabledServers.map(config => {
           log.info(`Starting server: ${config.name}`);
-          await this.connectServer(config);
-        } catch (error) {
-          log.error(`Failed to start server ${config.name}:`, error);
-          // Continue with other servers even if one fails
-        }
-      }
+          return this.connectServer(config).catch(error => {
+            log.error(`Failed to start server ${config.name}:`, error);
+            // Swallow so one failure doesn't abort the others.
+          });
+        })
+      );
     } finally {
       // Always reset the flag when done, even if there were errors
       this.setStartingUp(false);
