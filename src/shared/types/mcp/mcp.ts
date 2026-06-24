@@ -28,6 +28,13 @@ export type MCPManagerConfig = {
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
    */
   exposeAsMcpServer?: boolean;
+  /**
+   * MCP roots (#15): workspace folders this server is scoped to. Each entry is a
+   * filesystem path or a `file://` URI (and may contain `${global:VAR}` references,
+   * resolved at connection time). Opt-in: when empty/undefined, FLUJO declares NO roots
+   * capability so servers behave exactly as before. Advisory scoping, NOT a hard sandbox.
+   */
+  roots?: string[];
 }
 
 export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {

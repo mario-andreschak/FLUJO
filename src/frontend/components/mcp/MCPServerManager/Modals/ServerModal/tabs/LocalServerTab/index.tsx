@@ -10,6 +10,7 @@ import LocalServerForm from './LocalServerForm';
 import BuildTools from './BuildTools';
 import RunTools from './RunTools';
 import ArgumentsManager from './ArgumentsManager';
+import RootsManager from './RootsManager';
 import { 
   handleSubmit,
   handleRootPathSelect,
@@ -510,6 +511,13 @@ const LocalServerTab: React.FC<TabProps> = ({
                       onParseReadme={onParseReadme}
                       onParseClipboard={onParseClipboard}
                       isParsingReadme={isParsingReadme}
+                    />
+                  </Box>
+
+                  <Box>
+                    <RootsManager
+                      roots={localConfig.roots || []}
+                      onChange={(roots) => setLocalConfig(prev => ({ ...prev, roots }))}
                     />
                   </Box>
                 </Stack>
