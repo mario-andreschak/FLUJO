@@ -8,6 +8,8 @@ import { TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, STAY_ON_NODE_ACTION } from '@/
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage from shared types
 import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { ExecutionEvent } from '@/shared/types/execution/events';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -204,6 +206,12 @@ export async function processChatCompletion(
             log.error(`Failed to save error state for conversation ${effectiveConvId}:`, storageError);
           });
         }
+
+        // Make sure any open SSE stream for this conversation terminates even if
+        // the run threw before emitting run:done (runFlow emits run:done on its
+        // own error paths, but a throw before/around it would otherwise hang the
+        // stream).
+        executionEventBus.emitterFor(effectiveConvId)({ type: 'run:done', status: 'error' });
       });
 
     // Return streaming response immediately
@@ -214,7 +222,16 @@ export async function processChatCompletion(
   }
 }
 
-// Create a streaming response using Server-Sent Events (SSE)
+// Create a streaming response using Server-Sent Events (SSE).
+//
+// This subscribes to the in-process ExecutionEventBus (the same stream the live
+// chat view uses) rather than polling the conversation over HTTP. The previous
+// implementation fetched `http://localhost:4200/v1/chat/conversations/{id}`
+// once per second and diffed the assistant content — an HTTP round-trip to the
+// server's own port plus up-to-1s latency. Because the model layer is
+// non-streamed, each assistant message arrives complete in a single `message`
+// event, so we forward its content as one OpenAI chunk; the (non-standard)
+// `conversation` field is read from the in-memory conversationStates map.
 export function createStreamingResponse(
   model: string,
   conversationId: string
@@ -222,251 +239,94 @@ export function createStreamingResponse(
   const encoder = new TextEncoder();
   const chunkId = `chatcmpl-${Date.now()}`; // Use the same ID for all chunks in this stream
   const createdTimestamp = Math.floor(Date.now() / 1000);
-  log.debug(`create streaming response`)
-  // Create a ReadableStream for SSE
+  log.debug('create streaming response (event-bus driven)', { conversationId });
+
   const stream = new ReadableStream({
-    async start(controller) {
-      let lastState: any = null;
-      let lastAssistantContent: string = '';
-      let lastAssistantId: string | undefined = undefined;
-      let retryCount = 0;
+    start(controller) {
+      let closed = false;
+      let unsubscribe: (() => void) | null = null;
+      // Replay + live can both deliver an event; de-dupe on monotonic seq.
+      let lastSeq = -1;
 
-      // Send initial response with role
-      const initialChunk = JSON.stringify({
+      const send = (obj: unknown) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+
+      const baseChunk = (delta: unknown, finish_reason: string | null) => ({
         id: chunkId,
-        object: "chat.completion.chunk",
+        object: 'chat.completion.chunk',
         created: createdTimestamp,
-        model: model,
-        choices: [{
-          index: 0,
-          delta: { role: "assistant", content: "" },
-          finish_reason: null
-        }]
+        model,
+        choices: [{ index: 0, delta, finish_reason }],
       });
-      controller.enqueue(encoder.encode(`data: ${initialChunk}\n\n`));
 
-      // Poll until processing is complete
-      while (true) {
+      const finish = (status: 'completed' | 'error' | 'stop') => {
+        if (closed) return;
+        closed = true;
+        const finishReason = status === 'error' ? 'error' : 'stop';
+        const currentState = FlowExecutor.conversationStates.get(conversationId);
+        // Final unified chunk: empty content delta + the final conversation state.
+        send(baseChunk({ content: '', conversation: currentState }, finishReason));
+        // Standard OpenAI empty-delta terminator chunk.
+        send(baseChunk({}, finishReason));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        if (unsubscribe) unsubscribe();
         try {
-          // Fetch current conversation state
-          const response = await fetch(`http://localhost:4200/v1/chat/conversations/${conversationId}`);
-
-          if (!response.ok) {
-            log.error(`Failed to fetch conversation: ${response.status}`)
-            throw new Error(`Failed to fetch conversation: ${response.status}`);
-          }
-
-          const currentState = await response.json();
-
-          // Calculate and send delta if we have a previous state
-          if (lastState) {
-            // Check if the state has changed
-            if (JSON.stringify(lastState) !== JSON.stringify(currentState)) {
-              // Find the last assistant message to extract content
-              const messages = currentState.messages || [];
-              const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
-
-              if (lastAssistantMsg && typeof lastAssistantMsg.content === 'string') {
-                const currentContent = lastAssistantMsg.content;
-                const currentAssistantId = lastAssistantMsg.id;
-
-                // Check if this is a new message or an update to an existing one
-                const isNewMessage = currentAssistantId !== lastAssistantId;
-
-                // If it's a new message, send the entire content
-                // If it's an existing message with changed content, send only the delta
-                if (isNewMessage) {
-                  log.debug(`New assistant message detected with ID: ${currentAssistantId}`);
-                  lastAssistantId = currentAssistantId;
-                  lastAssistantContent = currentContent;
-
-                  // For a new message, send the entire content as the delta
-                  // This ensures we don't miss any content
-                  const newContent = currentContent;
-
-                  // Send a unified chunk with both content and conversation state
-                  const unifiedChunk = JSON.stringify({
-                    id: chunkId,
-                    object: "chat.completion.chunk",
-                    created: createdTimestamp,
-                    model: model,
-                    choices: [{
-                      index: 0,
-                      delta: {
-                        content: newContent,
-                        conversation: currentState
-                      },
-                      finish_reason: null
-                    }]
-                  });
-                  controller.enqueue(encoder.encode(`data: ${unifiedChunk}\n\n`));
-                }
-                // If content has changed and it's longer than before, calculate the delta
-                else if (currentContent !== lastAssistantContent && currentContent.length > lastAssistantContent.length) {
-                  // Get the new content that was added
-                  const newContent = currentContent.slice(lastAssistantContent.length);
-
-                  // Send a unified chunk with both content delta and conversation state
-                  const unifiedChunk = JSON.stringify({
-                    id: chunkId,
-                    object: "chat.completion.chunk",
-                    created: createdTimestamp,
-                    model: model,
-                    choices: [{
-                      index: 0,
-                      delta: {
-                        content: newContent,
-                        conversation: currentState
-                      },
-                      finish_reason: null
-                    }]
-                  });
-                  controller.enqueue(encoder.encode(`data: ${unifiedChunk}\n\n`));
-
-                  // Update the last assistant content
-                  lastAssistantContent = currentContent;
-                }
-                // If the state changed but the content didn't, still send the state update
-                else if (currentContent === lastAssistantContent) {
-                  // Send a unified chunk with empty content delta but updated conversation state
-                  const stateOnlyChunk = JSON.stringify({
-                    id: chunkId,
-                    object: "chat.completion.chunk",
-                    created: createdTimestamp,
-                    model: model,
-                    choices: [{
-                      index: 0,
-                      delta: {
-                        content: "",
-                        conversation: currentState
-                      },
-                      finish_reason: null
-                    }]
-                  });
-                  controller.enqueue(encoder.encode(`data: ${stateOnlyChunk}\n\n`));
-                }
-              } else {
-                // No assistant message found, but state changed - send state update only
-                const stateOnlyChunk = JSON.stringify({
-                  id: chunkId,
-                  object: "chat.completion.chunk",
-                  created: createdTimestamp,
-                  model: model,
-                  choices: [{
-                    index: 0,
-                    delta: {
-                      content: "",
-                      conversation: currentState
-                    },
-                    finish_reason: null
-                  }]
-                });
-                controller.enqueue(encoder.encode(`data: ${stateOnlyChunk}\n\n`));
-              }
-            }
-
-            // Check if processing is complete by checking the status in FlowExecutor.conversationStates
-            // This is more reliable than checking the conversation endpoint which might not have the latest status
-            const memoryState = FlowExecutor.conversationStates.get(conversationId);
-            const status = memoryState?.status || 'running';
-
-            if (status === 'completed' || status === 'error') {
-              // Send final chunk with both empty delta and the final conversation state
-              const finalChunk = JSON.stringify({
-                id: chunkId,
-                object: "chat.completion.chunk",
-                created: createdTimestamp,
-                model: model,
-                choices: [{
-                  index: 0,
-                  delta: {
-                    content: "",
-                    conversation: currentState
-                  },
-                  finish_reason: status === 'error' ? "error" : "stop"
-                }]
-              });
-              controller.enqueue(encoder.encode(`data: ${finalChunk}\n\n`));
-
-              // Send standard OpenAI empty delta chunk
-              const openAiFinalChunk = JSON.stringify({
-                id: chunkId,
-                object: "chat.completion.chunk",
-                created: createdTimestamp,
-                model: model,
-                choices: [{
-                  index: 0,
-                  delta: {},
-                  finish_reason: status === 'error' ? "error" : "stop"
-                }]
-              });
-              controller.enqueue(encoder.encode(`data: ${openAiFinalChunk}\n\n`));
-
-              // Send [DONE] to indicate end of stream
-              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-              break;
-            }
-          }
-
-          // Update last state and reset retry count
-          lastState = currentState;
-          retryCount = 0;
-
-          // Wait 1 second before next poll
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-          log.error(`Error during streaming for conversation ${conversationId}:`, error);
-
-          // Handle error with retry
-          if (retryCount < 1) {
-            retryCount++;
-            log.info(`Retrying after error (attempt ${retryCount}) for conversation ${conversationId}`);
-            // Wait 5 seconds before retry
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          } else {
-            // Send error with unified format
-            const errorChunk = JSON.stringify({
-              id: chunkId,
-              object: "chat.completion.chunk",
-              created: createdTimestamp,
-              model: model,
-              choices: [{
-                index: 0,
-                delta: {
-                  content: "Error during streaming: " + (error instanceof Error ? error.message : "Unknown error"),
-                  conversation: { error: error instanceof Error ? error.message : "Unknown error" }
-                },
-                finish_reason: "error"
-              }]
-            });
-            controller.enqueue(encoder.encode(`data: ${errorChunk}\n\n`));
-
-            // Also send standard OpenAI error format for compatibility
-            const openAiErrorChunk = JSON.stringify({
-              error: {
-                message: error instanceof Error ? error.message : "Unknown error during streaming",
-                type: "streaming_error",
-                code: "streaming_failed"
-              }
-            });
-            controller.enqueue(encoder.encode(`data: ${openAiErrorChunk}\n\n`));
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            break;
-          }
+          controller.close();
+        } catch {
+          /* already closed */
         }
+      };
+
+      const handleEvent = (event: ExecutionEvent) => {
+        if (closed) return;
+        if (event.seq <= lastSeq) return; // de-dupe replay vs live
+        lastSeq = event.seq;
+
+        if (event.type === 'message') {
+          const msg = event.message;
+          if (msg && msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.length > 0) {
+            const currentState = FlowExecutor.conversationStates.get(conversationId);
+            send(baseChunk({ content: msg.content, conversation: currentState }, null));
+          }
+        } else if (event.type === 'run:done') {
+          finish(event.status === 'error' ? 'error' : 'completed');
+        } else if (event.type === 'run:awaiting_approval' || event.type === 'run:paused') {
+          // A streaming run that pauses (tool approval / debug) produces no more
+          // content on this request; close the stream cleanly instead of hanging
+          // (the old poller would have spun until the client disconnected).
+          finish('stop');
+        }
+      };
+
+      // Initial chunk announcing the assistant role (OpenAI convention).
+      send(baseChunk({ role: 'assistant', content: '' }, null));
+
+      // Subscribe for live events, then replay anything already buffered (the run
+      // is fired just before this, so the buffer is normally empty; replay covers
+      // a run that completed unusually fast). seq de-dup keeps ordering correct.
+      unsubscribe = executionEventBus.subscribe(conversationId, handleEvent);
+      for (const buffered of executionEventBus.getBufferedSince(conversationId, 0)) {
+        handleEvent(buffered);
       }
 
-      // Close the stream
-      controller.close();
-    }
+      // If the conversation is already terminal (e.g. resumed and complete),
+      // close immediately so the client isn't left waiting for an event that
+      // will never come.
+      if (!closed) {
+        const existing = FlowExecutor.conversationStates.get(conversationId);
+        if (existing && (existing.status === 'completed' || existing.status === 'error')) {
+          finish(existing.status === 'error' ? 'error' : 'completed');
+        }
+      }
+    },
   });
 
-  // Return the stream as a Response
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
-    }
+      'Connection': 'keep-alive',
+    },
   });
 }
