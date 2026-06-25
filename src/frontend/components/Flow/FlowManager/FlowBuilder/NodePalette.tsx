@@ -7,6 +7,7 @@ import { createLogger } from '@/utils/logger';
 import { NodeType } from '@/frontend/types/flow/flow';
 import SettingsIcon from '@mui/icons-material/Settings';
 import OutputIcon from '@mui/icons-material/Output';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -34,6 +35,8 @@ const NodeItem = styled(Paper, {
       ? theme.palette.secondary.main
       : nodeType === 'finish'
       ? theme.palette.success.main
+      : nodeType === 'subflow'
+      ? theme.palette.warning.main
       : theme.palette.info.main
   }`,
   boxShadow: theme.shadows[2],
@@ -45,6 +48,8 @@ const NodeItem = styled(Paper, {
         ? theme.palette.secondary.main
         : nodeType === 'finish'
         ? theme.palette.success.main
+        : nodeType === 'subflow'
+        ? theme.palette.warning.main
         : theme.palette.info.main
     }, 0 3px 10px rgba(0,0,0,0.1)`
   },
@@ -64,6 +69,8 @@ const NodeHeader = styled(Box, {
       ? theme.palette.secondary.light
       : nodeType === 'finish'
       ? theme.palette.success.light
+      : nodeType === 'subflow'
+      ? theme.palette.warning.light
       : theme.palette.info.light
   }`,
   marginBottom: theme.spacing(1),
@@ -97,6 +104,11 @@ const nodeTypes: Array<{
     label: 'MCP Node',
     description: 'Add functionality',
   },
+  {
+    type: 'subflow',
+    label: 'Subflow Node',
+    description: 'Run another flow as a step',
+  },
 ];
 
 // Helper function to get the appropriate icon for each node type
@@ -108,6 +120,8 @@ const getNodeIcon = (type: NodeType) => {
       return <OutputIcon color="success" />;
     case 'mcp':
       return <SettingsIcon color="info" />;
+    case 'subflow':
+      return <AccountTreeIcon color="warning" />;
     default:
       return <SettingsIcon color="secondary" />;
   }
