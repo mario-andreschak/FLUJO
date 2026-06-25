@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { SharedState } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { StorageKey } from '@/shared/types/storage';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService'; // Import the main service
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser'; // Import request type
@@ -28,17 +27,7 @@ export async function POST(
 
   try {
     // 1. Load state (prioritize memory, then storage)
-    let sharedState: SharedState | undefined = undefined;
-    if (FlowExecutor.conversationStates.has(conversationId)) {
-      sharedState = FlowExecutor.conversationStates.get(conversationId)!;
-      log.debug(`Loaded state from memory`, { requestId, conversationId });
-    } else {
-      sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
-      if (sharedState) {
-        log.debug(`Loaded state from storage`, { requestId, conversationId });
-        FlowExecutor.conversationStates.set(conversationId, sharedState); // Add to memory map
-      }
-    }
+    const sharedState = await loadConversationState(conversationId);
 
     if (!sharedState) {
       log.warn(`Conversation state not found for debug continue`, { requestId, conversationId });

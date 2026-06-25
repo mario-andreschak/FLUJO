@@ -205,9 +205,20 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         if (handoff) {
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            // A model can emit several tool_uses in one turn; only the first
+            // handoff counts. Ignoring the rest also avoids re-aborting.
+            if (handoffCall) {
+              return { content: [{ type: 'text', text: 'Already handing off.' }] };
+            }
             handoffCall = { name: fnName, args: args ?? {} };
             log.debug('Claude subscription requested handoff', { tool: fnName });
-            abortController.abort();
+            // Defer the abort by a microtask. Aborting synchronously here tears
+            // down the SDK control stream while permission round-trips for the
+            // same turn's tool_uses may still be in flight, which surfaces
+            // "Tool permission stream closed before response received" as a tool
+            // result (the model then narrates it, even with approvals off). The
+            // handoff is already recorded; let the SDK settle, then abort.
+            queueMicrotask(() => abortController.abort());
             return { content: [{ type: 'text', text: 'Handing off.' }] };
           });
         }
@@ -359,7 +370,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
     recordMessage({
       role: 'assistant',
-      content: finalText || (finalToolCalls ? null : ''),
+      // On a handoff, the model's trailing prose is irrelevant (FLUJO routes on
+      // the tool_call) and often narrates the benign abort race ("permission
+      // stream closed…"). Drop it so the handoff turn is clean.
+      content: finalToolCalls ? null : (finalText || ''),
       ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}),
     });
 

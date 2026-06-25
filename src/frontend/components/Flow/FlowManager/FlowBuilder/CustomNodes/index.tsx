@@ -16,13 +16,14 @@ import {
 import ChatIcon from '@mui/icons-material/Chat';
 import SettingsIcon from '@mui/icons-material/Settings';
 import OutputIcon from '@mui/icons-material/Output';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 
 const NodeContainer = styled(Paper, {
   shouldForwardProp: (prop) => !['nodeType', 'selected'].includes(prop as string),
 })<{ 
-  nodeType: 'start' | 'process' | 'finish' | 'mcp';
+  nodeType: 'start' | 'process' | 'finish' | 'mcp' | 'subflow';
   selected?: boolean; 
 }>(({ theme, nodeType, selected }) => ({
   padding: theme.spacing(1.5),
@@ -39,9 +40,11 @@ const NodeContainer = styled(Paper, {
       ? theme.palette.secondary.main
       : nodeType === 'finish'
       ? theme.palette.success.main
-      : theme.palette.info.main
+      : nodeType === 'mcp'
+      ? theme.palette.info.main
+      : theme.palette.warning.main
   }`,
-  boxShadow: selected 
+  boxShadow: selected
     ? `0 0 0 2px ${theme.palette.primary.main}, 0 3px 10px rgba(0,0,0,0.2)` 
     : theme.shadows[2],
   transition: 'all 0.2s ease',
@@ -53,14 +56,16 @@ const NodeContainer = styled(Paper, {
         ? theme.palette.secondary.main
         : nodeType === 'finish'
         ? theme.palette.success.main
-        : theme.palette.info.main
+        : nodeType === 'mcp'
+        ? theme.palette.info.main
+        : theme.palette.warning.main
     }, 0 3px 10px rgba(0,0,0,0.1)`
   }
 }));
 
 const NodeHeader = styled(Box, {
   shouldForwardProp: (prop) => prop !== 'nodeType',
-})<{ nodeType: 'start' | 'process' | 'finish' | 'mcp' }>(({ theme, nodeType }) => ({
+})<{ nodeType: 'start' | 'process' | 'finish' | 'mcp' | 'subflow' }>(({ theme, nodeType }) => ({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -71,7 +76,9 @@ const NodeHeader = styled(Box, {
       ? theme.palette.secondary.light
       : nodeType === 'finish'
       ? theme.palette.success.light
-      : theme.palette.info.light
+      : nodeType === 'mcp'
+      ? theme.palette.info.light
+      : theme.palette.warning.light
   }`,
   marginBottom: theme.spacing(1),
   paddingBottom: theme.spacing(0.5),
@@ -96,10 +103,10 @@ const PropertyRow = styled(Box)(({ theme }) => ({
 }));
 
 interface CustomNodeProps extends NodeProps {
-  nodeType: 'start' | 'process' | 'finish' | 'mcp';
+  nodeType: 'start' | 'process' | 'finish' | 'mcp' | 'subflow';
 }
 
-const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp') => {
+const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp' | 'subflow') => {
   switch (type) {
     case 'start':
       return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
@@ -109,12 +116,14 @@ const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp') => {
       return <OutputIcon color="success" />;
     case 'mcp':
       return <SettingsIcon color="info" />;
+    case 'subflow':
+      return <AccountTreeIcon sx={{ color: 'warning.main' }} />;
     default:
       return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
   }
 };
 
-export const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme: any) => {
+export const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp' | 'subflow', theme: any) => {
   switch (type) {
     case 'start':
       return '#795548'; // Brown color hex value
@@ -124,6 +133,8 @@ export const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp', theme
       return theme.palette.success.main;
     case 'mcp':
       return theme.palette.info.main;
+    case 'subflow':
+      return theme.palette.warning.main;
     default:
       return '#795548'; // Brown color hex value
   }
@@ -250,15 +261,33 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
     } else if (nodeType === 'finish') {
       // Finish nodes only have a top connector
       return (
-        <Handle 
+        <Handle
           id="finish-top"
-          type="target" 
-          position={Position.Top} 
-          style={getProcessHandleStyle(theme)} 
+          type="target"
+          position={Position.Top}
+          style={getProcessHandleStyle(theme)}
         />
       );
+    } else if (nodeType === 'subflow') {
+      // Subflow nodes sit inline in the vertical flow: in from above, out below.
+      return (
+        <>
+          <Handle
+            id="subflow-top"
+            type="target"
+            position={Position.Top}
+            style={getProcessHandleStyle(theme)}
+          />
+          <Handle
+            id="subflow-bottom"
+            type="source"
+            position={Position.Bottom}
+            style={getProcessHandleStyle(theme)}
+          />
+        </>
+      );
     }
-    
+
     return null;
   };
   
@@ -343,4 +372,8 @@ export const FinishNode = memo(function FinishNode(props: NodeProps) {
 
 export const MCPNode = memo(function MCPNode(props: NodeProps) {
   return <CustomNode {...props} nodeType="mcp" selected={props.selected} />;
+});
+
+export const SubflowNode = memo(function SubflowNode(props: NodeProps) {
+  return <CustomNode {...props} nodeType="subflow" selected={props.selected} />;
 });

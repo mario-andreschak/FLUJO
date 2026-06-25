@@ -47,6 +47,7 @@ import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
 import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
+import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
@@ -110,6 +111,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
   const [startModalOpen, setStartModalOpen] = useState(false);
   const [finishModalOpen, setFinishModalOpen] = useState(false);
+  const [subflowModalOpen, setSubflowModalOpen] = useState(false);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
   
   // History for undo/redo functionality
@@ -513,6 +515,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     setMcpModalOpen(false);
     setStartModalOpen(false);
     setFinishModalOpen(false);
+    setSubflowModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, []);
@@ -528,6 +531,8 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       setStartModalOpen(true);
     } else if (node.data.type === 'finish') {
       setFinishModalOpen(true);
+    } else if (node.data.type === 'subflow') {
+      setSubflowModalOpen(true);
     } else {
       setProcessModalOpen(true);
     }
@@ -714,6 +719,14 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
         node={nodeToEdit}
         onClose={() => setFinishModalOpen(false)}
         onSave={handleNodeUpdate}
+      />
+
+      <SubflowNodePropertiesModal
+        open={subflowModalOpen}
+        node={nodeToEdit}
+        onClose={() => setSubflowModalOpen(false)}
+        onSave={handleNodeUpdate}
+        flowId={initialFlow?.id}
       />
       
       {/* Dialog for Copy/Rename/Unsaved Changes */}

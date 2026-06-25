@@ -1,0 +1,969 @@
+import { createLogger } from '@/utils/logger';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import OpenAI from 'openai';
+import {
+  SharedState,
+  TOOL_CALL_ACTION,
+  FINAL_RESPONSE_ACTION,
+  ERROR_ACTION,
+  STAY_ON_NODE_ACTION,
+  ErrorDetails,
+} from '@/backend/execution/flow/types';
+import { FlujoChatMessage } from '@/shared/types/chat';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import { flowService } from '@/backend/services/flow/index';
+import type { FlowService as FlowServiceType } from '@/backend/services/flow/index';
+import { Flow } from '@/shared/types/flow';
+import { loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
+import { FEATURES } from '@/config/features';
+
+const log = createLogger('backend/execution/flow/runFlow');
+
+// Hard ceiling on subflow-call nesting (re-entrancy guard). A SubflowNode runs
+// its child at runDepth + 1; runFlow refuses to start a run past this depth so
+// a flow that (directly or indirectly) calls itself cannot recurse forever.
+const MAX_SUBFLOW_DEPTH = 8;
+
+// --- Add getFlowByName to flowService if it doesn't exist ---
+// (Moved here from chatCompletionService: flow-name resolution now lives in the
+// keystone, since the OpenAI route is a thin adapter on top of runFlow.)
+if (!(flowService as any).getFlowByName) {
+  (flowService as any).getFlowByName = async (name: string): Promise<Flow | null> => {
+    const flows = await flowService.loadFlows();
+    return flows.find(flow => flow.name === name) || null;
+  };
+  log.info('Added getFlowByName method directly to flowService instance.');
+}
+const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByName: (name: string) => Promise<Flow | null> };
+
+// Persist conversation state WITHOUT the in-memory-only debug execution trace.
+const persistState = persistConversationState;
+
+export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | 'paused_debug' | 'running';
+
+/**
+ * The "flow-as-callable" keystone input. One operation — run a flow with a
+ * defined input → defined output, in isolated state — shared by the
+ * OpenAI-compatible API (today), subflows (#13), planned executions (#10), and
+ * (deferred) flows-as-MCP-tools (#17B).
+ */
+export interface FlowRunInput {
+  /** Resolved flow id. Provide this OR `modelName`. */
+  flowId?: string;
+  /** OpenAI-style model string ("flow-<name>"); resolved to a flowId for a NEW
+   *  conversation (mirrors the legacy completions path). Ignored when resuming
+   *  an existing conversation (the flowId comes from loaded state). */
+  modelName?: string;
+
+  /** Full message list (advanced; the OpenAI route passes its request messages). */
+  messages?: any[];
+  /** Convenience: a single user message. Used when `messages` is absent. */
+  prompt?: string;
+  /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
+  processNodeId?: string;
+  /** Named inputs for templates / StartNode. Accepted but not yet injected (v1.1). */
+  variables?: Record<string, unknown>;
+
+  /** 'ephemeral' runs in transient state and never writes to the conversations/*
+   *  store (so the run never appears in the chat sidebar). 'conversation'
+   *  (default) is the legacy persisted/resumable behavior. */
+  mode?: 'ephemeral' | 'conversation';
+  /** Required to resume/persist a conversation; a random id is used otherwise. */
+  conversationId?: string;
+
+  /** Engine flags (defaults preserve the legacy completions behavior). */
+  flujo?: boolean;               // default true
+  requireApproval?: boolean;     // default false
+  debug?: boolean;               // maps to the legacy flujodebug flag; default false
+  continueDebug?: boolean;       // default false
+  userTurn?: boolean;            // default false
+
+  /** Live execution events. Defaults to the per-conversation ExecutionEventBus
+   *  emitter (what the OpenAI/SSE path relies on). */
+  emit?: EmitFn;
+  /** Nesting provenance / re-entrancy guards (subflows, sampling). Reserved. */
+  parentRunId?: string;
+  depth?: number;
+}
+
+export interface FlowRunResult {
+  status: FlowRunStatus;
+  conversationId: string;
+  /** Final assistant content (the default "output"), post external-tool XML wrap. */
+  outputText: string;
+  /** Tool calls to surface in a tool-calls response (undefined when XML-wrapped). */
+  toolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+  /** Full transcript of THIS run. */
+  messages: FlujoChatMessage[];
+  /** Aggregated token/cost totals for the run. */
+  usage?: UsageTotals;
+  pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+  error?: { message: string; details?: ErrorDetails; statusCode: number };
+  /** Set when flow resolution failed (the adapter maps this to a 400). */
+  flowNotFound?: { name: string };
+  /** The terminal action at loop exit (for finish_reason mapping by adapters). */
+  finalAction?: string;
+  /** Full final state. Needed by the OpenAI adapter (paused_debug returns it as
+   *  debugState) and by callers that want the raw state. NOT persisted for
+   *  ephemeral runs. */
+  sharedState: SharedState;
+}
+
+/**
+ * The keystone. Extracted (behavior-preserving) from the old
+ * processChatCompletionInternal: state init + the agent loop + final persist +
+ * response-content resolution. Returns a typed FlowRunResult instead of an
+ * OpenAI NextResponse, so callers other than the OpenAI shim (subflows,
+ * scheduler) can run flows without the HTTP/OpenAI coupling.
+ */
+export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  const startTime = Date.now();
+
+  const flujo = input.flujo ?? true;
+  const requireApproval = input.requireApproval ?? false;
+  const flujodebug = input.debug ?? false;
+  const continueDebug = input.continueDebug ?? false;
+  const userTurn = input.userTurn ?? false;
+  const ephemeral = input.mode === 'ephemeral';
+
+  // Reconstruct the legacy `data` shape the body below reads from.
+  const inputMessages: any[] = input.messages
+    ?? (input.prompt !== undefined ? [{ role: 'user', content: input.prompt }] : []);
+  const data: { model?: string; messages: any[]; processNodeId?: string } = {
+    model: input.modelName,
+    messages: inputMessages,
+    processNodeId: input.processNodeId,
+  };
+
+  log.info('runFlow invoked', {
+    flowId: input.flowId,
+    model: input.modelName,
+    messageCount: inputMessages.length,
+    mode: ephemeral ? 'ephemeral' : 'conversation',
+    flujo,
+    requireApproval,
+    flujodebug,
+    conversationId: input.conversationId,
+  });
+
+  // --- 1. Initialize or Retrieve State ---
+  const effectiveConvId = input.conversationId || crypto.randomUUID();
+  const storageKey = `conversations/${effectiveConvId}` as StorageKey;
+  let stateSource: 'storage' | 'memory' | 'new' = 'new';
+  let loadedState: SharedState | undefined = undefined;
+
+  log.info(`Effective Conversation ID for this run: ${effectiveConvId}`, { providedId: input.conversationId });
+
+  // Prioritize in-memory state.
+  if (FlowExecutor.conversationStates.has(effectiveConvId)) {
+    loadedState = FlowExecutor.conversationStates.get(effectiveConvId)!;
+    log.info(`Resuming conversation ${effectiveConvId} from memory`, { currentNodeId: loadedState.currentNodeId });
+    stateSource = 'memory';
+  }
+  // If not in memory, try storage — but never for an ephemeral run (it must stay
+  // transient and never adopt a persisted conversation).
+  else if (!ephemeral) {
+    try {
+      loadedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+      if (loadedState) {
+        log.info(`Loaded conversation state from storage: ${effectiveConvId}`);
+        stateSource = 'storage';
+        FlowExecutor.conversationStates.set(effectiveConvId, loadedState);
+      } else {
+        log.info(`No state found in storage for conversation: ${effectiveConvId}. Will create new state.`);
+      }
+    } catch (error) {
+      log.warn(`Error loading conversation state from storage for ${effectiveConvId}:`, error);
+    }
+  }
+
+  let sharedState: SharedState;
+  if (loadedState) {
+    sharedState = loadedState;
+    if (sharedState.conversationId !== effectiveConvId) {
+      log.warn(`Loaded state's internal conversationId (${sharedState.conversationId}) differs from effectiveConvId (${effectiveConvId}). Using effectiveConvId.`);
+      sharedState.conversationId = effectiveConvId;
+    }
+
+    // --- Reset status if resuming a completed/errored conversation ---
+    if (stateSource !== 'new' && (sharedState.status === 'completed' || sharedState.status === 'error')) {
+      log.info(`Resuming completed/errored conversation ${effectiveConvId}. Resetting status to 'running'.`);
+      sharedState.status = 'running';
+      sharedState.lastResponse = undefined;
+      sharedState.isCancelled = false;
+      if (stateSource === 'storage') {
+        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      }
+    }
+
+    // --- Handle processNodeId if provided (for edits specifically) ---
+    if (data.processNodeId && stateSource !== 'new') {
+      log.info(`Edit detected: Resetting currentNodeId for conversation ${effectiveConvId} to provided processNodeId: ${data.processNodeId}`);
+
+      sharedState.currentNodeId = data.processNodeId;
+      sharedState.status = 'running';
+      sharedState.lastResponse = undefined;
+      sharedState.pendingToolCalls = undefined;
+      sharedState.handoffRequested = undefined;
+      sharedState.isCancelled = false;
+
+      sharedState.trackingInfo = {
+        executionId: crypto.randomUUID(),
+        startTime: Date.now(),
+        nodeExecutionTracker: [],
+      };
+
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
+        sharedState.executionTrace = [];
+      }
+
+      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      log.verbose(`State updated in memory with reset currentNodeId: ${sharedState.currentNodeId}`);
+    }
+  } else {
+    log.info(`Creating new conversation state object for ID: ${effectiveConvId}`);
+    sharedState = {
+      trackingInfo: {
+        executionId: crypto.randomUUID(),
+        startTime: Date.now(),
+        nodeExecutionTracker: FEATURES.ENABLE_EXECUTION_TRACKER ? [] : [],
+      },
+      messages: [],
+      flowId: '',
+      conversationId: effectiveConvId,
+      currentNodeId: undefined,
+      status: 'running',
+      title: 'New Conversation',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      debugMode: flujodebug,
+      executionTrace: (flujodebug && FEATURES.ENABLE_EXECUTION_TRACKER) ? [] : undefined,
+    };
+  }
+
+  // The conversation's approval setting (single source of truth).
+  sharedState.requireApproval = requireApproval;
+
+  // Subflow re-entrancy guard: record this run's depth and refuse to start if
+  // the call tree is too deep (a flow calling itself, directly or via a chain).
+  sharedState.runDepth = input.depth ?? sharedState.runDepth ?? 0;
+  if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
+    log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
+    sharedState.status = 'error';
+    return {
+      status: 'error',
+      conversationId: effectiveConvId,
+      outputText: '',
+      messages: sharedState.messages,
+      error: { message: `Subflow recursion limit (${MAX_SUBFLOW_DEPTH}) exceeded`, statusCode: 500 },
+      finalAction: ERROR_ACTION,
+      sharedState,
+    };
+  }
+
+  // --- Configure State Based on Source ---
+  if (stateSource === 'new') {
+    // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
+    let resolvedFlowId = input.flowId;
+    if (!resolvedFlowId && data.model) {
+      const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
+      const reactFlow = await flowServiceWithGetByName.getFlowByName(flowName);
+      if (!reactFlow) {
+        log.error(`Flow not found: ${flowName}`);
+        return {
+          status: 'error',
+          conversationId: effectiveConvId,
+          outputText: '',
+          messages: sharedState.messages,
+          flowNotFound: { name: flowName },
+          error: { message: `Flow not found: ${flowName}`, statusCode: 400 },
+          finalAction: ERROR_ACTION,
+          sharedState,
+        };
+      }
+      resolvedFlowId = reactFlow.id;
+    }
+    if (!resolvedFlowId) {
+      log.error('No flow specified for run (neither flowId nor model provided).');
+      return {
+        status: 'error',
+        conversationId: effectiveConvId,
+        outputText: '',
+        messages: sharedState.messages,
+        error: { message: 'No flow specified (provide flowId or model).', statusCode: 400 },
+        finalAction: ERROR_ACTION,
+        sharedState,
+      };
+    }
+    sharedState.flowId = resolvedFlowId;
+
+    const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
+      ...msg,
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      processNodeId: (msg as any).processNodeId || undefined,
+    }));
+    sharedState.messages = initialMessages;
+
+    try {
+      sharedState.updatedAt = Date.now();
+      if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+        const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+        if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+          sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+          log.verbose(`Updated conversation title for ${effectiveConvId} during init to: ${sharedState.title}`);
+        }
+      }
+      if (!ephemeral) await persistState(storageKey, sharedState);
+      log.debug(`Saved initial state for new conversation ${effectiveConvId}.`);
+    } catch (error) {
+      log.error(`Failed to save initial state for new conversation ${effectiveConvId}:`, error);
+    }
+    FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+
+  } else { // stateSource is 'storage' or 'memory'
+    if (data.messages && data.messages.length > 0) {
+      sharedState.messages = data.messages.map(msg => {
+        const flujoMsg: FlujoChatMessage = {
+          ...msg,
+          id: (msg as any).id || crypto.randomUUID(),
+          timestamp: (msg as any).timestamp || Date.now(),
+          processNodeId: (msg as any).processNodeId || undefined,
+        };
+        return flujoMsg;
+      });
+      log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+    }
+    if (userTurn || sharedState.debugMode === undefined) {
+      sharedState.debugMode = flujodebug;
+    }
+    if (userTurn) {
+      sharedState.debugPendingToolCalls = undefined;
+    }
+    if (sharedState.debugMode) {
+      if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
+        sharedState.executionTrace = [];
+      }
+    }
+  }
+
+  // --- Direct a new user turn to its intended node (one-time, at turn start) ---
+  if (userTurn && stateSource !== 'new' && !data.processNodeId) {
+    const lastMsg = sharedState.messages.length > 0
+      ? sharedState.messages[sharedState.messages.length - 1]
+      : undefined;
+    if (lastMsg?.role === 'user' && lastMsg.processNodeId && lastMsg.processNodeId !== sharedState.currentNodeId) {
+      log.info(`New user turn for ${effectiveConvId}: directing execution to node ${lastMsg.processNodeId} (was ${sharedState.currentNodeId}).`);
+      sharedState.currentNodeId = lastMsg.processNodeId;
+      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    }
+  }
+
+  // --- Force a fresh compiled flow at the start of each user turn ---
+  if (userTurn && sharedState.flowId) {
+    FlowExecutor.clearFlowCache(sharedState.flowId);
+    log.debug(`Cleared compiled-flow cache for ${sharedState.flowId} at start of user turn ${effectiveConvId}.`);
+  }
+
+  // --- 2. Main Execution Logic ---
+  let currentAction: string | undefined = undefined;
+  const MAX_INTERNAL_ITERATIONS = 150;
+  let internalIterations = 0;
+
+  // --- Execution event emission (live progress + debugger) ---
+  const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
+  let lastEmittedMsgIndex = sharedState.messages.length;
+
+  const accumulateUsage = (msg: FlujoChatMessage) => {
+    if (!msg.usage) return;
+    const totals: UsageTotals = sharedState.usage ?? {
+      promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {},
+    };
+    totals.promptTokens += msg.usage.promptTokens;
+    totals.completionTokens += msg.usage.completionTokens;
+    totals.totalTokens += msg.usage.totalTokens;
+    const nodeKey = msg.processNodeId || 'unknown';
+    const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
+    node.promptTokens += msg.usage.promptTokens;
+    node.completionTokens += msg.usage.completionTokens;
+    node.totalTokens += msg.usage.totalTokens;
+    totals.byNode[nodeKey] = node;
+    sharedState.usage = totals;
+    emit({
+      type: 'usage',
+      node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
+      promptTokens: msg.usage.promptTokens,
+      completionTokens: msg.usage.completionTokens,
+      totalTokens: msg.usage.totalTokens,
+      costUsd: 0,
+    });
+  };
+
+  const emitNewMessages = () => {
+    for (; lastEmittedMsgIndex < sharedState.messages.length; lastEmittedMsgIndex++) {
+      const msg = sharedState.messages[lastEmittedMsgIndex];
+      emit({
+        type: 'message',
+        message: msg,
+        node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
+      });
+      accumulateUsage(msg);
+    }
+  };
+
+  emit({ type: 'run:start', flowId: sharedState.flowId });
+
+  const singleStep = !!sharedState.debugMode && !continueDebug;
+  const pauseForDebug = () => {
+    sharedState.status = 'paused_debug';
+    emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
+  };
+
+  try {
+    {
+      while (true) {
+        internalIterations++;
+        log.debug(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`);
+
+        if (internalIterations > MAX_INTERNAL_ITERATIONS) {
+          log.warn(`Max internal iterations (${MAX_INTERNAL_ITERATIONS}) reached for conv ${effectiveConvId}. Breaking loop.`);
+          if (currentAction !== ERROR_ACTION) {
+            sharedState.lastResponse = { success: false, error: `Maximum internal iterations (${MAX_INTERNAL_ITERATIONS}) reached.` };
+            currentAction = ERROR_ACTION;
+          }
+          break;
+        }
+
+        if (sharedState.isCancelled) {
+          log.info(`Cancellation flag detected for conv ${effectiveConvId}. Terminating execution.`);
+          sharedState.status = 'error';
+          sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+          currentAction = ERROR_ACTION;
+          break;
+        }
+
+        // Debug step granularity: execute tool calls a previous step paused before.
+        if (sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
+          const pendingCalls = sharedState.debugPendingToolCalls;
+          sharedState.debugPendingToolCalls = undefined;
+          log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
+          const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap });
+          if (!toolProcessingResult.success) {
+            log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
+            sharedState.lastResponse = { success: false, error: 'Tool processing failed', errorDetails: toolProcessingResult.error };
+            currentAction = ERROR_ACTION;
+            break;
+          }
+          const toolResultMessages: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+            ...msg,
+            id: crypto.randomUUID(),
+            timestamp: Date.now(),
+            processNodeId: sharedState.currentNodeId,
+          }));
+          sharedState.messages.push(...toolResultMessages);
+          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+          emitNewMessages();
+          try {
+            sharedState.updatedAt = Date.now();
+            if (!ephemeral) await persistState(storageKey, sharedState);
+          } catch (error) {
+            log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
+          }
+          if (singleStep) {
+            log.info(`[Debug Step] Paused after tool execution for conv ${effectiveConvId}.`);
+            pauseForDebug();
+            break;
+          }
+          continue;
+        }
+
+        // Breakpoint check.
+        if (!singleStep && sharedState.breakpoints && sharedState.breakpoints.length > 0) {
+          const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
+          if (nextNodeId && sharedState.breakpoints.includes(nextNodeId) && sharedState.lastBreakNodeId !== nextNodeId) {
+            log.info(`Breakpoint hit at node ${nextNodeId} for conv ${effectiveConvId}. Pausing.`);
+            sharedState.status = 'paused_debug';
+            sharedState.debugMode = true;
+            sharedState.lastBreakNodeId = nextNodeId;
+            emit({ type: 'breakpoint:hit', node: { nodeId: nextNodeId } });
+            emit({ type: 'run:paused', reason: 'breakpoint', node: { nodeId: nextNodeId } });
+            try {
+              sharedState.updatedAt = Date.now();
+              if (!ephemeral) await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save state on breakpoint for conv ${effectiveConvId}:`, error);
+            }
+            break;
+          } else if (nextNodeId && sharedState.lastBreakNodeId && nextNodeId !== sharedState.lastBreakNodeId) {
+            sharedState.lastBreakNodeId = undefined;
+          }
+        }
+
+        if (sharedState.messages.length > 0) {
+          const lastFewMessages = sharedState.messages.slice(-3);
+          log.verbose(`Message history before step ${internalIterations}`, JSON.stringify(lastFewMessages));
+        } else {
+          log.verbose(`No messages in history before step ${internalIterations}`);
+        }
+
+        // 2a. Execute one step of the flow
+        const stepResult = await FlowExecutor.executeStep(sharedState, emit);
+        sharedState = stepResult.sharedState;
+        currentAction = stepResult.action;
+        emitNewMessages();
+
+        try {
+          sharedState.updatedAt = Date.now();
+          if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+            const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+            if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+              sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+              log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
+            }
+          }
+          if (!ephemeral) await persistState(storageKey, sharedState);
+          log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`);
+        } catch (error) {
+          log.error(`Failed to save state after step ${internalIterations} for conv ${effectiveConvId}:`, error);
+        }
+
+        log.info(`Step ${internalIterations} completed for conv ${effectiveConvId}. Action: ${currentAction}`, { currentNodeId: sharedState.currentNodeId });
+        log.verbose(`Shared state after step ${internalIterations}`, JSON.stringify(sharedState));
+
+        log.debug(`[Action Handling] Step ${internalIterations}: Received action "${currentAction}" for conv ${effectiveConvId}`);
+
+        // 2b. Handle the action returned by the step
+        if (currentAction === ERROR_ACTION) {
+          log.info(`[Action Handling] Step ${internalIterations}: Handling ERROR_ACTION for conv ${effectiveConvId}`);
+          log.error(`Error action received during step ${internalIterations} for conv ${effectiveConvId}`, { error: sharedState.lastResponse });
+          break;
+        }
+
+        if (currentAction === FINAL_RESPONSE_ACTION) {
+          log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
+          log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
+          sharedState.status = 'completed';
+          log.info(`Setting conversation status to 'completed' for conv ${effectiveConvId}`);
+          break;
+        }
+
+        if (currentAction === TOOL_CALL_ACTION) {
+          log.info(`[Action Handling] Step ${internalIterations}: Handling TOOL_CALL_ACTION for conv ${effectiveConvId}`);
+          log.info(`Tool call action received at step ${internalIterations} for conv ${effectiveConvId}`);
+          const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+
+          if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
+            if (flujo) {
+              // --- Flujo=true: Handle optional approval ---
+              if (requireApproval) {
+                log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
+                sharedState.status = 'awaiting_tool_approval';
+                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
+                sharedState.lastResponse = undefined;
+                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                try {
+                  sharedState.updatedAt = Date.now();
+                  if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+                    const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+                    if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+                      sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+                      log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`);
+                    }
+                  }
+                  if (!ephemeral) await persistState(storageKey, sharedState);
+                  log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`);
+                } catch (error) {
+                  log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
+                }
+                emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
+                break;
+              } else if (singleStep) {
+                log.info(`[Debug Step] Paused before executing ${lastAssistantMsg.tool_calls.length} tool call(s) for conv ${effectiveConvId}.`);
+                sharedState.debugPendingToolCalls = lastAssistantMsg.tool_calls;
+                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                try {
+                  sharedState.updatedAt = Date.now();
+                  if (!ephemeral) await persistState(storageKey, sharedState);
+                } catch (error) {
+                  log.error(`Failed to save state before debug tool pause for conv ${effectiveConvId}:`, error);
+                }
+                pauseForDebug();
+                break;
+              } else {
+                log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
+                const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap });
+
+                if (!toolProcessingResult.success) {
+                  log.error(`Internal tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
+                  sharedState.lastResponse = { success: false, error: 'Tool processing failed', errorDetails: toolProcessingResult.error };
+                  currentAction = ERROR_ACTION;
+                  break;
+                }
+
+                log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} tool result messages for conv ${effectiveConvId}`);
+                const toolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+                  ...msg,
+                  id: crypto.randomUUID(),
+                  timestamp: Date.now(),
+                  processNodeId: sharedState.currentNodeId,
+                }));
+                sharedState.messages.push(...toolResultMessagesWithTimestamp);
+                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                emitNewMessages();
+                log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
+                continue;
+              }
+            } else {
+              // --- flujo=false: Handle internal vs external tools ---
+              log.info(`[flujo=false] Tool call action received for conv ${effectiveConvId}. Checking tool types.`);
+              const allToolCalls = lastAssistantMsg.tool_calls || [];
+              const internalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
+              const externalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
+
+              allToolCalls.forEach(tc => {
+                if (tc.type === 'function' && isInternalToolName(tc.function.name, sharedState.toolNameMap)) {
+                  log.verbose('tool is internal:', tc.function.name);
+                  internalTools.push(tc);
+                } else {
+                  log.verbose('tool is external:', tc.function.name);
+                  externalTools.push(tc);
+                }
+              });
+
+              if (internalTools.length > 0) {
+                log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);
+                const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: internalTools, toolNameMap: sharedState.toolNameMap });
+
+                if (!toolProcessingResult.success) {
+                  log.error(`[flujo=false] Internal tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
+                  sharedState.lastResponse = { success: false, error: 'Internal tool processing failed', errorDetails: toolProcessingResult.error };
+                  currentAction = ERROR_ACTION;
+                  break;
+                }
+
+                log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} internal tool result messages for conv ${effectiveConvId}`);
+                const internalToolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+                  ...msg,
+                  id: crypto.randomUUID(),
+                  timestamp: Date.now(),
+                  processNodeId: sharedState.currentNodeId,
+                }));
+                sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
+                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (flujo=false).`);
+                continue;
+
+              } else if (externalTools.length > 0) {
+                log.info(`[flujo=false] Found ${externalTools.length} external tools for conv ${effectiveConvId}. Wrapping in XML and returning.`);
+
+                const xmlToolStrings: string[] = [];
+                for (const toolCall of externalTools) {
+                  if (toolCall.type === 'function') {
+                    try {
+                      const args = JSON.parse(toolCall.function.arguments || '{}');
+                      let paramsXml = '';
+                      for (const key in args) {
+                        const value = String(args[key]).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');                      paramsXml += `\n<${key}>${value}</${key}>`;
+                      }
+                      xmlToolStrings.push(`<${toolCall.function.name}>${paramsXml}\n</${toolCall.function.name}>`);
+                    } catch (parseError) {
+                      log.error(`[flujo=false] Failed to parse arguments for external tool ${toolCall.function.name}`, { args: toolCall.function.arguments, error: parseError, convId: effectiveConvId });
+                      xmlToolStrings.push(`<${toolCall.function.name}>\n<error>Failed to parse arguments: ${parseError instanceof Error ? parseError.message : String(parseError)}</error>\n</${toolCall.function.name}>`);
+                    }
+                  }
+                }
+
+                sharedState.lastResponse = {
+                  _flujo_xml_tools: xmlToolStrings.join('\n\n'),
+                };
+
+                currentAction = FINAL_RESPONSE_ACTION;
+                log.info(`[flujo=false] Prepared XML for external tools. Exiting loop for conv ${effectiveConvId}.`);
+                break;
+
+              } else {
+                log.warn(`[flujo=false] TOOL_CALL_ACTION received for conv ${effectiveConvId} but no tools found after classification. Treating as final.`);
+                currentAction = FINAL_RESPONSE_ACTION;
+                break;
+              }
+            }
+          } else {
+            log.warn(`TOOL_CALL_ACTION received for conv ${effectiveConvId} but no tool_calls found in last message. Treating as final.`);
+            currentAction = FINAL_RESPONSE_ACTION;
+            break;
+          }
+        }
+
+        // Check if action is an edgeId (Handoff).
+        const handoff = await FlowExecutor.resolveHandoff(sharedState, currentAction);
+
+        if (handoff.isSuccessorEdge) {
+          log.info(`[Action Handling] Step ${internalIterations}: Handling Handoff Action (Edge ID) for conv ${effectiveConvId}`);
+          log.info(`Handoff action received for conv ${effectiveConvId}. Edge: ${currentAction}`);
+          const nextNodeId = handoff.targetNodeId;
+          if (typeof nextNodeId === 'string' && nextNodeId.length > 0) {
+
+            const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+            let handoffToolCallId: string | undefined = undefined;
+
+            if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
+              const handoffToolCall = lastAssistantMsg.tool_calls.find(tc =>
+                tc.type === 'function' &&
+                (tc.function.name === 'handoff' || tc.function.name.startsWith('handoff_to_'))
+              );
+
+              if (handoffToolCall) {
+                handoffToolCallId = handoffToolCall.id;
+                log.debug(`Found handoff tool call ID: ${handoffToolCallId} for edge ${currentAction}`);
+
+                const toolResultMessage: FlujoChatMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'tool',
+                  tool_call_id: handoffToolCallId,
+                  content: JSON.stringify({ status: 'Handoff processed', targetNodeId: nextNodeId }),
+                  timestamp: Date.now(),
+                  processNodeId: sharedState.currentNodeId,
+                };
+
+                sharedState.messages.push(toolResultMessage);
+                log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
+
+                if (handoff.targetNodeType === 'finish') {
+                  log.info(`Handoff target ${nextNodeId} is a Finish node; skipping "Continue" confirmation message.`);
+                } else {
+                  const userHandoffConfirmation: FlujoChatMessage = {
+                    id: crypto.randomUUID(),
+                    role: 'user',
+                    content: 'The handoff was successful. Continue',
+                    timestamp: Date.now(),
+                  };
+                  sharedState.messages.push(userHandoffConfirmation);
+                  log.info(`Appended user confirmation message after handoff tool result.`);
+                }
+
+              } else {
+                log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);
+              }
+            } else {
+              log.warn(`Handoff action received for edge ${currentAction}, but the last message was not an assistant message with tool calls.`);
+            }
+
+            emitNewMessages();
+            const fromNodeId = sharedState.currentNodeId;
+            sharedState.currentNodeId = nextNodeId;
+            sharedState.handoffRequested = undefined;
+            emit({
+              type: 'handoff',
+              from: fromNodeId ? { nodeId: fromNodeId } : undefined,
+              toNodeId: nextNodeId,
+              edgeId: currentAction,
+            });
+            log.info(`Transitioning conv ${effectiveConvId} to node ${sharedState.currentNodeId}`);
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            if (singleStep) {
+              log.info(`[Debug Step] Paused after handoff to node ${sharedState.currentNodeId} for conv ${effectiveConvId}.`);
+              pauseForDebug();
+              break;
+            }
+            log.info(`Continuing loop for conv ${effectiveConvId} after handoff.`);
+            continue;
+          } else {
+            log.error(`Handoff failed for conv ${effectiveConvId}: Successor node for edge ${currentAction} has invalid ID.`);
+            sharedState.lastResponse = { success: false, error: `Handoff failed: Target node for edge ${currentAction} has invalid ID.` };
+            currentAction = ERROR_ACTION;
+            break;
+          }
+        }
+
+        if (currentAction === STAY_ON_NODE_ACTION) {
+          log.info(`[Action Handling] Step ${internalIterations}: Handling STAY_ON_NODE_ACTION for conv ${effectiveConvId}`);
+          log.info(`Stay on node action received for conv ${effectiveConvId} at step ${internalIterations}`);
+          break;
+        }
+
+        log.warn(`Unrecognized action '${currentAction}' received at step ${internalIterations} for conv ${effectiveConvId}. Treating as final response.`);
+        currentAction = FINAL_RESPONSE_ACTION;
+        break;
+
+      } // --- End while loop ---
+    } // --- End execution block ---
+
+  } catch (loopError) {
+    log.error(`Unhandled error during execution loop for conv ${effectiveConvId}`, { loopError });
+    if (currentAction !== ERROR_ACTION) {
+      const modelDetails = (loopError as any)?.details;
+      sharedState.lastResponse = {
+        success: false,
+        error: loopError instanceof Error ? loopError.message : String(loopError),
+        errorDetails: loopError instanceof Error
+          ? {
+              name: loopError.name,
+              message: loopError.message,
+              stack: loopError.stack,
+              ...(modelDetails && typeof modelDetails === 'object' ? modelDetails : {}),
+            }
+          : undefined,
+      };
+      currentAction = ERROR_ACTION;
+    }
+  }
+
+  // Reconcile status with the terminal action BEFORE the final persist.
+  if (currentAction === ERROR_ACTION && sharedState.status !== 'error') {
+    sharedState.status = 'error';
+  }
+
+  // --- 3. Finalize ---
+  const finalExecutionTime = Date.now() - startTime;
+  const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
+  log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
+
+  // Flush any trailing messages and signal terminal completion to live consumers.
+  emitNewMessages();
+  if (finalStatus === 'completed' || finalStatus === 'error') {
+    emit({ type: 'run:done', status: finalStatus });
+  }
+
+  try {
+    sharedState.updatedAt = Date.now();
+    if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+      const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+      if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+        sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+        log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
+      }
+    }
+    if (!ephemeral) await persistState(storageKey, sharedState);
+    log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
+  } catch (error) {
+    log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
+  }
+  FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+
+  // An ephemeral run is transient: drop it from the in-memory map once it
+  // reaches a terminal state so isolated/subflow runs don't accumulate.
+  const cleanupEphemeral = () => {
+    if (ephemeral && (sharedState.status === 'completed' || sharedState.status === 'error')) {
+      FlowExecutor.conversationStates.delete(effectiveConvId);
+    }
+  };
+
+  const baseResult = {
+    conversationId: sharedState.conversationId || effectiveConvId,
+    messages: sharedState.messages as FlujoChatMessage[],
+    usage: sharedState.usage,
+    finalAction: currentAction,
+    sharedState,
+  };
+
+  // --- Paused debug ---
+  if (sharedState.status === 'paused_debug') {
+    log.info(`Returning paused debug state for conv ${effectiveConvId}`);
+    return {
+      ...baseResult,
+      status: 'paused_debug',
+      outputText: '',
+      pendingToolCalls: sharedState.pendingToolCalls,
+    };
+  }
+
+  // --- Error ---
+  if (sharedState.status === 'error' || currentAction === ERROR_ACTION) {
+    let errorMessage = 'Unknown error during execution';
+    let errorDetails: ErrorDetails | undefined = undefined;
+    let statusCode = 500;
+
+    if (typeof sharedState.lastResponse === 'object' && sharedState.lastResponse !== null) {
+      if ('success' in sharedState.lastResponse && sharedState.lastResponse.success === false && 'error' in sharedState.lastResponse && typeof sharedState.lastResponse.error === 'string') {
+        errorMessage = sharedState.lastResponse.error;
+        if ('errorDetails' in sharedState.lastResponse && typeof sharedState.lastResponse.errorDetails === 'object' && sharedState.lastResponse.errorDetails !== null) {
+          const details = sharedState.lastResponse.errorDetails as Partial<ErrorDetails>;
+          errorDetails = {
+            message: typeof details.message === 'string' ? details.message : errorMessage,
+            type: typeof details.type === 'string' ? details.type : undefined,
+            code: typeof details.code === 'string' ? details.code : undefined,
+            param: typeof details.param === 'string' ? details.param : undefined,
+            status: typeof details.status === 'number' ? details.status : undefined,
+            stack: typeof details.stack === 'string' ? details.stack : undefined,
+            name: typeof details.name === 'string' ? details.name : undefined,
+          };
+          if (errorDetails.status) {
+            statusCode = errorDetails.status;
+          }
+        }
+      } else {
+        try {
+          errorMessage = `Unexpected error state object: ${JSON.stringify(sharedState.lastResponse)}`;
+        } catch {
+          errorMessage = 'Unexpected error state object (unserializable)';
+        }
+      }
+    } else if (typeof sharedState.lastResponse === 'string') {
+      errorMessage = sharedState.lastResponse;
+    }
+
+    if (!errorDetails) {
+      errorDetails = { message: errorMessage };
+    } else {
+      errorDetails.message = errorDetails.message || errorMessage;
+    }
+
+    log.error(`Returning error result for conv ${effectiveConvId}`, { errorMessage, errorDetails, statusCode });
+
+    if (sharedState.status !== 'error') {
+      sharedState.status = 'error';
+    }
+
+    cleanupEphemeral();
+    return {
+      ...baseResult,
+      status: 'error',
+      outputText: '',
+      error: { message: errorMessage, details: errorDetails, statusCode },
+    };
+  }
+
+  // --- Success (Final, Tool Call, Stay, or Awaiting Approval) ---
+  const lastMessage = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+
+  let responseContent = '';
+  let externalToolsXml = '';
+
+  if (typeof sharedState.lastResponse === 'object' && sharedState.lastResponse !== null && '_flujo_xml_tools' in sharedState.lastResponse) {
+    externalToolsXml = sharedState.lastResponse._flujo_xml_tools as string;
+    if (lastMessage?.role === 'assistant' && typeof lastMessage.content === 'string') {
+      responseContent = lastMessage.content;
+    } else {
+      responseContent = '';
+    }
+    responseContent += (responseContent ? '\n\n' : '') + externalToolsXml;
+    sharedState.lastResponse = responseContent;
+
+  } else if (typeof sharedState.lastResponse === 'string') {
+    responseContent = sharedState.lastResponse;
+  } else if (lastMessage?.role === 'assistant' && typeof lastMessage.content === 'string') {
+    responseContent = lastMessage.content;
+  } else {
+    responseContent = (currentAction === TOOL_CALL_ACTION && !flujo) ? '' : 'Processing complete.';
+  }
+
+  const toolCalls = externalToolsXml
+    ? undefined
+    : (lastMessage?.role === 'assistant' ? lastMessage.tool_calls : undefined);
+
+  log.info(`Returning success result for conv ${effectiveConvId}`, { action: currentAction, status: sharedState.status, flujo, requireApproval, flujodebug });
+
+  cleanupEphemeral();
+  return {
+    ...baseResult,
+    status: (sharedState.status as FlowRunStatus) || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
+    outputText: responseContent,
+    toolCalls,
+    pendingToolCalls: sharedState.pendingToolCalls,
+  };
+}
