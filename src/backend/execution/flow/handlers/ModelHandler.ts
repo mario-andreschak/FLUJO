@@ -10,6 +10,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName } from './toolNamespace';
+import { stripHandoffPlumbing } from '../buildNodeContext';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
@@ -390,7 +391,12 @@ export class ModelHandler {
 
       // Create the request parameters - the adapters expect ChatCompletionMessageParam,
       // not FlujoChatMessage, so strip the FLUJO-internal timestamp before sending.
-      const apiMessages: OpenAI.ChatCompletionMessageParam[] = messages.map(({ timestamp, ...rest }) => rest);
+      // Also strip handoff plumbing (the handoff tool-call turn, its result, the
+      // synthetic "Continue") from the WIRE view only — the threaded history kept
+      // in SharedState is untouched. So a node handed off to sees a clean
+      // conversation. See ~/.claude/plans/execution-core-v2.md.
+      const wireMessages = stripHandoffPlumbing(messages);
+      const apiMessages: OpenAI.ChatCompletionMessageParam[] = wireMessages.map(({ timestamp, ...rest }) => rest);
 
       // Sanitize tool schemas for broad provider compatibility (handles string
       // properties with unsupported `format` values, etc.). Done once here so

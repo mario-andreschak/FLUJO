@@ -217,11 +217,11 @@ export class ProcessNode extends BaseNode {
         completePrompt.substring(0, 100) + '...' : completePrompt
     });
 
-    // Assemble the model context through the single chokepoint (buildNodeContext).
-    // 'scoped' strips handoff plumbing (the handoff tool-call turn, its result,
-    // and the synthetic "Continue") so a node that was handed off to sees a clean
-    // conversation. See ~/.claude/plans/execution-core-v2.md.
-    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage, 'scoped');
+    // Assemble the node's threaded history (lossless — this is written back to
+    // SharedState.messages). Stripping handoff plumbing for the MODEL happens at
+    // the provider boundary (ModelHandler.generateCompletion → stripHandoffPlumbing),
+    // so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
+    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
 
     log.info('Assembled node context', {
       systemMessageCount: 1,

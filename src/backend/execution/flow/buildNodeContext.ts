@@ -1,8 +1,8 @@
 import { FlujoChatMessage } from '@/shared/types/chat';
 
 // The synthetic user message the run loop used to append after a handoff to
-// un-stall the receiving model. Stripped here (and no longer produced) so it
-// never reaches a model or the displayed conversation.
+// un-stall the receiving model. No longer produced; also stripped from the wire
+// defensively (old conversations may still contain it).
 const HANDOFF_CONTINUE_MESSAGE = 'The handoff was successful. Continue';
 
 function isHandoffToolName(name: string): boolean {
@@ -10,38 +10,38 @@ function isHandoffToolName(name: string): boolean {
 }
 
 /**
- * Policy deciding what conversation a node's model actually sees.
+ * Assemble a node's conversation history: drop any pre-existing system messages,
+ * put the node's own system prompt first, keep every other message in order.
  *
- * - `full` — the legacy behavior: the node sees every non-system message in
- *   order with its own system prompt on top.
- * - `scoped` — `full`, minus FLUJO **handoff plumbing**: the assistant turn that
- *   carried a `handoff_to_*` tool call, that call's tool result, and the
- *   synthetic "Continue" message. This removes the dangling handoff tool-call
- *   and the fake user turn from the receiving model's view, so it responds to
- *   the real task naturally. Real (MCP) tool-call/result pairs and the node's
- *   own agent-loop history are left intact, so this is safe for agent loops.
- *
- * (A fuller per-node scoping — not showing one agent all of another agent's
- * tool mechanics — rides on the Phase 3 event-log model where node attribution
- * is reliable by construction. See ~/.claude/plans/execution-core-v2.md.)
+ * This is the chokepoint for what becomes the node's threaded history (it is
+ * written back to SharedState.messages by ProcessNode). It MUST be lossless
+ * w.r.t. non-system messages — scoping what the *model* sees is a separate
+ * concern handled at the provider boundary by stripHandoffPlumbing (see below),
+ * so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
  */
-export type NodeContextPolicy = 'full' | 'scoped';
-
 export function buildNodeContext(
   messages: FlujoChatMessage[],
   systemMessage: FlujoChatMessage,
-  policy: NodeContextPolicy = 'full',
 ): FlujoChatMessage[] {
   const nonSystem = messages.filter((m) => m.role !== 'system');
+  return [systemMessage, ...nonSystem];
+}
 
-  if (policy === 'full') {
-    return [systemMessage, ...nonSystem];
-  }
-
-  // 'scoped': collect the ids of handoff tool calls so we can also drop their
-  // matching tool results, then strip the handoff turns + the "Continue" nudge.
+/**
+ * Filter applied to the messages sent **to the model** (the wire view), NOT to
+ * the threaded history. Removes FLUJO handoff plumbing so a node that was handed
+ * off to sees a clean conversation ending on the real task instead of a dangling
+ * `handoff_to_*` tool-call and a synthetic "Continue":
+ *   - the assistant turn that carried a handoff tool call,
+ *   - that call's tool result (matched by tool_call_id),
+ *   - the synthetic "Continue" user message.
+ *
+ * Real (MCP) tool-call/result pairs and a node's own agent-loop history are
+ * preserved, so agent loops are unaffected. System messages pass through.
+ */
+export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMessage[] {
   const handoffToolCallIds = new Set<string>();
-  for (const m of nonSystem) {
+  for (const m of messages) {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
       for (const tc of m.tool_calls) {
         if (tc.type === 'function' && isHandoffToolName(tc.function.name)) {
@@ -51,23 +51,20 @@ export function buildNodeContext(
     }
   }
 
-  const kept: FlujoChatMessage[] = [];
-  for (const m of nonSystem) {
+  return messages.filter((m) => {
     if (m.role === 'user' && typeof m.content === 'string' && m.content.trim() === HANDOFF_CONTINUE_MESSAGE) {
-      continue;
+      return false;
     }
     if (
       m.role === 'assistant' &&
       Array.isArray(m.tool_calls) &&
       m.tool_calls.some((tc) => tc.type === 'function' && isHandoffToolName(tc.function.name))
     ) {
-      continue;
+      return false;
     }
     if (m.role === 'tool' && m.tool_call_id && handoffToolCallIds.has(m.tool_call_id)) {
-      continue;
+      return false;
     }
-    kept.push(m);
-  }
-
-  return [systemMessage, ...kept];
+    return true;
+  });
 }
