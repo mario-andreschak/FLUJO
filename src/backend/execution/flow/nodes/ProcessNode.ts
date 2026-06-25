@@ -218,9 +218,10 @@ export class ProcessNode extends BaseNode {
     });
 
     // Assemble the model context through the single chokepoint (buildNodeContext).
-    // Behavior is unchanged here (policy 'full'); the re-architecture evolves the
-    // policy in one place. See ~/.claude/plans/execution-core-v2.md.
-    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
+    // 'scoped' strips handoff plumbing (the handoff tool-call turn, its result,
+    // and the synthetic "Continue") so a node that was handed off to sees a clean
+    // conversation. See ~/.claude/plans/execution-core-v2.md.
+    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage, 'scoped');
 
     log.info('Assembled node context', {
       systemMessageCount: 1,

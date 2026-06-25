@@ -733,18 +733,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 sharedState.messages.push(toolResultMessage);
                 log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
 
-                if (handoff.targetNodeType === 'finish') {
-                  log.info(`Handoff target ${nextNodeId} is a Finish node; skipping "Continue" confirmation message.`);
-                } else {
-                  const userHandoffConfirmation: FlujoChatMessage = {
-                    id: crypto.randomUUID(),
-                    role: 'user',
-                    content: 'The handoff was successful. Continue',
-                    timestamp: Date.now(),
-                  };
-                  sharedState.messages.push(userHandoffConfirmation);
-                  log.info(`Appended user confirmation message after handoff tool result.`);
-                }
+                // NOTE: we no longer append a synthetic "The handoff was
+                // successful. Continue" user message. The receiving node now
+                // builds its model context via buildNodeContext('scoped'), which
+                // strips this handoff tool-call/result so the model sees a clean
+                // conversation ending on the real task and responds naturally.
+                // See ~/.claude/plans/execution-core-v2.md.
 
               } else {
                 log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);

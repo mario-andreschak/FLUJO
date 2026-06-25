@@ -47,3 +47,52 @@ describe('buildNodeContext (Phase 1 — full policy, behavior-preserving)', () =
     expect(buildNodeContext([], nodeSystem)).toEqual([nodeSystem]);
   });
 });
+
+describe('buildNodeContext (Phase 2 — scoped policy strips handoff plumbing)', () => {
+  const handoffAssistant = (id: string, callId: string): FlujoChatMessage =>
+    ({
+      role: 'assistant',
+      content: "I'll route this",
+      id,
+      timestamp: 1,
+      tool_calls: [{ id: callId, type: 'function', function: { name: 'handoff_to_nodeB', arguments: '{}' } }],
+    } as FlujoChatMessage);
+  const handoffResult = (id: string, callId: string): FlujoChatMessage =>
+    ({ role: 'tool', tool_call_id: callId, content: '{"status":"Handoff processed"}', id, timestamp: 1 } as FlujoChatMessage);
+  const continueMsg = (): FlujoChatMessage =>
+    ({ role: 'user', content: 'The handoff was successful. Continue', id: 'cont', timestamp: 1 } as FlujoChatMessage);
+
+  it('drops the handoff turn, its tool result, and the "Continue" nudge — ending on the real task', () => {
+    const nodeSystem = sys('NODE B', 'node-sys');
+    const messages: FlujoChatMessage[] = [
+      sys('start system', 'old-sys'),
+      user('I want to research about cats', 'u1'),
+      handoffAssistant('a-handoff', 'call-1'),
+      handoffResult('t-handoff', 'call-1'),
+      continueMsg(),
+    ];
+
+    const out = buildNodeContext(messages, nodeSystem, 'scoped');
+
+    // Only the node's system prompt and the real user task survive.
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1']);
+    expect(out[out.length - 1]).toMatchObject({ role: 'user', content: 'I want to research about cats' });
+  });
+
+  it('keeps real (non-handoff) tool-call/result pairs intact (agent loop safe)', () => {
+    const nodeSystem = sys('NODE', 'node-sys');
+    const realAssistant: FlujoChatMessage = {
+      role: 'assistant',
+      content: '',
+      id: 'a-tool',
+      timestamp: 1,
+      tool_calls: [{ id: 'call-x', type: 'function', function: { name: 'mcp_search_abc', arguments: '{}' } }],
+    } as FlujoChatMessage;
+    const realResult: FlujoChatMessage = { role: 'tool', tool_call_id: 'call-x', content: 'results', id: 't-tool', timestamp: 1 } as FlujoChatMessage;
+    const messages = [user('q', 'u1'), realAssistant, realResult];
+
+    const out = buildNodeContext(messages, nodeSystem, 'scoped');
+
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a-tool', 't-tool']);
+  });
+});
