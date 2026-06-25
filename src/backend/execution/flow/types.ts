@@ -297,8 +297,15 @@ export interface MCPNodePrepResult extends BasePrepResult {
 export interface SubflowNodePrepResult extends BasePrepResult {
     nodeType: 'subflow';
     subflowId?: string;
-    /** The user prompt passed into the subflow run. */
-    inputText: string;
+    /** Explicit prompt passed into the subflow (set only when the node has a
+     *  promptTemplate override). Mutually exclusive with `messages`. */
+    inputText?: string;
+    /** Sanitized parent conversation history passed into the subflow (the
+     *  default when there is no promptTemplate override). FLUJO plumbing —
+     *  system prompt, tool calls/results, and the synthetic handoff "Continue"
+     *  message — is stripped so the child runs with genuine context and injects
+     *  its own system prompt. */
+    messages?: FlujoChatMessage[];
     /** This run's depth in the subflow-call tree (parent depth + 1). */
     depth: number;
     /** Parent conversation id, for nesting provenance. */

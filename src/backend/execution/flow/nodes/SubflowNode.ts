@@ -13,16 +13,49 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
-/** Best-effort plain-text view of a (possibly multipart) message content. */
-function messageText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part: any) => (part?.type === 'text' && typeof part.text === 'string' ? part.text : ''))
-      .filter(Boolean)
-      .join('\n');
+// The synthetic user message the run loop appends after a handoff. It must not
+// leak into a subflow as "the task", so it is stripped from the passed history.
+const HANDOFF_CONTINUE_MESSAGE = 'The handoff was successful. Continue';
+
+/** True when a message carries real (non-empty) content. */
+function hasContent(content: unknown): boolean {
+  if (typeof content === 'string') return content.trim().length > 0;
+  if (Array.isArray(content)) return content.length > 0;
+  return false;
+}
+
+/**
+ * Build the message list handed to a subflow from the parent conversation.
+ *
+ * A subflow runs another flow as a continuation of this conversation, so it
+ * needs the genuine exchange — but NOT FLUJO's internal plumbing, which would
+ * confuse the child's model (or be invalid against its own toolset):
+ *   - drop system messages (the child's StartNode injects its own),
+ *   - drop tool-result messages,
+ *   - drop assistant messages that made tool calls (handoff or otherwise): they
+ *     are mid-action turns whose results we're also dropping, so keeping their
+ *     prose would dangle. In the router case this drops the "I'll hand this off"
+ *     turn, leaving the history ending on the user's task so the child model
+ *     responds to it naturally rather than prefilling an assistant turn,
+ *   - drop the synthetic "...Continue" handoff nudge,
+ *   - drop processNodeId (parent node ids don't exist in the child flow),
+ *   - keep user messages and prose-only assistant messages with real content.
+ */
+function sanitizeForSubflow(messages: FlujoChatMessage[]): FlujoChatMessage[] {
+  const out: FlujoChatMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'system' || msg.role === 'tool') continue;
+    if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.trim() === HANDOFF_CONTINUE_MESSAGE) {
+      continue;
+    }
+    if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0) {
+      continue;
+    }
+    if (!hasContent(msg.content)) continue;
+    const { processNodeId, ...rest } = msg as any;
+    out.push({ ...rest });
   }
-  return '';
+  return out;
 }
 
 /**
@@ -45,21 +78,28 @@ export class SubflowNode extends BaseNode {
     const subflowId = node_params?.properties?.subflowId;
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
 
-    let inputText = promptTemplate || '';
-    if (!inputText && sharedState.messages.length > 0) {
-      const last = sharedState.messages[sharedState.messages.length - 1];
-      inputText = messageText(last.content);
-    }
-
+    // An explicit promptTemplate is an override: send exactly that as the
+    // subflow's single user prompt. Otherwise, pass the sanitized parent
+    // conversation so the subflow continues with genuine context.
     const prepResult: SubflowNodePrepResult = {
       nodeId: node_params?.id || '',
       nodeType: 'subflow',
       subflowId,
-      inputText,
       depth: (sharedState.runDepth ?? 0) + 1,
       parentRunId: sharedState.conversationId,
     };
-    log.info('prep() completed', { subflowId, depth: prepResult.depth, inputLength: inputText.length });
+    if (promptTemplate) {
+      prepResult.inputText = promptTemplate;
+    } else {
+      prepResult.messages = sanitizeForSubflow(sharedState.messages);
+    }
+
+    log.info('prep() completed', {
+      subflowId,
+      depth: prepResult.depth,
+      mode: promptTemplate ? 'promptTemplate' : 'history',
+      historyCount: prepResult.messages?.length,
+    });
     return prepResult;
   }
 
@@ -75,7 +115,9 @@ export class SubflowNode extends BaseNode {
     log.info('execCore() running subflow', { subflowId: prepResult.subflowId, depth: prepResult.depth });
     const result = await runFlow({
       flowId: prepResult.subflowId,
-      prompt: prepResult.inputText,
+      // Either a promptTemplate override (single prompt) or the sanitized parent
+      // history. prep sets exactly one of these.
+      ...(prepResult.messages ? { messages: prepResult.messages } : { prompt: prepResult.inputText ?? '' }),
       mode: 'ephemeral',
       flujo: true,
       requireApproval: false, // headless: subflows never pause for approval

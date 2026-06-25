@@ -34,7 +34,7 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
     return {
       status: 'completed',
       conversationId: 'sub',
-      outputText: `echo:${input.prompt}`,
+      outputText: input.prompt !== undefined ? `echo:${input.prompt}` : 'echo:history',
       messages: [],
       finalAction: 'FINAL_RESPONSE',
       sharedState: {},
@@ -81,34 +81,56 @@ describe('SubflowNode', () => {
 
     const { action } = await node.run(state);
 
-    expect(runFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        flowId: 'inner-flow',
-        prompt: 'hello world',
-        mode: 'ephemeral',
-        depth: 1,
-        requireApproval: false,
-      }),
-    );
+    // Default (no promptTemplate): the parent history is passed, not a prompt.
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call).toMatchObject({ flowId: 'inner-flow', mode: 'ephemeral', depth: 1, requireApproval: false });
+    expect(call.prompt).toBeUndefined();
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'hello world' }),
+    ]);
 
     // Subflow output folded back into the parent transcript as this node's message.
     const last = state.messages[state.messages.length - 1];
     expect(last.role).toBe('assistant');
-    expect(last.content).toBe('echo:hello world');
+    expect(last.content).toBe('echo:history');
     expect(last.processNodeId).toBe('sub-node');
-    expect(state.lastResponse).toBe('echo:hello world');
+    expect(state.lastResponse).toBe('echo:history');
 
     // Hands off via the successor edge.
     expect(action).toBe('edge-next');
   });
 
-  it('an explicit promptTemplate overrides the last message text', async () => {
+  it('passes sanitized history: drops system/tool/handoff plumbing and processNodeId', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    const state = makeState({
+      messages: [
+        { role: 'system', content: 'parent system prompt', id: 's1', timestamp: 1 } as any,
+        { role: 'user', content: 'I want to research about cats', id: 'u1', timestamp: 2, processNodeId: 'parent-start' } as any,
+        { role: 'assistant', content: "I'll hand this off", id: 'a1', timestamp: 3, processNodeId: 'parent-proc',
+          tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'handoff_to_x', arguments: '{}' } }] } as any,
+        { role: 'tool', tool_call_id: 'tc1', content: 'Handoff processed', id: 't1', timestamp: 4 } as any,
+        { role: 'user', content: 'The handoff was successful. Continue', id: 'u2', timestamp: 5 } as any,
+      ],
+    });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    // system, tool, the synthetic "Continue", and the handoff assistant turn are
+    // all gone; processNodeId stripped. Left ending on the user's actual task.
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'I want to research about cats' }),
+    ]);
+    expect(call.messages.every((m: any) => m.processNodeId === undefined)).toBe(true);
+  });
+
+  it('an explicit promptTemplate overrides the history and is sent as a prompt', async () => {
     const node = makeNode({ subflowId: 'inner-flow', promptTemplate: 'use me instead' }, 'edge-next');
     await node.run(makeState());
 
-    expect(runFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: 'use me instead' }),
-    );
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('use me instead');
+    expect(call.messages).toBeUndefined();
   });
 
   it('propagates parent runDepth (depth = runDepth + 1)', async () => {
