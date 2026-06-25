@@ -370,7 +370,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
     recordMessage({
       role: 'assistant',
-      content: finalText || (finalToolCalls ? null : ''),
+      // On a handoff, the model's trailing prose is irrelevant (FLUJO routes on
+      // the tool_call) and often narrates the benign abort race ("permission
+      // stream closed…"). Drop it so the handoff turn is clean.
+      content: finalToolCalls ? null : (finalText || ''),
       ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}),
     });
 
