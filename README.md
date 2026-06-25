@@ -107,7 +107,10 @@ FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io
 ### Prerequisites
 
 - Node.js (v18 or higher)
-- npm or yarn
+- claude code (optional, if you want to use Anthropic Subscription) 
+- python (optional, if you want to use python-based MCP servers)
+- pip (optional, if you want to use python-based MCP servers that build with pip)
+- uv and/or yarn (optional, if you prefer these over npm or pip)
 
 ### Installation
 
