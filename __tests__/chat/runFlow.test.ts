@@ -145,6 +145,20 @@ describe('runFlow keystone', () => {
     expect(conversationStates.has(result.conversationId)).toBe(false);
   });
 
+  it('rejects a run past the subflow depth limit (re-entrancy guard)', async () => {
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'too deep',
+      mode: 'ephemeral',
+      depth: 99,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error?.message).toMatch(/recursion limit/i);
+    // The guard fires before any step runs.
+    expect(FlowExecutor.executeStep as jest.Mock).not.toHaveBeenCalled();
+  });
+
   it('conversation mode DOES persist (contrast with ephemeral)', async () => {
     await runFlow({
       flowId: FLOW_ID,

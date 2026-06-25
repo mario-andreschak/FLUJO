@@ -24,6 +24,11 @@ import { FEATURES } from '@/config/features';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
+// Hard ceiling on subflow-call nesting (re-entrancy guard). A SubflowNode runs
+// its child at runDepth + 1; runFlow refuses to start a run past this depth so
+// a flow that (directly or indirectly) calls itself cannot recurse forever.
+const MAX_SUBFLOW_DEPTH = 8;
+
 // --- Add getFlowByName to flowService if it doesn't exist ---
 // (Moved here from chatCompletionService: flow-name resolution now lives in the
 // keystone, since the OpenAI route is a thin adapter on top of runFlow.)
@@ -243,6 +248,23 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // The conversation's approval setting (single source of truth).
   sharedState.requireApproval = requireApproval;
+
+  // Subflow re-entrancy guard: record this run's depth and refuse to start if
+  // the call tree is too deep (a flow calling itself, directly or via a chain).
+  sharedState.runDepth = input.depth ?? sharedState.runDepth ?? 0;
+  if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
+    log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
+    sharedState.status = 'error';
+    return {
+      status: 'error',
+      conversationId: effectiveConvId,
+      outputText: '',
+      messages: sharedState.messages,
+      error: { message: `Subflow recursion limit (${MAX_SUBFLOW_DEPTH}) exceeded`, statusCode: 500 },
+      finalAction: ERROR_ACTION,
+      sharedState,
+    };
+  }
 
   // --- Configure State Based on Source ---
   if (stateSource === 'new') {

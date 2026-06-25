@@ -66,6 +66,17 @@ export interface MCPNodeProperties {
     env?: Record<string, string>;
 }
 
+// SubflowNode specific properties
+export interface SubflowNodeProperties {
+    name?: string;
+    /** The id of the flow this node runs as a subflow (flow-as-callable). */
+    subflowId?: string;
+    /** Optional explicit input passed to the subflow as its user prompt. When
+     *  empty, the subflow receives the parent conversation's latest message
+     *  text. (Named-variable templating is a later enhancement.) */
+    promptTemplate?: string;
+}
+
 // Type-specific node params
 export interface StartNodeParams extends BaseNodeParams<StartNodeProperties> {
     type: 'start';
@@ -83,8 +94,12 @@ export interface MCPNodeParams extends BaseNodeParams<MCPNodeProperties> {
     type: 'mcp';
 }
 
+export interface SubflowNodeParams extends BaseNodeParams<SubflowNodeProperties> {
+    type: 'subflow';
+}
+
 // Union type for all node params
-export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams;
+export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams;
 
 // MCP Node Reference (used in ProcessNode)
 export interface MCPNodeReference {
@@ -174,6 +189,14 @@ export interface SharedState {
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
     usage?: UsageTotals;
+
+    /**
+     * Depth of this run in the subflow-call tree (0 for a top-level run). Set by
+     * runFlow from FlowRunInput.depth; a SubflowNode passes runDepth + 1 to the
+     * child run, and runFlow refuses to start a run past MAX_SUBFLOW_DEPTH. This
+     * is the re-entrancy guard against infinite subflow recursion.
+     */
+    runDepth?: number;
 
     /**
      * Transient emit callback for execution events, attached for the duration
@@ -270,8 +293,20 @@ export interface MCPNodePrepResult extends BasePrepResult {
     mcpEnv?: Record<string, string>;
 }
 
+// SubflowNode prep result
+export interface SubflowNodePrepResult extends BasePrepResult {
+    nodeType: 'subflow';
+    subflowId?: string;
+    /** The user prompt passed into the subflow run. */
+    inputText: string;
+    /** This run's depth in the subflow-call tree (parent depth + 1). */
+    depth: number;
+    /** Parent conversation id, for nesting provenance. */
+    parentRunId?: string;
+}
+
 // Union type for all prep results
-export type PrepResult = StartNodePrepResult | ProcessNodePrepResult | FinishNodePrepResult | MCPNodePrepResult;
+export type PrepResult = StartNodePrepResult | ProcessNodePrepResult | FinishNodePrepResult | MCPNodePrepResult | SubflowNodePrepResult;
 
 // Base exec result
 export interface BaseExecResult {
@@ -306,8 +341,18 @@ export interface MCPNodeExecResult extends BaseExecResult {
     error?: string;
 }
 
+// SubflowNode exec result
+export interface SubflowNodeExecResult extends BaseExecResult {
+    /** Final assistant text produced by the subflow run. */
+    outputText?: string;
+    error?: string;
+    errorDetails?: ErrorDetails;
+    /** The subflow run's terminal status (completed/error). */
+    subStatus?: string;
+}
+
 // Union type for all exec results
-export type ExecResult = StartNodeExecResult | ProcessNodeExecResult | FinishNodeExecResult | MCPNodeExecResult;
+export type ExecResult = StartNodeExecResult | ProcessNodeExecResult | FinishNodeExecResult | MCPNodeExecResult | SubflowNodeExecResult;
 
 // Action constants for flow control
 export const TOOL_CALL_ACTION = 'TOOL_CALL';
