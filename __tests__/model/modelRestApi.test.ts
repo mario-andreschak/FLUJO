@@ -73,9 +73,21 @@ describe('Model REST API', () => {
     expect(created.ApiKey).toBe(MASKED_API_KEY);
   });
 
-  it('rejects a duplicate technical name with 409', async () => {
+  it('allows two models sharing a technical name when display names differ', async () => {
+    // The technical name is the provider's model id and may legitimately repeat
+    // (e.g. two "openrouter/auto" entries with different keys); only the display
+    // name must be unique.
     await createModel(req(modelFixture()));
     const res = await createModel(req(modelFixture({ id: 'm2', displayName: 'Other' })));
+    expect(res.status).toBe(201);
+    await expect(res.json()).resolves.toMatchObject({ id: 'm2', name: 'gpt-test' });
+  });
+
+  it('rejects a duplicate display name with 409 (case-insensitive)', async () => {
+    await createModel(req(modelFixture()));
+    const res = await createModel(
+      req(modelFixture({ id: 'm2', name: 'different-technical', displayName: 'gpt test' })),
+    );
     expect(res.status).toBe(409);
     await expect(res.json()).resolves.toHaveProperty('error');
   });

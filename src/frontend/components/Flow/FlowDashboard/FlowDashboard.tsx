@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
 import { 
   Box, 
   Grid, 
@@ -61,6 +62,57 @@ const FlowDashboard = ({
   const [sortOption, setSortOption] = useState<SortOption>('name-asc');
   const [viewMode, setViewMode] = useState<'grid' | 'compact'>('grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+  // Context for the per-card consistency badge. Loaded once; flows are revalidated
+  // whenever the list or the context changes. A failed load leaves a family undefined
+  // so the validator skips those checks rather than mislabelling every card.
+  const [validationContext, setValidationContext] = useState<{
+    models?: Array<{ id: string; name?: string; displayName?: string }>;
+    servers?: Array<{ name: string; status?: string }>;
+  }>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ctx: { models?: any[]; servers?: Array<{ name: string; status?: string }> } = {};
+      try {
+        const res = await fetch('/api/model');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) ctx.models = data;
+        }
+      } catch (error) {
+        log.warn('Could not load models for flow badges', error);
+      }
+      try {
+        const res = await fetch('/api/mcp/servers');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            ctx.servers = data.map((s: any) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
+          }
+        }
+      } catch (error) {
+        log.warn('Could not load servers for flow badges', error);
+      }
+      if (!cancelled) setValidationContext(ctx);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const validationByFlow = useMemo(() => {
+    const map: Record<string, FlowValidationResult> = {};
+    for (const flow of flows) {
+      try {
+        map[flow.id] = validateFlow(flow as any, validationContext);
+      } catch (error) {
+        log.warn('Failed to validate flow for badge', { flowId: flow.id, error });
+      }
+    }
+    return map;
+  }, [flows, validationContext]);
   
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -277,6 +329,7 @@ const FlowDashboard = ({
                   onDelete={onDeleteFlow}
                   onCopy={onCopyFlow}
                   onEdit={onEditFlow}
+                  validation={validationByFlow[flow.id]}
                 />
               </Grid>
             ))}

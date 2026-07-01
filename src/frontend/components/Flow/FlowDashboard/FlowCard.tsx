@@ -19,8 +19,11 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditIcon from '@mui/icons-material/Edit';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Flow } from '@/frontend/types/flow/flow';
 import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
+import { FlowValidationResult } from '@/utils/shared/flowValidation';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
@@ -32,6 +35,8 @@ interface FlowCardProps {
   onDelete: (flowId: string) => void;
   onCopy?: (flowId: string) => void;
   onEdit?: (flowId: string) => void;
+  /** Consistency-check result; drives the problem badge. */
+  validation?: FlowValidationResult;
 }
 
 // Styled card with hover effects
@@ -73,16 +78,43 @@ const PreviewArea = styled(Box)(({ theme }) => ({
   position: 'relative',
 }));
 
-const FlowCard = ({ 
-  flow, 
-  selected, 
-  onSelect, 
-  onDelete, 
-  onCopy, 
-  onEdit
+const FlowCard = ({
+  flow,
+  selected,
+  onSelect,
+  onDelete,
+  onCopy,
+  onEdit,
+  validation
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
   const theme = useTheme();
+
+  // Surface flow problems at a glance: red when it won't run (errors), amber for
+  // advisory warnings. The tooltip lists the first few issues.
+  const errorCount = validation?.errorCount ?? 0;
+  const warningCount = validation?.warningCount ?? 0;
+  const badgeSeverity: 'error' | 'warning' | null =
+    errorCount > 0 ? 'error' : warningCount > 0 ? 'warning' : null;
+  const badgeTooltip = validation ? (
+    <Box>
+      <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+        {errorCount > 0
+          ? `${errorCount} problem${errorCount === 1 ? '' : 's'} — won't run`
+          : `${warningCount} warning${warningCount === 1 ? '' : 's'}`}
+      </Typography>
+      {validation.issues.slice(0, 5).map((issue, i) => (
+        <Typography key={i} variant="caption" sx={{ display: 'block' }}>
+          • {issue.message}
+        </Typography>
+      ))}
+      {validation.issues.length > 5 && (
+        <Typography variant="caption" sx={{ display: 'block', fontStyle: 'italic' }}>
+          …and {validation.issues.length - 5} more
+        </Typography>
+      )}
+    </Box>
+  ) : null;
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -202,7 +234,39 @@ const FlowCard = ({
 
   return (
     <StyledCard selected={selected}>
-      <CardActionArea 
+      {badgeSeverity && (
+        <Tooltip title={badgeTooltip} arrow placement="top">
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              zIndex: 2,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              px: 0.75,
+              py: 0.25,
+              borderRadius: 1,
+              color: '#fff',
+              backgroundColor:
+                badgeSeverity === 'error' ? theme.palette.error.main : theme.palette.warning.main,
+              boxShadow: theme.shadows[2],
+              pointerEvents: 'auto',
+            }}
+          >
+            {badgeSeverity === 'error' ? (
+              <ErrorOutlineIcon sx={{ fontSize: 16 }} />
+            ) : (
+              <WarningAmberIcon sx={{ fontSize: 16 }} />
+            )}
+            <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1 }}>
+              {badgeSeverity === 'error' ? errorCount : warningCount}
+            </Typography>
+          </Box>
+        </Tooltip>
+      )}
+      <CardActionArea
         onClick={() => onSelect(flow.id)}
         sx={{ 
           display: 'flex', 

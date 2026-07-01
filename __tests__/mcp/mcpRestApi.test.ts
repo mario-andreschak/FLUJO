@@ -200,4 +200,39 @@ describe('MCP REST API', () => {
     const res = await updateServer(req({ name: 'a/b' }), ctx('srv1'));
     expect(res.status).toBe(400);
   });
+
+  // --- Rename: addressed by the OLD name (path), the NEW name lives in the body ---
+
+  it('PUT renames a server in place — no duplicate, old name removed', async () => {
+    await createServer(req(serverFixture({ name: 'old' })));
+
+    const res = await updateServer(req({ name: 'new' }), ctx('old'));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ name: 'new', command: 'echo' });
+
+    // Exactly one server remains, under the new name — the rename did not duplicate it.
+    const list = await (await listServers()).json();
+    expect((list as MCPServerConfig[]).map((c) => c.name)).toEqual(['new']);
+
+    // The old name is gone; the new name reads back the carried-over config.
+    expect((await getServer(req(), ctx('old'))).status).toBe(404);
+    const renamed = await getServer(req(), ctx('new'));
+    expect(renamed.status).toBe(200);
+    await expect(renamed.json()).resolves.toMatchObject({ name: 'new', command: 'echo' });
+  });
+
+  it('PUT rejects a rename onto an existing name (409) and keeps both servers intact', async () => {
+    await createServer(req(serverFixture({ name: 'a' })));
+    await createServer(req(serverFixture({ name: 'b', command: 'bbb' })));
+
+    const res = await updateServer(req({ name: 'b' }), ctx('a'));
+    expect(res.status).toBe(409);
+
+    // Neither server was lost or clobbered.
+    const list = await (await listServers()).json();
+    expect((list as MCPServerConfig[]).map((c) => c.name).sort()).toEqual(['a', 'b']);
+    await expect(
+      getServer(req(), ctx('b')).then((r) => r.json())
+    ).resolves.toMatchObject({ command: 'bbb' });
+  });
 });

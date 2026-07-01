@@ -15,9 +15,10 @@ import { flowService } from '@/backend/services/flow/index';
 import type { FlowService as FlowServiceType } from '@/backend/services/flow/index'; // Use 'type' import for the class
 import { Flow } from '@/shared/types/flow'; // Import Flow type
 // Import backend storage functions directly
-import { loadItem as loadItemBackend } from '@/utils/storage/backend'; 
+import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
 import { FEATURES } from '@/config/features'; // Import feature flags
+import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -325,6 +326,9 @@ async function processChatCompletionInternal(
 
   // --- 2. Main Execution Logic ---
   let currentAction: string | undefined = undefined;
+  // Set when a fresh user turn fails the pre-run consistency check below. The
+  // execution loop is skipped and the standard terminal/error path reports it.
+  let preflightError = false;
   const MAX_INTERNAL_ITERATIONS = 150; // Safety break for non-debug flujo=true loop
   let internalIterations = 0;
 
@@ -381,6 +385,39 @@ async function processChatCompletionInternal(
 
   emit({ type: 'run:start', flowId: sharedState.flowId });
 
+  // --- Pre-run consistency check (blocking) ---
+  // Only on a genuine new user turn — internal resumes (debug step/continue,
+  // tool-approval respond) continue an already-started run and must not be
+  // re-blocked. If the flow has error-level issues (deleted model, renamed/
+  // deleted MCP server, missing Start node, dangling tool references, …), abort
+  // before any node runs. The standard terminal/error path below formats the
+  // response (and emits run:done) for both streaming and non-streaming callers.
+  if (userTurn && sharedState.flowId) {
+    try {
+      const validation = await validateFlowForRun(sharedState.flowId);
+      if (!validation.isRunnable) {
+        const errs = validation.issues.filter(i => i.severity === 'error');
+        const message =
+          `This flow can't run yet — please fix the following before running:\n` +
+          errs.map(e => `• ${e.message}`).join('\n');
+        log.warn(`Pre-run validation blocked flow ${sharedState.flowId} for conv ${effectiveConvId}`, {
+          errorCount: errs.length,
+          codes: errs.map(e => e.code),
+        });
+        sharedState.lastResponse = {
+          success: false,
+          error: message,
+          errorDetails: { message, type: 'invalid_request_error', code: 'flow_invalid', status: 400 },
+        };
+        currentAction = ERROR_ACTION;
+        preflightError = true;
+      }
+    } catch (validationError) {
+      // A failure to RUN the check must not block the user — log and proceed.
+      log.warn(`Pre-run validation could not complete for ${sharedState.flowId}; proceeding`, validationError);
+    }
+  }
+
   // In a debug session, "Step" pauses after each productive transition while
   // "Continue" (continueDebug) runs freely to the next terminal/approval/
   // breakpoint state. Both share the single loop below; singleStep just turns
@@ -393,7 +430,7 @@ async function processChatCompletionInternal(
   };
 
   try {
-    {
+    if (!preflightError) {
       while (true) { // Loop indefinitely until a break condition is met
         internalIterations++;
         log.debug(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`); // Changed to debug

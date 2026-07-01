@@ -3,6 +3,7 @@ import { useOnSelectionChange, NodeChange, EdgeChange } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { SelectedElementsState, ContextMenuState } from '../types';
 import { getDeleteChanges, canDeleteNode } from '../utils/nodeUtils';
+import { computeOrphanedPromptCleanups } from '@/utils/shared/flowValidation';
 import { createLogger } from '@/utils/logger';
 
 // Create a logger instance for this file
@@ -127,25 +128,58 @@ export function useCanvasEvents(
     setContextMenu(prev => ({ ...prev, open: false }));
   }, []);
 
+  // Build 'replace' node changes that strip now-dead tool pills from Process nodes when the
+  // given nodes are removed. Deleting an MCP node also removes its edges, but the binding
+  // pills already embedded in a connected Process node's prompt would otherwise linger and
+  // point at a server the node can no longer reach. Emitting these as node changes keeps the
+  // Canvas and FlowBuilder state stores in sync (both apply the same changes).
+  const buildPromptCleanupChanges = useCallback(
+    (removedNodeIds: string[]): NodeChange<FlowNode>[] => {
+      const cleanups = computeOrphanedPromptCleanups(removedNodeIds, nodes, edges);
+      const changes: NodeChange<FlowNode>[] = [];
+      for (const { nodeId, promptTemplate } of cleanups) {
+        const node = nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        changes.push({
+          type: 'replace',
+          id: nodeId,
+          item: {
+            ...node,
+            data: {
+              ...node.data,
+              properties: { ...(node.data?.properties ?? {}), promptTemplate },
+            },
+          },
+        });
+      }
+      if (changes.length > 0) {
+        log.info(`Stripped orphaned tool pills from ${changes.length} process node(s) after deletion`);
+      }
+      return changes;
+    },
+    [nodes, edges]
+  );
+
   // Handle delete action from context menu
   const handleDelete = useCallback(() => {
     if (contextMenu.nodeId) {
       log.debug(`handleDelete: Attempting to delete node ${contextMenu.nodeId}`);
-      
+
       // Check if the node is a Start node - Start nodes cannot be deleted
       if (!canDeleteNode(contextMenu.nodeId, nodes)) {
         log.warn(`Cannot delete Start node: ${contextMenu.nodeId}`);
         alert("Start nodes cannot be deleted");
         return;
       }
-      
-      // Delete node
-      handleNodesChange([{ type: 'remove', id: contextMenu.nodeId }]);
+
+      // Delete node, and in the same batch strip any tool pills the deletion orphans.
+      const cleanupChanges = buildPromptCleanupChanges([contextMenu.nodeId]);
+      handleNodesChange([{ type: 'remove', id: contextMenu.nodeId }, ...cleanupChanges]);
       log.info(`Node deleted: ${contextMenu.nodeId}`);
-      
+
       // Find and delete all connected edges
-      const connectedEdges = edges.filter(edge => 
-        edge.source === contextMenu.nodeId || 
+      const connectedEdges = edges.filter(edge =>
+        edge.source === contextMenu.nodeId ||
         edge.target === contextMenu.nodeId
       );
       
@@ -164,7 +198,7 @@ export function useCanvasEvents(
       log.debug(`handleDelete: Deleting edge ${contextMenu.edgeId}`);
       handleEdgesChange([{ type: 'remove', id: contextMenu.edgeId }]);
     }
-  }, [contextMenu, handleNodesChange, handleEdgesChange, edges, nodes]);
+  }, [contextMenu, handleNodesChange, handleEdgesChange, edges, nodes, buildPromptCleanupChanges]);
 
   // Handle edit properties from context menu
   const handleEditProperties = useCallback(() => {
@@ -211,12 +245,18 @@ export function useCanvasEvents(
             edges
           );
 
-          // Apply the changes
-          if (nodeChanges.length > 0) {
+          // Apply the changes, stripping any tool pills the node removals orphan.
+          const removedNodeIds = nodeChanges
+            .filter((c): c is Extract<NodeChange<FlowNode>, { type: 'remove' }> => c.type === 'remove')
+            .map(c => c.id);
+          const cleanupChanges = buildPromptCleanupChanges(removedNodeIds);
+          const allNodeChanges = [...nodeChanges, ...cleanupChanges];
+
+          if (allNodeChanges.length > 0) {
             log.debug(`Deleting ${nodeChanges.length} nodes via keyboard shortcut`);
-            handleNodesChange(nodeChanges);
+            handleNodesChange(allNodeChanges);
           }
-          
+
           if (edgeChanges.length > 0) {
             log.debug(`Deleting ${edgeChanges.length} edges via keyboard shortcut`);
             handleEdgesChange(edgeChanges);
@@ -224,7 +264,7 @@ export function useCanvasEvents(
         }
       }
     },
-    [selectedElements, handleNodesChange, handleEdgesChange, edges, nodes]
+    [selectedElements, handleNodesChange, handleEdgesChange, edges, nodes, buildPromptCleanupChanges]
   );
 
   return {

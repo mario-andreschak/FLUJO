@@ -962,6 +962,21 @@ export class MCPService {
     const configs = configsResult;
     let config = configs.find(c => c.name === serverName);
 
+    // A rename arrives as a PUT whose path is the CURRENT (old) name and whose body
+    // carries a different `name`. Detect it up front: the storage swap below already
+    // re-keys the entry, but the live connection and per-name state are still keyed by
+    // the old name and must be migrated explicitly (see the connection handling at the
+    // end of this method).
+    const isRename =
+      !!config && typeof updates.name === 'string' && updates.name !== serverName;
+
+    // Refuse to rename onto a name another server already uses: the configs are keyed by
+    // name, so saving would silently drop one of the two. Surface it as an error instead.
+    if (isRename && configs.some(c => c.name === updates.name)) {
+      log.warn(`updateServerConfig: Refusing to rename ${serverName} -> ${updates.name}: name already in use`);
+      return { success: false, error: `A server named "${updates.name}" already exists` };
+    }
+
     if (!config && updates.name) {
       // New server being added - default to stdio transport
       log.info(`updateServerConfig: Creating new server config for ${updates.name}`);
@@ -1026,10 +1041,29 @@ export class MCPService {
       return saveResult;
     }
 
-    // Handle connection state based on config changes
-    await this.handleConnectionStateChange(serverName, updatedConfig);
+    // Handle connection state based on config changes.
+    if (isRename) {
+      // The server now lives under a new name. Tear down everything still keyed by the
+      // OLD name — the live client (and its child process), the recovery entry, retry
+      // timers, captured stderr and the last connection error — so the rename doesn't
+      // leak a dangling process or surface stale status under the old name. Then drive
+      // the connection under the NEW name.
+      if (this.clients.has(serverName)) {
+        await this.disconnectServer(serverName);
+      } else {
+        this.clearRetryTimer(serverName);
+        this.connectionRetryAttempts.delete(serverName);
+      }
+      this.removeFromGlobalRecovery(serverName);
+      this.stderrLogs.delete(serverName);
+      this.lastConnectionError.delete(serverName);
 
-    log.info(`updateServerConfig: Successfully updated config for ${serverName}`);
+      await this.handleConnectionStateChange(updatedConfig.name, updatedConfig);
+    } else {
+      await this.handleConnectionStateChange(serverName, updatedConfig);
+    }
+
+    log.info(`updateServerConfig: Successfully updated config for ${serverName}${isRename ? ` (renamed to ${updatedConfig.name})` : ''}`);
     return updatedConfig;
   }
 

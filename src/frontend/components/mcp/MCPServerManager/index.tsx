@@ -152,8 +152,15 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   const handleUpdateServer = async (config: MCPServerConfig) => {
-    log.debug(`Updating server: ${config.name}`);
-    await updateServer(config);
+    // Pass the original name so a rename targets the existing server (PUT /{oldName})
+    // instead of creating a duplicate under the new name. editingServer holds the server
+    // as it was opened, so its name is the current (pre-edit) storage key.
+    const originalName = editingServer?.name;
+    log.debug(
+      `Updating server: ${originalName ?? config.name}` +
+        (originalName && originalName !== config.name ? ` -> ${config.name}` : '')
+    );
+    await updateServer(config, originalName);
     setShowAddModal(false);
     setEditingServer(null);
     onServerModalToggle?.(false);

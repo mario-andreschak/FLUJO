@@ -80,15 +80,22 @@ class ModelService {
     try {
       // Load current models
       const models = await this.loadModels();
-      
-      // Check for duplicate name (technical name)
-      if (models.some(m => m.name === model.name)) {
-        return { success: false, error: 'A model with this technical name already exists' };
-      }
-      
-      // Check for duplicate display name if provided
-      if (model.displayName && models.some(m => m.displayName === model.displayName)) {
-        return { success: false, error: 'A model with this display name already exists' };
+
+      // Duplicate detection is by DISPLAY name only (case-insensitive). The technical
+      // `name` is the provider's model id and is intentionally allowed to repeat — e.g.
+      // two entries both pointing at "openrouter/auto" but distinguished by display name
+      // (and possibly different keys, temperature, or prompt template). The display name
+      // is what the UI shows and what a flow's process node surfaces, so that is the field
+      // that must be unique. Mirrors updateModel's check.
+      if (model.displayName && model.displayName.trim()) {
+        const normalizedDisplayName = model.displayName.trim();
+        const duplicate = models.find(
+          m => m.displayName?.toLowerCase() === normalizedDisplayName.toLowerCase()
+        );
+        if (duplicate) {
+          return { success: false, error: `A model with the display name "${normalizedDisplayName}" already exists` };
+        }
+        model.displayName = normalizedDisplayName;
       }
 
       // Encrypt the API key before persisting. A brand-new model's first save arrives here
