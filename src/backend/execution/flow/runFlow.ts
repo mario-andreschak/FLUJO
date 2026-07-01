@@ -21,6 +21,7 @@ import { Flow } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
+import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -372,6 +373,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- 2. Main Execution Logic ---
   let currentAction: string | undefined = undefined;
+  // Set when the pre-run consistency check below fails. The execution loop is
+  // skipped and the standard terminal/error path reports it.
+  let preflightError = false;
   const MAX_INTERNAL_ITERATIONS = 150;
   let internalIterations = 0;
 
@@ -418,6 +422,41 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   emit({ type: 'run:start', flowId: sharedState.flowId });
 
+  // --- Pre-run consistency check (blocking) ---
+  // Only at the start of a run: a genuine new user turn or a brand-new
+  // conversation (which covers subflow child runs — this lives in the keystone
+  // so EVERY caller gets it, not just the OpenAI route). Internal resumes
+  // (debug step/continue, tool-approval respond) continue an already-started
+  // run and must not be re-blocked. If the flow has error-level issues
+  // (deleted model, renamed/deleted MCP server, missing Start node, dangling
+  // tool references, …), abort before any node runs. The standard terminal/
+  // error path below formats the result (and emits run:done).
+  if ((userTurn || stateSource === 'new') && sharedState.flowId) {
+    try {
+      const validation = await validateFlowForRun(sharedState.flowId);
+      if (!validation.isRunnable) {
+        const errs = validation.issues.filter(i => i.severity === 'error');
+        const message =
+          `This flow can't run yet — please fix the following before running:\n` +
+          errs.map(e => `• ${e.message}`).join('\n');
+        log.warn(`Pre-run validation blocked flow ${sharedState.flowId} for conv ${effectiveConvId}`, {
+          errorCount: errs.length,
+          codes: errs.map(e => e.code),
+        });
+        sharedState.lastResponse = {
+          success: false,
+          error: message,
+          errorDetails: { message, type: 'invalid_request_error', code: 'flow_invalid', status: 400 },
+        };
+        currentAction = ERROR_ACTION;
+        preflightError = true;
+      }
+    } catch (validationError) {
+      // A failure to RUN the check must not block the user — log and proceed.
+      log.warn(`Pre-run validation could not complete for ${sharedState.flowId}; proceeding`, validationError);
+    }
+  }
+
   const singleStep = !!sharedState.debugMode && !continueDebug;
   const pauseForDebug = () => {
     sharedState.status = 'paused_debug';
@@ -425,7 +464,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   };
 
   try {
-    {
+    if (!preflightError) {
       while (true) {
         internalIterations++;
         log.debug(`--- Starting Execution Step ${internalIterations} for Conv ${effectiveConvId} ---`);

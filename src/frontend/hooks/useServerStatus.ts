@@ -306,13 +306,19 @@ export function useServerStatus() {
   /**
    * Update a server configuration
    */
-  const updateServer = useCallback(async (config: MCPServerConfig) => {
+  const updateServer = useCallback(async (config: MCPServerConfig, originalName?: string) => {
+    // `originalName` is the name the server is CURRENTLY stored under. On a rename it
+    // differs from config.name and is what the backend must be addressed by (PUT /{old}) —
+    // otherwise the backend can't find the server and creates a duplicate under the new
+    // name. It's also the key for the existing UI row, so the card updates in place.
+    const targetName = originalName ?? config.name;
+    const isRename = targetName !== config.name;
     log.debug('Updating server:', config);
     try {
       // First, update the UI with the new configuration immediately
       setServers((prev) =>
         prev.map((server) =>
-          server.name === config.name
+          server.name === targetName
             ? {
                 ...config,
                 path: getServerPath(config),
@@ -323,11 +329,18 @@ export function useServerStatus() {
             : server
         )
       );
-      
-      // Now update the server config in the backend
-      const updateResult = await mcpService.updateServerConfig(config.name, config);
+
+      // Now update the server config in the backend, addressed by its current name.
+      const updateResult = await mcpService.updateServerConfig(targetName, config);
       if (updateResult.error) {
         log.warn('Failed to update server config:', updateResult.error);
+        // A failed RENAME leaves the optimistic row carrying the new name while storage
+        // still holds the old one (e.g. the new name collides) — reload to resync the
+        // list to backend truth rather than leave a phantom row.
+        if (isRename) {
+          await loadServers();
+          return false;
+        }
         // Update the UI to show the error
         setServers((prev) =>
           prev.map((server) =>
@@ -371,6 +384,12 @@ export function useServerStatus() {
       return true;
     } catch (error) {
       log.warn('Failed to update server:', error);
+      // See the rename note above — resync from backend on a failed rename so the UI
+      // never shows a phantom row under the new name.
+      if (isRename) {
+        await loadServers();
+        return false;
+      }
       // Update the UI to show the error
       const errorMessage = error instanceof Error ? error.message : 'Unknown error during update';
       setServers((prev) =>
@@ -382,7 +401,7 @@ export function useServerStatus() {
       );
       return false;
     }
-  }, []);
+  }, [loadServers]);
 
   /**
    * Save environment variables for a server

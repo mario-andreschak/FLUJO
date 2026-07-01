@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import HeadersEditor from './HeadersEditor';
+import OAuthCredentialsEditor from './OAuthCredentialsEditor';
 import { MessageState } from '../../types';
 import { EnvVarValue } from '@/shared/types/mcp/mcp';
 import {
@@ -33,6 +34,10 @@ interface RunToolsProps {
   onEnvChange: (env: Record<string, EnvVarValue>) => void;
   headers?: Record<string, string>;
   onHeadersChange?: (headers: Record<string, string>) => void;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  onOAuthClientIdChange?: (clientId: string) => void;
+  onOAuthClientSecretChange?: (clientSecret: string) => void;
   serverName: string;
   consoleOutput: string;
   message: MessageState | null;
@@ -55,6 +60,10 @@ const RunTools: React.FC<RunToolsProps> = ({
   onEnvChange,
   headers = {},
   onHeadersChange,
+  oauthClientId = '',
+  oauthClientSecret = '',
+  onOAuthClientIdChange,
+  onOAuthClientSecretChange,
   serverName,
   consoleOutput,
   message,
@@ -166,6 +175,18 @@ const RunTools: React.FC<RunToolsProps> = ({
       {(transport === 'sse' || transport === 'streamable') && (
         <Box>
           <HeadersEditor headers={headers} onChange={onHeadersChange || (() => {})} />
+        </Box>
+      )}
+
+      {/* OAuth client credentials (only shown for sse or streamable transports) */}
+      {(transport === 'sse' || transport === 'streamable') && (
+        <Box>
+          <OAuthCredentialsEditor
+            clientId={oauthClientId}
+            clientSecret={oauthClientSecret}
+            onClientIdChange={onOAuthClientIdChange || (() => {})}
+            onClientSecretChange={onOAuthClientSecretChange || (() => {})}
+          />
         </Box>
       )}
 

@@ -80,8 +80,16 @@ jest.mock('@/backend/services/flow/index', () => ({
   },
 }));
 
+// The pre-run consistency check runs at the start of every fresh run. The
+// stub flows here have no nodes (the engine is stubbed too), so let the check
+// pass by default; the preflight test overrides this per-call.
+jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
+  validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
+}));
+
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -168,5 +176,39 @@ describe('runFlow keystone', () => {
 
     expect(persistedStates.length).toBeGreaterThan(0);
     expect(persistedStates[persistedStates.length - 1].status).toBe('completed');
+  });
+
+  it('blocks a fresh run when pre-run validation finds errors (before any step)', async () => {
+    (validateFlowForRun as jest.Mock).mockResolvedValueOnce({
+      issues: [{ severity: 'error', code: 'model_missing', message: 'Node "agent" references a deleted model' }],
+      errorCount: 1,
+      warningCount: 0,
+      isRunnable: false,
+    });
+
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'should be blocked',
+      mode: 'ephemeral',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error?.statusCode).toBe(400);
+    expect(result.error?.message).toMatch(/deleted model/);
+    // Blocked BEFORE any node executed.
+    expect(FlowExecutor.executeStep as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it('a validator crash does not block the run (check is advisory infrastructure)', async () => {
+    (validateFlowForRun as jest.Mock).mockRejectedValueOnce(new Error('validator exploded'));
+
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'still runs',
+      mode: 'ephemeral',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.outputText).toBe('Hello from the process node');
   });
 });

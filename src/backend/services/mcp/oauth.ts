@@ -1,7 +1,9 @@
-import { OAuthClientProvider, discoverOAuthMetadata, registerClient } from '@modelcontextprotocol/sdk/client/auth.js';
+import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
+import { loadServerConfigs, saveConfig } from './config';
+import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 
 const log = createLogger('backend/services/mcp/oauth');
 
@@ -40,24 +42,84 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     return this._clientMetadata;
   }
 
-  clientInformation(): OAuthClientInformation | undefined {
+  /**
+   * OAuth2 state parameter, carried through the redirect round-trip so /api/oauth/callback
+   * knows which server config to resume. Consumed by auth()'s startAuthorization() call.
+   */
+  state(): string {
+    return encodeURIComponent(JSON.stringify({ serverName: this.config.name }));
+  }
+
+  async clientInformation(): Promise<OAuthClientInformation | undefined> {
     if (this.config.oauthClientInformation) {
       log.debug(`Returning stored client information for ${this.config.name}`);
       return this.config.oauthClientInformation;
     }
-    
-    // If we have client ID and secret from config, create client information
+
+    // Manually pre-registered client (e.g. Asana V2, which disables dynamic registration).
+    // The stored secret may be encrypted ("encrypted:...") or a "${global:VAR}" binding, so
+    // resolve+decrypt it here — the plaintext only ever exists in the backend, at use time.
     if (this.config.oauthClientId) {
-      const clientInfo: OAuthClientInformation = {
-        client_id: this.config.oauthClientId,
-        client_secret: this.config.oauthClientSecret,
-      };
+      const clientSecret = this.config.oauthClientSecret
+        ? (await resolveAndDecryptApiKey(this.config.oauthClientSecret)) ?? undefined
+        : undefined;
       log.debug(`Created client information from config for ${this.config.name}`);
-      return clientInfo;
+      return {
+        client_id: this.config.oauthClientId,
+        client_secret: clientSecret,
+      };
     }
 
     log.debug(`No client information available for ${this.config.name}`);
     return undefined;
+  }
+
+  /**
+   * Write this.config's current OAuth fields back to the on-disk server list.
+   *
+   * The SDK's `auth()` flow calls `saveTokens`/`saveClientInformation`/`saveCodeVerifier`
+   * as pure in-memory setters - it has no idea FLUJO's config needs to hit storage. Without
+   * this, a token the SDK silently refreshes mid-connection (e.g. after a 401) lives only in
+   * this transient config object and is discarded once the connection attempt's stack
+   * unwinds. The next reconnect reloads the OLD refresh token from disk and presents it to
+   * the authorization server - which has already rotated past it - producing a permanent
+   * "invalid refresh_token" failure that no amount of retrying can fix.
+   */
+  private async persist(): Promise<void> {
+    const configs = await loadServerConfigs();
+    if (!Array.isArray(configs)) {
+      log.warn(`persist: failed to load server configs for ${this.config.name}, cannot persist OAuth state`);
+      return;
+    }
+    const configMap = new Map(configs.map(c => [c.name, c]));
+    configMap.set(this.config.name, this.config);
+    const result = await saveConfig(configMap);
+    if (!result.success) {
+      log.warn(`persist: failed to save OAuth state for ${this.config.name}: ${result.error}`);
+    }
+  }
+
+  /**
+   * Clear credentials the authorization server has rejected, so the next status check
+   * correctly reports "requires authentication" instead of retrying dead tokens forever.
+   */
+  async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): Promise<void> {
+    log.info(`Invalidating OAuth credentials for ${this.config.name} (scope: ${scope})`);
+
+    if (scope === 'all' || scope === 'tokens') {
+      this.config.oauthTokens = undefined;
+    }
+    if (scope === 'all' || scope === 'client') {
+      this.config.oauthClientInformation = undefined;
+      this.config.oauthClientMetadata = undefined;
+    }
+    if (scope === 'all' || scope === 'verifier') {
+      this.config.oauthCodeVerifier = undefined;
+    }
+    // Note: scope 'discovery' is a no-op — FLUJO does not cache OAuth discovery state;
+    // the SDK's auth() re-discovers (RFC 9728) on each call, so there is nothing to clear.
+
+    await this.persist();
   }
 
   async saveClientInformation(clientInformation: OAuthClientInformationFull): Promise<void> {
@@ -90,33 +152,35 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       software_version: clientInformation.software_version,
     };
 
+    await this.persist();
     log.info(`Client information saved for ${this.config.name}`);
   }
 
-  tokens(): OAuthTokens | undefined {
+  async tokens(): Promise<OAuthTokens | undefined> {
     if (this.config.oauthTokens) {
       log.debug(`Returning stored tokens for ${this.config.name}`);
-      
+
       // Check if tokens are expired
       if (this.config.oauthTokens.expires_in && (this.config.oauthTokens as any).issued_at) {
         const issuedAt = (this.config.oauthTokens as any).issued_at;
         const expiresIn = this.config.oauthTokens.expires_in;
         const currentTime = Math.floor(Date.now() / 1000);
         const expirationTime = issuedAt + expiresIn;
-        
+
         if (currentTime >= expirationTime) {
           log.warn(`Tokens for ${this.config.name} have expired (issued: ${issuedAt}, expires: ${expirationTime}, current: ${currentTime})`);
           // Clear expired tokens
           this.config.oauthTokens = undefined;
+          await this.persist();
           return undefined;
         }
-        
+
         log.debug(`Tokens for ${this.config.name} are valid (expires in ${expirationTime - currentTime} seconds)`);
       }
-      
+
       return this.config.oauthTokens;
     }
-    
+
     log.debug(`No tokens available for ${this.config.name}`);
     return undefined;
   }
@@ -136,6 +200,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     };
     
     this.config.oauthTokens = tokensWithTimestamp;
+    await this.persist();
     log.info(`OAuth tokens saved for ${this.config.name}`);
   }
 
@@ -156,6 +221,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
     log.debug(`Saving code verifier for ${this.config.name}`);
     this.config.oauthCodeVerifier = codeVerifier;
+    await this.persist();
     log.debug(`Code verifier saved for ${this.config.name}`);
   }
 
@@ -176,7 +242,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
  */
 export function createOAuthClientProvider(
   config: MCPStreamableConfig,
-  redirectUrl: string = 'http://localhost:4200/oauth/callback'
+  redirectUrl: string = 'http://localhost:4200/api/oauth/callback'
 ): MCPOAuthClientProvider {
   return new MCPOAuthClientProvider(config, redirectUrl);
 }

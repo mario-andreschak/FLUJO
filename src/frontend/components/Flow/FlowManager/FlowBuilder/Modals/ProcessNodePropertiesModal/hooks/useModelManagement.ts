@@ -21,6 +21,27 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
     }
   }, [open]);
 
+  // Keep the cached technical name (properties.modelName) honest — silently, with no user
+  // action required. It's a display-only cache (execution binds by boundModel id), so if the
+  // model was renamed since binding we just refresh it here instead of nagging the user to
+  // "re-open and re-save". Guarded on an actual difference so it can't loop.
+  useEffect(() => {
+    if (models.length === 0) return;
+    const boundModel = nodeData?.properties?.boundModel;
+    if (!boundModel) return;
+    const current = models.find((m) => m.id === boundModel);
+    if (!current || !current.name) return;
+    if (nodeData?.properties?.modelName === current.name) return;
+
+    setNodeData((prev: any) => {
+      if (!prev || prev.properties?.modelName === current.name) return prev;
+      return {
+        ...prev,
+        properties: { ...prev.properties, modelName: current.name },
+      };
+    });
+  }, [models, nodeData?.properties?.boundModel, nodeData?.properties?.modelName, setNodeData]);
+
   // Load models from the service
   const loadModels = async () => {
     log.debug('loadModels: Entering method');

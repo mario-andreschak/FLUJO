@@ -62,9 +62,14 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
     const result = await mcpService.updateServerConfig(name, updates);
 
     if ('error' in result) {
-      const notFound = typeof result.error === 'string' && result.error.includes('not found');
+      const errMsg = typeof result.error === 'string' ? result.error : '';
+      const status = errMsg.includes('not found')
+        ? 404
+        : errMsg.includes('already exists')
+          ? 409
+          : 400;
       log.warn(`Error updating config for ${name}:`, result.error);
-      return json({ error: result.error }, notFound ? 404 : 400);
+      return json({ error: result.error }, status);
     }
 
     log.info(`Successfully updated config for ${name}`);

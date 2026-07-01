@@ -53,8 +53,12 @@ import {
 import {
   enhanceConnectionErrorMessage,
   formatErrorChain,
-  formatErrorResponse
+  formatErrorResponse,
+  isAuthRequiredError,
+  isTransientStreamError
 } from '@/utils/mcp/utils';
+import { encryptApiKey } from '@/backend/services/model/encryption';
+import { MASKED_API_KEY } from '@/shared/types/constants';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import {
   createNewClient,
@@ -83,6 +87,8 @@ export class MCPService {
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
   private lastConnectionError: Map<string, string> = new Map();
+  // De-dupes concurrent connectServer() calls for the same server (see connectServer below).
+  private inFlightConnects: Map<string, Promise<MCPServiceResponse>> = new Map();
   private recover_attempted: boolean = false; // Flag to track if recovery has been attempted
   private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
   private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
@@ -330,9 +336,33 @@ export class MCPService {
   async connectServer(config: MCPServerConfig): Promise<MCPServiceResponse>;
   
   /**
-   * Implementation of connectServer that handles both parameter types
+   * Implementation of connectServer that handles both parameter types.
+   *
+   * De-dupes concurrent calls for the same server name. Without this, two overlapping
+   * callers (e.g. a UI-triggered reconnect racing the transport's on-close reconnect
+   * handler) each build their own OAuthClientProvider from an independently-loaded config
+   * snapshot and can both attempt to redeem the same single-use OAuth refresh token - the
+   * second redemption is rejected by the authorization server as invalid_grant, which
+   * previously left the stored refresh token permanently poisoned (see isAuthRequiredError
+   * and MCPOAuthClientProvider.invalidateCredentials for the recovery half of this fix).
    */
   async connectServer(configOrName: MCPServerConfig | string): Promise<MCPServiceResponse> {
+    const serverName = typeof configOrName === 'string' ? configOrName : configOrName.name;
+
+    const inFlight = this.inFlightConnects.get(serverName);
+    if (inFlight) {
+      log.debug(`connectServer: reusing in-flight connection attempt for ${serverName}`);
+      return inFlight;
+    }
+
+    const attempt = this.connectServerInternal(configOrName).finally(() => {
+      this.inFlightConnects.delete(serverName);
+    });
+    this.inFlightConnects.set(serverName, attempt);
+    return attempt;
+  }
+
+  private async connectServerInternal(configOrName: MCPServerConfig | string): Promise<MCPServiceResponse> {
     // Determine if we're connecting by name or by config
     let config: MCPServerConfig;
     
@@ -444,6 +474,20 @@ export class MCPService {
       };
 
       transport.onerror = (error) => {
+        // The Streamable HTTP transport keeps a long-lived SSE stream open for server->client
+        // notifications; servers/proxies recycle that idle stream (e.g. Cloudflare in front of
+        // Asana), which surfaces here as "SSE stream disconnected: TypeError: terminated". The
+        // SDK reconnects the stream on its own and tool calls keep working, so this is noise —
+        // NOT a fatal error. Log it quietly and leave the client in place. Tearing it down here
+        // (as the fatal path below does) would fight the SDK's own reconnection and orphan the
+        // transport, whose stale reconnection loop would then keep firing this handler.
+        if (isTransientStreamError(error)) {
+          log.debug(
+            `connectServer: transient SSE stream disconnect for ${config.name} (self-healing, ignored): ${error instanceof Error ? error.message : String(error)}`
+          );
+          return;
+        }
+
         // Enhanced error logging to capture more details about transport errors
         log.error(`connectServer: Transport error for server ${config.name}:`);
         
@@ -554,14 +598,11 @@ export class MCPService {
         };
       }
       
-      // Check for other OAuth-related errors (401/403 indicating missing auth)
-      if (errorMessage.includes('UnauthorizedError') || 
-          errorMessage.includes('invalid_token') || 
-          errorMessage.includes('token_expired') ||
-          errorMessage.includes('HTTP 401') ||
-          errorMessage.includes('HTTP 403') ||
-          errorMessage.includes('Missing Authorization header')) {
-        
+      // Check for other OAuth-related errors (401/403 indicating missing auth) - this also
+      // covers a freshly-added streamable server that has no OAuth config at all yet, where
+      // createTransport() never attached an auth provider and the server just rejected the
+      // unauthenticated request outright (e.g. Asana's MCP V2 API).
+      if (isAuthRequiredError(error)) {
         log.info(`OAuth authentication error detected for server ${config.name}: ${errorMessage}`);
         
         // For streamable servers, dynamically enable OAuth if not already configured
@@ -680,14 +721,7 @@ export class MCPService {
     } catch (error) {
       log.warn(`testConnection: Failed to connect to ${config.name}:`, error);
 
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorName = error instanceof Error ? error.name : '';
-      const requiresAuthentication =
-        errorName === 'OAuthAuthenticationRequired' ||
-        errorMessage.includes('OAuth authentication required') ||
-        errorMessage.includes('UnauthorizedError') ||
-        errorMessage.includes('HTTP 401') ||
-        errorMessage.includes('HTTP 403');
+      const requiresAuthentication = isAuthRequiredError(error);
 
       const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
       return { success: false, error: enhancedErrorMessage, requiresAuthentication };
@@ -947,6 +981,24 @@ export class MCPService {
   }
 
   /**
+   * Decide what to persist for a streamable server's OAuth client secret, given the value the
+   * browser sent and the currently-stored value. Same contract as the model service's
+   * API-key handling so the two behave identically:
+   *   - MASKED_API_KEY        -> keep the existing stored secret (the UI never saw the real one)
+   *   - "${global:VAR}"       -> a global-variable binding; store the reference verbatim
+   *   - "encrypted[_failed]:"  -> already encrypted; store as-is (idempotent, no double-encrypt)
+   *   - "" (empty)            -> cleared/unbound; store empty
+   *   - anything else         -> a freshly typed plaintext secret; encrypt it at rest
+   */
+  private async resolveOAuthSecretForSave(incoming: string, existing: string | undefined): Promise<string> {
+    if (incoming === MASKED_API_KEY) return existing ?? '';
+    if (!incoming) return '';
+    if (incoming.startsWith('${global:')) return incoming;
+    if (incoming.startsWith('encrypted:') || incoming.startsWith('encrypted_failed:')) return incoming;
+    return await encryptApiKey(incoming);
+  }
+
+  /**
    * Update an MCP server configuration
    */
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
@@ -961,6 +1013,21 @@ export class MCPService {
     
     const configs = configsResult;
     let config = configs.find(c => c.name === serverName);
+
+    // A rename arrives as a PUT whose path is the CURRENT (old) name and whose body
+    // carries a different `name`. Detect it up front: the storage swap below already
+    // re-keys the entry, but the live connection and per-name state are still keyed by
+    // the old name and must be migrated explicitly (see the connection handling at the
+    // end of this method).
+    const isRename =
+      !!config && typeof updates.name === 'string' && updates.name !== serverName;
+
+    // Refuse to rename onto a name another server already uses: the configs are keyed by
+    // name, so saving would silently drop one of the two. Surface it as an error instead.
+    if (isRename && configs.some(c => c.name === updates.name)) {
+      log.warn(`updateServerConfig: Refusing to rename ${serverName} -> ${updates.name}: name already in use`);
+      return { success: false, error: `A server named "${updates.name}" already exists` };
+    }
 
     if (!config && updates.name) {
       // New server being added - default to stdio transport
@@ -1003,6 +1070,17 @@ export class MCPService {
       }
     }
 
+    // OAuth client secret handling, mirroring model API-key semantics. The browser only ever
+    // sends MASKED_API_KEY (meaning "keep the stored secret"), a "${global:VAR}" binding, or a
+    // freshly typed plaintext secret — never the real stored value. Encrypt plaintext at rest;
+    // keep bindings and already-encrypted values as-is; an empty value clears it.
+    const incomingSecret = (updates as Partial<MCPStreamableConfig>).oauthClientSecret;
+    if (incomingSecret !== undefined) {
+      const existingSecret = (config as MCPStreamableConfig).oauthClientSecret;
+      (updates as Partial<MCPStreamableConfig>).oauthClientSecret =
+        await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
+    }
+
     // Update the config with the new values (including resolved env variables)
     let updatedConfig: MCPServerConfig = { ...config };
     updatedConfig = {
@@ -1026,10 +1104,29 @@ export class MCPService {
       return saveResult;
     }
 
-    // Handle connection state based on config changes
-    await this.handleConnectionStateChange(serverName, updatedConfig);
+    // Handle connection state based on config changes.
+    if (isRename) {
+      // The server now lives under a new name. Tear down everything still keyed by the
+      // OLD name — the live client (and its child process), the recovery entry, retry
+      // timers, captured stderr and the last connection error — so the rename doesn't
+      // leak a dangling process or surface stale status under the old name. Then drive
+      // the connection under the NEW name.
+      if (this.clients.has(serverName)) {
+        await this.disconnectServer(serverName);
+      } else {
+        this.clearRetryTimer(serverName);
+        this.connectionRetryAttempts.delete(serverName);
+      }
+      this.removeFromGlobalRecovery(serverName);
+      this.stderrLogs.delete(serverName);
+      this.lastConnectionError.delete(serverName);
 
-    log.info(`updateServerConfig: Successfully updated config for ${serverName}`);
+      await this.handleConnectionStateChange(updatedConfig.name, updatedConfig);
+    } else {
+      await this.handleConnectionStateChange(serverName, updatedConfig);
+    }
+
+    log.info(`updateServerConfig: Successfully updated config for ${serverName}${isRename ? ` (renamed to ${updatedConfig.name})` : ''}`);
     return updatedConfig;
   }
 

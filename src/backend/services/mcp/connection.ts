@@ -130,17 +130,13 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
       // Always set the OAuth provider - let the transport handle the OAuth flow
       transportoptions.authProvider = oauthProvider;
       
-      // Check if we have valid tokens for logging purposes
-      try {
-        const tokens = oauthProvider.tokens();
-        if (tokens && tokens.access_token) {
-          log.debug(`OAuth provider configured for ${config.name} with existing tokens`);
-          log.debug(`Token expires in: ${tokens.expires_in} seconds`);
-        } else {
-          log.debug(`OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`);
-        }
-      } catch (error) {
-        log.debug(`OAuth provider configured for ${config.name} - token check failed, will initiate OAuth flow if needed`);
+      // Check if we have stored tokens, for logging purposes only - actual freshness/expiry
+      // is resolved async by oauthProvider.tokens() when the transport uses it.
+      if (streamableConfig.oauthTokens?.access_token) {
+        log.debug(`OAuth provider configured for ${config.name} with existing tokens`);
+        log.debug(`Token expires in: ${streamableConfig.oauthTokens.expires_in} seconds`);
+      } else {
+        log.debug(`OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`);
       }
     } else {
       log.debug(`No OAuth configuration found for ${config.name}`);

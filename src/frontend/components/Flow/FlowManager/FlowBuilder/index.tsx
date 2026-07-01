@@ -43,6 +43,7 @@ import { flowService } from '@/frontend/services/flow';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import PropertiesPanel from './PropertiesPanel';
+import { FlowValidationButton } from './FlowValidationButton';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
@@ -630,11 +631,13 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
               Save Flow
             </Button>
             
+            <FlowValidationButton nodes={nodes} edges={edges} />
+
             {initialFlow && (
               <>
-                <Button 
-                  variant="outlined" 
-                  color="primary" 
+                <Button
+                  variant="outlined"
+                  color="primary"
                   onClick={() => {
                     setDialogType('duplicate');
                     setNewFlowName(`${initialFlow.name}_copy`);
@@ -648,7 +651,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
                 </Button>
               </>
             )}
-            
+
             <Divider orientation="vertical" flexItem />
             
             <IconButton 

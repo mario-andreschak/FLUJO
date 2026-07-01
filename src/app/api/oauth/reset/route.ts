@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     // Clear OAuth tokens and related data
     serverConfig.oauthTokens = undefined;
     serverConfig.oauthCodeVerifier = undefined;
-    
+
     // Optionally clear client information to force re-registration
     // serverConfig.oauthClientInformation = undefined;
     // serverConfig.oauthClientMetadata = undefined;

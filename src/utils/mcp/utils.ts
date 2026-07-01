@@ -272,6 +272,73 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
   return chainMessage;
 }
 
+// Message substrings seen across different MCP servers'/SDKs' auth-failure wording.
+// Kept in addition to the numeric-code check below because some transports (e.g. stdio
+// servers proxying HTTP calls) only surface the failure as free text, with no `.code`.
+const AUTH_REQUIRED_MESSAGE_PATTERNS = [
+  'OAuth authentication required',
+  'UnauthorizedError',
+  'invalid_token',
+  'token_expired',
+  'HTTP 401',
+  'HTTP 403',
+  'Missing Authorization header',
+  'Authorization header is required',
+];
+
+/**
+ * Detect whether a connection failure means "this server needs OAuth", covering both:
+ *  - the SDK's own `OAuthAuthenticationRequired` error (thrown by our OAuthClientProvider
+ *    when tokens/registration are missing), and
+ *  - a raw 401/403 from a server that was never even given an auth provider (e.g. a
+ *    freshly-added streamable server with no OAuth config yet, like Asana's MCP V2 API).
+ *
+ * `StreamableHTTPError`/`SSEError` (from the MCP SDK) carry the HTTP status on `.code`,
+ * not in the message text, and the response body's exact wording varies per server -
+ * so the numeric code is the primary, server-agnostic signal; the message patterns are
+ * a fallback for shapes that don't set `.code`.
+ *
+ * Also covers the SDK's `OAuthError` family (thrown by refreshAuthorization/
+ * exchangeAuthorization/registerClient when the auth server rejects a grant, e.g.
+ * "invalid_grant" after a refresh token was rotated/revoked). These errors set an
+ * `errorCode` getter backed by a static class property (e.g. `InvalidGrantError.errorCode
+ * = 'invalid_grant'`), which survives minification even though `error.name`/`.constructor.name`
+ * do not - so `.errorCode` is the reliable structural check, not the message text.
+ */
+export function isAuthRequiredError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  if (error.name === 'OAuthAuthenticationRequired') return true;
+
+  const httpCode = (error as unknown as { code?: unknown }).code;
+  if (httpCode === 401 || httpCode === 403) return true;
+
+  const oauthErrorCode = (error as unknown as { errorCode?: unknown }).errorCode;
+  if (typeof oauthErrorCode === 'string' && oauthErrorCode.length > 0) return true;
+
+  return AUTH_REQUIRED_MESSAGE_PATTERNS.some(pattern => error.message.includes(pattern));
+}
+
+/**
+ * Detect a transient, self-healing error from the Streamable HTTP transport's long-lived
+ * server->client SSE notification stream.
+ *
+ * That stream is routinely recycled by servers/proxies when idle (e.g. Cloudflare in front of
+ * Asana), surfacing as "SSE stream disconnected: TypeError: terminated". The MCP SDK reconnects
+ * the stream itself (StreamableHTTPClientTransport._scheduleReconnection), and request/response
+ * (tool calls) keep working regardless — so these are NOT fatal and must not trigger a full
+ * client teardown, which would fight the SDK's reconnection and flood the console.
+ */
+export function isTransientStreamError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('SSE stream disconnected') ||
+    message.includes('Failed to reconnect SSE stream') ||
+    message.includes('Maximum reconnection attempts') ||
+    /\bterminated\b/i.test(message)
+  );
+}
+
 /**
  * Format error response
  */
