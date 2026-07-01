@@ -61,14 +61,14 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   };
 });
 
-jest.mock('@/backend/execution/flow/persistConversationState', () => ({
-  persistConversationState: jest.fn(async (_key: string, state: any) => {
-    persistedStates.push(JSON.parse(JSON.stringify(state)));
-  }),
-}));
-
+// Mock the storage layer BELOW persistConversationState, so the ephemeral
+// guarantee is exercised through the REAL chokepoint (which refuses states
+// with `ephemeral: true`) rather than through a mock of it.
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: jest.fn(async () => undefined),
+  saveItem: jest.fn(async (_key: string, value: any) => {
+    persistedStates.push(JSON.parse(JSON.stringify(value)));
+  }),
 }));
 
 // runFlow resolves a "flow-<name>" model via flowService.getFlowByName; give it
@@ -210,5 +210,30 @@ describe('runFlow keystone', () => {
 
     expect(result.status).toBe('completed');
     expect(result.outputText).toBe('Hello from the process node');
+  });
+});
+
+describe('persistConversationState chokepoint (ephemeral policy)', () => {
+  // The policy is enforced INSIDE the persist function, not at call sites, so
+  // even persist paths outside the run loop (e.g. the Claude adapter's
+  // incremental persistStreamedMessage — the suspected leak vector) cannot
+  // write an ephemeral run to the conversations store.
+  const { persistConversationState } = jest.requireActual('@/backend/execution/flow/persistConversationState');
+
+  it('refuses a state marked ephemeral, persists an unmarked one', async () => {
+    const base = {
+      trackingInfo: { executionId: 'x', startTime: 1, nodeExecutionTracker: [] },
+      messages: [],
+      flowId: FLOW_ID,
+      title: 't',
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as SharedState;
+
+    await persistConversationState('conversations/child-1', { ...base, ephemeral: true });
+    expect(persistedStates.length).toBe(0);
+
+    await persistConversationState('conversations/parent-1', base);
+    expect(persistedStates.length).toBe(1);
   });
 });

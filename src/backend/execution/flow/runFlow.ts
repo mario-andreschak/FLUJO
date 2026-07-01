@@ -250,6 +250,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // The conversation's approval setting (single source of truth).
   sharedState.requireApproval = requireApproval;
 
+  // The persistence policy travels ON the state: persistConversationState (the
+  // single chokepoint) refuses ephemeral states, so no path — including
+  // incremental persists deep in adapters — can leak this run to the
+  // conversations store. Never unset: an ephemeral run stays ephemeral.
+  if (ephemeral) {
+    sharedState.ephemeral = true;
+  }
+
   // Subflow re-entrancy guard: record this run's depth and refuse to start if
   // the call tree is too deep (a flow calling itself, directly or via a chain).
   sharedState.runDepth = input.depth ?? sharedState.runDepth ?? 0;
@@ -320,7 +328,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           log.verbose(`Updated conversation title for ${effectiveConvId} during init to: ${sharedState.title}`);
         }
       }
-      if (!ephemeral) await persistState(storageKey, sharedState);
+      await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
       log.debug(`Saved initial state for new conversation ${effectiveConvId}.`);
     } catch (error) {
       log.error(`Failed to save initial state for new conversation ${effectiveConvId}:`, error);
@@ -509,7 +517,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           emitNewMessages();
           try {
             sharedState.updatedAt = Date.now();
-            if (!ephemeral) await persistState(storageKey, sharedState);
+            await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
           } catch (error) {
             log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
           }
@@ -533,7 +541,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             emit({ type: 'run:paused', reason: 'breakpoint', node: { nodeId: nextNodeId } });
             try {
               sharedState.updatedAt = Date.now();
-              if (!ephemeral) await persistState(storageKey, sharedState);
+              await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
             } catch (error) {
               log.error(`Failed to save state on breakpoint for conv ${effectiveConvId}:`, error);
             }
@@ -565,7 +573,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
             }
           }
-          if (!ephemeral) await persistState(storageKey, sharedState);
+          await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
           log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`);
         } catch (error) {
           log.error(`Failed to save state after step ${internalIterations} for conv ${effectiveConvId}:`, error);
@@ -614,7 +622,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                       log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`);
                     }
                   }
-                  if (!ephemeral) await persistState(storageKey, sharedState);
+                  await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
                   log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`);
                 } catch (error) {
                   log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
@@ -627,7 +635,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
                   sharedState.updatedAt = Date.now();
-                  if (!ephemeral) await persistState(storageKey, sharedState);
+                  await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
                 } catch (error) {
                   log.error(`Failed to save state before debug tool pause for conv ${effectiveConvId}:`, error);
                 }
@@ -871,7 +879,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
       }
     }
-    if (!ephemeral) await persistState(storageKey, sharedState);
+    await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);

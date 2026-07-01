@@ -199,6 +199,16 @@ export interface SharedState {
     runDepth?: number;
 
     /**
+     * True for a transient run (subflow child, future scheduler runs): this
+     * state must NEVER reach the conversations/* store, so it never appears in
+     * the chat sidebar. The policy travels ON the state and is enforced inside
+     * persistConversationState (the single chokepoint) — call-site guards
+     * proved leaky (a Claude-adapter incremental persist wrote a subflow child
+     * to disk). Set by runFlow from FlowRunInput.mode; never unset.
+     */
+    ephemeral?: boolean;
+
+    /**
      * Transient emit callback for execution events, attached for the duration
      * of a single step by the engine. NOT persisted (functions are dropped by
      * JSON serialization and it is deleted after each step).
