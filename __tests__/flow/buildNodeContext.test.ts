@@ -52,7 +52,7 @@ describe('buildNodeContext (history — lossless except system swap)', () => {
 });
 
 describe('stripHandoffPlumbing (wire view — clean for the model)', () => {
-  it('drops the handoff turn, its tool result, and the "Continue" nudge', () => {
+  it('drops a PURE-ROUTING handoff turn (no text), its tool result, and the "Continue" nudge', () => {
     const messages: FlujoChatMessage[] = [
       sys('NODE', 'node-sys'),
       user('research cats', 'u1'),
@@ -65,6 +65,64 @@ describe('stripHandoffPlumbing (wire view — clean for the model)', () => {
 
     expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1']);
     expect(out[out.length - 1]).toMatchObject({ role: 'user', content: 'research cats' });
+  });
+
+  it('KEEPS the handoff turn\'s text as a plain assistant turn (the turn boundary; plan §10.1a)', () => {
+    // Regression: "call 3 tools" then "call 2 more" → model did 5. The departing
+    // agent's summary text is the receiving model's "previous turn is done" cue;
+    // only the handoff mechanics may be stripped, never the prose.
+    const handoffWithSummary: FlujoChatMessage = {
+      role: 'assistant',
+      content: 'I called two tools as requested: 1. echo 2. get-sum',
+      id: 'a-summary',
+      timestamp: 1,
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'handoff_to_nodeB', arguments: '{}' } }],
+    } as FlujoChatMessage;
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('call two tools', 'u1'),
+      handoffWithSummary,
+      toolResult('t-handoff', 'call-1', '{"status":"Handoff processed"}'),
+      user('call three more', 'u2'),
+    ];
+
+    const out = stripHandoffPlumbing(messages);
+
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a-summary', 'u2']);
+    const kept = out.find((m) => m.id === 'a-summary')!;
+    expect(kept.content).toBe('I called two tools as requested: 1. echo 2. get-sum');
+    // No dangling handoff call on the wire.
+    expect((kept as any).tool_calls).toBeUndefined();
+    // The input message was not mutated (threaded history keeps its tool_calls).
+    expect((handoffWithSummary as any).tool_calls).toHaveLength(1);
+  });
+
+  it('keeps REAL tool calls made in the same turn as a handoff (strips only the handoff call)', () => {
+    const mixedTurn: FlujoChatMessage = {
+      role: 'assistant',
+      content: '',
+      id: 'a-mixed',
+      timestamp: 1,
+      tool_calls: [
+        { id: 'call-real', type: 'function', function: { name: 'mcp_search_abc', arguments: '{}' } },
+        { id: 'call-hand', type: 'function', function: { name: 'handoff_to_nodeB', arguments: '{}' } },
+      ],
+    } as FlujoChatMessage;
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      mixedTurn,
+      toolResult('t-real', 'call-real', 'results'),
+      toolResult('t-hand', 'call-hand', '{"status":"Handoff processed"}'),
+    ];
+
+    const out = stripHandoffPlumbing(messages);
+
+    // The real pair survives; the handoff call + its result vanish.
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a-mixed', 't-real']);
+    const kept = out.find((m) => m.id === 'a-mixed')!;
+    expect((kept as any).tool_calls).toHaveLength(1);
+    expect((kept as any).tool_calls[0].id).toBe('call-real');
   });
 
   it('keeps real (non-handoff) tool-call/result pairs intact (agent loop safe)', () => {
