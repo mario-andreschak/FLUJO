@@ -408,11 +408,19 @@ const ServerCard: React.FC<ServerCardProps> = ({
                       throw new Error(errorData.error || 'Failed to initiate OAuth');
                     }
 
-                    const { authorizationUrl } = await response.json();
-                    
+                    const { authorizationUrl, alreadyAuthorized } = await response.json();
+
+                    if (alreadyAuthorized || !authorizationUrl) {
+                      // The server already had a usable (or successfully refreshed) token -
+                      // no popup needed, just refresh this card's status.
+                      log.info(`Server ${name} already authorized, no popup needed`);
+                      handleServerRestart();
+                      return;
+                    }
+
                     // Open OAuth popup
                     const { openOAuthPopup } = await import('@/frontend/utils/oauth');
-                    
+
                     await openOAuthPopup({
                       url: authorizationUrl,
                       windowName: `oauth_${name}`,

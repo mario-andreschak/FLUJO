@@ -99,13 +99,14 @@ describe('validateFlow — model binding', () => {
     expect(codes(r)).toContain('process-model-missing');
   });
 
-  it('warns when the cached model technical name is stale (model renamed)', () => {
+  it('does not flag a stale cached model technical name (binding is by id, cache is display-only)', () => {
     const flow: VFlow = {
       nodes: [startNode(), processNode('p', { boundModel: 'm1', modelName: 'old-name' }), finishNode()],
       edges: [edge('start', 'p'), edge('p', 'finish')],
     };
     const r = validateFlow(flow, { models: [{ id: 'm1', name: 'new-name' }] });
-    expect(codes(r)).toContain('process-model-renamed');
+    expect(codes(r)).not.toContain('process-model-renamed');
+    expect(r.issues).toEqual([]);
     expect(r.isRunnable).toBe(true); // still runs — binding is by id
   });
 
@@ -119,14 +120,17 @@ describe('validateFlow — model binding', () => {
 });
 
 describe('validateFlow — MCP server binding', () => {
-  it('errors when an MCP node is bound to a renamed/deleted server', () => {
+  it('warns (does not block) when an MCP node is bound to a server missing from the list', () => {
+    // Absence is ambiguous — renamed/removed vs. just offline (VPN down) — so it's advisory,
+    // not a hard error that blocks the run.
     const flow: VFlow = {
       nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode(), mcpNode('mcp1', 'old-server')],
       edges: [edge('start', 'p'), edge('p', 'finish'), edge('p', 'mcp1', true)],
     };
     const r = validateFlow(flow, { models: [{ id: 'm1' }], servers: [{ name: 'new-server', status: 'connected' }] });
-    expect(codes(r)).toContain('mcp-server-missing');
-    expect(r.isRunnable).toBe(false);
+    const missing = r.issues.find((i) => i.code === 'mcp-server-missing');
+    expect(missing?.severity).toBe('warning');
+    expect(r.isRunnable).toBe(true);
   });
 
   it('warns when the bound server exists but is not connected', () => {

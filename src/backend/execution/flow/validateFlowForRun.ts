@@ -10,14 +10,16 @@ const log = createLogger('backend/execution/flow/validateFlowForRun');
  * Pre-flight consistency check for a flow about to run.
  *
  * Loads the flow plus the current models and servers and runs the shared validator, so a
- * flow that references a deleted model, a renamed/deleted MCP server, has no Start node,
- * dangling tool references, etc. is caught BEFORE any node executes. Errors block the run;
- * warnings don't.
+ * flow that references a deleted model, has no Start node, dangling tool references, etc. is
+ * caught BEFORE any node executes. Errors block the run; warnings don't.
  *
- * Server live status isn't consulted here — names (plus the disabled flag) are enough to
- * catch renames/deletions, which is what blocks a run. Model/server context is only passed
- * to the validator when it loads cleanly, so a transient load failure skips that family of
- * checks rather than falsely blocking every binding.
+ * A bound MCP server that's missing from the list is only a warning (not blocking): absence
+ * is ambiguous — the server may be renamed/removed, or just offline (e.g. VPN down) — so we
+ * don't block a run over it; the run simply lacks those tools if the server never comes up.
+ * Server live status isn't consulted here (names + the disabled flag are enough for the
+ * advisory checks). Model/server context is only passed to the validator when it loads
+ * cleanly, so a transient load failure skips that family of checks rather than falsely
+ * flagging every binding.
  */
 export async function validateFlowForRun(flowId: string): Promise<FlowValidationResult> {
   const flow = await flowService.getFlow(flowId);

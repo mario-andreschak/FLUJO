@@ -1,15 +1,34 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
-import { MCPServerConfig } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 import { formatErrorResponse } from '@/utils/mcp/utils';
+import { MASKED_API_KEY } from '@/shared/types/constants';
 import { json, validateServerName } from '../_helpers';
 
 const log = createLogger('app/api/mcp/servers/route');
 
 /**
+ * Never let a stored OAuth client secret reach the browser. Mirrors how model API keys are
+ * masked: a saved secret is replaced with MASKED_API_KEY (which the save path interprets as
+ * "keep the existing secret"), while a "${global:VAR}" binding is left intact so the edit UI
+ * can show that it's bound. Encrypted/plaintext secret material is never sent out.
+ */
+function redactServerConfig(config: MCPServerConfig): MCPServerConfig {
+  if (config.transport !== 'streamable' && config.transport !== 'sse') {
+    return config;
+  }
+  const streamable = config as MCPStreamableConfig;
+  const secret = streamable.oauthClientSecret;
+  if (!secret || secret.startsWith('${global:')) {
+    return config;
+  }
+  return { ...streamable, oauthClientSecret: MASKED_API_KEY } as MCPServerConfig;
+}
+
+/**
  * GET /api/mcp/servers
- * List all MCP server configurations.
+ * List all MCP server configurations (with secrets redacted for the browser).
  */
 export async function GET() {
   log.debug('Entering GET method');
@@ -18,7 +37,7 @@ export async function GET() {
     if (!Array.isArray(configs)) {
       return json({ error: configs.error || 'Failed to load server configs' }, 500);
     }
-    return json(configs, 200);
+    return json(configs.map(redactServerConfig), 200);
   } catch (error) {
     log.error('Error handling GET request', error);
     return json(formatErrorResponse(error), 500);

@@ -496,6 +496,13 @@ const LocalServerTab: React.FC<TabProps> = ({
                       ? ((localConfig as MCPSSEConfig | MCPStreamableConfig).headers || {})
                       : {}}
                     onHeadersChange={(headers) => setLocalConfig(prev => ({ ...prev, headers }))}
+                    oauthClientId={(localConfig as MCPStreamableConfig).oauthClientId || ''}
+                    oauthClientSecret={(localConfig as MCPStreamableConfig).oauthClientSecret || ''}
+                    onOAuthClientIdChange={(oauthClientId) => setLocalConfig(prev => ({ ...prev, oauthClientId }))}
+                    // The backend delivers the secret masked (MASKED_API_KEY) and interprets
+                    // that value on save as "keep the stored secret", so we can store whatever
+                    // the editor emits verbatim (masked, a ${global:} binding, or a new value).
+                    onOAuthClientSecretChange={(oauthClientSecret) => setLocalConfig(prev => ({ ...prev, oauthClientSecret }))}
                     serverName={localConfig.name}
                     consoleOutput={consoleOutput}
                     message={message}

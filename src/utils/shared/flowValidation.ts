@@ -2,8 +2,9 @@
  * Flow consistency checks — a pure, dependency-light validator that surfaces the ways a
  * saved flow can quietly become broken or un-runnable over time:
  *
- *   - a bound model was deleted (or its technical name changed since binding)
- *   - an MCP node's server was renamed or deleted
+ *   - a bound model was deleted
+ *   - an MCP node's server is missing from the current server list (renamed, removed, or
+ *     just offline)
  *   - the flow has no Start node (or more than one), or no Finish node
  *   - a Process node has no model bound
  *   - nodes are orphaned / unreachable from Start (missing connections)
@@ -251,6 +252,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   }
 
   // --- Process nodes: model binding ---
+  // Note: we deliberately do NOT flag a stale cached technical name (props.modelName).
+  // Binding is by id (boundModel) and execution always resolves the current model by id, so
+  // the cached name is a display-only fallback with no effect on a run — warning about it
+  // would be noise the user can't meaningfully act on.
   for (const node of processNodes) {
     const props = node.data?.properties ?? {};
     const boundModel = props.boundModel as string | undefined;
@@ -264,17 +269,6 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         `Process node "${getNodeLabel(node)}" is bound to a model that no longer exists${cachedName}.`,
         node
       );
-    } else if (haveModels) {
-      const model = modelById.get(boundModel)!;
-      const cachedName = props.modelName as string | undefined;
-      if (cachedName && model.name && cachedName !== model.name) {
-        add(
-          'warning',
-          'process-model-renamed',
-          `Process node "${getNodeLabel(node)}" caches model name "${cachedName}", but it is now "${model.name}". Re-open and re-save the node to refresh it.`,
-          node
-        );
-      }
     }
   }
 
@@ -285,19 +279,25 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     if (!boundServer) {
       add('warning', 'mcp-missing-server', `MCP node "${getNodeLabel(node)}" is not bound to a server.`, node);
     } else if (haveServers && !serverByName.has(boundServer)) {
+      // Absence from the current server list is ambiguous: the server may have been renamed
+      // or removed, but it may equally be a remote server that's simply offline right now
+      // (e.g. it's behind a VPN that isn't connected). Don't assert deletion as fact, and
+      // don't block the run — if the binding is stale the user can rebind; if the server
+      // comes back the flow just works. So this is an advisory warning, not an error.
       add(
-        'error',
+        'warning',
         'mcp-server-missing',
-        `MCP node "${getNodeLabel(node)}" is bound to server "${boundServer}", which no longer exists (renamed or deleted).`,
+        `MCP node "${getNodeLabel(node)}" is bound to server "${boundServer}", which isn't in your current MCP server list. It may be offline (e.g. not connected), renamed, or removed — if it was renamed or removed, rebind this node.`,
         node
       );
     } else if (haveServers) {
       const server = serverByName.get(boundServer)!;
       if (server.status && server.status !== 'connected') {
+        const readable = server.status === 'disabled' ? 'disabled' : `not connected (${server.status})`;
         add(
           'warning',
           'mcp-server-disconnected',
-          `MCP node "${getNodeLabel(node)}" is bound to server "${boundServer}", which is currently ${server.status}.`,
+          `MCP node "${getNodeLabel(node)}" is bound to server "${boundServer}", which is currently ${readable}. It will provide tools again once it reconnects.`,
           node
         );
       }

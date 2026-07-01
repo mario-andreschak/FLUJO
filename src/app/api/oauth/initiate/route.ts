@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
-import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
+import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
-import { discoverOAuthMetadata, registerClient, startAuthorization } from '@modelcontextprotocol/sdk/client/auth.js';
+import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
+import { createOAuthClientProvider } from '@/backend/services/mcp/oauth';
 
 const log = createLogger('api/oauth/initiate');
 
 /**
- * Initiate OAuth authentication for an MCP server
- * This endpoint handles dynamic client registration and returns the authorization URL
+ * Initiate OAuth authentication for an MCP server.
+ *
+ * Delegates the entire discovery -> registration -> authorization dance to the MCP SDK's
+ * `auth()` orchestrator (RFC 9728 protected-resource discovery, RFC 8414 authorization-server
+ * discovery, dynamic client registration, PKCE) via MCPOAuthClientProvider, instead of hand-
+ * rolling each step - so this stays correct as the SDK's auth implementation evolves.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -23,7 +28,6 @@ export async function POST(request: NextRequest) {
 
     log.info(`Initiating OAuth authentication for server: ${serverName}`);
 
-    // Load server configurations
     const configsResult = await loadServerConfigs();
     if (!Array.isArray(configsResult)) {
       log.error('Failed to load server configs', configsResult);
@@ -33,8 +37,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find the server configuration
-    const serverConfig = configsResult.find(config => config.name === serverName) as MCPStreamableConfig;
+    const serverConfig = configsResult.find(config => config.name === serverName) as MCPStreamableConfig | undefined;
     if (!serverConfig || serverConfig.transport !== 'streamable') {
       log.error('Server configuration not found or not streamable', { serverName });
       return NextResponse.json(
@@ -43,145 +46,59 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get the server URL for OAuth metadata discovery
-    const serverUrl = new URL(serverConfig.serverUrl);
-    const baseUrl = `${serverUrl.protocol}//${serverUrl.host}`;
     const redirectUri = `${request.nextUrl.origin}/api/oauth/callback`;
+    // The provider mutates and persists `serverConfig` in place (see MCPOAuthClientProvider),
+    // so client registration / discovery state / the authorization URL land in storage as
+    // soon as auth() produces them - the route doesn't do any saving itself.
+    const provider = createOAuthClientProvider(serverConfig, redirectUri);
 
     try {
-      // Discover OAuth metadata
-      log.debug(`Discovering OAuth metadata for ${baseUrl}`);
-      const oauthMetadata = await discoverOAuthMetadata(baseUrl);
-      
-      if (!oauthMetadata) {
-        return NextResponse.json(
-          { error: 'OAuth not supported by this server' },
-          { status: 400 }
-        );
+      const result = await auth(provider, { serverUrl: serverConfig.serverUrl });
+
+      if (result === 'AUTHORIZED') {
+        // We already held a usable (or successfully refreshed) token - no user interaction
+        // needed.
+        log.info(`Server ${serverName} already has valid OAuth tokens`);
+        return NextResponse.json({ alreadyAuthorized: true, serverName });
       }
 
-      log.debug('OAuth metadata discovered', { 
-        authorizationEndpoint: oauthMetadata.authorization_endpoint,
-        tokenEndpoint: oauthMetadata.token_endpoint,
-        registrationEndpoint: oauthMetadata.registration_endpoint
-      });
-
-      // Check if we need to register the client
-      let clientInformation = serverConfig.oauthClientInformation;
-      
-      if (!clientInformation && oauthMetadata.registration_endpoint) {
-        log.info(`Registering OAuth client for ${serverName}`);
-        
-        // Prepare client metadata for registration
-        const clientMetadata = {
-          redirect_uris: [redirectUri],
-          client_name: `FLUJO MCP Client - ${serverName}`,
-          client_uri: 'https://github.com/mario-andreschak/FLUJO',
-          grant_types: ['authorization_code', 'refresh_token'],
-          response_types: ['code'],
-          token_endpoint_auth_method: 'client_secret_post',
-          scope: serverConfig.oauthScopes?.join(' ') || 'read',
-        };
-
-        try {
-          // Register the client
-          const registrationResult = await registerClient(baseUrl, {
-            metadata: oauthMetadata,
-            clientMetadata,
-          });
-
-          log.info(`Client registered successfully for ${serverName}`);
-          log.verbose('Registration result', JSON.stringify({
-            ...registrationResult,
-            client_secret: registrationResult.client_secret ? '[REDACTED]' : undefined,
-          }));
-
-          // Store client information
-          clientInformation = {
-            client_id: registrationResult.client_id,
-            client_secret: registrationResult.client_secret,
-            client_id_issued_at: registrationResult.client_id_issued_at,
-            client_secret_expires_at: registrationResult.client_secret_expires_at,
-          };
-
-          // Update server configuration
-          serverConfig.oauthClientInformation = clientInformation;
-          serverConfig.oauthClientMetadata = clientMetadata;
-
-        } catch (registrationError) {
-          log.error('Failed to register OAuth client', { 
-            serverName, 
-            error: registrationError instanceof Error ? registrationError.message : registrationError 
-          });
-          return NextResponse.json(
-            { error: 'Failed to register OAuth client' },
-            { status: 500 }
-          );
-        }
-      }
-
-      if (!clientInformation) {
-        return NextResponse.json(
-          { error: 'No client credentials available and dynamic registration not supported' },
-          { status: 400 }
-        );
-      }
-
-      // Start authorization flow
-      log.debug(`Starting authorization flow for ${serverName}`);
-      const authResult = await startAuthorization(baseUrl, {
-        metadata: oauthMetadata,
-        clientInformation,
-        redirectUrl: redirectUri,
-      });
-
+      // 'REDIRECT': our provider's redirectToAuthorization() always throws (see oauth.ts) to
+      // signal this case up through the connection stack, so in practice we won't get here -
+      // but handle it defensively using whatever it stored.
       log.info(`Authorization URL generated for ${serverName}`);
+      return NextResponse.json({ authorizationUrl: serverConfig.authorizationUrl, serverName });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'OAuthAuthenticationRequired' && serverConfig.authorizationUrl) {
+        log.info(`Authorization URL generated for ${serverName}`);
+        return NextResponse.json({ authorizationUrl: serverConfig.authorizationUrl, serverName });
+      }
 
-      // Store the code verifier
-      serverConfig.oauthCodeVerifier = authResult.codeVerifier;
+      const rawMessage = error instanceof Error ? error.message : String(error);
 
-      // Add state parameter to the authorization URL
-      const authUrl = new URL(authResult.authorizationUrl);
-      const stateData = {
-        serverName: serverName,
-        redirectUri: redirectUri
-      };
-      const stateParam = encodeURIComponent(JSON.stringify(stateData));
-      authUrl.searchParams.set('state', stateParam);
-      
-      log.debug(`Added state parameter to authorization URL for ${serverName}`);
-
-      // Save updated configuration
-      const configMap = new Map(configsResult.map(config => [config.name, config]));
-      configMap.set(serverName, serverConfig);
-      
-      const saveResult = await saveConfig(configMap);
-      if (!saveResult.success) {
-        log.error('Failed to save updated configuration', saveResult);
+      // Some authorization servers (e.g. Asana's V2 MCP server) disable Dynamic Client
+      // Registration, so auth() can't self-register and needs a pre-registered app. Turn the
+      // SDK's terse error into an actionable instruction pointing at the new credential fields.
+      if (/dynamic client registration/i.test(rawMessage) && !serverConfig.oauthClientId) {
+        log.info(`Server ${serverName} requires manual OAuth client credentials (no DCR)`);
         return NextResponse.json(
-          { error: 'Failed to save configuration' },
-          { status: 500 }
+          {
+            error:
+              'This server does not support automatic app registration. Edit the server and enter ' +
+              'the OAuth Client ID and Client Secret from the provider\'s developer console, then ' +
+              'authenticate again.',
+            needsClientCredentials: true,
+            serverName,
+          },
+          { status: 400 }
         );
       }
 
-      // Return the authorization URL with state parameter
-      return NextResponse.json({
-        authorizationUrl: authUrl.toString(),
-        serverName,
-      });
-
-    } catch (error) {
-      log.error('Failed to initiate OAuth flow', { 
-        serverName, 
-        error: error instanceof Error ? error.message : error 
-      });
-      
+      log.error('Failed to initiate OAuth flow', { serverName, error: rawMessage });
       return NextResponse.json(
-        { error: 'Failed to initiate OAuth authentication' },
+        { error: rawMessage || 'Failed to initiate OAuth authentication' },
         { status: 500 }
       );
     }
-
   } catch (error) {
     log.error('Unexpected error in OAuth initiation', error);
     return NextResponse.json(
