@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'; // Import icon for Accordion
 import CloseIcon from '@mui/icons-material/Close';
+import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
 import { SharedState, DebugStep } from '@/backend/execution/flow/types'; // Import backend types
@@ -16,7 +17,7 @@ import { flowService } from '@/frontend/services/flow'; // Import flow service
 import { createLogger } from '@/utils/logger';
 
 // Import custom nodes and edges if needed for display (might need adaptation for read-only)
-import { StartNode, ProcessNode, FinishNode, MCPNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 
 // Import Canvas components if needed (or create simplified versions)
@@ -38,12 +39,17 @@ interface DebuggerCanvasProps {
   onClose?: () => void; // Callback to dismiss/hide the debugger panel
 }
 
-// Define node types for React Flow display
+// Define node types for React Flow display. Every builder node type must be
+// registered here: an unregistered type falls back to React Flow's default
+// node, which lacks the named handles the flow's edges reference — so ALL
+// edges from/to such a node are silently dropped (this is how subflow nodes
+// lost their edges in the debugger).
 const nodeTypes = {
   start: StartNode,
   process: ProcessNode,
   finish: FinishNode,
   mcp: MCPNode,
+  subflow: SubflowNode,
 };
 
 // Define edge types
@@ -118,6 +124,9 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(
     debugState.executionTrace && debugState.executionTrace.length > 0 ? debugState.executionTrace.length - 1 : -1
   );
+  // Sidebar visibility: both can be hidden to give the flow canvas more room.
+  const [traceOpen, setTraceOpen] = useState<boolean>(true);
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(true);
   const [flowDefinition, setFlowDefinition] = useState<Flow | null>(null);
   const [flowLoading, setFlowLoading] = useState<boolean>(true);
   const [flowError, setFlowError] = useState<string | null>(null);
@@ -281,15 +290,39 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             {breakpoints && breakpoints.length > 0 ? ` · ${breakpoints.length} active` : ''}
           </Typography>
         </Box>
-        {onClose && (
-          <Tooltip title="Close debugger">
-            <IconButton size="small" onClick={onClose} aria-label="Close debugger">
-              <CloseIcon fontSize="small" />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Tooltip title={traceOpen ? 'Hide execution trace' : 'Show execution trace'}>
+            <IconButton
+              size="small"
+              onClick={() => setTraceOpen(v => !v)}
+              color={traceOpen ? 'primary' : 'default'}
+              aria-label={traceOpen ? 'Hide execution trace' : 'Show execution trace'}
+            >
+              {/* Mirrored sidebar icon = left panel */}
+              <ViewSidebarOutlinedIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
             </IconButton>
           </Tooltip>
-        )}
+          <Tooltip title={inspectorOpen ? 'Hide step inspector' : 'Show step inspector'}>
+            <IconButton
+              size="small"
+              onClick={() => setInspectorOpen(v => !v)}
+              color={inspectorOpen ? 'primary' : 'default'}
+              aria-label={inspectorOpen ? 'Hide step inspector' : 'Show step inspector'}
+            >
+              <ViewSidebarOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          {onClose && (
+            <Tooltip title="Close debugger">
+              <IconButton size="small" onClick={onClose} aria-label="Close debugger">
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       </Header>
       <ContentArea>
+        {traceOpen && (
         <TracePanel>
           <Typography variant="subtitle2" gutterBottom>Execution Trace</Typography>
           <List dense disablePadding>
@@ -310,6 +343,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             )}
           </List>
         </TracePanel>
+        )}
         <FlowDisplayPanel>
           {flowLoading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
@@ -349,6 +383,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             </ReactFlowProvider>
           )}
         </FlowDisplayPanel>
+        {inspectorOpen && (
         <InspectorPanel>
           <Typography variant="subtitle2" gutterBottom>Step Inspector</Typography>
           {currentStepData ? (
@@ -426,6 +461,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             <Typography variant="body2" color="textSecondary">Select a step from the trace.</Typography>
           )}
         </InspectorPanel>
+        )}
       </ContentArea>
        <ControlsPanel>
             <Button variant="outlined" size="small" onClick={handlePreviousStep} disabled={isLoading || currentStepIndex <= 0}>
