@@ -20,6 +20,7 @@ import {
   hasConversationLog,
   flushConversationLog,
   projectMessages,
+  recoverMessagesFromLog,
   _setConversationLogDirForTests,
 } from '@/backend/execution/flow/conversationLog';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -222,5 +223,79 @@ describe('projectMessages (conversation-as-projection)', () => {
       { type: 'message:removed', conversationId: convId, seq: -1, timestamp: 2, messageId: 'nope' } as ExecutionEvent,
     ]);
     expect(projected.map((m) => m.id)).toEqual(['u1']);
+  });
+});
+
+describe('recoverMessagesFromLog (crash recovery: snapshot behind the log)', () => {
+  // Per-step durability is the log; the SharedState snapshot is only written
+  // at run boundaries. A crash mid-run leaves the snapshot missing messages
+  // that ARE in the log — recovery adopts the log's parent-level projection
+  // when (and only when) it strictly extends the snapshot.
+
+  it('folds log messages missing from a stale snapshot back into the state', async () => {
+    const convId = 'conv-recover-stale';
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user', 'task')];
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user', 'task') },
+      { type: 'message', message: msg('a1', 'assistant', 'streamed mid-run') },
+      { type: 'message', message: msg('t1', 'tool', 'tool result') },
+    ]);
+
+    const recovered = await recoverMessagesFromLog(state);
+    expect(recovered).toBe(true);
+    expect(state.messages.map((m) => m.id)).toEqual(['u1', 'a1', 't1']);
+  });
+
+  it('excludes depth>0 subflow steps from recovery (display-only, never transcript)', async () => {
+    const convId = 'conv-recover-depth';
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user')];
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: { ...msg('c1', 'assistant', 'child step'), depth: 1 }, depth: 1 },
+      { type: 'message', message: msg('a1', 'assistant', 'answer') },
+    ]);
+
+    expect(await recoverMessagesFromLog(state)).toBe(true);
+    expect(state.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+
+  it('keeps the snapshot when the log does not strictly extend it (no log / diverged / equal)', async () => {
+    // No log at all.
+    const noLog = makeState('conv-recover-nolog');
+    noLog.messages = [msg('u1', 'user')];
+    expect(await recoverMessagesFromLog(noLog)).toBe(false);
+    expect(noLog.messages.map((m) => m.id)).toEqual(['u1']);
+
+    // Log diverged: snapshot has a message the log lacks.
+    const diverged = makeState('conv-recover-diverged');
+    diverged.messages = [msg('u1', 'user'), msg('local-only', 'assistant')];
+    await appendRawForState(diverged, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant') },
+    ]);
+    expect(await recoverMessagesFromLog(diverged)).toBe(false);
+    expect(diverged.messages.map((m) => m.id)).toEqual(['u1', 'local-only']);
+
+    // Log equal to snapshot: nothing to recover.
+    const equal = makeState('conv-recover-equal');
+    equal.messages = [msg('u1', 'user')];
+    await appendRawForState(equal, [{ type: 'message', message: msg('u1', 'user') }]);
+    expect(await recoverMessagesFromLog(equal)).toBe(false);
+  });
+
+  it('ignores a leading legacy system message when comparing (recovery still applies)', async () => {
+    const convId = 'conv-recover-system';
+    const state = makeState(convId);
+    state.messages = [msg('sys', 'system', 'old node prompt'), msg('u1', 'user')];
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant') },
+    ]);
+
+    expect(await recoverMessagesFromLog(state)).toBe(true);
+    // Recovery adopts the projection (system-free, like every post-Phase-3 state).
+    expect(state.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
   });
 });

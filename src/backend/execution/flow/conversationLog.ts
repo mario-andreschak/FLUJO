@@ -316,6 +316,39 @@ export async function reconcileConversationLog(
   await appendRawForState(state, raws);
 }
 
+/**
+ * Crash recovery: fold log messages missing from a storage-loaded snapshot
+ * back into the state. Per-step durability is the LOG (appends); the full
+ * SharedState snapshot is only written at run boundaries, so a crash mid-run
+ * leaves the snapshot behind the log. Adopt the log's parent-level projection
+ * (depth>0 subflow steps are display-only and never enter the transcript)
+ * ONLY when it strictly extends the snapshot — every snapshot message id
+ * present, plus at least one more. Anything else (no log, log incomplete or
+ * diverged) keeps the snapshot untouched. Returns true when recovery applied.
+ */
+export async function recoverMessagesFromLog(state: SharedState): Promise<boolean> {
+  if (state.ephemeral) return false;
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) return false;
+
+  const events = await readConversationLog(conversationId);
+  if (!events) return false;
+
+  const projectedParent = projectMessages(events).filter((m) => !((m.depth ?? 0) > 0));
+  const snapshotIds = (state.messages ?? [])
+    .filter((m) => m.role !== 'system' && !!m.id)
+    .map((m) => m.id);
+  if (projectedParent.length <= snapshotIds.length) return false;
+  const projectedIds = new Set(projectedParent.map((m) => m.id));
+  if (!snapshotIds.every((id) => projectedIds.has(id))) return false;
+
+  log.info(
+    `Recovered ${projectedParent.length - snapshotIds.length} message(s) from the conversation log for ${conversationId} (snapshot was behind).`
+  );
+  state.messages = projectedParent;
+  return true;
+}
+
 /** True if a persisted log exists for this conversation. */
 export async function hasConversationLog(conversationId: string): Promise<boolean> {
   if (!SAFE_ID.test(conversationId)) return false;
