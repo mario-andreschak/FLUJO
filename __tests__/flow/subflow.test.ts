@@ -42,6 +42,15 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
   }),
 }));
 
+// prep() looks up the child flow's display name (subflow:start attribution)
+// via a dynamic import of the flow service; mock it so tests never touch disk.
+jest.mock('@/backend/services/flow/index', () => ({
+  flowService: {
+    getFlow: jest.fn(async (id: string) => ({ id, name: `flow-${id}` })),
+    loadFlows: jest.fn(async () => []),
+  },
+}));
+
 import { SubflowNode, FinishNode } from '@/backend/execution/flow/nodes';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 
@@ -162,5 +171,72 @@ describe('SubflowNode', () => {
 
     expect(runFlowMock).not.toHaveBeenCalled();
     expect(action).toBe(ERROR_ACTION);
+  });
+});
+
+describe('subflow event folding into the parent conversation (Phase 3)', () => {
+  it('forwards child events onto the parent emit at depth+1, translating run boundaries', async () => {
+    // Simulate a child run that emits its lifecycle through the emit it was given.
+    runFlowMock.mockImplementationOnce(async (input: any) => {
+      input.emit?.({ type: 'run:start', flowId: input.flowId });
+      input.emit?.({ type: 'message', message: { role: 'assistant', content: 'child step', id: 'child-1', timestamp: 2 } });
+      input.emit?.({ type: 'run:done', status: 'completed' });
+      return {
+        status: 'completed', conversationId: 'sub', outputText: 'child final',
+        messages: [], finalAction: 'FINAL_RESPONSE', sharedState: {},
+      };
+    });
+
+    const parentEvents: any[] = [];
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    const state = makeState({ emit: (e: any) => parentEvents.push(e) } as Partial<SharedState>);
+
+    await node.run(state);
+
+    expect(parentEvents.map(e => e.type)).toEqual(['subflow:start', 'message', 'subflow:done']);
+    // The child's raw run boundaries never reach the parent channel (a raw
+    // run:done would terminate the parent's SSE streams mid-run).
+    const [start, message, done] = parentEvents;
+    expect(start).toMatchObject({ subflowId: 'inner-flow', subflowName: 'flow-inner-flow', depth: 1, node: { nodeId: 'sub-node' } });
+    // depth is stamped on the event AND on the message payload (nested display
+    // and the log projection both key off it).
+    expect(message).toMatchObject({ depth: 1, message: { id: 'child-1', depth: 1 } });
+    expect(done).toMatchObject({ subflowId: 'inner-flow', status: 'completed', depth: 1 });
+  });
+
+  it('wrappers compose: an already-nested child event is forwarded one level deeper', async () => {
+    runFlowMock.mockImplementationOnce(async (input: any) => {
+      // A grandchild's event arriving at the child wrapper already carries depth 1.
+      input.emit?.({ type: 'message', depth: 1, message: { role: 'assistant', content: 'grandchild', id: 'gc-1', timestamp: 3, depth: 1 } });
+      return {
+        status: 'completed', conversationId: 'sub', outputText: 'x',
+        messages: [], finalAction: 'FINAL_RESPONSE', sharedState: {},
+      };
+    });
+
+    const parentEvents: any[] = [];
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState({ emit: (e: any) => parentEvents.push(e) } as Partial<SharedState>));
+
+    expect(parentEvents[0]).toMatchObject({ type: 'message', depth: 2, message: { id: 'gc-1', depth: 2 } });
+  });
+
+  it("outputMode 'final-only' runs the child without an emit (no steps forwarded)", async () => {
+    const parentEvents: any[] = [];
+    const node = makeNode({ subflowId: 'inner-flow', outputMode: 'final-only' }, 'edge-next');
+    const state = makeState({ emit: (e: any) => parentEvents.push(e) } as Partial<SharedState>);
+
+    await node.run(state);
+
+    expect(runFlowMock.mock.calls[0][0].emit).toBeUndefined();
+    expect(parentEvents).toEqual([]);
+    // The folded final output still lands in the parent transcript.
+    expect(state.messages[state.messages.length - 1]).toMatchObject({ role: 'assistant', content: 'echo:history' });
+  });
+
+  it('runs the child without an emit when the parent has none (headless runs unchanged)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState()); // no state.emit
+    expect(runFlowMock.mock.calls[0][0].emit).toBeUndefined();
   });
 });

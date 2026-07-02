@@ -19,8 +19,9 @@ const log = createLogger('backend/execution/flow/FlowExecutor');
 // instead, so each step is roughly constant size regardless of conversation
 // length.
 
-/** Bulky fields stripped from prep/exec result snapshots. */
-const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse'] as const;
+/** Bulky or non-serializable fields stripped from prep/exec result snapshots
+ *  ('emit' is the transient event callback a SubflowNode captures in prep). */
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit'] as const;
 
 /** Lightweight state snapshot: everything except the conversation/tool payloads. */
 function slimStateSnapshot(state: SharedState): Partial<SharedState> {

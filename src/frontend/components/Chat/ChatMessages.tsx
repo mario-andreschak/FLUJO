@@ -172,6 +172,9 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onSaveEdit,
   onCancelEdit,
 }) {
+  // Subflow steps (depth > 0) render nested: indented per level, marked with a
+  // guide line + chip. They are display-only (never sent back as history).
+  const depth = message.depth ?? 0;
   return (
     <Box
       sx={{
@@ -179,6 +182,12 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         flexDirection: 'column',
         alignItems: message.role === 'user' ? 'flex-end' : 'flex-start',
         opacity: message.disabled ? 0.5 : 1,
+        ...(depth > 0 && {
+          pl: 3 * depth,
+          borderLeft: '2px solid',
+          borderColor: 'divider',
+          ml: 1,
+        }),
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
@@ -198,6 +207,18 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
               label={`Node: ${nodeLabel || `${message.processNodeId.substring(0, 6)}...`}`}
               size="small"
               color="primary"
+              variant="outlined"
+              sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
+            />
+          </Tooltip>
+        )}
+
+        {depth > 0 && (
+          <Tooltip title={`Nested subflow step (depth ${depth})`}>
+            <Chip
+              label="Subflow step"
+              size="small"
+              color="secondary"
               variant="outlined"
               sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
             />

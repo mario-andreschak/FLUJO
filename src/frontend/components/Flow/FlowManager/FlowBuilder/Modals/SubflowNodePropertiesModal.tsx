@@ -175,6 +175,19 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           rows={3}
           helperText="What to send to the subflow. Leave empty to pass this conversation's latest message."
         />
+
+        <FormControl fullWidth margin="normal">
+          <InputLabel id="subflow-output-label">Output</InputLabel>
+          <Select
+            labelId="subflow-output-label"
+            label="Output"
+            value={nodeData.properties?.outputMode || 'steps'}
+            onChange={(e) => handlePropertyChange('outputMode', e.target.value)}
+          >
+            <MenuItem value="steps">Show steps — the subflow&apos;s intermediate steps appear nested in the conversation</MenuItem>
+            <MenuItem value="final-only">Final answer only — only the subflow&apos;s final output is shown</MenuItem>
+          </Select>
+        </FormControl>
       </DialogContent>
 
       <DialogActions>

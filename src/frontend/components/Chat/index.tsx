@@ -558,6 +558,9 @@ const Chat: React.FC = () => {
       case 'node:enter':
         touch({ activeNode: event.node?.nodeName || event.node?.nodeId || null });
         break;
+      case 'subflow:start':
+        touch({ activeNode: `↳ ${event.subflowName || event.subflowId}` });
+        break;
       case 'handoff':
         touch({ activeNode: `→ ${event.toNodeId}` });
         break;
@@ -1077,9 +1080,12 @@ const Chat: React.FC = () => {
 
       log.debug('Sending to chat completions', { flowId: conversation.flowId, flowName: flow.name, conversationId: conversation.id });
 
-      // Prepare messages for the API from the detailed conversation
+      // Prepare messages for the API from the detailed conversation.
+      // depth>0 messages are nested subflow steps served by the backend's
+      // projection for display only — they are never part of the parent
+      // transcript and must not be sent back as history.
       const messages = conversation.messages
-        .filter(msg => !msg.disabled)
+        .filter(msg => !msg.disabled && !((msg.depth ?? 0) > 0))
         .map(msg => {
           // Collapse text/doc/audio to a string or, for image attachments, a
           // multipart array (so vision models receive the image).
@@ -1300,9 +1306,10 @@ const Chat: React.FC = () => {
           throw new Error(`Flow with ID ${updatedDetailedConv.flowId} not found`);
         }
 
-        // Prepare messages for the API
+        // Prepare messages for the API (depth>0 = display-only subflow steps,
+        // never sent back as history — same rule as the send path)
         const messages = updatedDetailedConv.messages
-          .filter(msg => !msg.disabled)
+          .filter(msg => !msg.disabled && !((msg.depth ?? 0) > 0))
           .map(msg => {
             // Same content shaping as the send path: string for text/doc/audio,
             // multipart array when image attachments are present.
