@@ -52,6 +52,15 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   /** The ID of the process node that generated or handled this message */
   processNodeId?: string;
 
+  /**
+   * Subflow nesting depth for display. Absent/0 = a top-level message of this
+   * conversation; >0 = a step of a nested subflow run, folded into the parent
+   * conversation's log/projection. Depth>0 messages are display-only: they are
+   * never part of the parent's model context and chat clients must exclude
+   * them when sending history back.
+   */
+  depth?: number;
+
   /** Token usage reported by the provider for the call that produced this message (assistant messages only). */
   usage?: {
     promptTokens: number;
