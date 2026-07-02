@@ -7,6 +7,12 @@ const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
 // How many recent events to retain per conversation for replay on (re)connect.
 const RING_BUFFER_SIZE = 1000;
 
+// How long a channel (and its buffered events) survives after a run:done with
+// no listeners. Long enough for the frontend's terminal refetch and any late
+// replays; without this the channels Map grew for the process lifetime — one
+// buffer of up to RING_BUFFER_SIZE message payloads per conversation ever run.
+const CHANNEL_TTL_AFTER_DONE_MS = 5 * 60 * 1000;
+
 interface ConversationChannel {
   emitter: EventEmitter;
   seq: number;
@@ -25,6 +31,7 @@ interface ConversationChannel {
  */
 class ExecutionEventBus {
   private channels = new Map<string, ConversationChannel>();
+  private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private getChannel(conversationId: string): ConversationChannel {
     let channel = this.channels.get(conversationId);
@@ -35,6 +42,33 @@ class ExecutionEventBus {
       this.channels.set(conversationId, channel);
     }
     return channel;
+  }
+
+  private cancelCleanup(conversationId: string): void {
+    const timer = this.cleanupTimers.get(conversationId);
+    if (timer) {
+      clearTimeout(timer);
+      this.cleanupTimers.delete(conversationId);
+    }
+  }
+
+  /** Drop the channel after the TTL unless the run resumed or someone is still
+   *  listening. Deleting resets seq to 0 on recreation — safe, because clients
+   *  subscribe fresh (fromSeq 0/absent) and the stale-'running' heuristic in the
+   *  conversations list only applies to states persisted as 'running'. */
+  private scheduleCleanup(conversationId: string, seqAtDone: number): void {
+    this.cancelCleanup(conversationId);
+    const timer = setTimeout(() => {
+      this.cleanupTimers.delete(conversationId);
+      const channel = this.channels.get(conversationId);
+      if (!channel) return;
+      if (channel.seq !== seqAtDone) return; // a new run emitted since; keep
+      if (channel.emitter.listenerCount('event') > 0) return; // active SSE subscriber
+      this.channels.delete(conversationId);
+    }, CHANNEL_TTL_AFTER_DONE_MS);
+    // Never keep the process alive just for channel GC.
+    if (typeof timer.unref === 'function') timer.unref();
+    this.cleanupTimers.set(conversationId, timer);
   }
 
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
@@ -52,6 +86,14 @@ class ExecutionEventBus {
       channel.buffer.shift();
     }
     channel.emitter.emit('event', event);
+
+    // Terminal event → the channel becomes garbage once nobody replays it.
+    // Any other event (e.g. run:start of a resumed conversation) revives it.
+    if (event.type === 'run:done') {
+      this.scheduleCleanup(conversationId, channel.seq);
+    } else {
+      this.cancelCleanup(conversationId);
+    }
     return event;
   }
 

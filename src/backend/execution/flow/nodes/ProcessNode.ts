@@ -247,7 +247,7 @@ export class ProcessNode extends BaseNode {
     });
 
     // Add verbose logging of the entire prepResult
-    log.debug('execCore() prepResult', JSON.stringify(prepResult));
+    log.debug('execCore() prepResult', prepResult);
 
     try {
       // Prepare tools if available
@@ -391,7 +391,7 @@ export class ProcessNode extends BaseNode {
       });
 
       // Add verbose logging of the entire execResult
-      log.verbose('execCore() execResult', JSON.stringify(execResult));
+      log.verbose('execCore() execResult', execResult);
 
       return execResult;
     } catch (error) {
@@ -428,7 +428,7 @@ export class ProcessNode extends BaseNode {
       });
 
       // Add verbose logging of the error result
-      log.verbose('execCore() errorResult', JSON.stringify(errorResult));
+      log.verbose('execCore() errorResult', errorResult);
 
       return errorResult;
     }

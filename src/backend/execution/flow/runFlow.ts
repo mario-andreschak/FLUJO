@@ -471,6 +471,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
   };
 
+  // Mid-loop persistence throttle. Persisting rewrites the ENTIRE conversation
+  // file, so a fast tool loop on a long conversation used to pay O(file size)
+  // disk writes on every step. Boundary persists (initial save, every pause,
+  // breakpoints, the final save) stay unconditional — durability at every point
+  // a caller can observe is unchanged; only intermediate step snapshots within
+  // a running loop are coalesced. Crash-loss window ≤ the throttle interval
+  // (and the Claude adapter's incremental persist still covers streamed
+  // messages independently).
+  const STEP_PERSIST_MIN_INTERVAL_MS = 500;
+  let lastStepPersistAt = 0;
+
   try {
     if (!preflightError) {
       while (true) {
@@ -553,7 +564,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
         if (sharedState.messages.length > 0) {
           const lastFewMessages = sharedState.messages.slice(-3);
-          log.verbose(`Message history before step ${internalIterations}`, JSON.stringify(lastFewMessages));
+          log.verbose(`Message history before step ${internalIterations}`, lastFewMessages);
         } else {
           log.verbose(`No messages in history before step ${internalIterations}`);
         }
@@ -573,14 +584,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
             }
           }
-          await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
-          log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`);
+          // Throttled: intermediate step snapshots coalesce (see
+          // STEP_PERSIST_MIN_INTERVAL_MS above); every loop-exit path persists
+          // unconditionally, so no terminal/pause state is ever stale.
+          if (Date.now() - lastStepPersistAt >= STEP_PERSIST_MIN_INTERVAL_MS) {
+            lastStepPersistAt = Date.now();
+            await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
+            log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`);
+          }
         } catch (error) {
           log.error(`Failed to save state after step ${internalIterations} for conv ${effectiveConvId}:`, error);
         }
 
         log.info(`Step ${internalIterations} completed for conv ${effectiveConvId}. Action: ${currentAction}`, { currentNodeId: sharedState.currentNodeId });
-        log.verbose(`Shared state after step ${internalIterations}`, JSON.stringify(sharedState));
+        log.verbose(`Shared state after step ${internalIterations}`, sharedState);
 
         log.debug(`[Action Handling] Step ${internalIterations}: Received action "${currentAction}" for conv ${effectiveConvId}`);
 
