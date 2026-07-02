@@ -7,8 +7,67 @@ import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
 import { StorageKey } from '@/shared/types/storage';
 import { ConversationListItem } from '@/frontend/components/Chat'; // Import for response type
+import { flowService } from '@/backend/services/flow';
+import { modelService } from '@/backend/services/model';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
+
+/**
+ * Context-usage snapshot for the conversation's most recent model call.
+ *
+ * `promptTokens` is the PROVIDER-REPORTED prompt size of the last assistant
+ * turn that carried usage — the exact size of what that node's model last
+ * received, no tokenizer approximation needed. `contextWindow` comes from the
+ * node's bound model config (optional metadata); the frontend renders a meter
+ * when both are present. Advisory: any resolution failure just omits fields.
+ */
+async function buildContextInfo(sharedState: SharedState): Promise<
+  | {
+      promptTokens: number;
+      completionTokens?: number;
+      nodeId?: string;
+      modelDisplayName?: string;
+      contextWindow?: number;
+    }
+  | undefined
+> {
+  try {
+    const messages = sharedState.messages || [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role !== 'assistant' || !msg.usage) continue;
+
+      const info: {
+        promptTokens: number;
+        completionTokens?: number;
+        nodeId?: string;
+        modelDisplayName?: string;
+        contextWindow?: number;
+      } = {
+        promptTokens: msg.usage.promptTokens,
+        completionTokens: msg.usage.completionTokens,
+        nodeId: msg.processNodeId,
+      };
+
+      if (msg.processNodeId && sharedState.flowId) {
+        const flow = await flowService.getFlow(sharedState.flowId);
+        const node = (flow as any)?.nodes?.find((n: any) => n.id === msg.processNodeId);
+        const boundModelId = node?.data?.properties?.boundModel;
+        if (boundModelId) {
+          const model = await modelService.getModel(boundModelId);
+          if (model) {
+            info.modelDisplayName = model.displayName || model.name;
+            info.contextWindow = model.contextWindow;
+          }
+        }
+      }
+      return info;
+    }
+  } catch (error) {
+    log.warn('buildContextInfo failed; omitting context info', { error });
+  }
+  return undefined;
+}
 
 export async function GET(
   request: NextRequest,
@@ -77,11 +136,12 @@ export async function GET(
         requireApproval: sharedState.requireApproval ?? false, // Per-conversation tool-approval setting
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
-        // Include other relevant fields if the frontend Conversation type needs them
-        // status: sharedState.status || (stateSource === 'memory' ? 'running' : 'completed'), // Status is part of ConversationListItem, not Conversation
-        // currentNodeId: sharedState.currentNodeId, // Not part of frontend Conversation type
-        // lastResponse: sharedState.lastResponse, // Not part of frontend Conversation type
-        // pendingToolCalls: sharedState.pendingToolCalls // Not part of frontend Conversation type
+        status: sharedState.status,
+        // Aggregated token totals (accumulated by runFlow, persisted with the
+        // state) + the context snapshot of the latest model call — powers the
+        // chat header's token counter and context meter.
+        usage: sharedState.usage,
+        contextInfo: await buildContextInfo(sharedState),
       };
 
       // Return the full conversation data

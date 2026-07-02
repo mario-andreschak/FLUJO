@@ -11,6 +11,7 @@ import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
 import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
+import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
 import DebuggerCanvas from './DebuggerCanvas';
 import Spinner from '@/frontend/components/shared/Spinner';
@@ -81,6 +82,24 @@ export interface Conversation {
   requireApproval?: boolean;
   createdAt: number;
   updatedAt: number;
+  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error';
+  /** Aggregated token totals for the conversation (accumulated by the backend). */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd?: number;
+    byNode?: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd?: number }>;
+  };
+  /** Context snapshot of the latest model call (provider-reported prompt size
+   *  + the bound model's configured context window, when available). */
+  contextInfo?: {
+    promptTokens: number;
+    completionTokens?: number;
+    nodeId?: string;
+    modelDisplayName?: string;
+    contextWindow?: number;
+  };
 }
 
 // Represents the summary item shown in the list
@@ -1615,12 +1634,20 @@ const Chat: React.FC = () => {
               selected; with no conversation it's confusing (nothing to assign a
               flow to). */}
           {currentConversationId && (
-            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-              <FlowSelector
-                // Remove duplicate selectedFlowId prop
-                selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
-                onSelectFlow={handleFlowSelect}
-                disabled={isDebugPaused} // Disable flow selection when debugging
+            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <FlowSelector
+                  // Remove duplicate selectedFlowId prop
+                  selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+                  onSelectFlow={handleFlowSelect}
+                  disabled={isDebugPaused} // Disable flow selection when debugging
+                />
+              </Box>
+              {/* Token totals + context meter (persisted usage; refreshed with the conversation) */}
+              <ConversationStats
+                usage={detailedConversation?.usage}
+                contextInfo={detailedConversation?.contextInfo}
+                availableNodes={availableNodes}
               />
             </Box>
           )}

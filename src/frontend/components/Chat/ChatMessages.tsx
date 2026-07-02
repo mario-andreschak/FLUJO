@@ -66,6 +66,10 @@ function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_cal
   return message.role === 'assistant' && 'tool_calls' in message && Array.isArray(message.tool_calls);
 }
 
+// Compact token count for the per-message chip (12345 → "12.3k").
+const formatTokenCount = (n: number): string =>
+  n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${n}`;
+
 // Format timestamp
 const formatTime = (timestamp: number) => {
   // Add a check for valid timestamp before formatting
@@ -208,6 +212,18 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             variant="outlined"
             sx={{ height: 20, fontSize: '0.7rem' }}
           />
+        )}
+
+        {message.usage && (
+          <Tooltip title={`${message.usage.promptTokens.toLocaleString()} prompt + ${message.usage.completionTokens.toLocaleString()} completion tokens (provider-reported)`}>
+            <Chip
+              label={`${formatTokenCount(message.usage.totalTokens)} tok`}
+              size="small"
+              color="default"
+              variant="outlined"
+              sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
+            />
+          </Tooltip>
         )}
 
         <IconButton

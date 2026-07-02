@@ -19,4 +19,11 @@ export interface Model {
     reasoningSchema?: string;
     temperature?: string;
     functionCallingSchema?: string;
+    /**
+     * The model's context window in tokens (as advertised by the provider).
+     * Optional metadata: when set, the chat shows a context-usage meter for
+     * conversations whose active node runs this model (provider-reported
+     * prompt tokens vs. this limit).
+     */
+    contextWindow?: number;
   }
