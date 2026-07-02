@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'; // Added useCallback
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -10,6 +10,7 @@ import { Grid } from '@mui/material'; // Import Grid for layout
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
+import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
 import FlowSelector from './FlowSelector';
 import DebuggerCanvas from './DebuggerCanvas';
 import Spinner from '@/frontend/components/shared/Spinner';
@@ -146,16 +147,12 @@ const Chat: React.FC = () => {
   const [debugSessionActive, setDebugSessionActive] = useState<boolean>(false);
 
   // Live execution stats, driven by the SSE event stream while a run is active.
-  const [liveStats, setLiveStats] = useState<
-    { totalTokens: number; activeNode: string | null; startedAt: number; lastEventAt: number } | null
-  >(null);
+  const [liveStats, setLiveStats] = useState<LiveRunStats | null>(null);
   // Breakpoint node IDs for the visual debugger (mirrors server state).
   const [breakpoints, setBreakpoints] = useState<string[]>([]);
   // Which conversation currently has an active run (so the live indicator only
   // shows for the conversation being viewed, not for background runs).
   const [loadingConversationId, setLoadingConversationId] = useState<string | null>(null);
-  // Re-render tick (1s) so elapsed/"stuck" indicators update while loading.
-  const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
   // Refs
   const openaiRef = useRef<OpenAI | null>(null);
@@ -383,6 +380,20 @@ const Chat: React.FC = () => {
   const currentConversationSummary = conversationList.find(
     (conv) => conv.id === currentConversationId
   ) || null;
+
+  // Nodes of the conversation's flow, for message attribution + the edit
+  // dropdown. Memoized: a fresh array per render would defeat the memoized
+  // message bubbles (prop identity would change on every SSE event).
+  const availableNodes = useMemo(
+    () =>
+      flows
+        .find(f => f.id === detailedConversation?.flowId)
+        ?.nodes?.map(node => ({
+          id: node.id,
+          label: node.data.label || node.id,
+        })) || [],
+    [flows, detailedConversation?.flowId]
+  );
 
   // Create a new conversation (now persists to backend immediately)
   const createNewConversation = async () => {
@@ -1011,13 +1022,8 @@ const Chat: React.FC = () => {
     };
   }, [closeEventStream]);
 
-  // Tick once per second while loading so elapsed/"stuck" indicators refresh.
-  useEffect(() => {
-    if (!isLoading) return;
-    const t = setInterval(() => setNowTick(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [isLoading]);
-
+  // (The 1s elapsed/"stuck" tick lives inside LiveRunIndicator — keeping it
+  // here re-rendered every message bubble once per second during a run.)
 
   // Send conversation to chat completions API
   // Returns true on success, false on error
@@ -1632,10 +1638,8 @@ const Chat: React.FC = () => {
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
-                availableNodes={flows.find(f => f.id === detailedConversation.flowId)?.nodes?.map(node => ({
-                  id: node.id,
-                  label: node.data.label || node.id
-                })) || []} // Pass available nodes for the selected flow
+                availableNodes={availableNodes} // Memoized nodes for the selected flow
+                conversationId={detailedConversation.id} // Resets the render window on switch
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
                 onEditMessage={handleEditMessage}
@@ -1678,35 +1682,15 @@ const Chat: React.FC = () => {
 
               {/* Live execution indicator (progress, active node, tokens, stop).
                   Only shown for the conversation actually running, so a background
-                  run does not display its status in a different conversation. */}
-              {isLoading && loadingConversationId === currentConversationId && (() => {
-                const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
-                const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
-                const stuck = !!liveStats && sinceLast >= 20;
-                return (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
-                      <Typography variant="body2" color="textSecondary">
-                        {liveStats?.activeNode ? `Running: ${liveStats.activeNode}` : 'Working…'}
-                      </Typography>
-                      <Button
-                        variant="outlined"
-                        color="secondary"
-                        size="small"
-                        onClick={handleCancelRequest}
-                        disabled={!currentConversationId}
-                      >
-                        Stop
-                      </Button>
-                    </Box>
-                    <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
-                      {(liveStats?.totalTokens ?? 0).toLocaleString()} tokens · {elapsed}s elapsed
-                      {stuck ? ` · no activity for ${sinceLast}s — may be stuck` : ''}
-                    </Typography>
-                  </Box>
-                );
-              })()}
+                  run does not display its status in a different conversation. Owns
+                  its own 1s tick so the rest of the tree doesn't re-render. */}
+              {isLoading && loadingConversationId === currentConversationId && (
+                <LiveRunIndicator
+                  liveStats={liveStats}
+                  onStop={handleCancelRequest}
+                  stopDisabled={!currentConversationId}
+                />
+              )}
 
               {/* Error Display */}
               {error && (
