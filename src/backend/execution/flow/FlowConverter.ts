@@ -1,19 +1,20 @@
 // Local implementation of PocketFlow for debugging
 import { Flow, BaseNode } from './temp_pocket';
 import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';
-import { StartNode, ProcessNode, MCPNode, FinishNode } from './nodes';
+import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode } from './nodes';
 import { createLogger } from '@/utils/logger';
-import { 
-  NodeParams, 
-  StartNodeParams, 
-  ProcessNodeParams, 
-  MCPNodeParams, 
+import {
+  NodeParams,
+  StartNodeParams,
+  ProcessNodeParams,
+  MCPNodeParams,
   FinishNodeParams,
   MCPNodeReference,
   StartNodeProperties,
   ProcessNodeProperties,
   MCPNodeProperties,
-  FinishNodeProperties
+  FinishNodeProperties,
+  SubflowNodeProperties
 } from './types';
 
 // Create a logger instance for this file
@@ -216,6 +217,15 @@ export class FlowConverter {
           label: node.data.label,
           type: 'finish',
           properties: node.data.properties as FinishNodeProperties || { name: node.data.label }
+        };
+        break;
+      case 'subflow':
+        pocketNode = new SubflowNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'subflow',
+          properties: node.data.properties as SubflowNodeProperties || { name: node.data.label }
         };
         break;
       default:

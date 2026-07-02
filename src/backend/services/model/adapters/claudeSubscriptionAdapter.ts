@@ -205,9 +205,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         if (handoff) {
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            // A model can emit several tool_uses in one turn; only the first
+            // handoff counts. Ignoring the rest also avoids re-aborting.
+            if (handoffCall) {
+              return { content: [{ type: 'text', text: 'Already handing off.' }] };
+            }
             handoffCall = { name: fnName, args: args ?? {} };
             log.debug('Claude subscription requested handoff', { tool: fnName });
-            abortController.abort();
+            // Do NOT abort here. Aborting inside the tool handler tears down the
+            // SDK control stream mid-permission-round-trip and surfaces the
+            // benign "permission stream closed" error. Instead just record the
+            // handoff and return cleanly; the message loop aborts on its next
+            // turn (see the handoffCall check at the top of the for-await).
             return { content: [{ type: 'text', text: 'Handing off.' }] };
           });
         }
@@ -320,6 +329,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     try {
       for await (const message of response) {
+        // A handoff was requested by the tool handler (which runs between the
+        // assistant turn that called it and the next turn). Stop here — BEFORE
+        // accumulating any further turn — so the model can't narrate post-handoff
+        // (e.g. the benign abort-race "permission stream closed" message), while
+        // the handoff turn's own text (already in accumulatedText) is preserved.
+        if (handoffCall) {
+          abortController.abort();
+          break;
+        }
         if (message.type === 'assistant') {
           const content = (message as { message?: { content?: unknown } }).message?.content;
           if (Array.isArray(content)) {
@@ -359,6 +377,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
     recordMessage({
       role: 'assistant',
+      // Keep the model's text even on a handoff: a node can legitimately answer
+      // AND hand off in one turn (e.g. say "LEFT" then route to finish), and
+      // that text is the node's output. The post-handoff narration is prevented
+      // upstream by breaking the loop, so finalText here is the genuine answer.
       content: finalText || (finalToolCalls ? null : ''),
       ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}),
     });

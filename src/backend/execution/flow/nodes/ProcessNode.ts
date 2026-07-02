@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
+import { buildNodeContext } from '../buildNodeContext';
 import { FEATURES } from '@/config/features'; // Import feature flags
 import {
   SharedState,
@@ -202,17 +203,6 @@ export class ProcessNode extends BaseNode {
     requireToolApproval: sharedState.requireApproval ?? false,
   };
 
-    // Reorder messages to ensure system messages are at the top
-    // Extract non-system messages (already FlujoChatMessage type from sharedState)
-    const nonSystemMessages: FlujoChatMessage[] = [];
-
-    // Copy and categorize messages
-    sharedState.messages.forEach((msg: FlujoChatMessage) => { // Ensure msg is typed correctly
-      if (msg.role !== 'system') {
-        nonSystemMessages.push(msg);
-      }
-    });
-
     // Create our own system message with the current prompt as FlujoChatMessage
     const systemMessage: FlujoChatMessage = {
       id: uuidv4(), // Generate unique ID
@@ -227,12 +217,14 @@ export class ProcessNode extends BaseNode {
         completePrompt.substring(0, 100) + '...' : completePrompt
     });
 
-    // Combine messages with our system message first, then non-system messages
-    prepResult.messages = [systemMessage, ...nonSystemMessages];
+    // Assemble the node's threaded history (lossless — this is written back to
+    // SharedState.messages). Stripping handoff plumbing for the MODEL happens at
+    // the provider boundary (ModelHandler.generateCompletion → stripHandoffPlumbing),
+    // so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
+    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
 
-    log.info('Reordered messages with system messages at the top', {
-      systemMessageCount: 1, // We now have exactly one system message
-      nonSystemMessageCount: nonSystemMessages.length,
+    log.info('Assembled node context', {
+      systemMessageCount: 1,
       totalMessageCount: prepResult.messages.length
     });
 

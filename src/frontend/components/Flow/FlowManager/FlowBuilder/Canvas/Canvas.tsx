@@ -19,7 +19,7 @@ import {
 import { styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
-import { StartNode, ProcessNode, FinishNode, MCPNode } from '../CustomNodes';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge } from '../CustomEdges';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
@@ -49,6 +49,7 @@ const nodeTypes = {
   process: ProcessNode,
   finish: FinishNode,
   mcp: MCPNode,
+  subflow: SubflowNode,
 };
 
 const edgeTypes = {
@@ -70,7 +71,7 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   // Helper function to determine valid target node types based on source node type and handle ID
   const getValidNodeTypes = (): Array<NodeType> => {
     if (!sourceNodeType || !sourceHandleId) {
-      return ['process', 'finish', 'mcp'] as Array<NodeType>;
+      return ['process', 'finish', 'mcp', 'subflow'] as Array<NodeType>;
     }
     
     // If source is an MCP node, only allow connecting to process nodes
@@ -87,8 +88,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       return ['mcp'] as Array<NodeType>;
     }
     
-    // For normal connections from process or start nodes, allow process and finish nodes
-    return ['process', 'finish'] as Array<NodeType>;
+    // For normal connections from process or start nodes, allow process, finish, and subflow nodes
+    return ['process', 'finish', 'subflow'] as Array<NodeType>;
   };
   
   // Get valid node types based on source node type and handle ID
@@ -119,8 +120,13 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       label: 'MCP Node',
       description: 'Add functionality',
     },
+    {
+      type: 'subflow',
+      label: 'Subflow Node',
+      description: 'Run another flow',
+    },
   ];
-  
+
   // Filter node types based on validation
   const availableNodeTypes = allNodeTypes.filter(node => validNodeTypes.includes(node.type));
 
@@ -133,6 +139,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.success.main, borderRadius: '50%' }}></div>;
       case 'mcp':
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.info.main, borderRadius: '50%' }}></div>;
+      case 'subflow':
+        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.warning.main, borderRadius: '50%' }}></div>;
       default:
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
     }
@@ -174,6 +182,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
                     ? theme.palette.secondary.main
                     : node.type === 'finish'
                     ? theme.palette.success.main
+                    : node.type === 'subflow'
+                    ? theme.palette.warning.main
                     : theme.palette.info.main
                 }`,
                 cursor: 'pointer',
@@ -481,9 +491,10 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       
       if (sourceNode) {
         // Determine the appropriate target handle based on node type
-        const targetHandle = nodeType === 'process' ? 'process-top' : 
-                            nodeType === 'finish' ? 'finish-top' : 
-                            nodeType === 'mcp' ? 'mcp-top' : '';
+        const targetHandle = nodeType === 'process' ? 'process-top' :
+                            nodeType === 'finish' ? 'finish-top' :
+                            nodeType === 'mcp' ? 'mcp-top' :
+                            nodeType === 'subflow' ? 'subflow-top' : '';
         
         // Create a connection from the source node to the new node
         const connection = {

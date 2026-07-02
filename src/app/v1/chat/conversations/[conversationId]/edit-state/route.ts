@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { SharedState } from '@/backend/execution/flow/types';
-import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/edit-state/route');
@@ -38,13 +37,7 @@ export async function PATCH(
   }
 
   try {
-    let sharedState: SharedState | undefined;
-    if (FlowExecutor.conversationStates.has(conversationId)) {
-      sharedState = FlowExecutor.conversationStates.get(conversationId);
-    } else {
-      sharedState = (await loadItemBackend<SharedState>(`conversations/${conversationId}` as StorageKey, undefined as any)) ?? undefined;
-      if (sharedState) FlowExecutor.conversationStates.set(conversationId, sharedState);
-    }
+    const sharedState = await loadConversationState(conversationId);
 
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });

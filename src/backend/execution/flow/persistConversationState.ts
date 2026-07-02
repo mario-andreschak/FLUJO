@@ -1,6 +1,9 @@
 import { saveItem as saveItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('backend/execution/flow/persistConversationState');
 
 /**
  * Persist a conversation's SharedState to storage WITHOUT the debug execution
@@ -11,7 +14,18 @@ import { SharedState } from './types';
  * (`FlowExecutor.conversationStates`) and is shipped to the debugger in the live
  * response, so it does not need to be durable. Every code path that writes a
  * conversation's state should go through here so the on-disk file stays lean.
+ *
+ * This is ALSO the single enforcement point for the ephemeral policy: a state
+ * marked `ephemeral` (subflow child runs, future scheduler runs) is refused
+ * outright, so it can never appear as a conversation in the chat sidebar. The
+ * policy lives here, on the state, because per-call-site guards proved leaky —
+ * an incremental persist path nobody remembered to guard wrote a subflow child
+ * to disk. Do NOT add call-site `if (!ephemeral)` guards; they are redundant.
  */
 export function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
-  return saveItemBackend(key, { ...state, executionTrace: undefined });
+  if (state.ephemeral) {
+    log.debug(`Refusing to persist ephemeral state (key ${key}); ephemeral runs never reach the conversations store.`);
+    return Promise.resolve();
+  }
+  return saveItemBackend(key, { ...state, executionTrace: undefined, emit: undefined });
 }
