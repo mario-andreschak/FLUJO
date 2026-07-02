@@ -311,10 +311,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
     sharedState.flowId = resolvedFlowId;
 
+    // Preserve caller-provided ids/timestamps (like the resume path below).
+    // The chat frontend sends its optimistic message id; keeping it means the
+    // canonical copy MERGES with the optimistic bubble in the live view
+    // instead of appearing as a duplicate (dedupe there is by message id).
     const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
       ...msg,
-      id: crypto.randomUUID(),
-      timestamp: Date.now(),
+      id: (msg as any).id || crypto.randomUUID(),
+      timestamp: (msg as any).timestamp || Date.now(),
       processNodeId: (msg as any).processNodeId || undefined,
     }));
     sharedState.messages = initialMessages;
@@ -389,7 +393,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- Execution event emission (live progress + debugger) ---
   const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
-  let lastEmittedMsgIndex = sharedState.messages.length;
+  // Emission is tracked by message IDENTITY, not index: ProcessNode.post
+  // REPLACES sharedState.messages with a system-message-prefixed copy of the
+  // node context, so an index cursor shifts and re-emits the last pre-step
+  // message (the user's turn — seen as a duplicated bubble in the live view).
+  // Everything present at run start counts as already known to the client
+  // (it fetches full state on connect / shows the user message optimistically).
+  const emittedMessageIds = new Set<string>(
+    sharedState.messages.map(m => m.id).filter((id): id is string => !!id)
+  );
 
   const accumulateUsage = (msg: FlujoChatMessage) => {
     if (!msg.usage) return;
@@ -417,8 +429,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   };
 
   const emitNewMessages = () => {
-    for (; lastEmittedMsgIndex < sharedState.messages.length; lastEmittedMsgIndex++) {
-      const msg = sharedState.messages[lastEmittedMsgIndex];
+    for (const msg of sharedState.messages) {
+      // Strengthen the id invariant at the emission boundary: a message
+      // without an id could never be tracked (or deduped by any consumer).
+      if (!msg.id) msg.id = crypto.randomUUID();
+      if (emittedMessageIds.has(msg.id)) continue;
+      emittedMessageIds.add(msg.id);
+      // The node's system prompt (prepended into the transcript by
+      // ProcessNode.post's write-back) is model plumbing, not conversation
+      // content — never emitted under the old index cursor either (it lands
+      // BEFORE the cursor). Keep it out of the live stream.
+      if (msg.role === 'system') continue;
       emit({
         type: 'message',
         message: msg,

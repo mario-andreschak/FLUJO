@@ -213,6 +213,64 @@ describe('runFlow keystone', () => {
   });
 });
 
+describe('message emission (live view feed)', () => {
+  it('preserves caller-provided message ids on a NEW conversation', async () => {
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      messages: [{ role: 'user', content: 'hi there', id: 'client-uuid-1', timestamp: 123 }],
+      mode: 'conversation',
+    });
+
+    expect(result.status).toBe('completed');
+    // The optimistic client id survives — the live view can merge the
+    // canonical copy into the optimistic bubble instead of duplicating it.
+    expect(result.messages[0]).toMatchObject({ role: 'user', id: 'client-uuid-1' });
+  });
+
+  it('does not re-emit the user message when a node REPLACES the transcript (dup-bubble regression)', async () => {
+    // Reproduces ProcessNode.post's write-back: prep builds a system-prefixed
+    // copy of the history and post REPLACES sharedState.messages with it. The
+    // old index-based emission cursor shifted by one and re-emitted the last
+    // pre-step message (the user's) as a live `message` event.
+    const S = '077cfac0-start';
+    const P = 'ef2a3c01-process';
+    (FlowExecutor.executeStep as jest.Mock)
+      .mockImplementationOnce(async (sharedState: any) => {
+        sharedState.currentNodeId = sharedState.currentNodeId ?? S;
+        return { sharedState, action: `${S}->${P}` };
+      })
+      .mockImplementationOnce(async (sharedState: any) => {
+        sharedState.messages = [
+          { role: 'system', content: 'NODE SYSTEM PROMPT', id: 'sys-1', timestamp: 2 },
+          ...sharedState.messages,
+          { role: 'assistant', content: 'answer', id: 'assistant-1', timestamp: 3, processNodeId: P },
+        ];
+        sharedState.lastResponse = 'answer';
+        return { sharedState, action: 'FINAL_RESPONSE' };
+      });
+
+    const events: any[] = [];
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      messages: [{ role: 'user', content: 'call two tools', id: 'user-1', timestamp: 1 }],
+      mode: 'conversation',
+      emit: (e: any) => { events.push(e); },
+    });
+
+    expect(result.status).toBe('completed');
+    const messageEvents = events.filter(e => e.type === 'message');
+    // The user message was present at run start (the client already shows it):
+    // it must NOT come back as a live event under any id.
+    expect(messageEvents.filter(e => e.message.role === 'user')).toHaveLength(0);
+    // The node's system prompt is model plumbing, never streamed.
+    expect(messageEvents.filter(e => e.message.role === 'system')).toHaveLength(0);
+    // The genuinely new assistant answer is emitted exactly once.
+    const assistantEvents = messageEvents.filter(e => e.message.role === 'assistant');
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents[0].message.id).toBe('assistant-1');
+  });
+});
+
 describe('persistConversationState chokepoint (ephemeral policy)', () => {
   // The policy is enforced INSIDE the persist function, not at call sites, so
   // even persist paths outside the run loop (e.g. the Claude adapter's

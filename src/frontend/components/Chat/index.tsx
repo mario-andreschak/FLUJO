@@ -1062,6 +1062,10 @@ const Chat: React.FC = () => {
 
           // Include processNodeId in the message object if it exists
           const processNodeId = msg.processNodeId;
+          // Carry the client message id/timestamp: the backend preserves them,
+          // so the canonical copy keeps the SAME id as the optimistic bubble
+          // and the live view merges instead of duplicating (dedupe is by id).
+          const identity = { id: msg.id, timestamp: msg.timestamp };
 
           // Create properly typed message based on role
           if (msg.role === 'user') {
@@ -1069,45 +1073,51 @@ const Chat: React.FC = () => {
             return {
               role: 'user',
               content,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           if (msg.role === 'assistant') {
             return {
               role: 'assistant',
               content,
               tool_calls: msg.tool_calls,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionAssistantMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionAssistantMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           if (msg.role === 'system') {
             return {
               role: 'system',
               content,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionSystemMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionSystemMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           if (msg.role === 'tool') {
             if (!msg.tool_call_id) {
               return {
                 role: 'user',
                 content: typeof content === 'string' ? `Tool result: ${content}` : content,
+                ...identity,
                 processNodeId // Include processNodeId if it exists
-              } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+              } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
             }
             return {
               role: 'tool',
               content,
               tool_call_id: msg.tool_call_id,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionToolMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionToolMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           // Fallback
           return {
             role: 'user',
             content,
+            ...identity,
             processNodeId // Include processNodeId if it exists
-          } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+          } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
         });
 
       // Call the API
@@ -1272,15 +1282,18 @@ const Chat: React.FC = () => {
             // Same content shaping as the send path: string for text/doc/audio,
             // multipart array when image attachments are present.
             const content = buildApiContent(msg);
+            // Same identity carry as the send path: preserved ids keep the
+            // canonical copies mergeable with what the UI already shows.
+            const identity = { id: msg.id, timestamp: msg.timestamp, processNodeId: msg.processNodeId };
             // Create properly typed message based on role
-            if (msg.role === 'user') return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam;
-            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls } as OpenAI.ChatCompletionAssistantMessageParam;
-            if (msg.role === 'system') return { role: 'system', content } as OpenAI.ChatCompletionSystemMessageParam;
+            if (msg.role === 'user') return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
+            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls, ...identity } as OpenAI.ChatCompletionAssistantMessageParam;
+            if (msg.role === 'system') return { role: 'system', content, ...identity } as OpenAI.ChatCompletionSystemMessageParam;
             if (msg.role === 'tool') {
-              if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content } as OpenAI.ChatCompletionUserMessageParam;
-              return { role: 'tool', content, tool_call_id: msg.tool_call_id } as OpenAI.ChatCompletionToolMessageParam;
+              if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
+              return { role: 'tool', content, tool_call_id: msg.tool_call_id, ...identity } as OpenAI.ChatCompletionToolMessageParam;
             }
-            return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam; // Fallback
+            return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam; // Fallback
           });
 
         // Make the API call with processNodeId in metadata
