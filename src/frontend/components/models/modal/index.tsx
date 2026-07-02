@@ -286,6 +286,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         adapter: formState.adapter || 'openai',
         promptTemplate: formState.promptTemplate,
         temperature: formState.temperature,
+        contextWindow: formState.contextWindow,
       } as Model);
 
       if (result.success) {
@@ -524,6 +525,23 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   rows={3}
                   value={formState.description || ''}
                   onChange={(e) => handleChange('description', e.target.value)}
+                />
+
+                <TextField
+                  margin="dense"
+                  label="Context Window (tokens)"
+                  fullWidth
+                  type="number"
+                  value={formState.contextWindow ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const parsed = raw === '' ? undefined : Number(raw);
+                    setFormState(prev => ({
+                      ...prev,
+                      contextWindow: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
+                    }));
+                  }}
+                  helperText="Optional. Enables the context-usage meter in chat (e.g. 200000 for Claude, 128000 for GPT-4o)."
                 />
               </Box>
             </Grid>

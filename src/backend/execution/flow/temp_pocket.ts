@@ -92,21 +92,19 @@ export abstract class BaseNode {
    * @returns 
    */
   public async execWrapper(prepResult: any, node_params?: any): Promise<any> {
+      // Objects are passed as-is: the logger only serializes AFTER the level
+      // check, so these cost nothing when suppressed. Never pre-stringify
+      // conversation-sized payloads in log arguments (eager-arg CPU cost).
       log.debug(`execWrapper called with prepResult`, { prepResult });
-      
-      // Add verbose logging of the input parameters
-      log.verbose('execWrapper input', JSON.stringify({
-        prepResult,
-        node_params
-      }));
-      
+
+      log.verbose('execWrapper input', { prepResult, node_params });
+
       const result = await this.execCore(prepResult, node_params);
-      
+
       log.debug(`execWrapper finished. Result`, { result });
-      
-      // Add verbose logging of the result
-      log.verbose('execWrapper result', JSON.stringify(result));
-      
+
+      log.verbose('execWrapper result', result);
+
       return result;
   }
 
@@ -128,31 +126,30 @@ export abstract class BaseNode {
   public async run(sharedState: any): Promise<{ action: string, prepResult: any, execResult: any }> {
     log.debug(`run called with sharedState`, { sharedState });
     log.debug(`Current flow_params at start of run`, { flow_params: this.flow_params });
-    
-    // Add verbose logging of the input parameters
-    log.verbose('run input', JSON.stringify({
+
+    // Objects passed as-is: serialized by the logger only when the level is
+    // enabled (these payloads carry the whole conversation — eager
+    // JSON.stringify here was a measurable per-step CPU cost).
+    log.verbose('run input', {
       sharedState,
       flow_params: this.flow_params,
       node_params: this.node_params
-    }));
-    
+    });
+
     const prepResult = await this.prep(sharedState, this.node_params); // Pass node_params to prep
-    
-    // Add verbose logging of the prep result
-    log.verbose('run prepResult', JSON.stringify(prepResult));
-    
+
+    log.verbose('run prepResult', prepResult);
+
     const execResult = await this.execWrapper(prepResult, this.node_params); // Pass node_params to execWrapper
-    
-    // Add verbose logging of the exec result
-    log.verbose('run execResult', JSON.stringify(execResult));
-    
+
+    log.verbose('run execResult', execResult);
+
     const action = await this.post(prepResult, execResult, sharedState, this.node_params); // Pass node_params to post
-    
+
     log.debug(`action`, { action });
     log.debug(`run finished. Returning action: ${action}`);
-    
-    // Add verbose logging of the final action
-    log.verbose('run action result', JSON.stringify({ action, prepResult, execResult }));
+
+    log.verbose('run action result', { action, prepResult, execResult });
 
     return { action, prepResult, execResult };
   }

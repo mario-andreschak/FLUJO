@@ -162,7 +162,7 @@ async function processChatCompletionInternal(
   };
 
   log.info(`Returning success response for conv ${result.conversationId}`, { action: result.finalAction, status: responseData.status, flujo, requireApproval, flujodebug, finish_reason });
-  log.verbose(`Final response data for conv ${result.conversationId}`, JSON.stringify(responseData));
+  log.verbose(`Final response data for conv ${result.conversationId}`, responseData);
 
   return NextResponse.json(responseData);
 }
@@ -286,8 +286,11 @@ export function createStreamingResponse(
         if (event.type === 'message') {
           const msg = event.message;
           if (msg && msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.length > 0) {
-            const currentState = FlowExecutor.conversationStates.get(conversationId);
-            send(baseChunk({ content: msg.content, conversation: currentState }, null));
+            // Content chunks carry ONLY the delta. The full conversation state
+            // (the non-standard `conversation` field) is attached once, on the
+            // final chunk in finish() — embedding it per chunk serialized the
+            // entire growing conversation O(chunks) times per run.
+            send(baseChunk({ content: msg.content }, null));
           }
         } else if (event.type === 'run:done') {
           finish(event.status === 'error' ? 'error' : 'completed');

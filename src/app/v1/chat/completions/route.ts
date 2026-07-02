@@ -111,46 +111,48 @@ async function handleRequest(request: NextRequest) {
     // Destructure all flags, including flujodebug
     const { flujo, conversation_id, requireApproval, flujodebug, ...completionData } = parsedData;
 
-    // Create a truncated version of the data for logging
-    const truncatedData = { ...completionData };
-    if (truncatedData.messages && Array.isArray(truncatedData.messages)) {
-      truncatedData.messages = truncatedData.messages.map((msg): any => {
-        if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
-          return {
-            ...msg,
-            content: msg.content.substring(0, 100) + `... (${msg.content.length - 100} more characters)`
-          };
-        }
-        // Multipart content: truncate long text parts and replace image_url
-        // payloads (often huge base64 data URLs) with a short placeholder so
-        // logging never dumps an entire pasted screenshot.
-        if (msg && Array.isArray(msg.content)) {
-          return {
-            ...msg,
-            content: msg.content.map((part: any) => {
-              if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 100) {
-                return { ...part, text: part.text.substring(0, 100) + `... (${part.text.length - 100} more characters)` };
-              }
-              if (part?.type === 'image_url') {
-                const url: string = part.image_url?.url ?? '';
-                const isData = url.startsWith('data:');
-                return { ...part, image_url: { ...part.image_url, url: isData ? `[image data url, ${url.length} chars]` : url } };
-              }
-              return part;
-            })
-          };
-        }
-        return msg;
-      });
-    }
-    
+    // Truncated payload dump for VERBOSE only. Built lazily (thunk): the map
+    // walks every message (and multipart image parts), which is O(history) per
+    // request — previously this ran unconditionally even at LOG_LEVEL=ERROR.
+    // Truncation keeps long content and pasted-screenshot data URLs out of logs.
+    log.verbose('Chat completion request payload (truncated)', () => ({
+      ...completionData,
+      messages: Array.isArray(completionData.messages)
+        ? completionData.messages.map((msg): any => {
+            if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
+              return {
+                ...msg,
+                content: msg.content.substring(0, 100) + `... (${msg.content.length - 100} more characters)`
+              };
+            }
+            if (msg && Array.isArray(msg.content)) {
+              return {
+                ...msg,
+                content: msg.content.map((part: any) => {
+                  if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 100) {
+                    return { ...part, text: part.text.substring(0, 100) + `... (${part.text.length - 100} more characters)` };
+                  }
+                  if (part?.type === 'image_url') {
+                    const url: string = part.image_url?.url ?? '';
+                    const isData = url.startsWith('data:');
+                    return { ...part, image_url: { ...part.image_url, url: isData ? `[image data url, ${url.length} chars]` : url } };
+                  }
+                  return part;
+                })
+              };
+            }
+            return msg;
+          })
+        : completionData.messages,
+    }));
+
     log.info('Request parameters parsed, processing chat completion', {
       requestId,
-      model: truncatedData.model,
-      messageCount: truncatedData.messages?.length || 0,
-      stream: truncatedData.stream,
-      temperature: truncatedData.temperature,
-      max_tokens: truncatedData.max_tokens,
+      model: completionData.model,
+      messageCount: completionData.messages?.length || 0,
+      stream: completionData.stream,
+      temperature: completionData.temperature,
+      max_tokens: completionData.max_tokens,
       flujo,
       conversation_id,
       requireApproval,

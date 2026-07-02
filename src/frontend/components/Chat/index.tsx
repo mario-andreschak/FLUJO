@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'; // Added useCallback
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -10,6 +10,8 @@ import { Grid } from '@mui/material'; // Import Grid for layout
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
+import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
+import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
 import DebuggerCanvas from './DebuggerCanvas';
 import Spinner from '@/frontend/components/shared/Spinner';
@@ -80,6 +82,24 @@ export interface Conversation {
   requireApproval?: boolean;
   createdAt: number;
   updatedAt: number;
+  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error';
+  /** Aggregated token totals for the conversation (accumulated by the backend). */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd?: number;
+    byNode?: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd?: number }>;
+  };
+  /** Context snapshot of the latest model call (provider-reported prompt size
+   *  + the bound model's configured context window, when available). */
+  contextInfo?: {
+    promptTokens: number;
+    completionTokens?: number;
+    nodeId?: string;
+    modelDisplayName?: string;
+    contextWindow?: number;
+  };
 }
 
 // Represents the summary item shown in the list
@@ -146,16 +166,12 @@ const Chat: React.FC = () => {
   const [debugSessionActive, setDebugSessionActive] = useState<boolean>(false);
 
   // Live execution stats, driven by the SSE event stream while a run is active.
-  const [liveStats, setLiveStats] = useState<
-    { totalTokens: number; activeNode: string | null; startedAt: number; lastEventAt: number } | null
-  >(null);
+  const [liveStats, setLiveStats] = useState<LiveRunStats | null>(null);
   // Breakpoint node IDs for the visual debugger (mirrors server state).
   const [breakpoints, setBreakpoints] = useState<string[]>([]);
   // Which conversation currently has an active run (so the live indicator only
   // shows for the conversation being viewed, not for background runs).
   const [loadingConversationId, setLoadingConversationId] = useState<string | null>(null);
-  // Re-render tick (1s) so elapsed/"stuck" indicators update while loading.
-  const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
   // Refs
   const openaiRef = useRef<OpenAI | null>(null);
@@ -383,6 +399,20 @@ const Chat: React.FC = () => {
   const currentConversationSummary = conversationList.find(
     (conv) => conv.id === currentConversationId
   ) || null;
+
+  // Nodes of the conversation's flow, for message attribution + the edit
+  // dropdown. Memoized: a fresh array per render would defeat the memoized
+  // message bubbles (prop identity would change on every SSE event).
+  const availableNodes = useMemo(
+    () =>
+      flows
+        .find(f => f.id === detailedConversation?.flowId)
+        ?.nodes?.map(node => ({
+          id: node.id,
+          label: node.data.label || node.id,
+        })) || [],
+    [flows, detailedConversation?.flowId]
+  );
 
   // Create a new conversation (now persists to backend immediately)
   const createNewConversation = async () => {
@@ -1011,13 +1041,8 @@ const Chat: React.FC = () => {
     };
   }, [closeEventStream]);
 
-  // Tick once per second while loading so elapsed/"stuck" indicators refresh.
-  useEffect(() => {
-    if (!isLoading) return;
-    const t = setInterval(() => setNowTick(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [isLoading]);
-
+  // (The 1s elapsed/"stuck" tick lives inside LiveRunIndicator — keeping it
+  // here re-rendered every message bubble once per second during a run.)
 
   // Send conversation to chat completions API
   // Returns true on success, false on error
@@ -1062,6 +1087,10 @@ const Chat: React.FC = () => {
 
           // Include processNodeId in the message object if it exists
           const processNodeId = msg.processNodeId;
+          // Carry the client message id/timestamp: the backend preserves them,
+          // so the canonical copy keeps the SAME id as the optimistic bubble
+          // and the live view merges instead of duplicating (dedupe is by id).
+          const identity = { id: msg.id, timestamp: msg.timestamp };
 
           // Create properly typed message based on role
           if (msg.role === 'user') {
@@ -1069,45 +1098,51 @@ const Chat: React.FC = () => {
             return {
               role: 'user',
               content,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           if (msg.role === 'assistant') {
             return {
               role: 'assistant',
               content,
               tool_calls: msg.tool_calls,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionAssistantMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionAssistantMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           if (msg.role === 'system') {
             return {
               role: 'system',
               content,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionSystemMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionSystemMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           if (msg.role === 'tool') {
             if (!msg.tool_call_id) {
               return {
                 role: 'user',
                 content: typeof content === 'string' ? `Tool result: ${content}` : content,
+                ...identity,
                 processNodeId // Include processNodeId if it exists
-              } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+              } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
             }
             return {
               role: 'tool',
               content,
               tool_call_id: msg.tool_call_id,
+              ...identity,
               processNodeId // Include processNodeId if it exists
-            } as OpenAI.ChatCompletionToolMessageParam & { processNodeId?: string };
+            } as OpenAI.ChatCompletionToolMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
           }
           // Fallback
           return {
             role: 'user',
             content,
+            ...identity,
             processNodeId // Include processNodeId if it exists
-          } as OpenAI.ChatCompletionUserMessageParam & { processNodeId?: string };
+          } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
         });
 
       // Call the API
@@ -1272,15 +1307,18 @@ const Chat: React.FC = () => {
             // Same content shaping as the send path: string for text/doc/audio,
             // multipart array when image attachments are present.
             const content = buildApiContent(msg);
+            // Same identity carry as the send path: preserved ids keep the
+            // canonical copies mergeable with what the UI already shows.
+            const identity = { id: msg.id, timestamp: msg.timestamp, processNodeId: msg.processNodeId };
             // Create properly typed message based on role
-            if (msg.role === 'user') return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam;
-            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls } as OpenAI.ChatCompletionAssistantMessageParam;
-            if (msg.role === 'system') return { role: 'system', content } as OpenAI.ChatCompletionSystemMessageParam;
+            if (msg.role === 'user') return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
+            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls, ...identity } as OpenAI.ChatCompletionAssistantMessageParam;
+            if (msg.role === 'system') return { role: 'system', content, ...identity } as OpenAI.ChatCompletionSystemMessageParam;
             if (msg.role === 'tool') {
-              if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content } as OpenAI.ChatCompletionUserMessageParam;
-              return { role: 'tool', content, tool_call_id: msg.tool_call_id } as OpenAI.ChatCompletionToolMessageParam;
+              if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
+              return { role: 'tool', content, tool_call_id: msg.tool_call_id, ...identity } as OpenAI.ChatCompletionToolMessageParam;
             }
-            return { role: 'user', content } as OpenAI.ChatCompletionUserMessageParam; // Fallback
+            return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam; // Fallback
           });
 
         // Make the API call with processNodeId in metadata
@@ -1596,12 +1634,20 @@ const Chat: React.FC = () => {
               selected; with no conversation it's confusing (nothing to assign a
               flow to). */}
           {currentConversationId && (
-            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-              <FlowSelector
-                // Remove duplicate selectedFlowId prop
-                selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
-                onSelectFlow={handleFlowSelect}
-                disabled={isDebugPaused} // Disable flow selection when debugging
+            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <FlowSelector
+                  // Remove duplicate selectedFlowId prop
+                  selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+                  onSelectFlow={handleFlowSelect}
+                  disabled={isDebugPaused} // Disable flow selection when debugging
+                />
+              </Box>
+              {/* Token totals + context meter (persisted usage; refreshed with the conversation) */}
+              <ConversationStats
+                usage={detailedConversation?.usage}
+                contextInfo={detailedConversation?.contextInfo}
+                availableNodes={availableNodes}
               />
             </Box>
           )}
@@ -1619,10 +1665,8 @@ const Chat: React.FC = () => {
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
-                availableNodes={flows.find(f => f.id === detailedConversation.flowId)?.nodes?.map(node => ({
-                  id: node.id,
-                  label: node.data.label || node.id
-                })) || []} // Pass available nodes for the selected flow
+                availableNodes={availableNodes} // Memoized nodes for the selected flow
+                conversationId={detailedConversation.id} // Resets the render window on switch
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
                 onEditMessage={handleEditMessage}
@@ -1665,35 +1709,15 @@ const Chat: React.FC = () => {
 
               {/* Live execution indicator (progress, active node, tokens, stop).
                   Only shown for the conversation actually running, so a background
-                  run does not display its status in a different conversation. */}
-              {isLoading && loadingConversationId === currentConversationId && (() => {
-                const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
-                const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
-                const stuck = !!liveStats && sinceLast >= 20;
-                return (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
-                      <Typography variant="body2" color="textSecondary">
-                        {liveStats?.activeNode ? `Running: ${liveStats.activeNode}` : 'Working…'}
-                      </Typography>
-                      <Button
-                        variant="outlined"
-                        color="secondary"
-                        size="small"
-                        onClick={handleCancelRequest}
-                        disabled={!currentConversationId}
-                      >
-                        Stop
-                      </Button>
-                    </Box>
-                    <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
-                      {(liveStats?.totalTokens ?? 0).toLocaleString()} tokens · {elapsed}s elapsed
-                      {stuck ? ` · no activity for ${sinceLast}s — may be stuck` : ''}
-                    </Typography>
-                  </Box>
-                );
-              })()}
+                  run does not display its status in a different conversation. Owns
+                  its own 1s tick so the rest of the tree doesn't re-render. */}
+              {isLoading && loadingConversationId === currentConversationId && (
+                <LiveRunIndicator
+                  liveStats={liveStats}
+                  onStop={handleCancelRequest}
+                  stopDisabled={!currentConversationId}
+                />
+              )}
 
               {/* Error Display */}
               {error && (

@@ -48,8 +48,21 @@ function errorToPlain(err: unknown, depth = 0): unknown {
 function logWithLevel(level: number, filepath: string, message: string, data?: any, overrideLogLevel?: number) {
   // Use the override log level if provided, otherwise use the global setting
   const effectiveLogLevel = typeof overrideLogLevel === 'number' ? overrideLogLevel : CURRENT_LOG_LEVEL;
-  
+
   if (level >= effectiveLogLevel) {
+    // Lazy data: a function is only evaluated when the message will actually be
+    // emitted. Hot paths pass `() => expensiveSerialization()` so a suppressed
+    // level costs nothing. (JS evaluates call arguments eagerly, so passing
+    // JSON.stringify(bigState) directly pays full serialization even at
+    // LOG_LEVEL=ERROR — measured as a real per-step CPU cost on long
+    // conversations. Prefer passing the object itself or a thunk.)
+    if (typeof data === 'function') {
+      try {
+        data = data();
+      } catch {
+        data = '[lazy log data threw]';
+      }
+    }
     const timestamp = new Date().toISOString();
     const logPrefix = `[${timestamp}] [${filepath}]`;
     

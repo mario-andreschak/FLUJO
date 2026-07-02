@@ -169,7 +169,7 @@ export class ModelHandler {
     });
 
     // Add verbose logging of the entire input
-    log.verbose('callModel input', JSON.stringify(input));
+    log.verbose('callModel input', input);
 
     // When approval is required and we have a conversation to surface it on, build
     // a human-in-the-loop gate for self-orchestrating adapters (Claude
@@ -223,7 +223,7 @@ export class ModelHandler {
 
     if (!response.success) {
       // Add verbose logging of the error response
-      log.verbose('callModel error response', JSON.stringify(response));
+      log.verbose('callModel error response', response);
 
       // Ensure we're returning the complete error response with all details
       return {
@@ -325,7 +325,7 @@ export class ModelHandler {
       }
     };
 
-    log.verbose('callModel single step result', JSON.stringify(result));
+    log.verbose('callModel single step result', result);
     return result;
   }
 
@@ -351,7 +351,7 @@ export class ModelHandler {
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
-    log.verbose('generateCompletion input', JSON.stringify({
+    log.verbose('generateCompletion input', ({
       modelId,
       prompt,
       messages,
@@ -426,11 +426,11 @@ export class ModelHandler {
       const adapter = getCompletionAdapter(model);
 
       log.debug(`calling chatcompletion`)
-      log.verbose(`calling chatcompletion now with ADAPTER ${JSON.stringify(model.adapter || 'openai')}`)
-      log.verbose(`calling chatcompletion now with MODEL ${ JSON.stringify(model.name)}`)
-      log.verbose(`calling chatcompletion now with TEMP ${ JSON.stringify(temperature)}`)
-      log.verbose(`calling chatcompletion now with MESSAGES ${ JSON.stringify(apiMessages)}`)
-      log.verbose(`calling chatcompletion now with TOOLS ${ JSON.stringify(sanitizedTools)}`)
+      log.verbose('calling chatcompletion now with ADAPTER', model.adapter || 'openai')
+      log.verbose('calling chatcompletion now with MODEL', model.name)
+      log.verbose('calling chatcompletion now with TEMP', temperature)
+      log.verbose('calling chatcompletion now with MESSAGES', apiMessages)
+      log.verbose('calling chatcompletion now with TOOLS', sanitizedTools)
 
       // --- Log the exact request being sent ---
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
@@ -449,10 +449,10 @@ export class ModelHandler {
       });
 
       // --- Log the raw response received ---
-      log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: JSON.stringify(chatCompletion) }); // Use debug level
+      log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: chatCompletion }); // Use debug level
 
       log.verbose(`chatcompletion returned`) // Keep verbose for backward compatibility if needed
-      log.verbose(`chatcompletion returned ${ JSON.stringify(chatCompletion)}`) // Keep verbose
+      log.verbose('chatcompletion returned', chatCompletion) // Keep verbose
 
       // --- Check for top-level error in the response ---
       // Some providers (like OpenRouter for certain errors) might return a 200 OK
@@ -481,7 +481,7 @@ export class ModelHandler {
                 }
             )
         };
-        log.verbose('generateCompletion returning error from response body', JSON.stringify(errorResult));
+        log.verbose('generateCompletion returning error from response body', errorResult);
         return errorResult;
       }
       // --- End error check ---
@@ -491,7 +491,7 @@ export class ModelHandler {
       // Ensure choices exist before accessing them
       const choice = chatCompletion?.choices?.[0];
       if (!choice) {
-        log.error('API response missing choices array or first choice.', { response: JSON.stringify(chatCompletion) });
+        log.error('API response missing choices array or first choice.', { response: chatCompletion });
         return {
           success: false,
           error: createModelError(
@@ -516,7 +516,7 @@ export class ModelHandler {
       };
 
       // Add verbose logging of the successful result
-      log.verbose('generateCompletion success result', JSON.stringify(result));
+      log.verbose('generateCompletion success result', result);
 
       return result;
     } catch (error) {
@@ -584,7 +584,7 @@ export class ModelHandler {
         };
 
         // Add verbose logging of the API error
-        log.verbose('generateCompletion API error', JSON.stringify(errorResult));
+        log.verbose('generateCompletion API error', errorResult);
 
         return errorResult;
       }
@@ -605,7 +605,7 @@ export class ModelHandler {
       };
 
       // Add verbose logging of the unknown error
-      log.verbose('generateCompletion unknown error', JSON.stringify(errorResult));
+      log.verbose('generateCompletion unknown error', errorResult);
 
       return errorResult;
     }
@@ -620,7 +620,7 @@ export class ModelHandler {
     const { toolCalls, toolNameMap } = input;
 
     // Add verbose logging of the input
-    log.verbose('processToolCalls input', JSON.stringify(input));
+    log.verbose('processToolCalls input', input);
 
     if (!toolCalls || toolCalls.length === 0) {
       const emptyResult: Result<ToolCallProcessingResult> = {
@@ -632,7 +632,7 @@ export class ModelHandler {
       };
 
       // Add verbose logging of the empty result
-      log.verbose('processToolCalls empty result', JSON.stringify(emptyResult));
+      log.verbose('processToolCalls empty result', emptyResult);
 
       return emptyResult;
     }
@@ -760,7 +760,7 @@ export class ModelHandler {
       };
 
       // Add verbose logging of the successful result
-      log.verbose('processToolCalls success result', JSON.stringify(result));
+      log.verbose('processToolCalls success result', result);
 
       return result;
     } catch (error) {
@@ -774,7 +774,7 @@ export class ModelHandler {
       };
 
       // Add verbose logging of the error result
-      log.verbose('processToolCalls error result', JSON.stringify(errorResult));
+      log.verbose('processToolCalls error result', errorResult);
 
       return errorResult;
     }
