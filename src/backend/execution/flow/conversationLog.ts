@@ -256,6 +256,66 @@ export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
   return messages;
 }
 
+// Change signature for the reconcile diff: which fields make a message "the
+// same" across turns. The chat client sends the full history each turn with
+// stable ids; content may be re-encoded (attachments collapse to text/parts),
+// which the persisted state also adopts today — so an upsert on signature
+// change keeps the projection aligned with SharedState semantics.
+function messageSignature(m: FlujoChatMessage): string {
+  return JSON.stringify([
+    m.role,
+    m.content,
+    (m as { tool_calls?: unknown }).tool_calls ?? null,
+    m.disabled ?? false,
+    m.processNodeId ?? null,
+  ]);
+}
+
+/**
+ * Turn-start reconcile: bring the log in line with the state's just-configured
+ * messages. The chat client sends its FULL (possibly pruned or edited) history
+ * every turn and runFlow REPLACES SharedState.messages with it, so the log
+ * cannot assume pure append. Called once per runFlow invocation, after state
+ * configuration and before the run loop:
+ *  - no log yet (brand-new conversation, or a legacy one from before the log
+ *    existed) → bootstrap: the whole current transcript becomes the baseline;
+ *  - log exists → diff current vs the pre-turn messages: changed/new messages
+ *    become 'message' upserts, vanished ids become 'message:removed'.
+ * System-role messages never enter the log. Awaitable: the turn's input is on
+ * disk before the run loop starts.
+ */
+export async function reconcileConversationLog(
+  state: SharedState,
+  previousMessages: FlujoChatMessage[],
+): Promise<void> {
+  if (state.ephemeral) return;
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) return;
+
+  const current = (state.messages ?? []).filter((m) => m.role !== 'system' && !!m.id);
+  const logExists = await hasConversationLog(conversationId);
+  const baseline = logExists
+    ? previousMessages.filter((m) => m.role !== 'system' && !!m.id)
+    : [];
+
+  const baselineById = new Map(baseline.map((m) => [m.id, m]));
+  const currentIds = new Set(current.map((m) => m.id));
+
+  const raws: RawExecutionEvent[] = [];
+  for (const m of current) {
+    const previous = baselineById.get(m.id);
+    if (!previous || messageSignature(previous) !== messageSignature(m)) {
+      raws.push({ type: 'message', message: m });
+    }
+  }
+  for (const m of baseline) {
+    if (!currentIds.has(m.id)) {
+      raws.push({ type: 'message:removed', messageId: m.id });
+    }
+  }
+  await appendRawForState(state, raws);
+}
+
 /** True if a persisted log exists for this conversation. */
 export async function hasConversationLog(conversationId: string): Promise<boolean> {
   if (!SAFE_ID.test(conversationId)) return false;

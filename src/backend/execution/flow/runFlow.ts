@@ -1,6 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { reconcileConversationLog } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
@@ -275,6 +276,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     };
   }
 
+  // Snapshot the pre-turn messages for the log reconcile below: the incoming
+  // request may REPLACE the message list (the chat client sends its full,
+  // possibly pruned/edited history each turn), and the append-only log needs
+  // the diff, not the replacement.
+  const messagesBeforeTurn: FlujoChatMessage[] = [...(sharedState.messages ?? [])];
+
   // --- Configure State Based on Source ---
   if (stateSource === 'new') {
     // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
@@ -315,12 +322,16 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // The chat frontend sends its optimistic message id; keeping it means the
     // canonical copy MERGES with the optimistic bubble in the live view
     // instead of appearing as a duplicate (dedupe there is by message id).
-    const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
-      ...msg,
-      id: (msg as any).id || crypto.randomUUID(),
-      timestamp: (msg as any).timestamp || Date.now(),
-      processNodeId: (msg as any).processNodeId || undefined,
-    }));
+    // depth>0 messages are display-only subflow steps served by the projection
+    // — they must never (re-)enter the parent transcript / model context.
+    const initialMessages: FlujoChatMessage[] = (data.messages || [])
+      .filter(msg => !((msg as any).depth > 0))
+      .map(msg => ({
+        ...msg,
+        id: (msg as any).id || crypto.randomUUID(),
+        timestamp: (msg as any).timestamp || Date.now(),
+        processNodeId: (msg as any).processNodeId || undefined,
+      }));
     sharedState.messages = initialMessages;
 
     try {
@@ -341,15 +352,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   } else { // stateSource is 'storage' or 'memory'
     if (data.messages && data.messages.length > 0) {
-      sharedState.messages = data.messages.map(msg => {
-        const flujoMsg: FlujoChatMessage = {
-          ...msg,
-          id: (msg as any).id || crypto.randomUUID(),
-          timestamp: (msg as any).timestamp || Date.now(),
-          processNodeId: (msg as any).processNodeId || undefined,
-        };
-        return flujoMsg;
-      });
+      // As above: drop display-only subflow step messages (depth>0) so they
+      // can never round-trip from the projection into the parent transcript.
+      sharedState.messages = data.messages
+        .filter(msg => !((msg as any).depth > 0))
+        .map(msg => {
+          const flujoMsg: FlujoChatMessage = {
+            ...msg,
+            id: (msg as any).id || crypto.randomUUID(),
+            timestamp: (msg as any).timestamp || Date.now(),
+            processNodeId: (msg as any).processNodeId || undefined,
+          };
+          return flujoMsg;
+        });
       log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
     }
     if (userTurn || sharedState.debugMode === undefined) {
@@ -363,6 +378,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         sharedState.executionTrace = [];
       }
     }
+  }
+
+  // --- Bring the append-only conversation log in line with this turn's input ---
+  // Bootstraps the log for brand-new/legacy conversations and records the diff
+  // (new turns, edits, pruned messages) for logged ones, BEFORE any run event
+  // is emitted. Ephemeral runs are refused inside. Advisory on failure: the
+  // legacy SharedState persistence below still covers the conversation.
+  try {
+    await reconcileConversationLog(sharedState, messagesBeforeTurn);
+  } catch (error) {
+    log.warn(`Conversation-log reconcile failed for ${effectiveConvId}; continuing`, error);
   }
 
   // --- Direct a new user turn to its intended node (one-time, at turn start) ---

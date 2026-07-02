@@ -8,6 +8,9 @@ const createJestConfig = nextJest({ dir: './' });
 /** @type {import('jest').Config} */
 const config = {
   testEnvironment: 'node',
+  // Redirect the conversation-log store to a temp dir so bus emissions in
+  // tests never write JSONL files into the repo's db/.
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },

@@ -3,6 +3,12 @@ import { promises as fs } from 'fs'; // Import fs promises
 import path from 'path'; // Import path
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import {
+  readConversationLog,
+  projectMessages,
+  flushConversationLog,
+  deleteConversationLog,
+} from '@/backend/execution/flow/conversationLog';
 import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
 import { StorageKey } from '@/shared/types/storage';
@@ -116,12 +122,28 @@ export async function GET(
 
     // 3. Handle based on whether state was found
     if (sharedState) {
-      // --- Ensure all messages have IDs before returning ---
-      const messagesWithIds = (sharedState.messages || []).map(msg => ({
-        ...msg,
-        id: msg.id || crypto.randomUUID() // Add ID if missing
-      }));
-      // --- End ID check ---
+      // --- Resolve the displayed messages ---
+      // Preferred source: the append-only conversation log's projection
+      // (execution-core v2 Phase 3) — it carries attribution/depth (nested
+      // subflow steps) and never contains node system prompts. Conversations
+      // from before the log existed (or whose log is missing) fall back to the
+      // legacy SharedState messages. System-role messages are model plumbing
+      // and are excluded from the displayed transcript on BOTH paths.
+      let displayedMessages: SharedState['messages'];
+      await flushConversationLog(conversationId);
+      const logEvents = await readConversationLog(conversationId);
+      const projected = logEvents ? projectMessages(logEvents) : [];
+      if (projected.length > 0) {
+        displayedMessages = projected;
+      } else {
+        displayedMessages = (sharedState.messages || [])
+          .filter(msg => msg.role !== 'system')
+          .map(msg => ({
+            ...msg,
+            id: msg.id || crypto.randomUUID() // Add ID if missing (legacy data)
+          }));
+      }
+      const messagesWithIds = displayedMessages;
 
       // Use variable for logging
       log.info(`Returning conversation state`, { requestId, conversationId, stateSource, messageCount: messagesWithIds.length, status: sharedState.status });
@@ -299,6 +321,9 @@ export async function DELETE(
       log.debug(`Removed conversation state from memory`, { requestId, conversationId });
     }
 
+    // Remove the append-only conversation log alongside the state (idempotent).
+    await deleteConversationLog(conversationId);
+
     return new Response(null, { status: 204 }); // Success, No Content
 
   } catch (error: any) {
@@ -317,6 +342,8 @@ export async function DELETE(
         FlowExecutor.conversationStates.delete(conversationId);
         log.debug(`Removed potentially orphaned conversation state from memory`, { requestId, conversationId });
       }
+      // The log may exist even when the state file is already gone.
+      await deleteConversationLog(conversationId);
       return new Response(null, { status: 204 }); // Success, No Content
     }
 
