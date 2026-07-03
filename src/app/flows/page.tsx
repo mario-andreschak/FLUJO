@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Box, 
   Typography, 
@@ -22,7 +22,7 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
-import FlowBuilder from '@/frontend/components/Flow/FlowManager/FlowBuilder';
+import FlowBuilder, { FlowBuilderHandle } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -39,6 +39,7 @@ const FlowsPage = () => {
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const flowBuilderRef = useRef<FlowBuilderHandle>(null);
   
   // Copy flow dialog state
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
@@ -91,10 +92,16 @@ const FlowsPage = () => {
     setIsEditing(true); // Auto-enter edit mode when a flow is selected
   }, []);
   
-  // Handle back to dashboard
+  // Handle back to dashboard — routed through the builder's navigation
+  // guard so unsaved changes get a Save/Discard dialog first.
   const handleBackToDashboard = useCallback(() => {
     log.debug('Returning to dashboard');
-    setIsEditing(false);
+    const leave = () => setIsEditing(false);
+    if (flowBuilderRef.current) {
+      flowBuilderRef.current.requestNavigation(leave);
+    } else {
+      leave();
+    }
   }, []);
   
   // Show snackbar notification
@@ -338,11 +345,11 @@ const FlowsPage = () => {
           <Box sx={{ height: '100%' }}>
             <FlowBuilder
               key={selectedFlow}
+              ref={flowBuilderRef}
               initialFlow={selectedFlowData}
               onSave={handleSaveFlow}
               onDelete={handleDeleteFlow}
               allFlows={flows}
-              onSelectFlow={setSelectedFlow}
             />
           </Box>
         </Fade>

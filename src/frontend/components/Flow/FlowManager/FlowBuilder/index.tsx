@@ -86,13 +86,24 @@ interface FlowBuilderProps {
   onSave: (flow: Flow) => void;
   onDelete: (flowId: string) => void;
   allFlows: Flow[];
-  onSelectFlow?: (flowId: string | null) => void;
+}
+
+// Imperative handle for the parent page: navigation away from the builder
+// (e.g. back to the dashboard) must go through requestNavigation so unsaved
+// changes get a Save/Discard dialog instead of being silently dropped.
+export interface FlowBuilderHandle {
+  requestNavigation: (navigate: () => void) => void;
 }
 
 // Dialog types for save/copy/rename
 type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
 
-export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectFlow }: FlowBuilderProps) => {
+// What handleSave actually did — callers that navigate afterwards must only
+// proceed on 'saved' ('rename-dialog' means the save was diverted into the
+// rename dialog, 'invalid-name' means nothing was saved).
+type SaveResult = 'saved' | 'invalid-name' | 'rename-dialog';
+
+export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, allFlows }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
@@ -120,7 +131,9 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isHistoryAction, setIsHistoryAction] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [pendingFlowId, setPendingFlowId] = useState<string | null>(null);
+  // Navigation deferred by the unsaved-changes dialog; runs on Save/Discard,
+  // cleared on Cancel.
+  const pendingNavigationRef = useRef<(() => void) | null>(null);
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
@@ -255,15 +268,15 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
   };
 
   // Handle save flow
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback((): SaveResult => {
     log.debug(`handleSave: Attempting to save flow "${flowName}"`);
-    
+
     // Validate flow name
     const error = validateFlowName(flowName);
     if (error) {
       log.warn(`handleSave: Invalid flow name - ${error}`);
       setFlowNameError(error);
-      return;
+      return 'invalid-name';
     }
     
     // Ensure there's at least a Start node in the flow
@@ -290,49 +303,36 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       setDialogType('rename');
       setNewFlowName(flowName);
       setDialogOpen(true);
-      return;
+      return 'rename-dialog';
     }
-    
+
     const flow: Flow = {
       id: initialFlow?.id || flowService.createNewFlow().id,
       name: flowName,
       nodes: flowNodes,
       edges,
     };
-    
+
     log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
     onSave(flow);
     setHasUnsavedChanges(false);
+    return 'saved';
   }, [flowName, nodes, edges, initialFlow, onSave, allFlows]);
 
-  // Handle flow selection with unsaved changes check
-  const handleFlowSelection = useCallback((flowId: string | null) => {
-    if (hasUnsavedChanges) {
-      setPendingFlowId(flowId);
-      setDialogType('unsaved');
-      setDialogOpen(true);
-    } else if (onSelectFlow) {
-      onSelectFlow(flowId);
-    }
-  }, [hasUnsavedChanges, onSelectFlow]);
-
-  // Export the handleFlowSelection function to be used by the parent component
-  useEffect(() => {
-    if (onSelectFlow) {
-      // This is a workaround to expose the handleFlowSelection function
-      // We're overriding the onSelectFlow prop with our wrapped version
-      const originalOnSelectFlow = onSelectFlow;
-      (onSelectFlow as any).__wrapped = true;
-      
-      if (!(originalOnSelectFlow as any).__wrapped) {
-        const wrappedOnSelectFlow = (flowId: string | null) => {
-          handleFlowSelection(flowId);
-        };
-        (wrappedOnSelectFlow as any).__wrapped = true;
-        onSelectFlow = wrappedOnSelectFlow;
+  // Navigation guard: the parent must route "leave the builder" actions
+  // (back to dashboard, switching flows) through here so unsaved changes get
+  // a Save/Discard dialog instead of being silently dropped.
+  React.useImperativeHandle(ref, () => ({
+    requestNavigation: (navigate: () => void) => {
+      if (hasUnsavedChanges) {
+        pendingNavigationRef.current = navigate;
+        setDialogType('unsaved');
+        setDialogOpen(true);
+      } else {
+        navigate();
       }
-    }
-  }, [handleFlowSelection, onSelectFlow]);
+    },
+  }), [hasUnsavedChanges]);
 
   // Handle delete flow
   const handleDelete = useCallback(() => {
@@ -360,14 +360,24 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
     onSave(newFlow);
   }, [onSave]);
   
-  // Handle dialog close
+  // Run and clear the navigation deferred by the unsaved-changes dialog.
+  const runPendingNavigation = () => {
+    const navigate = pendingNavigationRef.current;
+    pendingNavigationRef.current = null;
+    if (navigate) {
+      navigate();
+    }
+  };
+
+  // Handle dialog close (cancel): a deferred navigation is abandoned.
   const handleDialogClose = () => {
+    pendingNavigationRef.current = null;
     setDialogOpen(false);
     setDialogType('none');
     setNewFlowName('');
     setNewFlowNameError(null);
   };
-  
+
   // Handle dialog confirm
   const handleDialogConfirm = () => {
     // Validate new flow name
@@ -376,7 +386,7 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       setNewFlowNameError(error);
       return;
     }
-    
+
     if (dialogType === 'duplicate') {
       // Copy the flow with a new name
       if (initialFlow) {
@@ -392,33 +402,35 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       };
       onSave(flow);
       setHasUnsavedChanges(false);
-    } else if (dialogType === 'unsaved') {
-      // User confirmed to discard changes
-      if (onSelectFlow && pendingFlowId !== undefined) {
-        onSelectFlow(pendingFlowId);
-        setHasUnsavedChanges(false);
-      }
+      // If the rename was reached from "Save Changes" in the unsaved-changes
+      // dialog, the save is now done — continue the interrupted navigation.
+      runPendingNavigation();
     }
-    
+
     handleDialogClose();
   };
 
   // Handle discard changes and continue
   const handleDiscardAndContinue = () => {
-    if (onSelectFlow && pendingFlowId !== undefined) {
-      onSelectFlow(pendingFlowId);
-      setHasUnsavedChanges(false);
-    }
+    setHasUnsavedChanges(false);
+    runPendingNavigation();
     handleDialogClose();
   };
 
-  // Handle save and continue
+  // Handle save and continue: only navigate when something was actually
+  // saved — an invalid name or a rename diversion must not lose the edits.
   const handleSaveAndContinue = () => {
-    handleSave();
-    if (onSelectFlow && pendingFlowId !== undefined) {
-      onSelectFlow(pendingFlowId);
+    const result = handleSave();
+    if (result === 'saved') {
+      runPendingNavigation();
+      handleDialogClose();
+    } else if (result === 'invalid-name') {
+      // Nothing saved; keep the user in the builder so they can fix the
+      // name (the error is shown on the flow-name field).
+      handleDialogClose();
     }
-    handleDialogClose();
+    // 'rename-dialog': handleSave switched this dialog to the rename flow;
+    // keep the deferred navigation so it continues after a successful rename.
   };
   
   // Handle new flow name change in dialog
@@ -835,6 +847,8 @@ export const FlowBuilder = ({ initialFlow, onSave, onDelete, allFlows, onSelectF
       </Dialog>
     </FlowBuilderContainer>
   );
-};
+});
+
+FlowBuilder.displayName = 'FlowBuilder';
 
 export default FlowBuilder;
