@@ -132,6 +132,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // Navigation deferred by the unsaved-changes dialog; runs on Save/Discard,
   // cleared on Cancel.
   const pendingNavigationRef = useRef<(() => void) | null>(null);
+  // True while a node drag is in flight — history snapshots wait for the end
+  // of the gesture.
+  const isDraggingRef = useRef(false);
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
@@ -181,26 +184,42 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
   }, [initialFlow]);
   
-  // Add to history when nodes or edges change
+  // Keys that don't represent a real edit: selection/drag/measurement state
+  // must create neither an undo step nor "unsaved changes".
+  const serializeForHistory = (entry: HistoryEntry) =>
+    JSON.stringify(entry, (key, value) =>
+      key === 'selected' || key === 'dragging' || key === 'measured' ||
+      key === 'width' || key === 'height' || key === 'positionAbsolute' || key === 'resizing'
+        ? undefined
+        : value
+    );
+
+  // Add to history when nodes or edges change. While a node is being dragged
+  // this is suppressed (React Flow emits a position change per pointer move);
+  // one entry is recorded when the drag ends, so Undo rewinds whole gestures
+  // instead of a few pixels at a time and large flows don't stutter on drag.
   useEffect(() => {
     if (isHistoryAction) {
       setIsHistoryAction(false);
       return;
     }
-    
+    if (isDraggingRef.current) {
+      return;
+    }
+
     // Create new history entry
     const newEntry: HistoryEntry = {
       nodes: [...nodes],
       edges: [...edges]
     };
-    
+
     // Truncate history if we're not at the end
     const newHistory = history.slice(0, historyIndex + 1);
-    
+
     // Only add to history if there's a real change
     if (
-      historyIndex < 0 || 
-      JSON.stringify(newEntry) !== JSON.stringify(newHistory[historyIndex])
+      historyIndex < 0 ||
+      serializeForHistory(newEntry) !== serializeForHistory(newHistory[historyIndex])
     ) {
       setHistory([...newHistory, newEntry]);
       setHistoryIndex(historyIndex + 1);
@@ -457,6 +476,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   // Memoized handlers for better performance
   const onNodesChange = useCallback((changes: NodeChange[]) => {
+    // Track drag state so the history effect snapshots once per gesture.
+    for (const change of changes) {
+      if (change.type === 'position') {
+        isDraggingRef.current = change.dragging === true;
+      }
+    }
     setNodes((nds) => applyNodeChanges(changes, nds) as FlowNode[]);
   }, []);
 

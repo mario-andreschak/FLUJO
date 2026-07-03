@@ -73,8 +73,10 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   handleRestartServer,
   // flowNodes // Removed if not needed
 }) => {
-  // State to track selected server node ID
-  const [selectedServerNodeId, setSelectedServerNodeId] = useState<string | null>(null);
+  // The selected server node is derived — the parent owns the selection, and
+  // the first connected node is the default (no mirrored local state to
+  // drift).
+  const selectedServerNodeId = selectedToolServerNodeId ?? connectedMcpNodes[0]?.nodeId ?? null;
   // State to track retrying servers (use serverName as key for API calls)
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
   // State to track search query
@@ -138,10 +140,9 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     }
   };
 
-  // Handle server tab selection (by nodeId)
+  // Handle server tab selection (by nodeId) — the parent owns the selection
   const handleServerSelect = (nodeId: string) => {
-    setSelectedServerNodeId(nodeId);
-    handleSelectToolServer(nodeId); // Notify parent about the selected nodeId
+    handleSelectToolServer(nodeId);
   };
 
   // Handle retry server with better UI feedback
@@ -218,18 +219,13 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   };
 
 
-  // Auto-select the first server node when the component mounts or nodes change
+  // Tell the parent about the default selection so it loads that server's
+  // tools (the rendered selection is already derived above).
   useEffect(() => {
-    // Use selectedToolServerNodeId from props for initial check
-    if (connectedMcpNodes.length > 0 && !selectedToolServerNodeId && !selectedServerNodeId) {
-      const firstNodeId = connectedMcpNodes[0].nodeId;
-      setSelectedServerNodeId(firstNodeId);
-      handleSelectToolServer(firstNodeId); // Notify parent
-    } else if (selectedToolServerNodeId && selectedToolServerNodeId !== selectedServerNodeId) {
-      // Sync local state if prop changes
-      setSelectedServerNodeId(selectedToolServerNodeId);
+    if (connectedMcpNodes.length > 0 && !selectedToolServerNodeId) {
+      handleSelectToolServer(connectedMcpNodes[0].nodeId);
     }
-  }, [connectedMcpNodes, selectedToolServerNodeId, selectedServerNodeId, handleSelectToolServer]);
+  }, [connectedMcpNodes, selectedToolServerNodeId, handleSelectToolServer]);
 
   // Determine the currently selected node details
   const currentSelectedMcpNode = connectedMcpNodes.find(node => node.nodeId === selectedServerNodeId);
