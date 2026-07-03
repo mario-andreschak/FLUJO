@@ -305,9 +305,9 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
 
   return {
     connectedMcpNodes, // Return the processed nodes list
+    allServers, // Every configured server (for the connect-a-server shortcut)
     isLoadingServers, // Keep overall loading state if needed
     selectedToolServerNodeId, // Return the selected node ID
-    // selectedNodeId, // Removed as redundant
     serverToolsMap,
     serverStatuses,
     isLoadingTools,

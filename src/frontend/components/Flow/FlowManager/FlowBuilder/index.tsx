@@ -40,6 +40,8 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
+import { mcpService } from '@/frontend/services/mcp';
+import { createEdgeFromConnection } from './Canvas/utils/edgeUtils';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { FlowValidationButton } from './FlowValidationButton';
@@ -526,6 +528,52 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, []);
   
+  // Connect-a-server shortcut from the Process node properties modal: create
+  // an MCP node bound to the server, place it next to the process node, and
+  // wire it via the MCP handles — without the user leaving the modal.
+  const handleConnectMcpServer = useCallback(async (processNodeId: string, serverName: string) => {
+    const processNode = nodes.find(n => n.id === processNodeId);
+    if (!processNode) {
+      log.warn(`handleConnectMcpServer: process node ${processNodeId} not found`);
+      return;
+    }
+
+    // Enable every tool the server currently provides (the same default the
+    // MCP node properties modal applies when it first loads a bound server).
+    let enabledTools: string[] = [];
+    try {
+      const result = await mcpService.listServerTools(serverName);
+      if (!result.error && Array.isArray(result.tools)) {
+        enabledTools = result.tools.map((t: { name: string }) => t.name);
+      }
+    } catch (error) {
+      log.warn(`handleConnectMcpServer: could not load tools for ${serverName}`, error);
+    }
+
+    // Stack additional servers below the previous one on the right side.
+    const connectedMcpEdgeCount = edges.filter(e =>
+      (e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp' &&
+      (e.source === processNodeId || e.target === processNodeId)
+    ).length;
+    const mcpNode = flowService.createNode('mcp', {
+      x: processNode.position.x + 350,
+      y: processNode.position.y + connectedMcpEdgeCount * 120,
+    });
+    mcpNode.data.label = serverName;
+    mcpNode.data.properties = { ...(mcpNode.data.properties ?? {}), boundServer: serverName, enabledTools };
+
+    const edge = createEdgeFromConnection({
+      source: processNodeId,
+      sourceHandle: 'process-right-mcp',
+      target: mcpNode.id,
+      targetHandle: 'mcp-left',
+    }, [...nodes, mcpNode]);
+
+    setNodes(nds => [...nds, mcpNode]);
+    setEdges(eds => [...eds, edge]);
+    log.info(`Connected MCP server "${serverName}" to process node ${processNodeId}`);
+  }, [nodes, edges]);
+
   // Open the appropriate properties modal based on node type
   const openNodeProperties = useCallback((node: FlowNode) => {
     log.debug('Opening properties for node:', node);
@@ -694,7 +742,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       </ReactFlowProvider>
       
       {/* Node Properties Modals */}
-      <ProcessNodePropertiesModal 
+      <ProcessNodePropertiesModal
         open={processModalOpen}
         node={nodeToEdit}
         onClose={() => setProcessModalOpen(false)}
@@ -702,6 +750,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         flowEdges={edges}
         flowNodes={nodes}
         flowId={initialFlow?.id}
+        onConnectMcpServer={(serverName) => {
+          if (nodeToEdit) {
+            handleConnectMcpServer(nodeToEdit.id, serverName);
+          }
+        }}
       />
       
       <MCPNodePropertiesModal 

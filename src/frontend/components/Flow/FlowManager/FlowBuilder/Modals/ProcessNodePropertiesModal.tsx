@@ -35,7 +35,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
-export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEdges = [], flowNodes = [], flowId }: ProcessNodePropertiesModalProps) => {
+export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEdges = [], flowNodes = [], flowId, onConnectMcpServer }: ProcessNodePropertiesModalProps) => {
   log.debug('ProcessNodePropertiesModal rendered with:', { node: node, flowId: flowId });
   const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
   const [promptTemplate, setPromptTemplate] = useState('');
@@ -54,6 +54,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
 
   const {
     connectedMcpNodes,
+    allServers,
     isLoadingServers,
     selectedToolServerNodeId,
     serverToolsMap,
@@ -256,6 +257,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 <ServerTools
                   isLoadingServers={isLoadingServers}
                   connectedMcpNodes={connectedMcpNodes}
+                  availableServers={allServers}
+                  onConnectMcpServer={onConnectMcpServer}
                   serverStatuses={serverStatuses}
                   serverToolsMap={serverToolsMap}
                   isLoadingTools={isLoadingTools}

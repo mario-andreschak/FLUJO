@@ -18,7 +18,10 @@ import {
   Tab,
   Tabs,
   Badge,
-  Grid
+  Grid,
+  Button,
+  Menu,
+  MenuItem
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -42,6 +45,10 @@ interface ConnectedMcpNode {
 interface ServerToolsProps {
   isLoadingServers: boolean; // Keep for overall loading state if needed, or remove if handled per node
   connectedMcpNodes: ConnectedMcpNode[]; // Use this instead of connectedServers
+  /** Every configured MCP server, for the connect-a-server shortcut. */
+  availableServers?: Array<{ name: string; status?: string }>;
+  /** Adds an MCP node for the given server and wires it to this Process node. */
+  onConnectMcpServer?: (serverName: string) => void;
   serverToolsMap: Record<string, any[]>; // Map tools by serverName (might need adjustment if tools are fetched per nodeId)
   serverStatuses: Record<string, string>; // Map status by serverName (might need adjustment)
   isLoadingTools: Record<string, boolean>; // Map loading by serverName (might need adjustment)
@@ -60,6 +67,8 @@ interface ServerToolsProps {
 const ServerTools: React.FC<ServerToolsProps> = ({
   isLoadingServers,
   connectedMcpNodes, // Use connectedMcpNodes
+  availableServers,
+  onConnectMcpServer,
   serverToolsMap,
   serverStatuses,
   isLoadingTools,
@@ -79,6 +88,44 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   const selectedServerNodeId = selectedToolServerNodeId ?? connectedMcpNodes[0]?.nodeId ?? null;
   // State to track retrying servers (use serverName as key for API calls)
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
+  // Anchor for the connect-a-server menu
+  const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
+
+  // Servers the user could still connect to this node (already-connected
+  // ones are hidden — the shortcut is a friction reducer, not a way to wire
+  // the same server twice).
+  const connectableServers = (availableServers ?? []).filter(
+    server => !connectedMcpNodes.some(node => node.serverName === server.name)
+  );
+  const canConnectServer = !!onConnectMcpServer && connectableServers.length > 0;
+
+  const handleConnectServer = (serverName: string) => {
+    setAddMenuAnchor(null);
+    onConnectMcpServer?.(serverName);
+  };
+
+  const connectServerMenu = (
+    <Menu
+      open={!!addMenuAnchor}
+      anchorEl={addMenuAnchor}
+      onClose={() => setAddMenuAnchor(null)}
+    >
+      {connectableServers.map(server => (
+        <MenuItem key={server.name} onClick={() => handleConnectServer(server.name)}>
+          <Box
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              mr: 1,
+              bgcolor: server.status === 'connected' ? 'success.main' : 'text.disabled',
+            }}
+          />
+          {server.name}
+        </MenuItem>
+      ))}
+    </Menu>
+  );
   // State to track search query
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -248,18 +295,34 @@ const ServerTools: React.FC<ServerToolsProps> = ({
             No MCP nodes connected to this Process node.
           </Typography>
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
-            Connect MCP nodes to this Process node using the side handles to access their tools.
+            {canConnectServer
+              ? 'Pick a server below — the MCP node is added to the flow and wired up for you.'
+              : 'Connect MCP nodes to this Process node using the side handles to access their tools.'}
           </Typography>
+          {canConnectServer && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={(e) => setAddMenuAnchor(e.currentTarget)}
+              >
+                Connect MCP Server
+              </Button>
+            </Box>
+          )}
+          {connectServerMenu}
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, height: 'calc(100% - 40px)' }}>
-          {/* Server tabs (using nodeId) */}
+          {/* Server tabs (using nodeId), plus the connect-a-server shortcut */}
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, borderBottom: 1, borderColor: 'divider' }}>
           <Tabs
             value={selectedServerNodeId || connectedMcpNodes[0]?.nodeId || ''}
             onChange={(_, value) => handleServerSelect(value)}
             variant="scrollable"
             scrollButtons="auto"
-            sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+            sx={{ flexGrow: 1 }}
           >
             {connectedMcpNodes.map((mcpNode: ConnectedMcpNode) => {
               if (!mcpNode || !mcpNode.nodeId || !mcpNode.serverName) {
@@ -311,6 +374,15 @@ const ServerTools: React.FC<ServerToolsProps> = ({
               );
             })}
           </Tabs>
+          {canConnectServer && (
+            <Tooltip title="Connect another MCP server">
+              <IconButton size="small" onClick={(e) => setAddMenuAnchor(e.currentTarget)} sx={{ ml: 1 }}>
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+          {connectServerMenu}
+          </Box>
 
           {/* Server actions for the selected node */}
           {currentSelectedMcpNode && currentSelectedServerName && (
