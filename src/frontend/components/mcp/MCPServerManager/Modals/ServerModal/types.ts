@@ -24,8 +24,16 @@ export interface RepoInfo {
 export interface TabProps {
   initialConfig?: MCPServerConfig | null;
   onAdd: (config: MCPServerConfig) => void;
-  onUpdate?: (config: MCPServerConfig) => void;
+  // options.autoTestRun marks a handoff whose config is ready to run as-is
+  // (marketplace one-click install): the local tab then skips straight to a test run
+  onUpdate?: (config: MCPServerConfig, options?: { autoTestRun?: boolean }) => void;
   onClose: () => void;
   onRestartAfterUpdate?: (serverName: string) => void;
   setActiveTab?: (tab: 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => void;
+  /** When true (marketplace handoff), collapse define/build as done and auto-start a test run */
+  autoTestRun?: boolean;
+  /** GitHub tab: prefill for the repository URL field (marketplace → manual install handoff) */
+  initialGitHubUrl?: string;
+  /** Marketplace tab: open the GitHub tab prefilled with this repository URL */
+  onOpenInGitHubTab?: (repoUrl: string) => void;
 }

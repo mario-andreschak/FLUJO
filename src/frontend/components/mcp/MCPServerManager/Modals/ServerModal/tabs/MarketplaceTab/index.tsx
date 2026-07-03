@@ -53,7 +53,8 @@ const PAGE_SIZE = 30;
 const MarketplaceTab: React.FC<TabProps> = ({
   onClose,
   setActiveTab,
-  onUpdate
+  onUpdate,
+  onOpenInGitHubTab
 }) => {
   const theme = useTheme();
   const [searchInput, setSearchInput] = useState<string>('');
@@ -129,7 +130,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
     const missing = missingRequiredInputs(option);
 
     if (onUpdate) {
-      onUpdate(config as MCPServerConfig);
+      // autoTestRun: registry configs need no manual install/build step, so the
+      // local tab can start the test run (which performs the install) right away
+      onUpdate(config as MCPServerConfig, { autoTestRun: true });
     }
     setSelectedServer(null);
     if (setActiveTab) {
@@ -142,6 +145,27 @@ const MarketplaceTab: React.FC<TabProps> = ({
           ? `Configuration prepared. Fill in the required value(s) before saving: ${missing.join(', ')}`
           : 'Configuration prepared. Review and save it in the Local Server tab.'
     });
+  };
+
+  // Repository URL if it points at github.com — the GitHub tab supports nothing else
+  // (registry entries may also live on e.g. GitLab)
+  const githubRepoUrl = (server: RegistryServer): string | null => {
+    const url = server.repository?.url;
+    if (!url) return null;
+    try {
+      return new URL(url).hostname === 'github.com' ? url : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // "Manual setup" fallback: hand the repository URL to the GitHub tab, where the
+  // user can clone the repo and configure the server from there
+  const handleManualInstall = (server: RegistryServer) => {
+    const repoUrl = githubRepoUrl(server);
+    if (!repoUrl || !onOpenInGitHubTab) return;
+    setSelectedServer(null);
+    onOpenInGitHubTab(repoUrl);
   };
 
   const handleServerClick = (server: RegistryServer) => {
@@ -385,10 +409,26 @@ const MarketplaceTab: React.FC<TabProps> = ({
                   </List>
                 </>
               ) : (
-                <Alert severity="info">
-                  This server does not offer an installation method FLUJO can set up automatically.
-                  Check its documentation for manual setup instructions.
-                </Alert>
+                <>
+                  <Alert severity="info">
+                    This server does not offer an installation method FLUJO can set up automatically.
+                    Check its documentation for manual setup instructions.
+                    {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
+                      <> You can still try to clone it directly from GitHub, but additional steps
+                      might still be required.</>
+                    )}
+                  </Alert>
+                  {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
+                    <Button
+                      variant="contained"
+                      startIcon={<GitHubIcon />}
+                      onClick={() => handleManualInstall(selectedServer)}
+                      sx={{ mt: 2 }}
+                    >
+                      Try manual installation
+                    </Button>
+                  )}
+                </>
               )}
 
               <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
