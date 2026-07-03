@@ -17,9 +17,21 @@ const log = createLogger('utils/mcp/configparse/index');
  */
 export async function parseRepositoryConfig(options: ConfigParseOptions): Promise<ConfigParseResult> {
   const { repoPath, repoName } = options;
-  
+
   log.debug(`Parsing repository configuration for ${repoPath}`);
-  
+
+  // README first: when the author documents an explicit MCP config block
+  // (an mcpServers JSON snippet), that is the intended way to run the server.
+  // This is the same logic as the Local Server tab's "Parse README" button, so
+  // auto-detection and manual README parsing can't disagree. Language-specific
+  // filesystem heuristics below only kick in when the README doesn't spell out
+  // a runnable config.
+  const readmeResult = await parseReadmeConfig(repoPath, repoName);
+  if (readmeResult.detected && readmeResult.foundExplicitConfig && readmeResult.runCommand) {
+    log.debug(`Explicit configuration found in README for ${repoPath}`);
+    return readmeResult;
+  }
+
   // Try TypeScript/JavaScript parser first
   log.debug(`Trying TypeScript/JavaScript parser for ${repoPath}`);
   const tsResult = await parseTypeScriptConfig(options);
@@ -27,7 +39,7 @@ export async function parseRepositoryConfig(options: ConfigParseOptions): Promis
     log.debug(`TypeScript/JavaScript configuration detected for ${repoPath}`);
     return tsResult;
   }
-  
+
   // Try Python parser
   log.debug(`Trying Python parser for ${repoPath}`);
   const pythonResult = await parsePythonConfig(options);
@@ -35,7 +47,7 @@ export async function parseRepositoryConfig(options: ConfigParseOptions): Promis
     log.debug(`Python configuration detected for ${repoPath}`);
     return pythonResult;
   }
-  
+
   // Try Java parser
   log.debug(`Trying Java parser for ${repoPath}`);
   const javaResult = await parseJavaConfig(options);
@@ -43,7 +55,7 @@ export async function parseRepositoryConfig(options: ConfigParseOptions): Promis
     log.debug(`Java configuration detected for ${repoPath}`);
     return javaResult;
   }
-  
+
   // Try Kotlin parser
   log.debug(`Trying Kotlin parser for ${repoPath}`);
   const kotlinResult = await parseKotlinConfig(options);
@@ -51,11 +63,9 @@ export async function parseRepositoryConfig(options: ConfigParseOptions): Promis
     log.debug(`Kotlin configuration detected for ${repoPath}`);
     return kotlinResult;
   }
-  
-  // If no language-specific configuration was detected, try parsing README
-  log.debug(`No language-specific configuration detected, trying README parsing for ${repoPath}`);
-  const readmeResult = await parseReadmeConfig(repoPath, repoName);
-  
+
+  // No language-specific configuration either: fall back to whatever loose
+  // information the README yielded (scraped commands, partial data)
   if (readmeResult.detected) {
     log.debug(`Configuration extracted from README for ${repoPath}`);
     return readmeResult;
@@ -158,6 +168,7 @@ async function parseReadmeConfig(repoPath: string, repoName: string): Promise<Co
       return {
         detected: true,
         language: 'unknown',
+        foundExplicitConfig: parseResult.foundExplicitConfig,
         installCommand: parseResult.config._installCommand || '',
         buildCommand: parseResult.config._buildCommand || '',
         runCommand: parseResult.config.transport === 'stdio' ? parseResult.config.command || '' : '',

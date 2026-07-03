@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { TabProps, MessageState } from '../../types';
 import { MCPServerConfig, MCPStdioConfig, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp/mcp';
 import ConsoleOutput from './ConsoleOutput';
@@ -42,7 +42,8 @@ const LocalServerTab: React.FC<TabProps> = ({
   initialConfig,
   onAdd,
   onUpdate,
-  onClose
+  onClose,
+  autoTestRun
 }) => {
   // Use custom hooks for state management first
   const {
@@ -235,6 +236,29 @@ const LocalServerTab: React.FC<TabProps> = ({
     updateConsole: setConsoleOutput
   } = useConsoleOutput();
   
+  // Marketplace handoff: the config arrives ready to run — no install/build step
+  // (npx/uvx/docker fetch the package on first run). Collapse the first two
+  // sections as done and start the test run immediately, so the installation
+  // begins without another click.
+  const autoRunStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoTestRun || autoRunStartedRef.current) return;
+    if (!initialConfig?.name) return;
+    // Wait until useLocalServerState has hydrated the form from initialConfig,
+    // otherwise the run would see the empty default config
+    if (localConfig.name !== initialConfig.name) return;
+    autoRunStartedRef.current = true;
+    setExpandedSections({
+      define: false,
+      build: false,
+      run: true
+    });
+    setInstallCompleted(true);
+    setBuildCompleted(true);
+    onRun();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoTestRun, initialConfig, localConfig.name]);
+
   // Handle accordion expansion
   const handleAccordionChange = (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
     setExpandedSections({
@@ -263,6 +287,10 @@ const LocalServerTab: React.FC<TabProps> = ({
   const getDefineStatus = () => {
     if (!localConfig.name || !localConfig.rootPath) {
       return 'error';
+    }
+    // Marketplace handoff: the definition came prefilled and complete
+    if (autoTestRun) {
+      return 'success';
     }
     return 'default';
   };
@@ -302,11 +330,15 @@ const LocalServerTab: React.FC<TabProps> = ({
               onChange={handleAccordionChange('define')}
               sx={{
                 border: 1,
-                borderColor: !localConfig.name || !localConfig.rootPath 
-                  ? 'error.main' 
+                borderColor: !localConfig.name || !localConfig.rootPath
+                  ? 'error.main'
+                  : autoTestRun
+                  ? 'success.main'
                   : 'divider',
                 bgcolor: !localConfig.name || !localConfig.rootPath
                   ? 'error.lighter'
+                  : autoTestRun
+                  ? 'success.lighter'
                   : 'background.paper',
                 '&:before': { display: 'none' },
                 borderRadius: 1,

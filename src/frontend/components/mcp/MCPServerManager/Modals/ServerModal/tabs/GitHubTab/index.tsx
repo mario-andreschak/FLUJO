@@ -19,9 +19,11 @@ const GitHubTab: React.FC<TabProps> = ({
   onAdd,
   onUpdate,
   onClose,
-  setActiveTab
+  setActiveTab,
+  initialGitHubUrl
 }) => {
-  const [githubUrl, setGithubUrl] = useState<string>('');
+  // Prefilled when arriving from the marketplace's "Try manual installation" handoff
+  const [githubUrl, setGithubUrl] = useState<string>(initialGitHubUrl || '');
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null);
   const [savePath, setSavePath] = useState<string>('');
   const [showCloneButton, setShowCloneButton] = useState<boolean>(false);

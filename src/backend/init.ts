@@ -1,5 +1,6 @@
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
+import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/init');
@@ -36,6 +37,13 @@ export function ensureBackendInitialized(): Promise<void> {
 async function runInitialization(): Promise<void> {
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
+
+  // Refresh the Spotlight curated-server cache in the background. Deliberately
+  // NOT awaited: the registry can be slow/unreachable and must never delay
+  // startup — the Spotlight tab just shows the previous cache until this lands.
+  refreshSpotlightServers().catch(error =>
+    log.warn('Spotlight refresh failed at startup:', error)
+  );
 
   log.info('Initializing MCP servers');
   // startEnabledServers() never rejects in practice (it catches per-server

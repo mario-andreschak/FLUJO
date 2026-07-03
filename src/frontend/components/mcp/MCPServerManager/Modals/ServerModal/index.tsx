@@ -5,6 +5,8 @@ import { ServerModalProps } from './types';
 import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
+import MarketplaceTab from './tabs/MarketplaceTab';
+import SpotlightTab from './tabs/SpotlightTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
 import RemoteTab from './tabs/RemoteTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
@@ -30,18 +32,27 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onUpdate,
   onRestartAfterUpdate
 }) => {
-  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'reference' | 'remote'>('github');
+  const [activeTab, setActiveTab] = useState<'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('spotlight');
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
+  // Marketplace handoff: the config is ready to run, so the local tab should
+  // start a test run automatically. Cleared on any manual tab change.
+  const [autoTestRun, setAutoTestRun] = useState<boolean>(false);
+  // Marketplace "manual setup" handoff: repository URL to prefill in the GitHub tab
+  const [githubPrefillUrl, setGithubPrefillUrl] = useState<string>('');
   
   // Track which tabs have been visited/initialized
   const [initializedTabs, setInitializedTabs] = useState<{
+    spotlight: boolean;
+    marketplace: boolean;
     github: boolean;
     local: boolean;
     reference: boolean;
     remote: boolean;
   }>({
+    spotlight: false,
+    marketplace: false,
     github: false,
     local: false,
     reference: false,
@@ -58,16 +69,22 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'reference' | 'remote') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => {
+    // A manual tab change is not a marketplace handoff — don't re-trigger the auto run
+    // or keep a stale GitHub-URL prefill around
+    setAutoTestRun(false);
+    setGithubPrefillUrl('');
     setActiveTab(newValue);
   };
-  
+
   // Handle close with state reset
   const handleClose = () => {
     // Reset parsed config when modal is closed
     setParsedConfig(null);
+    setAutoTestRun(false);
+    setGithubPrefillUrl('');
     // Reset to default tab
-    setActiveTab('github');
+    setActiveTab('spotlight');
     // Call the original onClose
     onClose();
   };
@@ -121,6 +138,8 @@ const ServerModal: React.FC<ServerModalProps> = ({
               aria-label="server configuration tabs"
               sx={{ px: 2 }}
             >
+              <Tab label="Spotlight" value="spotlight" />
+              <Tab label="Marketplace" value="marketplace" />
               <Tab label="GitHub" value="github" />
               <Tab label="Local Server" value="local" />
               <Tab label="Remote" value="remote" />
@@ -139,32 +158,62 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onClose={onClose}
               onRestartAfterUpdate={onRestartAfterUpdate}
             />
+          ) : activeTab === 'spotlight' ? (
+            <SpotlightTab
+              onAdd={onAdd}
+              onClose={onClose}
+            />
+          ) : activeTab === 'marketplace' ? (
+            <MarketplaceTab
+              onAdd={onAdd}
+              onClose={onClose}
+              setActiveTab={setActiveTab}
+              onUpdate={(config, options) => {
+                setParsedConfig(config);
+                setAutoTestRun(Boolean(options?.autoTestRun));
+              }}
+              onOpenInGitHubTab={(repoUrl) => {
+                setGithubPrefillUrl(repoUrl);
+                setActiveTab('github');
+              }}
+            />
           ) : activeTab === 'github' ? (
             <GitHubTab
               onAdd={onAdd}
               onClose={onClose}
               setActiveTab={setActiveTab}
-              onUpdate={(config) => setParsedConfig(config)}
+              initialGitHubUrl={githubPrefillUrl}
+              onUpdate={(config) => {
+                setParsedConfig(config);
+                setAutoTestRun(false);
+              }}
             />
           ) : activeTab === 'local' ? (
             <LocalServerTab
               initialConfig={parsedConfig}
               onAdd={onAdd}
               onClose={onClose}
+              autoTestRun={autoTestRun}
             />
           ) : activeTab === 'remote' ? (
             <RemoteTab
               onAdd={onAdd}
               onClose={onClose}
               setActiveTab={setActiveTab}
-              onUpdate={(config) => setParsedConfig(config)}
+              onUpdate={(config) => {
+                setParsedConfig(config);
+                setAutoTestRun(false);
+              }}
             />
           ) : (
             <ReferenceServersTab
               onAdd={onAdd}
               onClose={onClose}
               setActiveTab={setActiveTab}
-              onUpdate={(config) => setParsedConfig(config)}
+              onUpdate={(config) => {
+                setParsedConfig(config);
+                setAutoTestRun(false);
+              }}
             />
           )}
         </Box>

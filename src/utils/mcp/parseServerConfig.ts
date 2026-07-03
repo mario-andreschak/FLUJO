@@ -269,6 +269,7 @@ export function parseServerConfig(text: string, parseEnvVars: boolean = true, kn
       console.log(`parseServerConfig: Returning success - config found in ${configSource}`);
       return {
         config,
+        foundExplicitConfig: true,
         message: {
           type: 'success',
           text: `Configuration for "${serverName}" extracted successfully from ${configSource}.`
@@ -285,6 +286,7 @@ export function parseServerConfig(text: string, parseEnvVars: boolean = true, kn
         console.log(`parseServerConfig: Returning warning - partial data extracted: ${extractedItems.join(', ')}`);
         return {
           config,
+          foundExplicitConfig: false,
           message: {
             type: 'warning',
             text: `No complete server configuration found, but extracted: ${extractedItems.join(', ')}.`
@@ -294,6 +296,7 @@ export function parseServerConfig(text: string, parseEnvVars: boolean = true, kn
         console.log('parseServerConfig: Returning error - no data found');
         return {
           config,
+          foundExplicitConfig: false,
           message: {
             type: 'error',
             text: `No server configuration data found.`
@@ -306,6 +309,7 @@ export function parseServerConfig(text: string, parseEnvVars: boolean = true, kn
     console.error('parseServerConfig: Exception occurred:', error);
     return {
       config: {},
+      foundExplicitConfig: false,
       message: {
         type: 'error',
         text: 'Failed to extract server configuration. Please check the content format.'
