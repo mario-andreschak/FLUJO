@@ -52,13 +52,13 @@ import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 
-const FlowBuilderContainer = styled(Box)({
+const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
   height: 'calc(100vh - 64px)',
   gap: '16px',
   padding: '16px',
-  backgroundColor: '#f8f9fa',
-});
+  backgroundColor: theme.palette.background.default,
+}));
 
 const ToolbarContainer = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(1),

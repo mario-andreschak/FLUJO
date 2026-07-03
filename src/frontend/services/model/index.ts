@@ -112,14 +112,24 @@ class ModelService {
     }
   }
 
-  async loadModels(): Promise<Model[]> {
+  /**
+   * Load models, or null when the load FAILED. Callers that must distinguish
+   * "failed to load" from "no models configured" (e.g. flow validation, which
+   * skips model checks on failure instead of reporting every binding as
+   * deleted) use this variant.
+   */
+  async tryLoadModels(): Promise<Model[] | null> {
     try {
       const models = await this.fetchWithErrorHandling('/api/model');
-      return models;
+      return Array.isArray(models) ? models : null;
     } catch (error) {
       log.error('Failed to load models', error);
-      return [];
+      return null;
     }
+  }
+
+  async loadModels(): Promise<Model[]> {
+    return (await this.tryLoadModels()) ?? [];
   }
 
   async getModel(id: string): Promise<Model | null> {

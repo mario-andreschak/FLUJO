@@ -715,7 +715,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         snapGrid={[15, 15]}
         connectOnClick={true}
       >
-        <CanvasToolbar flowContainerRef={flowContainerRef as React.RefObject<HTMLDivElement>} />
+        <CanvasToolbar />
         <CanvasControls />
       </ReactFlow>
 
