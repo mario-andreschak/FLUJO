@@ -1,32 +1,25 @@
 import { useCallback, useState } from 'react';
-import { useOnSelectionChange, NodeChange, EdgeChange } from '@xyflow/react';
+import { useOnSelectionChange, useReactFlow } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { SelectedElementsState, ContextMenuState } from '../types';
-import { getDeleteChanges, canDeleteNode } from '../utils/nodeUtils';
-import { computeOrphanedPromptCleanups } from '@/utils/shared/flowValidation';
+import { canDeleteNode } from '../utils/nodeUtils';
 import { createLogger } from '@/utils/logger';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/hooks/useCanvasEvents.ts');
 
 /**
- * Custom hook to manage canvas events
- * @param nodes Array of flow nodes
- * @param edges Array of edges
- * @param onNodesChange Node change handler
- * @param onEdgesChange Edge change handler
- * @param onNodesChangeCallback Optional callback for node changes
- * @param onEdgesChangeCallback Optional callback for edge changes
- * @returns Object containing event handlers and state
+ * Custom hook to manage canvas events: selection tracking, the context menu,
+ * and context-menu deletion.
+ *
+ * All deletions are routed through ReactFlow's deleteElements so they pass the
+ * onBeforeDelete guard in Canvas (Start-node protection) regardless of whether
+ * they come from the context menu, the Delete/Backspace keys, or an edge's
+ * delete button.
  */
-export function useCanvasEvents(
-  nodes: FlowNode[],
-  edges: any[],
-  onNodesChange: (changes: NodeChange<FlowNode>[]) => void,
-  onEdgesChange: (changes: EdgeChange[]) => void,
-  onNodesChangeCallback?: (changes: NodeChange<FlowNode>[]) => void,
-  onEdgesChangeCallback?: (changes: EdgeChange[]) => void
-) {
+export function useCanvasEvents(nodes: FlowNode[]) {
+  const { deleteElements } = useReactFlow();
+
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     open: false,
@@ -44,9 +37,9 @@ export function useCanvasEvents(
     onChange: ({ nodes: selectedNodes, edges: selectedEdges }) => {
       const nodeIds = selectedNodes.map(node => node.id);
       const edgeIds = selectedEdges.map(edge => edge.id);
-      
+
       log.debug(`Selection changed: ${nodeIds.length} nodes, ${edgeIds.length} edges selected`);
-      
+
       setSelectedElements({
         nodes: nodeIds,
         edges: edgeIds,
@@ -54,57 +47,11 @@ export function useCanvasEvents(
     },
   });
 
-  // Handle node changes and propagate to parent
-  const handleNodesChange = useCallback(
-    (changes: NodeChange<FlowNode>[]) => {
-      log.debug(`handleNodesChange: Processing ${changes.length} node changes`);
-      
-      // Log specific change types
-      changes.forEach(change => {
-        if (change.type === 'remove') {
-          log.info(`Node removed: ${change.id}`);
-        } else if (change.type === 'position') {
-          log.debug(`Node position changed: ${change.id}`);
-        } else if (change.type === 'select') {
-          log.debug(`Node selection changed: ${change.id}, selected: ${change.selected}`);
-        }
-      });
-      
-      onNodesChange(changes);
-      if (onNodesChangeCallback) {
-        onNodesChangeCallback(changes);
-      }
-    },
-    [onNodesChange, onNodesChangeCallback]
-  );
-
-  // Handle edge changes and propagate to parent
-  const handleEdgesChange = useCallback(
-    (changes: EdgeChange[]) => {
-      log.debug(`handleEdgesChange: Processing ${changes.length} edge changes`);
-      
-      // Log specific change types
-      changes.forEach(change => {
-        if (change.type === 'remove') {
-          log.info(`Edge removed: ${change.id}`);
-        } else if (change.type === 'select') {
-          log.debug(`Edge selection changed: ${change.id}, selected: ${change.selected}`);
-        }
-      });
-      
-      onEdgesChange(changes);
-      if (onEdgesChangeCallback) {
-        onEdgesChangeCallback(changes);
-      }
-    },
-    [onEdgesChange, onEdgesChangeCallback]
-  );
-
   // Context menu handlers
   const onContextMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<Element, MouseEvent>, nodeId?: string, edgeId?: string) => {
       event.preventDefault();
-      
+
       if (nodeId) {
         log.debug(`Context menu opened for node: ${nodeId}`);
       } else if (edgeId) {
@@ -112,7 +59,7 @@ export function useCanvasEvents(
       } else {
         log.debug(`Context menu opened on canvas at (${event.clientX}, ${event.clientY})`);
       }
-      
+
       setContextMenu({
         open: true,
         position: { x: event.clientX, y: event.clientY },
@@ -128,38 +75,6 @@ export function useCanvasEvents(
     setContextMenu(prev => ({ ...prev, open: false }));
   }, []);
 
-  // Build 'replace' node changes that strip now-dead tool pills from Process nodes when the
-  // given nodes are removed. Deleting an MCP node also removes its edges, but the binding
-  // pills already embedded in a connected Process node's prompt would otherwise linger and
-  // point at a server the node can no longer reach. Emitting these as node changes keeps the
-  // Canvas and FlowBuilder state stores in sync (both apply the same changes).
-  const buildPromptCleanupChanges = useCallback(
-    (removedNodeIds: string[]): NodeChange<FlowNode>[] => {
-      const cleanups = computeOrphanedPromptCleanups(removedNodeIds, nodes, edges);
-      const changes: NodeChange<FlowNode>[] = [];
-      for (const { nodeId, promptTemplate } of cleanups) {
-        const node = nodes.find(n => n.id === nodeId);
-        if (!node) continue;
-        changes.push({
-          type: 'replace',
-          id: nodeId,
-          item: {
-            ...node,
-            data: {
-              ...node.data,
-              properties: { ...(node.data?.properties ?? {}), promptTemplate },
-            },
-          },
-        });
-      }
-      if (changes.length > 0) {
-        log.info(`Stripped orphaned tool pills from ${changes.length} process node(s) after deletion`);
-      }
-      return changes;
-    },
-    [nodes, edges]
-  );
-
   // Handle delete action from context menu
   const handleDelete = useCallback(() => {
     if (contextMenu.nodeId) {
@@ -172,39 +87,14 @@ export function useCanvasEvents(
         return;
       }
 
-      // Delete node, and in the same batch strip any tool pills the deletion orphans.
-      const cleanupChanges = buildPromptCleanupChanges([contextMenu.nodeId]);
-      handleNodesChange([{ type: 'remove', id: contextMenu.nodeId }, ...cleanupChanges]);
-      log.info(`Node deleted: ${contextMenu.nodeId}`);
-
-      // Find and delete all connected edges
-      const connectedEdges = edges.filter(edge =>
-        edge.source === contextMenu.nodeId ||
-        edge.target === contextMenu.nodeId
-      );
-      
-      if (connectedEdges.length > 0) {
-        log.debug(`Deleting ${connectedEdges.length} edges connected to node ${contextMenu.nodeId}`);
-        
-        const edgeChanges: EdgeChange[] = connectedEdges.map(edge => ({
-          type: 'remove' as const,
-          id: edge.id,
-        }));
-        
-        handleEdgesChange(edgeChanges);
-      }
+      // deleteElements also removes the node's connected edges and runs the
+      // onBeforeDelete guard.
+      deleteElements({ nodes: [{ id: contextMenu.nodeId }] });
     } else if (contextMenu.edgeId) {
-      // Delete edge
       log.debug(`handleDelete: Deleting edge ${contextMenu.edgeId}`);
-      handleEdgesChange([{ type: 'remove', id: contextMenu.edgeId }]);
+      deleteElements({ edges: [{ id: contextMenu.edgeId }] });
     }
-  }, [contextMenu, handleNodesChange, handleEdgesChange, edges, nodes, buildPromptCleanupChanges]);
-
-  // Handle edit properties from context menu
-  const handleEditProperties = useCallback(() => {
-    // This will be implemented in the main Canvas component
-    // as it requires the onEditNode prop
-  }, []);
+  }, [contextMenu, deleteElements, nodes]);
 
   // Node context menu handler
   const onNodeContextMenu = useCallback(
@@ -230,56 +120,15 @@ export function useCanvasEvents(
     [closeContextMenu]
   );
 
-  // Handler for delete key press
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent) => {
-      if (event.key === 'Delete') {
-        log.debug(`Delete key pressed with ${selectedElements.nodes.length} nodes and ${selectedElements.edges.length} edges selected`);
-        
-        // Only proceed if we have selected elements
-        if (selectedElements.nodes.length > 0 || selectedElements.edges.length > 0) {
-          const { nodeChanges, edgeChanges } = getDeleteChanges(
-            selectedElements.nodes,
-            selectedElements.edges,
-            nodes,
-            edges
-          );
-
-          // Apply the changes, stripping any tool pills the node removals orphan.
-          const removedNodeIds = nodeChanges
-            .filter((c): c is Extract<NodeChange<FlowNode>, { type: 'remove' }> => c.type === 'remove')
-            .map(c => c.id);
-          const cleanupChanges = buildPromptCleanupChanges(removedNodeIds);
-          const allNodeChanges = [...nodeChanges, ...cleanupChanges];
-
-          if (allNodeChanges.length > 0) {
-            log.debug(`Deleting ${nodeChanges.length} nodes via keyboard shortcut`);
-            handleNodesChange(allNodeChanges);
-          }
-
-          if (edgeChanges.length > 0) {
-            log.debug(`Deleting ${edgeChanges.length} edges via keyboard shortcut`);
-            handleEdgesChange(edgeChanges);
-          }
-        }
-      }
-    },
-    [selectedElements, handleNodesChange, handleEdgesChange, edges, nodes, buildPromptCleanupChanges]
-  );
-
   return {
     contextMenu,
     selectedElements,
-    handleNodesChange,
-    handleEdgesChange,
     onContextMenu,
     closeContextMenu,
     handleDelete,
-    handleEditProperties,
     onNodeContextMenu,
     onEdgeContextMenu,
     onPaneContextMenu,
-    handleKeyDown
   };
 }
 

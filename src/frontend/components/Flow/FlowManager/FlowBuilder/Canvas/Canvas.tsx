@@ -6,26 +6,28 @@ import {
   ReactFlow,
   ConnectionLineType,
   ReactFlowInstance,
-  addEdge,
   Connection,
+  Edge,
+  EdgeChange,
+  NodeChange,
   MarkerType,
   OnInit,
+  OnBeforeDelete,
   useReactFlow,
   OnConnectStart,
   OnConnectEnd,
-  NodeMouseHandler,
   OnConnectStartParams
 } from '@xyflow/react';
 import { styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
+import { flowService } from '@/frontend/services/flow';
 import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge } from '../CustomEdges';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
-import { useCanvasState } from './hooks/useCanvasState';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
-import { validateConnection, createEdgeFromConnection } from './utils/edgeUtils';
+import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds } from './utils/edgeUtils';
 import { findNodeById } from './utils/nodeUtils';
 import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
@@ -67,38 +69,38 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   sourceHandleId,
 }) => {
   const theme = useTheme();
-  
+
   // Helper function to determine valid target node types based on source node type and handle ID
   const getValidNodeTypes = (): Array<NodeType> => {
     if (!sourceNodeType || !sourceHandleId) {
       return ['process', 'finish', 'mcp', 'subflow'] as Array<NodeType>;
     }
-    
+
     // If source is an MCP node, only allow connecting to process nodes
     if (sourceNodeType === 'mcp') {
       return ['process'] as Array<NodeType>;
     }
-    
+
     // If source is a process node and the handle is an MCP handle, only allow connecting to MCP nodes
     if (sourceNodeType === 'process' && (
-      sourceHandleId.includes('mcp') || 
-      sourceHandleId.includes('left') || 
+      sourceHandleId.includes('mcp') ||
+      sourceHandleId.includes('left') ||
       sourceHandleId.includes('right')
     )) {
       return ['mcp'] as Array<NodeType>;
     }
-    
+
     // For normal connections from process or start nodes, allow process, finish, and subflow nodes
     return ['process', 'finish', 'subflow'] as Array<NodeType>;
   };
-  
+
   // Get valid node types based on source node type and handle ID
   const validNodeTypes = getValidNodeTypes();
-  
+
   // Log the validation for debugging
   log.debug(`NodeSelectionModal: Source node type: ${sourceNodeType}, Source handle ID: ${sourceHandleId}`);
   log.debug(`NodeSelectionModal: Valid node types: ${validNodeTypes.join(', ')}`);
-  
+
   // All possible node types
   const allNodeTypes: Array<{
     type: NodeType;
@@ -147,7 +149,7 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   };
 
   if (!position) return null;
-  
+
   return (
     <Modal
       open={open}
@@ -221,13 +223,12 @@ const FlowContainer = styled('div')(({ theme }) => ({
 
 
 export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
-  const { flowService } = require('@/frontend/services/flow');
   const theme = useTheme();
   const {
-    initialNodes = [],
-    initialEdges = [],
-    onNodesChange: onNodesChangeCallback,
-    onEdgesChange: onEdgesChangeCallback,
+    nodes,
+    edges,
+    onNodesChange,
+    onEdgesChange,
     onDrop,
     onDragOver,
     onInit,
@@ -235,24 +236,17 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onEditNode,
   } = props;
 
-  // Use custom hooks
   const {
-    nodes, edges, setNodes, setEdges, onNodesChange, onEdgesChange,
-    lastAddedEdge, setLastAddedEdge
-  } = useCanvasState(initialNodes, initialEdges);
-  
-  const {
-    contextMenu, selectedElements, handleNodesChange, handleEdgesChange,
-    onContextMenu, closeContextMenu, handleDelete, 
-    onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu, handleKeyDown
-  } = useCanvasEvents(
-    nodes, edges, onNodesChange, onEdgesChange, 
-    onNodesChangeCallback, onEdgesChangeCallback
-  );
+    contextMenu, selectedElements,
+    closeContextMenu, handleDelete,
+    onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu
+  } = useCanvasEvents(nodes);
+
+  const { deleteElements } = useReactFlow();
 
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
-  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
-  
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
+
   // State for connection tracking
   const [connectionStart, setConnectionStart] = useState<{
     nodeId: string | null;
@@ -267,18 +261,22 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     sourceHandleId?: string;
   }>({ open: false, position: null });
 
-  // Effect to notify parent about edge changes after render is complete
-  useEffect(() => {
-    if (lastAddedEdge && onEdgesChangeCallback) {
-      onEdgesChangeCallback([{ type: 'add', item: lastAddedEdge }]);
-      setLastAddedEdge(null);
-    }
-  }, [lastAddedEdge, onEdgesChangeCallback, setLastAddedEdge]);
+  // Changes that add a node: deselect the current selection, then add the new
+  // node selected.
+  const buildAddNodeChanges = useCallback(
+    (newNode: FlowNode): NodeChange<FlowNode>[] => [
+      ...nodes
+        .filter(n => n.selected)
+        .map(n => ({ type: 'select' as const, id: n.id, selected: false })),
+      { type: 'add' as const, item: { ...newNode, selected: true } },
+    ],
+    [nodes]
+  );
 
   // Add event listener for edit node from custom button
   useEffect(() => {
     if (!onEditNode) return;
-    
+
     const handleEditNodeEvent = (e: Event) => {
       const customEvent = e as CustomEvent<EditNodeEventDetail>;
       if (customEvent.detail && customEvent.detail.nodeId) {
@@ -288,101 +286,104 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         }
       }
     };
-    
+
     document.addEventListener('editNode', handleEditNodeEvent);
-    
+
     return () => {
       document.removeEventListener('editNode', handleEditNodeEvent);
     };
   }, [nodes, onEditNode]);
 
-  // Enhanced onConnect handler with edge type determination and validation
+  // Enhanced onConnect handler with edge type determination and validation.
+  // A new edge replaces any edge it logically duplicates (one MCP connection
+  // per Process/MCP node pair, one flow-control edge per direction), so users
+  // can freely re-draw connections while re-organizing without stacking
+  // duplicates.
   const onConnect = useCallback(
     (params: Connection) => {
       // Check for missing source or target handles
       if (!params.sourceHandle || !params.targetHandle) {
-        console.error('Invalid connection: Missing source or target handle', params);
+        log.error('Invalid connection: Missing source or target handle', params);
         return;
       }
-      
+
       // Validate the connection
       if (!validateConnection(params, nodes)) {
         // The validateConnection function now logs specific error messages
         return;
       }
-      
+
       // Create the edge with the appropriate type and options
       const edge = createEdgeFromConnection(params, nodes);
-      
-      setEdges((eds) => {
-        const newEdges = addEdge(edge, eds);
-        if (newEdges.length > eds.length) {
-          // Store the new edge to be processed in the effect
-          const newEdge = newEdges[newEdges.length - 1];
-          setLastAddedEdge(newEdge);
-        }
-        return newEdges;
-      });
+      const replaced = getReplacedEdgeIds(edge, edges);
+
+      onEdgesChange([
+        ...replaced.map(id => ({ type: 'remove' as const, id })),
+        { type: 'add' as const, item: edge },
+      ]);
     },
-    [setEdges, nodes, setLastAddedEdge]
+    [nodes, edges, onEdgesChange]
+  );
+
+  // Central deletion guard: every delete path (Delete/Backspace keys, context
+  // menu, edge delete buttons, Ctrl+X) runs through deleteElements and lands
+  // here. Start nodes are never deleted, and an edge is only deleted when the
+  // user selected it directly or one of its endpoints is actually being
+  // deleted — so a protected Start node keeps its connections.
+  const onBeforeDelete: OnBeforeDelete<FlowNode, Edge> = useCallback(
+    async ({ nodes: nodesToDelete, edges: edgesToDelete }: { nodes: FlowNode[]; edges: Edge[] }) => {
+      const deletableNodes = nodesToDelete.filter(n => n.type !== 'start');
+      const deletableIds = new Set(deletableNodes.map(n => n.id));
+      const requestedIds = new Set(nodesToDelete.map(n => n.id));
+
+      const deletableEdges = edgesToDelete.filter(e => {
+        if (e.selected) return true;
+        if (deletableIds.has(e.source) || deletableIds.has(e.target)) return true;
+        // Included only because it touches a protected Start node — keep it.
+        return !(requestedIds.has(e.source) || requestedIds.has(e.target));
+      });
+
+      if (deletableNodes.length === 0 && deletableEdges.length === 0) {
+        return false;
+      }
+      return { nodes: deletableNodes, edges: deletableEdges };
+    },
+    []
   );
 
   // Handle the ReactFlow instance initialization
-  const handleInit: OnInit = useCallback((instance) => {
+  const handleInit: OnInit<FlowNode, Edge> = useCallback((instance) => {
     setReactFlowInstance(instance);
     if (onInit) {
       onInit(instance);
     }
   }, [onInit]);
-  
+
   // Add event listener for adding nodes from palette via double-click
   useEffect(() => {
     const handleAddNodeFromPalette = (e: Event) => {
       const customEvent = e as CustomEvent<{ nodeType: string; position: { x: number; y: number } }>;
       if (!customEvent.detail || !reactFlowInstance) return;
-      
+
       const { nodeType, position } = customEvent.detail;
-      
-      // Create a new node
-      
+
       // Create the new node
       const newNode = flowService.createNode(nodeType, position);
-      
-      // Add the new node to the existing nodes
-      setNodes((nds) => {
-        // Deselect all existing nodes
-        const updatedNodes = nds.map(node => ({
-          ...node,
-          selected: false
-        }));
-        
-        // Add the new node with selected property
-        return [
-          ...updatedNodes,
-          {
-            ...newNode,
-            selected: true
-          }
-        ];
-      });
-      
-      // Notify parent about the node change
-      if (onNodesChangeCallback) {
-        onNodesChangeCallback([{ type: 'add', item: newNode }]);
-      }
-      
+
+      onNodesChange(buildAddNodeChanges(newNode));
+
       // Select the newly created node in the properties panel
       if (onEditNode) {
         onEditNode(newNode);
       }
     };
-    
+
     document.addEventListener('addNodeFromPalette', handleAddNodeFromPalette);
-    
+
     return () => {
       document.removeEventListener('addNodeFromPalette', handleAddNodeFromPalette);
     };
-  }, [reactFlowInstance, setNodes, onNodesChangeCallback, onEditNode]);
+  }, [reactFlowInstance, onNodesChange, buildAddNodeChanges, onEditNode]);
 
   // Handle edit properties from context menu
   const handleEditProperties = useCallback(() => {
@@ -399,7 +400,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     (event: React.MouseEvent, node: any) => {
       // Prevent default behavior
       event.preventDefault();
-      
+
       // Call the edit function if provided
       if (onEditNode) {
         const flowNode = node as FlowNode;
@@ -419,32 +420,35 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     []
   );
 
-  // Handle connection end
+  // Handle connection end. When the connection is dropped on the empty pane,
+  // the node-selection modal opens; connectionStart must stay set until the
+  // modal consumes it (handleNodeTypeSelection) or is closed — resetting it
+  // here would break the promised auto-connection to the new node.
   const onConnectEnd: OnConnectEnd = useCallback(
     (event) => {
       if (!connectionStart.nodeId || !connectionStart.handleId || !reactFlowInstance) {
         log.debug('onConnectEnd: No valid connection start data');
         return;
       }
-      
+
       log.debug(`onConnectEnd: Connection ended from node ${connectionStart.nodeId}`);
-      
+
       // Check if the target is the pane (not a node)
       const targetIsPane = (event.target as Element).classList.contains('react-flow__pane');
-      
+
       if (targetIsPane) {
         // Convert screen coordinates to flow coordinates
         const position = reactFlowInstance.screenToFlowPosition({
           x: event instanceof MouseEvent ? event.clientX : event.touches[0].clientX,
           y: event instanceof MouseEvent ? event.clientY : event.touches[0].clientY,
         });
-        
+
         log.debug(`onConnectEnd: Connection dropped on pane at position (${position.x}, ${position.y})`);
-        
+
         // Get the source node type
         const sourceNode = findNodeById(connectionStart.nodeId!, nodes);
         const sourceNodeType = sourceNode ? sourceNode.type as NodeType : undefined;
-        
+
         // Show the node selection modal with source node type and handle ID
         setNodeSelectionModal({
           open: true,
@@ -452,10 +456,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
           sourceNodeType,
           sourceHandleId: connectionStart.handleId!
         });
+      } else {
+        // Connection ended on a node (or was cancelled) — onConnect handled
+        // any edge creation, so the tracking state can be cleared.
+        setConnectionStart({ nodeId: null, handleId: null });
       }
-      
-      // Reset connection tracking
-      setConnectionStart({ nodeId: null, handleId: null });
     },
     [connectionStart, reactFlowInstance, nodes]
   );
@@ -464,38 +469,22 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const handleNodeTypeSelection = useCallback(
     (nodeType: NodeType, position: { x: number; y: number }) => {
       log.debug(`handleNodeTypeSelection: Selected node type ${nodeType} at position (${position.x}, ${position.y})`);
-      
+
       // Create a new node of the selected type
       const newNode = flowService.createNode(nodeType, position);
-      
-      // Add the new node
-      setNodes((nds) => {
-        // Deselect all existing nodes
-        const updatedNodes = nds.map(node => ({
-          ...node,
-          selected: false
-        }));
-        
-        // Add the new node with selected property
-        return [
-          ...updatedNodes,
-          {
-            ...newNode,
-            selected: true
-          }
-        ];
-      });
-      
+
+      onNodesChange(buildAddNodeChanges(newNode));
+
       // Get the source node
       const sourceNode = findNodeById(connectionStart.nodeId!, nodes);
-      
+
       if (sourceNode) {
         // Determine the appropriate target handle based on node type
         const targetHandle = nodeType === 'process' ? 'process-top' :
                             nodeType === 'finish' ? 'finish-top' :
                             nodeType === 'mcp' ? 'mcp-top' :
                             nodeType === 'subflow' ? 'subflow-top' : '';
-        
+
         // Create a connection from the source node to the new node
         const connection = {
           source: connectionStart.nodeId!,
@@ -503,39 +492,42 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
           target: newNode.id,
           targetHandle,
         };
-        
+
         log.debug(`handleNodeTypeSelection: Creating connection from ${connection.source} to ${connection.target}`);
-        
+
         // Create and add the edge if the connection is valid
         if (validateConnection(connection, [...nodes, newNode])) {
           const edge = createEdgeFromConnection(connection, [...nodes, newNode]);
-          setEdges((eds) => [...eds, edge]);
-          setLastAddedEdge(edge);
-          
+          const replaced = getReplacedEdgeIds(edge, edges);
+          onEdgesChange([
+            ...replaced.map(id => ({ type: 'remove' as const, id })),
+            { type: 'add' as const, item: edge },
+          ]);
+
           log.debug(`handleNodeTypeSelection: Edge created with id ${edge.id}`);
         }
       }
-      
-      // Notify parent components
-      if (onNodesChangeCallback) {
-        onNodesChangeCallback([{ type: 'add', item: newNode }]);
-      }
-      
+
+      // The pending connection has been consumed.
+      setConnectionStart({ nodeId: null, handleId: null });
+
       // Close the modal
       setNodeSelectionModal({ open: false, position: null });
-      
+
       // Select the newly created node in the properties panel
       if (onEditNode) {
         onEditNode(newNode);
       }
     },
-    [connectionStart, nodes, setNodes, setEdges, setLastAddedEdge, onNodesChangeCallback, onEditNode]
+    [connectionStart, nodes, edges, buildAddNodeChanges, onNodesChange, onEdgesChange, onEditNode]
   );
 
   // Close the node selection modal
   const handleCloseNodeSelectionModal = useCallback(() => {
     log.debug('handleCloseNodeSelectionModal: Closing node selection modal');
     setNodeSelectionModal({ open: false, position: null, sourceNodeType: undefined, sourceHandleId: undefined });
+    // The pending connection was abandoned.
+    setConnectionStart({ nodeId: null, handleId: null });
   }, []);
 
   // --- Copy / paste of nodes (within a flow and across flows) ---
@@ -563,7 +555,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   }, [selectedElements, nodes, edges]);
 
   // Paste clipboard contents as new, independent nodes/edges (regenerated ids,
-  // offset position). Notifies the parent via 'add' changes so it persists.
+  // offset position), emitted as 'add' changes to the parent store.
   const handlePaste = useCallback(() => {
     let payload = flowClipboardMemory;
     if (!payload) {
@@ -595,29 +587,27 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       .filter(e => idMap.has(e.source) && idMap.has(e.target))
       .map(e => ({
         ...e,
-        id: `${idMap.get(e.source)}-${idMap.get(e.target)}`,
+        id: uuidv4(),
         source: idMap.get(e.source)!,
         target: idMap.get(e.target)!,
         selected: false,
       }));
 
-    setNodes((nds) => [...nds.map(n => ({ ...n, selected: false })), ...newNodes]);
+    onNodesChange([
+      ...nodes
+        .filter(n => n.selected)
+        .map(n => ({ type: 'select' as const, id: n.id, selected: false })),
+      ...newNodes.map(n => ({ type: 'add' as const, item: n })),
+    ]);
     if (newEdges.length > 0) {
-      setEdges((eds) => [...eds, ...newEdges]);
-    }
-
-    if (onNodesChangeCallback) {
-      onNodesChangeCallback(newNodes.map(n => ({ type: 'add' as const, item: n })));
-    }
-    if (onEdgesChangeCallback && newEdges.length > 0) {
-      onEdgesChangeCallback(newEdges.map(e => ({ type: 'add' as const, item: e })) as any);
+      onEdgesChange(newEdges.map(e => ({ type: 'add' as const, item: e })) as EdgeChange[]);
     }
 
     log.info(`Pasted ${newNodes.length} node(s) and ${newEdges.length} edge(s)`);
-  }, [setNodes, setEdges, onNodesChangeCallback, onEdgesChangeCallback]);
+  }, [nodes, onNodesChange, onEdgesChange]);
 
-  // Keyboard handler: copy/cut/paste shortcuts, then delegate everything else
-  // (e.g. Delete) to the existing canvas key handler.
+  // Keyboard handler for copy/cut/paste shortcuts. Delete/Backspace are
+  // handled by ReactFlow itself and guarded by onBeforeDelete.
   const handleCanvasKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
       const mod = event.ctrlKey || event.metaKey;
@@ -629,8 +619,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       if (mod && key === 'x') {
         if (handleCopySelection()) {
           event.preventDefault();
-          // Reuse the existing Delete logic (also protects Start nodes).
-          handleKeyDown({ key: 'Delete' } as React.KeyboardEvent);
+          // Delete through the guarded pipeline (protects Start nodes).
+          deleteElements({
+            nodes: selectedElements.nodes.map(id => ({ id })),
+            edges: selectedElements.edges.map(id => ({ id })),
+          });
         }
         return;
       }
@@ -639,9 +632,8 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         handlePaste();
         return;
       }
-      handleKeyDown(event);
     },
-    [handleCopySelection, handlePaste, handleKeyDown]
+    [handleCopySelection, handlePaste, deleteElements, selectedElements]
   );
 
   // Context-menu "Copy": if the right-clicked node isn't part of the current
@@ -675,7 +667,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   }, [contextMenu.open]);
 
   return (
-    <FlowContainer 
+    <FlowContainer
       ref={(el) => {
         // Set both refs
         if (ref) {
@@ -685,15 +677,15 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
             ref.current = el;
           }
         }
-        
+
         if (reactFlowWrapper) {
           reactFlowWrapper.current = el;
         }
-        
+
         flowContainerRef.current = el;
       }}
     >
-      <ReactFlow
+      <ReactFlow<FlowNode, Edge>
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -710,9 +702,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
           },
         }), [theme.palette.text.secondary])}
         connectionLineType={ConnectionLineType.SmoothStep}
-        onNodesChange={handleNodesChange as any}
-        onEdgesChange={handleEdgesChange}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onBeforeDelete={onBeforeDelete}
+        deleteKeyCode={['Backspace', 'Delete']}
         onDrop={onDrop}
         onDragOver={onDragOver}
         onInit={handleInit}
@@ -735,7 +729,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         <CanvasToolbar flowContainerRef={flowContainerRef as React.RefObject<HTMLDivElement>} />
         <CanvasControls />
       </ReactFlow>
-      
+
       <ContextMenu
         open={contextMenu.open}
         position={contextMenu.position}
@@ -748,7 +742,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         nodeId={contextMenu.nodeId}
         edgeId={contextMenu.edgeId}
       />
-      
+
       <NodeSelectionModal
         open={nodeSelectionModal.open}
         position={nodeSelectionModal.position}

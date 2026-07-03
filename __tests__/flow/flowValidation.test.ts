@@ -9,8 +9,6 @@
 import {
   validateFlow,
   mcpServersConnectedToProcess,
-  computeOrphanedPromptCleanups,
-  stripServerBindings,
   type VFlow,
   type VNode,
   type VEdge,
@@ -252,49 +250,8 @@ describe('mcpServersConnectedToProcess', () => {
   });
 });
 
-describe('stripServerBindings', () => {
-  it('removes pills for the named servers and tidies whitespace', () => {
-    const text = `Hello ${encodeBindingPill('tool', 'files', 'read')} world ${encodeBindingPill('tool', 'web', 'fetch')}`;
-    const out = stripServerBindings(text, new Set(['files']));
-    expect(out).not.toContain('files__read');
-    expect(out).toContain('web__fetch'); // untouched server kept
-    expect(out).not.toMatch(/ {2,}/); // no double spaces left behind
-  });
-
-  it('returns the text unchanged when nothing matches', () => {
-    const text = `Use ${encodeBindingPill('tool', 'web', 'fetch')}`;
-    expect(stripServerBindings(text, new Set(['files']))).toBe(text);
-  });
-});
-
-describe('computeOrphanedPromptCleanups', () => {
-  const baseNodes = (): VNode[] => [
-    startNode(),
-    processNode('p', {
-      boundModel: 'm1',
-      promptTemplate: `Do ${encodeBindingPill('tool', 'files', 'read')} now`,
-    }),
-    finishNode(),
-    mcpNode('mcp1', 'files'),
-  ];
-  const baseEdges = (): VEdge[] => [edge('start', 'p'), edge('p', 'finish'), edge('p', 'mcp1', true)];
-
-  it('strips pills for a server that becomes disconnected when its MCP node is deleted', () => {
-    const cleanups = computeOrphanedPromptCleanups(['mcp1'], baseNodes(), baseEdges());
-    expect(cleanups).toHaveLength(1);
-    expect(cleanups[0].nodeId).toBe('p');
-    expect(cleanups[0].promptTemplate).not.toContain('files__read');
-  });
-
-  it('keeps pills when another MCP node still provides the same server', () => {
-    const nodes = [...baseNodes(), mcpNode('mcp2', 'files')];
-    const edges = [...baseEdges(), edge('p', 'mcp2', true)];
-    // Delete only mcp1 — mcp2 still binds "files", so the pill must stay.
-    const cleanups = computeOrphanedPromptCleanups(['mcp1'], nodes, edges);
-    expect(cleanups).toEqual([]);
-  });
-
-  it('returns nothing when the deleted node is not a bound MCP node', () => {
-    expect(computeOrphanedPromptCleanups(['finish'], baseNodes(), baseEdges())).toEqual([]);
-  });
-});
+// Note: the former stripServerBindings/computeOrphanedPromptCleanups helpers
+// (eager pill scrubbing on node deletion) were removed on purpose: pills now
+// survive edge/node deletion at design time so re-connecting restores them,
+// and the 'tool-pill-disconnected' error above still blocks running a flow
+// with genuinely orphaned pills.

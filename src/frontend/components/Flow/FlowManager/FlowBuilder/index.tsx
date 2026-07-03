@@ -690,8 +690,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           <Box sx={{ flex: 1, position: 'relative' }}>
             <Canvas
               ref={reactFlowWrapper}
-              initialNodes={nodes}
-              initialEdges={edges}
+              nodes={nodes}
+              edges={edges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onDrop={onDrop}

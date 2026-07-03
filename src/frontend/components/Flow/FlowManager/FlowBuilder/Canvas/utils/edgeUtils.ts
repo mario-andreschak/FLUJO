@@ -81,14 +81,16 @@ export function createEdgeFromConnection(
   const targetHandle = params.targetHandle;
   
   // Check if the connection involves MCP handles
-  const isMCPConnection = 
+  const isMCPConnection =
     (sourceHandle?.includes('mcp') || targetHandle?.includes('mcp')) ||
     (sourceHandle?.includes('left') || sourceHandle?.includes('right')) ||
     (targetHandle?.includes('left') || targetHandle?.includes('right')) ||
     (sourceNode?.type === 'mcp' || targetNode?.type === 'mcp');
-  
-  // Generate a unique ID for the edge
-  const edgeId = `${params.source}-${params.target}`;
+
+  // The id includes the handles so two edges between the same node pair via
+  // different handles never collide (colliding ids break React keys and make
+  // deleting one edge remove both).
+  const edgeId = `${params.source}:${sourceHandle}->${params.target}:${targetHandle}`;
   
   // Create the edge with the appropriate type and options
   if (isMCPConnection) {
@@ -111,4 +113,32 @@ export function createEdgeFromConnection(
       animated: true
     } as Edge;
   }
+}
+
+/**
+ * Edges the new edge logically replaces, so a connection stays unique:
+ *
+ * - An MCP edge represents "this Process node is wired to this MCP server" —
+ *   there must be exactly one per node pair regardless of which side or
+ *   handle it was drawn from, so re-connecting on the other side moves the
+ *   edge instead of doubling it.
+ * - A flow-control edge is unique per direction (source -> target).
+ *
+ * @param newEdge The edge about to be added
+ * @param edges The current edges
+ * @returns The ids of existing edges to remove before adding the new one
+ */
+export function getReplacedEdgeIds(newEdge: Edge, edges: Edge[]): string[] {
+  const isMcp = (e: Edge) => (e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp';
+  return edges
+    .filter(e => {
+      if (e.id === newEdge.id) return true;
+      if (isMcp(newEdge)) {
+        return isMcp(e) &&
+          ((e.source === newEdge.source && e.target === newEdge.target) ||
+            (e.source === newEdge.target && e.target === newEdge.source));
+      }
+      return !isMcp(e) && e.source === newEdge.source && e.target === newEdge.target;
+    })
+    .map(e => e.id);
 }
