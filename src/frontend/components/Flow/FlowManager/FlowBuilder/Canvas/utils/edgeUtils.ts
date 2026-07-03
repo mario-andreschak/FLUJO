@@ -1,6 +1,7 @@
 import { Connection, Edge } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { mcpEdgeOptions } from '../types';
+import { getConnectionError, isMcpHandle } from './connectionRules';
 
 /**
  * Validates if a connection between nodes is valid
@@ -17,48 +18,22 @@ export function validateConnection(
     console.error('Invalid connection: Missing source, target, or handles', params);
     return false;
   }
-  
+
   // Get the source and target nodes
   const sourceNode = nodes.find(node => node.id === params.source) as FlowNode | undefined;
   const targetNode = nodes.find(node => node.id === params.target) as FlowNode | undefined;
-  
+
   if (!sourceNode || !targetNode) {
     console.error('Invalid connection: Source or target node not found', params);
     return false;
   }
-  
-  // Reject connections from Finish nodes (they should only have incoming connections)
-  if (sourceNode.type === 'finish') {
-    console.error('Invalid connection: Finish nodes cannot have outgoing connections');
+
+  const error = getConnectionError(sourceNode.type, params.sourceHandle, targetNode.type, params.targetHandle);
+  if (error) {
+    console.error(`Invalid connection: ${error}`);
     return false;
   }
-  
-  // Reject connections to Start nodes (they should only have outgoing connections)
-  if (targetNode.type === 'start') {
-    console.error('Invalid connection: Start nodes cannot have incoming connections');
-    return false;
-  }
-  
-  // Check if one is an MCP node and the other is a PROCESS node
-  const isMCPToProcess = 
-    (sourceNode.type === 'mcp' && targetNode.type === 'process') ||
-    (sourceNode.type === 'process' && targetNode.type === 'mcp');
-  
-  // Check if the connection involves MCP handles
-  const isMCPConnection = 
-    (params.sourceHandle?.includes('mcp') || params.targetHandle?.includes('mcp')) ||
-    (params.sourceHandle?.includes('left') || params.sourceHandle?.includes('right')) ||
-    (params.targetHandle?.includes('left') || params.targetHandle?.includes('right'));
-  
-  // Validate MCP connections
-  if (sourceNode.type === 'mcp' || targetNode.type === 'mcp') {
-    // If an MCP node is involved, ensure it's connecting to a PROCESS node's MCP edge
-    if (!isMCPToProcess || !isMCPConnection) {
-      console.error('Invalid connection: MCP nodes can only connect to Process nodes via MCP handles');
-      return false;
-    }
-  }
-  
+
   return true;
 }
 
@@ -80,12 +55,12 @@ export function createEdgeFromConnection(
   const sourceHandle = params.sourceHandle;
   const targetHandle = params.targetHandle;
   
-  // Check if the connection involves MCP handles
+  // An MCP (tool-wiring) edge links an MCP node or uses MCP handles
   const isMCPConnection =
-    (sourceHandle?.includes('mcp') || targetHandle?.includes('mcp')) ||
-    (sourceHandle?.includes('left') || sourceHandle?.includes('right')) ||
-    (targetHandle?.includes('left') || targetHandle?.includes('right')) ||
-    (sourceNode?.type === 'mcp' || targetNode?.type === 'mcp');
+    sourceNode?.type === 'mcp' ||
+    targetNode?.type === 'mcp' ||
+    isMcpHandle(sourceHandle) ||
+    isMcpHandle(targetHandle);
 
   // The id includes the handles so two edges between the same node pair via
   // different handles never collide (colliding ids break React keys and make

@@ -28,6 +28,7 @@ import { CustomEdge, MCPEdge } from '../CustomEdges';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
 import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds } from './utils/edgeUtils';
+import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
 import { findNodeById } from './utils/nodeUtils';
 import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
@@ -70,32 +71,9 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
 }) => {
   const theme = useTheme();
 
-  // Helper function to determine valid target node types based on source node type and handle ID
-  const getValidNodeTypes = (): Array<NodeType> => {
-    if (!sourceNodeType || !sourceHandleId) {
-      return ['process', 'finish', 'mcp', 'subflow'] as Array<NodeType>;
-    }
-
-    // If source is an MCP node, only allow connecting to process nodes
-    if (sourceNodeType === 'mcp') {
-      return ['process'] as Array<NodeType>;
-    }
-
-    // If source is a process node and the handle is an MCP handle, only allow connecting to MCP nodes
-    if (sourceNodeType === 'process' && (
-      sourceHandleId.includes('mcp') ||
-      sourceHandleId.includes('left') ||
-      sourceHandleId.includes('right')
-    )) {
-      return ['mcp'] as Array<NodeType>;
-    }
-
-    // For normal connections from process or start nodes, allow process, finish, and subflow nodes
-    return ['process', 'finish', 'subflow'] as Array<NodeType>;
-  };
-
-  // Get valid node types based on source node type and handle ID
-  const validNodeTypes = getValidNodeTypes();
+  // Valid target node types come from the shared connection rules, so the
+  // picker always agrees with validateConnection.
+  const validNodeTypes = validTargetTypesFor(sourceNodeType, sourceHandleId);
 
   // Log the validation for debugging
   log.debug(`NodeSelectionModal: Source node type: ${sourceNodeType}, Source handle ID: ${sourceHandleId}`);
@@ -479,11 +457,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       const sourceNode = findNodeById(connectionStart.nodeId!, nodes);
 
       if (sourceNode) {
-        // Determine the appropriate target handle based on node type
-        const targetHandle = nodeType === 'process' ? 'process-top' :
-                            nodeType === 'finish' ? 'finish-top' :
-                            nodeType === 'mcp' ? 'mcp-top' :
-                            nodeType === 'subflow' ? 'subflow-top' : '';
+        const targetHandle = defaultTargetHandleFor(nodeType);
 
         // Create a connection from the source node to the new node
         const connection = {

@@ -12,6 +12,7 @@ import {
   createEdgeFromConnection,
   getReplacedEdgeIds,
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/edgeUtils';
+import { validTargetTypesFor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/connectionRules';
 import { FlowNode } from '@/frontend/types/flow/flow';
 
 const node = (id: string, type: string): FlowNode =>
@@ -93,5 +94,20 @@ describe('validateConnection', () => {
     const withFinish = [...nodes, node('f1', 'finish')];
     expect(validateConnection(connect('m1', 'mcp-left', 'p1', 'process-right-mcp'), nodes)).toBe(true);
     expect(validateConnection(connect('m1', 'mcp-left', 'f1', 'finish-top'), withFinish)).toBe(false);
+  });
+
+  it('rejects an MCP handle used for flow control between two Process nodes', () => {
+    expect(validateConnection(connect('p1', 'process-left-mcp', 'p2', 'process-top'), nodes)).toBe(false);
+  });
+});
+
+describe('validTargetTypesFor', () => {
+  it('agrees with validateConnection for every source/handle combination', () => {
+    expect(validTargetTypesFor('mcp', 'mcp-bottom')).toEqual(['process']);
+    expect(validTargetTypesFor('process', 'process-left-mcp')).toEqual(['mcp']);
+    expect(validTargetTypesFor('process', 'process-bottom')).toEqual(['process', 'finish', 'subflow']);
+    expect(validTargetTypesFor('start', 'start-bottom')).toEqual(['process', 'finish', 'subflow']);
+    expect(validTargetTypesFor('subflow', 'subflow-bottom')).toEqual(['process', 'finish', 'subflow']);
+    expect(validTargetTypesFor('finish', 'finish-top')).toEqual([]);
   });
 });
