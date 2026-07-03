@@ -286,7 +286,6 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                   isLoadingHandoffTools={isLoadingHandoffTools}
                   handleInsertToolBinding={(toolType: string, toolName: string) => handleInsertToolBinding(toolType, toolName, 'handoff')}
                   promptBuilderRef={promptBuilderRef}
-                  selectedNodeId={node?.id || null}
                 />
               )}
             </Box>

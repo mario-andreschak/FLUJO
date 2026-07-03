@@ -217,7 +217,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const {
     contextMenu, selectedElements,
     closeContextMenu, handleDelete,
-    onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu
+    onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu, onSelectionContextMenu
   } = useCanvasEvents(nodes);
 
   const { deleteElements } = useReactFlow();
@@ -640,6 +640,21 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     }
   }, [contextMenu.open]);
 
+  // Whether the context-menu target can be copied: Start nodes cannot (they
+  // are unique per flow), and a selection is copyable when it contains at
+  // least one non-Start node.
+  const canCopy = useMemo(() => {
+    if (contextMenu.selection) {
+      const selectedSet = new Set(selectedElements.nodes);
+      return nodes.some(n => selectedSet.has(n.id) && n.type !== 'start');
+    }
+    if (contextMenu.nodeId) {
+      const node = nodes.find(n => n.id === contextMenu.nodeId);
+      return !!node && node.type !== 'start';
+    }
+    return false;
+  }, [contextMenu.selection, contextMenu.nodeId, selectedElements, nodes]);
+
   return (
     <FlowContainer
       ref={(el) => {
@@ -687,6 +702,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onNodeContextMenu={onNodeContextMenu}
         onEdgeContextMenu={onEdgeContextMenu}
         onPaneContextMenu={onPaneContextMenu}
+        onSelectionContextMenu={onSelectionContextMenu}
         onKeyDown={handleCanvasKeyDown}
         onNodeDoubleClick={onNodeDoubleClick}
         onConnectStart={onConnectStart}
@@ -713,7 +729,9 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onCopy={handleContextCopy}
         onPaste={handlePaste}
         canPaste={canPaste}
+        canCopy={canCopy}
         nodeId={contextMenu.nodeId}
+        selection={contextMenu.selection}
         edgeId={contextMenu.edgeId}
       />
 

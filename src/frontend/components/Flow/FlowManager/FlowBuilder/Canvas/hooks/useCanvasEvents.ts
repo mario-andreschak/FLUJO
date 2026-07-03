@@ -49,13 +49,20 @@ export function useCanvasEvents(nodes: FlowNode[]) {
 
   // Context menu handlers
   const onContextMenu = useCallback(
-    (event: MouseEvent | React.MouseEvent<Element, MouseEvent>, nodeId?: string, edgeId?: string) => {
+    (
+      event: MouseEvent | React.MouseEvent<Element, MouseEvent>,
+      nodeId?: string,
+      edgeId?: string,
+      selection?: boolean
+    ) => {
       event.preventDefault();
 
       if (nodeId) {
         log.debug(`Context menu opened for node: ${nodeId}`);
       } else if (edgeId) {
         log.debug(`Context menu opened for edge: ${edgeId}`);
+      } else if (selection) {
+        log.debug('Context menu opened for the current selection');
       } else {
         log.debug(`Context menu opened on canvas at (${event.clientX}, ${event.clientY})`);
       }
@@ -65,6 +72,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
         position: { x: event.clientX, y: event.clientY },
         nodeId,
         edgeId,
+        selection,
       });
     },
     []
@@ -77,7 +85,14 @@ export function useCanvasEvents(nodes: FlowNode[]) {
 
   // Handle delete action from context menu
   const handleDelete = useCallback(() => {
-    if (contextMenu.nodeId) {
+    if (contextMenu.selection) {
+      log.debug('handleDelete: Deleting the current selection');
+      // The onBeforeDelete guard filters out protected Start nodes.
+      deleteElements({
+        nodes: selectedElements.nodes.map(id => ({ id })),
+        edges: selectedElements.edges.map(id => ({ id })),
+      });
+    } else if (contextMenu.nodeId) {
       log.debug(`handleDelete: Attempting to delete node ${contextMenu.nodeId}`);
 
       // Check if the node is a Start node - Start nodes cannot be deleted
@@ -94,7 +109,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
       log.debug(`handleDelete: Deleting edge ${contextMenu.edgeId}`);
       deleteElements({ edges: [{ id: contextMenu.edgeId }] });
     }
-  }, [contextMenu, deleteElements, nodes]);
+  }, [contextMenu, deleteElements, nodes, selectedElements]);
 
   // Node context menu handler
   const onNodeContextMenu = useCallback(
@@ -112,12 +127,21 @@ export function useCanvasEvents(nodes: FlowNode[]) {
     [onContextMenu]
   );
 
-  // Prevent context menu on the canvas background
+  // Pane (empty canvas) context menu — offers Paste at the click position
   const onPaneContextMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<Element, MouseEvent>) => {
-      closeContextMenu();
+      onContextMenu(event);
     },
-    [closeContextMenu]
+    [onContextMenu]
+  );
+
+  // Right-click on a multi-node selection (ReactFlow renders a selection box
+  // over the nodes, so onNodeContextMenu does not fire there)
+  const onSelectionContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      onContextMenu(event, undefined, undefined, true);
+    },
+    [onContextMenu]
   );
 
   return {
@@ -129,6 +153,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
     onNodeContextMenu,
     onEdgeContextMenu,
     onPaneContextMenu,
+    onSelectionContextMenu,
   };
 }
 

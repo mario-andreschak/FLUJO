@@ -40,6 +40,8 @@ export interface ContextMenuState {
   position: { x: number; y: number };
   nodeId?: string;
   edgeId?: string;
+  /** True when the menu targets the current multi-selection. */
+  selection?: boolean;
 }
 
 export interface SelectedElementsState {

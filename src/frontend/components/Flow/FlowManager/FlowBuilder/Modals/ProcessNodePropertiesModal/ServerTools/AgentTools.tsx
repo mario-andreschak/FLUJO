@@ -1,4 +1,4 @@
-import React, { RefObject, useState, useEffect } from 'react';
+import React, { RefObject, useState } from 'react';
 import {
   Box,
   Typography,
@@ -9,9 +9,7 @@ import {
   Card,
   CardContent,
   Tooltip,
-  List,
-  Button,
-  Divider
+  List
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
@@ -36,15 +34,13 @@ interface AgentToolsProps {
   isLoadingHandoffTools: boolean;
   handleInsertToolBinding: (toolType: string, toolName: string) => void;
   promptBuilderRef: RefObject<PromptBuilderRef | null>;
-  selectedNodeId: string | null;
 }
 
 const AgentTools: React.FC<AgentToolsProps> = ({
   handoffTools,
   isLoadingHandoffTools,
   handleInsertToolBinding,
-  promptBuilderRef,
-  selectedNodeId
+  promptBuilderRef
 }) => {
   // State to track search query
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -126,37 +122,6 @@ const AgentTools: React.FC<AgentToolsProps> = ({
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
             Connect this Process node to other nodes to enable handoff tools.
           </Typography>
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
-            <Button 
-              variant="outlined" 
-              size="small"
-              onClick={() => {
-                // Create a debug handoff tool for testing
-                const debugTool: HandoffTool = {
-                  name: "debug_handoff_tool",
-                  description: "Debug handoff tool for testing",
-                  inputSchema: {
-                    type: "object",
-                    properties: {
-                      debug: {
-                        type: "boolean",
-                        description: "This is a debug tool"
-                      }
-                    },
-                    required: ["debug"]
-                  }
-                };
-                
-                // Insert the debug tool
-                handleInsertToolBinding('handoff', debugTool.name);
-                
-                // Log the action
-                log.debug('Inserted debug handoff tool', { toolName: debugTool.name });
-              }}
-            >
-              Insert Debug Tool
-            </Button>
-          </Box>
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, height: 'calc(100% - 40px)' }}>
@@ -178,30 +143,14 @@ const AgentTools: React.FC<AgentToolsProps> = ({
             }}
           />
           
-          {/* Debug info */}
-          <Box sx={{ mb: 2, p: 2, bgcolor: 'rgba(0, 0, 0, 0.02)', borderRadius: 1 }}>
-            <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
-              Debug Information:
-            </Typography>
-            <Typography variant="caption" component="div">
-              Node ID: {selectedNodeId || 'None'}
-            </Typography>
-            <Typography variant="caption" component="div">
-              Handoff Tools Count: {handoffTools.length}
-            </Typography>
-            <Typography variant="caption" component="div">
-              Tool Names: {handoffTools.map(t => t.name).join(', ')}
-            </Typography>
-          </Box>
-          
           {/* Tool list */}
-          <Paper 
-            variant="outlined" 
-            sx={{ 
+          <Paper
+            variant="outlined"
+            sx={{
               flexGrow: 1,
-              overflow: 'auto', 
+              overflow: 'auto',
               p: 0,
-              height: 'calc(100% - 140px)' // Adjusted for debug info
+              height: 'calc(100% - 56px)' // Below the search field
             }}
           >
             {filteredTools.length === 0 ? (
