@@ -75,6 +75,10 @@ export interface SubflowNodeProperties {
      *  empty, the subflow receives the parent conversation's latest message
      *  text. (Named-variable templating is a later enhancement.) */
     promptTemplate?: string;
+    /** Output visibility: 'steps' (default) folds the child run's events into
+     *  the parent conversation's live stream + log, nested by depth;
+     *  'final-only' shows only the folded final output message. */
+    outputMode?: 'steps' | 'final-only';
 }
 
 // Type-specific node params
@@ -320,6 +324,17 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     depth: number;
     /** Parent conversation id, for nesting provenance. */
     parentRunId?: string;
+    /** Whether the child run's events are folded into the parent conversation
+     *  (outputMode 'steps', the default) or hidden ('final-only'). */
+    showSteps: boolean;
+    /** The parent run's emit (captured from sharedState during prep): child
+     *  events are forwarded through it onto the PARENT's channel/log with
+     *  depth + 1. Transient — stripped from debug snapshots, never persisted. */
+    emit?: EmitFn;
+    /** Display name of the child flow (for subflow:start events / attribution). */
+    subflowName?: string;
+    /** Display name of this node (for subflow event attribution). */
+    nodeName?: string;
 }
 
 // Union type for all prep results

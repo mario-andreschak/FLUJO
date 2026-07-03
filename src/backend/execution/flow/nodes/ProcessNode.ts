@@ -532,12 +532,18 @@ export class ProcessNode extends BaseNode {
        sharedState.lastResponse = execResult.content || '';
     }
 
-    // Update shared state with messages from execResult
+    // Update shared state with messages from execResult — WITHOUT the node's
+    // system prompt. The system message prep prepends (via buildNodeContext)
+    // is the model's WIRE view, not conversation content: writing it back made
+    // every persisted conversation lead with a system message, leaked it into
+    // the displayed transcript, and forced special-casing in the live emitter
+    // and the GET route. prep re-renders the prompt fresh every step (and
+    // buildNodeContext drops any stale system messages), so nothing is lost by
+    // excluding it here. (execution-core v2 Phase 3, plan §11.2.4)
     if (execResult.messages && execResult.messages.length > 0) {
-      // Replace messages in shared state with the updated messages
-      sharedState.messages = execResult.messages;
+      sharedState.messages = execResult.messages.filter(m => m.role !== 'system');
 
-      log.info('Updated messages in sharedState', {
+      log.info('Updated messages in sharedState (system prompt excluded)', {
         messagesCount: sharedState.messages.length
       });
     }

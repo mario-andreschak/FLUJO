@@ -24,6 +24,9 @@ export type ExecutionEventType =
   | 'handoff'
   | 'usage'
   | 'message'
+  | 'message:removed'
+  | 'subflow:start'
+  | 'subflow:done'
   | 'breakpoint:hit'
   | 'error';
 
@@ -38,6 +41,14 @@ export interface ExecutionEventBase {
   seq: number;       // monotonic per conversation, assigned by the bus
   timestamp: number; // ms since epoch, assigned by the bus
   type: ExecutionEventType;
+  /**
+   * Subflow nesting depth of the run that produced this event. Absent/0 for the
+   * top-level conversation; a subflow child's events are forwarded onto the
+   * PARENT's channel with depth = parent depth + 1 (each SubflowNode wrapper
+   * adds one), so the live stream and the persisted conversation log can nest
+   * child steps inside the parent conversation.
+   */
+  depth?: number;
 }
 
 export interface RunStartEvent extends ExecutionEventBase {
@@ -117,6 +128,30 @@ export interface MessageEvent extends ExecutionEventBase {
   node?: NodeRef;
   message: FlujoChatMessage;
 }
+/**
+ * A message was removed from the conversation (the chat client sends the full,
+ * possibly pruned, history each turn — see runFlow's turn-start reconcile).
+ * Log-only: written straight to the conversation log (seq -1), never emitted on
+ * the live bus.
+ */
+export interface MessageRemovedEvent extends ExecutionEventBase {
+  type: 'message:removed';
+  messageId: string;
+}
+/** A SubflowNode started its child run (child events follow with depth+1). */
+export interface SubflowStartEvent extends ExecutionEventBase {
+  type: 'subflow:start';
+  node?: NodeRef;
+  subflowId: string;
+  subflowName?: string;
+}
+/** The child run of a SubflowNode reached a terminal state. */
+export interface SubflowDoneEvent extends ExecutionEventBase {
+  type: 'subflow:done';
+  node?: NodeRef;
+  subflowId: string;
+  status: 'completed' | 'error';
+}
 export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';
   node: NodeRef;
@@ -142,6 +177,9 @@ export type ExecutionEvent =
   | HandoffEvent
   | UsageEvent
   | MessageEvent
+  | MessageRemovedEvent
+  | SubflowStartEvent
+  | SubflowDoneEvent
   | BreakpointHitEvent
   | ErrorEvent;
 

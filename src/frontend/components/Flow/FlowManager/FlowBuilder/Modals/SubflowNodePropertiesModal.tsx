@@ -19,6 +19,9 @@ import {
   Alert,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import { createLogger } from '@/utils/logger';
@@ -33,6 +36,65 @@ interface SubflowNodePropertiesModalProps {
   /** The id of the flow being edited, so it can be excluded from the picker. */
   flowId?: string;
 }
+
+/** A big selectable card for a mutually exclusive choice (radio-style). */
+const OptionCard = ({
+  selected,
+  icon,
+  title,
+  description,
+  onClick,
+}: {
+  selected: boolean;
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) => (
+  <Box
+    role="radio"
+    aria-checked={selected}
+    tabIndex={0}
+    onClick={onClick}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onClick();
+      }
+    }}
+    sx={{
+      flex: 1,
+      position: 'relative',
+      p: 2,
+      borderRadius: 2,
+      border: 2,
+      borderColor: selected ? 'primary.main' : 'divider',
+      bgcolor: selected ? 'action.selected' : 'background.paper',
+      cursor: 'pointer',
+      transition: 'border-color 120ms, background-color 120ms',
+      '&:hover': { borderColor: selected ? 'primary.main' : 'text.disabled' },
+      outline: 'none',
+      '&:focus-visible': { boxShadow: (theme: any) => `0 0 0 3px ${theme.palette.primary.light}` },
+    }}
+  >
+    {selected && (
+      <CheckCircleIcon
+        color="primary"
+        fontSize="small"
+        sx={{ position: 'absolute', top: 8, right: 8 }}
+      />
+    )}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, color: selected ? 'primary.main' : 'text.secondary' }}>
+      {icon}
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+        {title}
+      </Typography>
+    </Box>
+    <Typography variant="body2" color="text.secondary">
+      {description}
+    </Typography>
+  </Box>
+);
 
 export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId }: SubflowNodePropertiesModalProps) => {
   const [nodeData, setNodeData] = useState<{
@@ -125,8 +187,9 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
 
       <DialogContent sx={{ p: 3 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          This step runs another flow as a subroutine. Its final answer is added to
-          this conversation and execution continues to the next node.
+          This step runs another flow inside this one — like calling a helper.
+          When it finishes, its answer becomes part of this conversation and the
+          flow continues to the next node.
         </Typography>
 
         <TextField
@@ -175,6 +238,26 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           rows={3}
           helperText="What to send to the subflow. Leave empty to pass this conversation's latest message."
         />
+
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          What do you see in the chat while the subflow runs?
+        </Typography>
+        <Box role="radiogroup" aria-label="Subflow output" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <OptionCard
+            selected={(nodeData.properties?.outputMode || 'steps') !== 'final-only'}
+            onClick={() => handlePropertyChange('outputMode', 'steps')}
+            icon={<ForumOutlinedIcon />}
+            title="Full"
+            description="You see all of the subflow's messages in the chat, indented under this step — like watching it work."
+          />
+          <OptionCard
+            selected={nodeData.properties?.outputMode === 'final-only'}
+            onClick={() => handlePropertyChange('outputMode', 'final-only')}
+            icon={<ChatBubbleOutlineIcon />}
+            title="Condensed"
+            description="You only see the subflow's final answer as a single message. Its inner steps stay hidden."
+          />
+        </Box>
       </DialogContent>
 
       <DialogActions>

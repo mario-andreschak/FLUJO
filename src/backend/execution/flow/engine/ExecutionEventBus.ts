@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
+import { appendFromBus } from '@/backend/execution/flow/conversationLog';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
@@ -86,6 +87,14 @@ class ExecutionEventBus {
       channel.buffer.shift();
     }
     channel.emitter.emit('event', event);
+
+    // The live stream IS the conversation log being appended (execution-core
+    // v2 §3.1): every emit — regardless of which emitter produced it (runFlow's
+    // loop, ModelHandler's mid-run transcript sink, control routes) — is tapped
+    // into the append-only per-conversation log. The tap filters transient
+    // event types and enforces the ephemeral policy itself, and is
+    // fire-and-forget so persistence can never break live consumers.
+    appendFromBus(event);
 
     // Terminal event → the channel becomes garbage once nobody replays it.
     // Any other event (e.g. run:start of a resumed conversation) revives it.

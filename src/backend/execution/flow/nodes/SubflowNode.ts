@@ -10,6 +10,7 @@ import {
 } from '../types';
 import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import { EmitFn } from '@/shared/types/execution/events';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -77,6 +78,7 @@ export class SubflowNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
+    const showSteps = node_params?.properties?.outputMode !== 'final-only';
 
     // An explicit promptTemplate is an override: send exactly that as the
     // subflow's single user prompt. Otherwise, pass the sanitized parent
@@ -87,6 +89,12 @@ export class SubflowNode extends BaseNode {
       subflowId,
       depth: (sharedState.runDepth ?? 0) + 1,
       parentRunId: sharedState.conversationId,
+      showSteps,
+      // The engine attaches the run's emit to sharedState for the duration of
+      // this step; capturing it here lets execCore forward the child run's
+      // events onto the PARENT conversation's channel, nested by depth.
+      emit: sharedState.emit,
+      nodeName: node_params?.properties?.name,
     };
     if (promptTemplate) {
       prepResult.inputText = promptTemplate;
@@ -94,11 +102,23 @@ export class SubflowNode extends BaseNode {
       prepResult.messages = sanitizeForSubflow(sharedState.messages);
     }
 
+    // Child-flow display name for subflow:start attribution (best-effort).
+    if (subflowId) {
+      try {
+        const { flowService } = await import('@/backend/services/flow/index');
+        const flow = await flowService.getFlow(subflowId);
+        if (flow?.name) prepResult.subflowName = flow.name;
+      } catch {
+        /* attribution only — never block the run on a name lookup */
+      }
+    }
+
     log.info('prep() completed', {
       subflowId,
       depth: prepResult.depth,
       mode: promptTemplate ? 'promptTemplate' : 'history',
       historyCount: prepResult.messages?.length,
+      showSteps,
     });
     return prepResult;
   }
@@ -112,7 +132,56 @@ export class SubflowNode extends BaseNode {
     // SubflowNode -> runFlow -> FlowExecutor -> PocketflowEngine -> FlowConverter -> nodes
     const { runFlow } = await import('../runFlow');
 
-    log.info('execCore() running subflow', { subflowId: prepResult.subflowId, depth: prepResult.depth });
+    // Fold the child run's events into the PARENT conversation (outputMode
+    // 'steps', the default): every child event is forwarded through the
+    // parent's emit with depth + 1 — nested live view AND, via the bus tap,
+    // nested persistence in the parent's log. The child itself stays ephemeral
+    // and persists nothing of its own. The child's run boundaries are
+    // translated to subflow:start / subflow:done (a raw child run:done on the
+    // parent channel would terminate the parent's SSE streams mid-run).
+    // Wrappers COMPOSE: a grandchild's events pass through two wrappers and
+    // arrive at depth 2.
+    const parentEmit = prepResult.emit;
+    const nodeRef = {
+      nodeId: prepResult.nodeId,
+      nodeName: prepResult.nodeName,
+      nodeType: 'subflow',
+    };
+    const subflowId = prepResult.subflowId;
+    const childEmit: EmitFn | undefined =
+      parentEmit && prepResult.showSteps
+        ? (raw) => {
+            const depth = (raw.depth ?? 0) + 1;
+            if (raw.type === 'run:start') {
+              parentEmit({
+                type: 'subflow:start',
+                node: nodeRef,
+                subflowId,
+                subflowName: prepResult.subflowName,
+                depth,
+              });
+              return;
+            }
+            if (raw.type === 'run:done') {
+              parentEmit({ type: 'subflow:done', node: nodeRef, subflowId, status: raw.status, depth });
+              return;
+            }
+            if (raw.type === 'message') {
+              // Stamp depth onto the message payload too: live consumers and
+              // the log projection key nested display off message.depth.
+              parentEmit({ ...raw, depth, message: { ...raw.message, depth } });
+              return;
+            }
+            parentEmit({ ...raw, depth });
+          }
+        : undefined;
+
+    log.info('execCore() running subflow', {
+      subflowId: prepResult.subflowId,
+      depth: prepResult.depth,
+      showSteps: prepResult.showSteps,
+      foldingEvents: !!childEmit,
+    });
     const result = await runFlow({
       flowId: prepResult.subflowId,
       // Either a promptTemplate override (single prompt) or the sanitized parent
@@ -124,6 +193,7 @@ export class SubflowNode extends BaseNode {
       debug: false,
       depth: prepResult.depth,
       parentRunId: prepResult.parentRunId,
+      ...(childEmit ? { emit: childEmit } : {}),
     });
 
     if (result.status === 'error') {

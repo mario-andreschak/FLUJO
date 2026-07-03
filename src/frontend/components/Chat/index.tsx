@@ -6,7 +6,6 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
-import { Grid } from '@mui/material'; // Import Grid for layout
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
@@ -164,6 +163,43 @@ const Chat: React.FC = () => {
   // (between pauses) — it stays open and shows live progress, then re-populates
   // when the next pause arrives. Cleared when the session ends or is closed.
   const [debugSessionActive, setDebugSessionActive] = useState<boolean>(false);
+
+  // User-resizable debugger panel width in px (0 = default 50%). Persisted so
+  // the preferred split survives reloads. Adjusted by dragging the divider
+  // between the chat and the debugger.
+  const [debuggerWidth, setDebuggerWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0;
+    const saved = Number(window.localStorage.getItem('flujo-debugger-width'));
+    return Number.isFinite(saved) && saved > 0 ? saved : 0;
+  });
+  const startDebuggerResize = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none'; // no text selection while dragging
+    document.body.style.cursor = 'col-resize';
+    const onMove = (ev: PointerEvent) => {
+      // The debugger panel is flush right, so its width is the distance from
+      // the pointer to the right window edge (clamped to sane bounds).
+      const width = Math.min(
+        Math.max(window.innerWidth - ev.clientX, 360),
+        Math.round(window.innerWidth * 0.85)
+      );
+      setDebuggerWidth(width);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      setDebuggerWidth(w => {
+        if (w > 0) window.localStorage.setItem('flujo-debugger-width', String(Math.round(w)));
+        return w;
+      });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
 
   // Live execution stats, driven by the SSE event stream while a run is active.
   const [liveStats, setLiveStats] = useState<LiveRunStats | null>(null);
@@ -557,6 +593,9 @@ const Chat: React.FC = () => {
         break;
       case 'node:enter':
         touch({ activeNode: event.node?.nodeName || event.node?.nodeId || null });
+        break;
+      case 'subflow:start':
+        touch({ activeNode: `↳ ${event.subflowName || event.subflowId}` });
         break;
       case 'handoff':
         touch({ activeNode: `→ ${event.toNodeId}` });
@@ -1077,9 +1116,12 @@ const Chat: React.FC = () => {
 
       log.debug('Sending to chat completions', { flowId: conversation.flowId, flowName: flow.name, conversationId: conversation.id });
 
-      // Prepare messages for the API from the detailed conversation
+      // Prepare messages for the API from the detailed conversation.
+      // depth>0 messages are nested subflow steps served by the backend's
+      // projection for display only — they are never part of the parent
+      // transcript and must not be sent back as history.
       const messages = conversation.messages
-        .filter(msg => !msg.disabled)
+        .filter(msg => !msg.disabled && !((msg.depth ?? 0) > 0))
         .map(msg => {
           // Collapse text/doc/audio to a string or, for image attachments, a
           // multipart array (so vision models receive the image).
@@ -1300,9 +1342,10 @@ const Chat: React.FC = () => {
           throw new Error(`Flow with ID ${updatedDetailedConv.flowId} not found`);
         }
 
-        // Prepare messages for the API
+        // Prepare messages for the API (depth>0 = display-only subflow steps,
+        // never sent back as history — same rule as the send path)
         const messages = updatedDetailedConv.messages
-          .filter(msg => !msg.disabled)
+          .filter(msg => !msg.disabled && !((msg.depth ?? 0) > 0))
           .map(msg => {
             // Same content shaping as the send path: string for text/doc/audio,
             // multipart array when image attachments are present.
@@ -1626,10 +1669,11 @@ const Chat: React.FC = () => {
         )}
       </Box>
 
-      {/* Main Content Area (Chat or Chat + Debugger) */}
-      <Grid container sx={{ flex: 1, height: '100%' }}>
+      {/* Main Content Area (Chat or Chat + Debugger). Flex, not Grid: the
+          debugger panel has a user-resizable pixel width (drag the divider). */}
+      <Box sx={{ flex: 1, height: '100%', display: 'flex', minWidth: 0, minHeight: 0 }}>
         {/* Chat Area */}
-        <Grid item xs={debugPanelOpen ? 6 : 12} sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderRight: debugPanelOpen ? 1 : 0, borderColor: 'divider' }}>
+        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
           {/* Flow selector - Use summary data. Only shown once a conversation is
               selected; with no conversation it's confusing (nothing to assign a
               flow to). */}
@@ -1768,26 +1812,52 @@ const Chat: React.FC = () => {
             onExecuteInDebuggerChange={setExecuteInDebugger} // Pass debugger handler
           />
         </Box>
-        </Grid> {/* End Chat Area Grid */}
+        </Box> {/* End Chat Area */}
 
         {/* Debugger Area (open for the whole debug session, not only when paused) */}
         {debugPanelOpen && (
-          <Grid item xs={6} sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <DebuggerCanvas
-              debugState={debugState}
-              conversationId={currentConversationId}
-              onStep={handleDebugStep}
-              onStepOver={handleStepOver}
-              onContinue={handleDebugContinue}
-              onCancel={handleCancelRequest}
-              isLoading={isLoading}
-              breakpoints={breakpoints}
-              onToggleBreakpoint={handleToggleBreakpoint}
-              onClose={handleDebugClose}
+          <>
+            {/* Draggable divider: resizes the debugger panel. */}
+            <Box
+              onPointerDown={startDebuggerResize}
+              sx={{
+                width: '6px',
+                flexShrink: 0,
+                cursor: 'col-resize',
+                bgcolor: 'divider',
+                transition: 'background-color 120ms',
+                '&:hover': { bgcolor: 'primary.main' },
+                touchAction: 'none',
+              }}
+              aria-label="Resize debugger panel"
             />
-          </Grid>
+            <Box
+              sx={{
+                width: debuggerWidth ? `${debuggerWidth}px` : '50%',
+                minWidth: 360,
+                maxWidth: '85vw',
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+              }}
+            >
+              <DebuggerCanvas
+                debugState={debugState}
+                conversationId={currentConversationId}
+                onStep={handleDebugStep}
+                onStepOver={handleStepOver}
+                onContinue={handleDebugContinue}
+                onCancel={handleCancelRequest}
+                isLoading={isLoading}
+                breakpoints={breakpoints}
+                onToggleBreakpoint={handleToggleBreakpoint}
+                onClose={handleDebugClose}
+              />
+            </Box>
+          </>
         )}
-      </Grid> {/* End Main Content Grid */}
+      </Box> {/* End Main Content */}
     </Box>
   );
 };

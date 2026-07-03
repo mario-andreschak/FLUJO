@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { StorageKey } from '@/shared/types/storage';
 
@@ -60,6 +61,9 @@ export async function PATCH(
       }
       message.content = body.content;
       applied = true;
+      // Record the edit in the append-only conversation log: the projection
+      // upserts by message id, so the edited copy replaces the original in place.
+      await appendRawForState(sharedState, [{ type: 'message', message }]);
       log.info('Edited message content', { conversationId, messageId: body.messageId });
     }
 

@@ -2,6 +2,7 @@ import { FlowExecutor } from './FlowExecutor';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
+import { recoverMessagesFromLog } from './conversationLog';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
@@ -27,6 +28,9 @@ export async function loadConversationState(conversationId: string): Promise<Sha
     const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
     if (state) {
       log.debug('Loaded state from storage', { conversationId });
+      // Per-step durability lives in the append-only log; the snapshot is only
+      // written at run boundaries. Fold in anything the snapshot missed.
+      await recoverMessagesFromLog(state);
       FlowExecutor.conversationStates.set(conversationId, state);
       return state;
     }

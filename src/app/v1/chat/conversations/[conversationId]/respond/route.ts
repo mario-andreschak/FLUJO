@@ -5,6 +5,7 @@ import { SharedState } from '@/backend/execution/flow/types';
 import { StorageKey } from '@/shared/types/storage';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
@@ -87,6 +88,12 @@ export async function POST(
       return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
     }
 
+    // Messages appended by this request; folded into the append-only
+    // conversation log after the state is saved (the run loop's emission
+    // tracking never sees them — they are in the state before the resume
+    // starts — so the log must be told here).
+    const appendedMessages: FlujoChatMessage[] = [];
+
     // 3. Process action
     if (action === 'approve') {
       log.info(`Approving tool call`, { requestId, conversationId, toolCallId });
@@ -104,6 +111,7 @@ export async function POST(
           timestamp: Date.now(),
         };
         sharedState.messages.push(errorMessage);
+        appendedMessages.push(errorMessage);
         // Keep state as 'awaiting_tool_approval' but remove the failed call? Or mark as error?
         // Let's remove the call and stay awaiting for others, or transition if it was the last one.
         sharedState.pendingToolCalls = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
@@ -113,9 +121,18 @@ export async function POST(
         }
 
       } else {
-        // Add tool result message(s)
+        // Add tool result message(s), stamped with the id/timestamp identity
+        // every conversation message carries (mirrors the run loop's mapping;
+        // the log and the live-view dedupe are both keyed on message id).
         log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} tool result message(s) after approval`, { requestId, conversationId });
-        sharedState.messages.push(...toolProcessingResult.value.toolCallMessages);
+        const toolResultMessages: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
+          ...msg,
+          id: (msg as Partial<FlujoChatMessage>).id || uuidv4(),
+          timestamp: (msg as Partial<FlujoChatMessage>).timestamp || Date.now(),
+          processNodeId: (msg as Partial<FlujoChatMessage>).processNodeId || sharedState.currentNodeId,
+        }));
+        sharedState.messages.push(...toolResultMessages);
+        appendedMessages.push(...toolResultMessages);
         // Remove the processed tool call from pending list
         sharedState.pendingToolCalls = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
       }
@@ -131,6 +148,7 @@ export async function POST(
         timestamp: Date.now(),
       };
       sharedState.messages.push(rejectionMessage);
+      appendedMessages.push(rejectionMessage);
       // Remove the rejected tool call from pending list
       sharedState.pendingToolCalls = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
     }
@@ -148,6 +166,9 @@ export async function POST(
     sharedState.lastResponse = undefined; // Clear last response before potentially resuming
     FlowExecutor.conversationStates.set(conversationId, sharedState); // Update memory map
     await persistConversationState(storageKey, sharedState); // Save to storage (trace stripped)
+    // Fold this request's appended messages into the conversation log so the
+    // projection reflects them even while the run stays paused for approval.
+    await appendRawForState(sharedState, appendedMessages.map(m => ({ type: 'message', message: m })));
     log.info(`Saved updated state after processing tool response`, { requestId, conversationId, newStatus: sharedState.status });
 
     // 6a. Still awaiting approval for other tool calls in the same batch: just

@@ -1,6 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { reconcileConversationLog, recoverMessagesFromLog } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
@@ -174,6 +175,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       if (loadedState) {
         log.info(`Loaded conversation state from storage: ${effectiveConvId}`);
         stateSource = 'storage';
+        // Per-step durability lives in the append-only log; the snapshot is
+        // only written at run boundaries. Fold in anything it missed (e.g. a
+        // crash mid-run after messages were streamed/appended).
+        await recoverMessagesFromLog(loadedState);
         FlowExecutor.conversationStates.set(effectiveConvId, loadedState);
       } else {
         log.info(`No state found in storage for conversation: ${effectiveConvId}. Will create new state.`);
@@ -275,6 +280,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     };
   }
 
+  // Snapshot the pre-turn messages for the log reconcile below: the incoming
+  // request may REPLACE the message list (the chat client sends its full,
+  // possibly pruned/edited history each turn), and the append-only log needs
+  // the diff, not the replacement.
+  const messagesBeforeTurn: FlujoChatMessage[] = [...(sharedState.messages ?? [])];
+
   // --- Configure State Based on Source ---
   if (stateSource === 'new') {
     // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
@@ -315,12 +326,16 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // The chat frontend sends its optimistic message id; keeping it means the
     // canonical copy MERGES with the optimistic bubble in the live view
     // instead of appearing as a duplicate (dedupe there is by message id).
-    const initialMessages: FlujoChatMessage[] = (data.messages || []).map(msg => ({
-      ...msg,
-      id: (msg as any).id || crypto.randomUUID(),
-      timestamp: (msg as any).timestamp || Date.now(),
-      processNodeId: (msg as any).processNodeId || undefined,
-    }));
+    // depth>0 messages are display-only subflow steps served by the projection
+    // — they must never (re-)enter the parent transcript / model context.
+    const initialMessages: FlujoChatMessage[] = (data.messages || [])
+      .filter(msg => !((msg as any).depth > 0))
+      .map(msg => ({
+        ...msg,
+        id: (msg as any).id || crypto.randomUUID(),
+        timestamp: (msg as any).timestamp || Date.now(),
+        processNodeId: (msg as any).processNodeId || undefined,
+      }));
     sharedState.messages = initialMessages;
 
     try {
@@ -341,15 +356,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   } else { // stateSource is 'storage' or 'memory'
     if (data.messages && data.messages.length > 0) {
-      sharedState.messages = data.messages.map(msg => {
-        const flujoMsg: FlujoChatMessage = {
-          ...msg,
-          id: (msg as any).id || crypto.randomUUID(),
-          timestamp: (msg as any).timestamp || Date.now(),
-          processNodeId: (msg as any).processNodeId || undefined,
-        };
-        return flujoMsg;
-      });
+      // As above: drop display-only subflow step messages (depth>0) so they
+      // can never round-trip from the projection into the parent transcript.
+      sharedState.messages = data.messages
+        .filter(msg => !((msg as any).depth > 0))
+        .map(msg => {
+          const flujoMsg: FlujoChatMessage = {
+            ...msg,
+            id: (msg as any).id || crypto.randomUUID(),
+            timestamp: (msg as any).timestamp || Date.now(),
+            processNodeId: (msg as any).processNodeId || undefined,
+          };
+          return flujoMsg;
+        });
       log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
     }
     if (userTurn || sharedState.debugMode === undefined) {
@@ -363,6 +382,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         sharedState.executionTrace = [];
       }
     }
+  }
+
+  // --- Bring the append-only conversation log in line with this turn's input ---
+  // Bootstraps the log for brand-new/legacy conversations and records the diff
+  // (new turns, edits, pruned messages) for logged ones, BEFORE any run event
+  // is emitted. Ephemeral runs are refused inside. Advisory on failure: the
+  // legacy SharedState persistence below still covers the conversation.
+  try {
+    await reconcileConversationLog(sharedState, messagesBeforeTurn);
+  } catch (error) {
+    log.warn(`Conversation-log reconcile failed for ${effectiveConvId}; continuing`, error);
   }
 
   // --- Direct a new user turn to its intended node (one-time, at turn start) ---
@@ -492,17 +522,6 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
   };
 
-  // Mid-loop persistence throttle. Persisting rewrites the ENTIRE conversation
-  // file, so a fast tool loop on a long conversation used to pay O(file size)
-  // disk writes on every step. Boundary persists (initial save, every pause,
-  // breakpoints, the final save) stay unconditional — durability at every point
-  // a caller can observe is unchanged; only intermediate step snapshots within
-  // a running loop are coalesced. Crash-loss window ≤ the throttle interval
-  // (and the Claude adapter's incremental persist still covers streamed
-  // messages independently).
-  const STEP_PERSIST_MIN_INTERVAL_MS = 500;
-  let lastStepPersistAt = 0;
-
   try {
     if (!preflightError) {
       while (true) {
@@ -596,25 +615,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         currentAction = stepResult.action;
         emitNewMessages();
 
-        try {
-          sharedState.updatedAt = Date.now();
-          if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
-            const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
-            if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-              sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
-              log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
-            }
+        // No mid-loop state snapshot: per-step durability is the append-only
+        // conversation log (every emitted event is appended by the bus tap;
+        // this replaced the old rewrite-the-whole-file-per-step and its 500ms
+        // throttle). The full SharedState snapshot is written only at run
+        // boundaries — initial save, every pause, breakpoints, the final save —
+        // and a storage load folds log messages the snapshot missed back in
+        // (recoverMessagesFromLog).
+        sharedState.updatedAt = Date.now();
+        if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+          const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+          if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+            sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+            log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
           }
-          // Throttled: intermediate step snapshots coalesce (see
-          // STEP_PERSIST_MIN_INTERVAL_MS above); every loop-exit path persists
-          // unconditionally, so no terminal/pause state is ever stale.
-          if (Date.now() - lastStepPersistAt >= STEP_PERSIST_MIN_INTERVAL_MS) {
-            lastStepPersistAt = Date.now();
-            await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
-            log.verbose(`Saved state after step ${internalIterations} for conv ${effectiveConvId}`);
-          }
-        } catch (error) {
-          log.error(`Failed to save state after step ${internalIterations} for conv ${effectiveConvId}:`, error);
         }
 
         log.info(`Step ${internalIterations} completed for conv ${effectiveConvId}. Action: ${currentAction}`, { currentNodeId: sharedState.currentNodeId });
