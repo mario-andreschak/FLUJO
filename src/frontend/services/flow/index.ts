@@ -233,30 +233,34 @@ class FlowService {
   }
 
   /**
-   * Create a new flow with a default Start node
+   * Create the default Start node every flow begins with — the single
+   * definition of its shape (label, position, empty prompt template).
    */
-  createNewFlow(name: string = 'NewFlow'): Flow {
-    log.debug('createNewFlow: Entering method', { name });
-    
-    // Create a Start node
-    const startNode: FlowNode = { 
+  createStartNode(): FlowNode {
+    return {
       id: uuidv4(),
       type: 'start',
       position: { x: 250, y: 150 },
-      data: { 
-        label: 'Start Node', 
+      data: {
+        label: 'Start Node',
         type: 'start',
         properties: {
           promptTemplate: ''
         }
       }
     };
-    
-    // Create and return the new flow
+  }
+
+  /**
+   * Create a new flow with a default Start node
+   */
+  createNewFlow(name: string = 'NewFlow'): Flow {
+    log.debug('createNewFlow: Entering method', { name });
+
     return {
       id: uuidv4(),
       name,
-      nodes: [startNode],
+      nodes: [this.createStartNode()],
       edges: [],
     };
   }

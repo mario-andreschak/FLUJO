@@ -46,6 +46,17 @@ interface FlowClipboard {
 }
 let flowClipboardMemory: FlowClipboard | null = null;
 
+// The single write path for the flow clipboard — every copy source must use
+// this so the in-memory and localStorage payloads never diverge.
+function writeFlowClipboard(payload: FlowClipboard) {
+  flowClipboardMemory = payload;
+  try {
+    localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
+  } catch (err) {
+    log.warn('Could not persist flow clipboard to localStorage', err);
+  }
+}
+
 // Node types for the ReactFlow component
 const nodeTypes = {
   start: StartNode,
@@ -514,17 +525,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     if (copyNodes.length === 0) return false;
     const copyIds = new Set(copyNodes.map(n => n.id));
     const copyEdges = edges.filter(e => copyIds.has(e.source) && copyIds.has(e.target));
-    const payload: FlowClipboard = {
+    writeFlowClipboard({
       nodes: JSON.parse(JSON.stringify(copyNodes)),
       edges: JSON.parse(JSON.stringify(copyEdges)),
-    };
-    flowClipboardMemory = payload;
-    try {
-      localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
-    } catch (err) {
-      log.warn('Could not persist flow clipboard to localStorage', err);
-    }
-    log.debug(`Copied ${payload.nodes.length} node(s) and ${payload.edges.length} edge(s)`);
+    });
+    log.debug(`Copied ${copyNodes.length} node(s) and ${copyEdges.length} edge(s)`);
     return true;
   }, [selectedElements, nodes, edges]);
 
@@ -616,13 +621,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     if (contextMenu.nodeId && !selectedElements.nodes.includes(contextMenu.nodeId)) {
       const node = nodes.find(n => n.id === contextMenu.nodeId);
       if (node && node.type !== 'start') {
-        const payload: FlowClipboard = { nodes: JSON.parse(JSON.stringify([node])), edges: [] };
-        flowClipboardMemory = payload;
-        try {
-          localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
-        } catch (err) {
-          log.warn('Could not persist flow clipboard to localStorage', err);
-        }
+        writeFlowClipboard({ nodes: JSON.parse(JSON.stringify([node])), edges: [] });
         log.debug('Copied right-clicked node to clipboard');
       }
       return;

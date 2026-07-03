@@ -165,13 +165,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setHistoryIndex(0);
     } else {
       // Create a new flow with a Start node
-      const startNode = flowService.createNode('start', { x: 250, y: 150 });
-      // Ensure properties object exists and set promptTemplate
-      if (!startNode.data.properties) {
-        startNode.data.properties = {};
-      }
-      startNode.data.properties.promptTemplate = '';
-      
+      const startNode = flowService.createStartNode();
+
       setNodes([startNode]);
       setEdges([]);
       setFlowName('NewFlow');
@@ -283,14 +278,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     // If there are no nodes, add a Start node
     if (flowNodes.length === 0) {
       log.debug(`handleSave: No nodes found, adding a default Start node`);
-      const startNode = flowService.createNode('start', { x: 250, y: 150 });
-      // Ensure properties object exists and set promptTemplate
-      if (!startNode.data.properties) {
-        startNode.data.properties = {};
-      }
-      startNode.data.properties.promptTemplate = '';
-      
-      flowNodes = [startNode];
+      flowNodes = [flowService.createStartNode()];
       setNodes(flowNodes);
     }
     
@@ -305,7 +293,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
 
     const flow: Flow = {
-      id: initialFlow?.id || flowService.createNewFlow().id,
+      id: initialFlow?.id || uuidv4(),
       name: flowName,
       nodes: flowNodes,
       edges,
@@ -393,7 +381,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     } else if (dialogType === 'rename') {
       // Save the flow with the new name
       const flow: Flow = {
-        id: initialFlow?.id || flowService.createNewFlow().id,
+        id: initialFlow?.id || uuidv4(),
         name: newFlowName,
         nodes,
         edges,

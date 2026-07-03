@@ -300,19 +300,9 @@ const FlowsPage = () => {
       counter++;
     }
     
-    // Create a new flow with the unique name
+    // Create a new flow with the unique name (includes the default Start node)
     const newFlow = flowService.createNewFlow(newName);
-    
-    // Add a Start node
-    const startNode = flowService.createNode('start', { x: 250, y: 150 });
-    if (!startNode.data.properties) {
-      startNode.data.properties = {};
-    }
-    startNode.data.properties.promptTemplate = '';
-    
-    newFlow.nodes = [startNode];
-    newFlow.edges = [];
-    
+
     // Save the new flow
     await handleSaveFlow(newFlow);
     setIsEditing(true); // Switch to editor mode automatically
