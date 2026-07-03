@@ -49,7 +49,6 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import ClearIcon from '@mui/icons-material/Clear';
 
 const PAGE_SIZE = 30;
-const SEARCH_DEBOUNCE_MS = 400;
 
 const MarketplaceTab: React.FC<TabProps> = ({
   onClose,
@@ -58,13 +57,16 @@ const MarketplaceTab: React.FC<TabProps> = ({
 }) => {
   const theme = useTheme();
   const [searchInput, setSearchInput] = useState<string>('');
+  // The term actually sent to the registry — only updated when the user commits
+  // a search (Enter or the clear button), never while typing
+  const [activeSearch, setActiveSearch] = useState<string>('');
   const [results, setResults] = useState<RegistryServerResult[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
   const [selectedServer, setSelectedServer] = useState<RegistryServer | null>(null);
-  // Monotonic id so stale fetch responses (fast typing) can't clobber newer ones
+  // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
 
   const fetchServers = useCallback(async (search: string, cursor?: string) => {
@@ -112,14 +114,15 @@ const MarketplaceTab: React.FC<TabProps> = ({
     }
   }, []);
 
-  // Initial load + debounced search
+  // Initial load + committed searches (Enter / clear) — no search while typing
   useEffect(() => {
-    const handle = setTimeout(
-      () => fetchServers(searchInput.trim()),
-      searchInput ? SEARCH_DEBOUNCE_MS : 0
-    );
-    return () => clearTimeout(handle);
-  }, [searchInput, fetchServers]);
+    fetchServers(activeSearch);
+  }, [activeSearch, fetchServers]);
+
+  const handleClearSearch = () => {
+    setSearchInput('');
+    setActiveSearch('');
+  };
 
   const handleInstall = (server: RegistryServer, option: InstallOption) => {
     const config = buildConfigFromOption(server, option);
@@ -189,7 +192,19 @@ const MarketplaceTab: React.FC<TabProps> = ({
           size="small"
           value={searchInput}
           onChange={e => setSearchInput(e.target.value)}
-          placeholder="Search servers by name (e.g. github, filesystem, postgres)…"
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              const term = searchInput.trim();
+              if (term === activeSearch) {
+                // Same term committed again — re-run it (e.g. retry after an error)
+                fetchServers(term);
+              } else {
+                setActiveSearch(term);
+              }
+            }
+          }}
+          placeholder="Search servers by name and press Enter (e.g. github, filesystem, postgres)…"
           variant="outlined"
           InputProps={{
             startAdornment: (
@@ -199,7 +214,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
             ),
             endAdornment: searchInput ? (
               <InputAdornment position="end">
-                <IconButton size="small" onClick={() => setSearchInput('')} aria-label="clear search">
+                <IconButton size="small" onClick={handleClearSearch} aria-label="clear search">
                   <ClearIcon fontSize="small" />
                 </IconButton>
               </InputAdornment>
@@ -221,7 +236,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
           <>
             {results.length === 0 && !message && (
               <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
-                No servers found{searchInput ? ` for "${searchInput.trim()}"` : ''}. The registry
+                No servers found{activeSearch ? ` for "${activeSearch}"` : ''}. The registry
                 matches on server names — try a shorter term.
               </Typography>
             )}
@@ -312,7 +327,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
               <Box sx={{ display: 'flex', justifyContent: 'center' }}>
                 <Button
                   variant="outlined"
-                  onClick={() => fetchServers(searchInput.trim(), nextCursor)}
+                  onClick={() => fetchServers(activeSearch, nextCursor)}
                   disabled={isLoadingMore}
                   startIcon={isLoadingMore ? <CircularProgress size={20} color="inherit" /> : undefined}
                 >
