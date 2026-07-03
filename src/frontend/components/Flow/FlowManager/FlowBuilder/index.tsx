@@ -42,7 +42,6 @@ import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
-import PropertiesPanel from './PropertiesPanel';
 import { FlowValidationButton } from './FlowValidationButton';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
@@ -108,7 +107,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
   const [edges, setEdges] = useState<Edge[]>(initialFlow?.edges || []);
-  const [selectedNode, setSelectedNode] = useState<FlowNode | null>(null);
   const [flowName, setFlowName] = useState<string>(initialFlow?.name || 'NewFlow');
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   
@@ -471,26 +469,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   // Memoized handlers for better performance
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    log.debug(`onNodesChange: Processing ${changes.length} node changes`);
-    
-    // Handle node selection separately
-    changes.forEach((change) => {
-      if (change.type === 'select' && change.id) {
-        const node = nodes.find((n: FlowNode) => n.id === change.id);
-        if (node) {
-          log.debug(`onNodesChange: Node ${node.id} selection changed to ${change.selected}`);
-          setSelectedNode(change.selected ? node : null);
-        }
-      } else if (change.type === 'position' && change.id) {
-        log.debug(`onNodesChange: Node ${change.id} position changed`);
-      } else if (change.type === 'remove' && change.id) {
-        log.info(`onNodesChange: Node ${change.id} removed`);
-      }
-    });
-    
-    // Update nodes with changes
     setNodes((nds) => applyNodeChanges(changes, nds) as FlowNode[]);
-  }, [nodes]);
+  }, []);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     log.debug(`onEdgesChange: Processing ${changes.length} edge changes`);
@@ -594,10 +574,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           }
         ];
       });
-      
-      // Select the newly created node in the properties panel
-      setSelectedNode(newNode);
-      log.debug(`onDrop: Selected new node in properties panel: ${newNode.id}`);
       
       // Automatically open the edit properties modal for the new node
       openNodeProperties(newNode);
