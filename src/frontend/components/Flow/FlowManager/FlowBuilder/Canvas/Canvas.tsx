@@ -359,17 +359,20 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     [nodes, edges, onEdgesChange, theme.palette.text.secondary]
   );
 
-  // Commit edge waypoint changes from the edge grip (drag end / reset) into
-  // the controlled store — one undo entry per gesture.
+  // Commit edge re-route gestures (bend drag end, waypoint move/removal)
+  // into the controlled store — one undo entry per gesture.
   useEffect(() => {
     const handler = (e: Event) => {
-      const { edgeId, waypoint } = (e as CustomEvent<EdgeWaypointEventDetail>).detail;
+      const { edgeId, waypoints } = (e as CustomEvent<EdgeWaypointEventDetail>).detail;
       const edge = edges.find(ed => ed.id === edgeId);
       if (!edge) return;
+      // `waypoint` (singular) was the first iteration's shape — drop it on
+      // the way through so edges converge on the array form.
+      const { waypoint: _legacy, ...restData } = (edge.data ?? {}) as Record<string, unknown>;
       onEdgesChange([{
         type: 'replace',
         id: edgeId,
-        item: { ...edge, data: { ...edge.data, waypoint: waypoint ?? undefined } } as Edge,
+        item: { ...edge, data: { ...restData, waypoints: waypoints ?? undefined } } as Edge,
       }]);
     };
     document.addEventListener(EDGE_WAYPOINT_EVENT, handler);
