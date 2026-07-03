@@ -7,7 +7,8 @@ const log = createLogger('frontend/components/Navigation');
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { interceptNavigation } from '@/frontend/utils/navigationGuard';
 
 const navItems = [
   { name: 'Models', path: '/models', tour: 'nav-models' },
@@ -22,8 +23,22 @@ export default function Navigation() {
   const { toggleTheme, isDarkMode } = useTheme();
   const muiTheme = useMuiTheme();
   const pathname = usePathname();
-  
+  const router = useRouter();
+
   log.debug(`Rendering Navigation component with pathname: ${pathname}`);
+
+  // Route nav clicks through the navigation guard so a page with unsaved
+  // work (e.g. the flow editor) can show its Save/Discard dialog instead of
+  // being unmounted instantly. Modified clicks (new tab, etc.) keep native
+  // link behavior.
+  const handleNavClick = (href: string) => (e: React.MouseEvent) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return;
+    }
+    if (interceptNavigation(() => router.push(href))) {
+      e.preventDefault();
+    }
+  };
 
   return (
     <AppBar position="sticky" color="default" elevation={1}>
@@ -32,6 +47,7 @@ export default function Navigation() {
           variant="h6"
           component={Link}
           href="/"
+          onClick={handleNavClick('/')}
           sx={{
             color: 'text.primary',
             textDecoration: 'none',
@@ -50,6 +66,7 @@ export default function Navigation() {
               component={Link}
               href={item.path}
               data-tour={item.tour}
+              onClick={handleNavClick(item.path)}
               sx={{
                 color: pathname === item.path ? 'primary.main' : 'text.primary',
                 textDecoration: 'none',
