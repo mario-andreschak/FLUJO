@@ -159,6 +159,10 @@ export async function GET(
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
         status: sharedState.status,
+        // Where execution currently sits — powers the chat input's node pill
+        // (the manual node picker). May reference a node of a previously
+        // selected flow after a flow switch; the frontend validates it.
+        currentNodeId: sharedState.currentNodeId,
         // Aggregated token totals (accumulated by runFlow, persisted with the
         // state) + the context snapshot of the latest model call — powers the
         // chat header's token counter and context meter.
@@ -276,7 +280,10 @@ export async function PATCH(
       flowId: updatedState.flowId,
       createdAt: updatedState.createdAt,
       updatedAt: updatedState.updatedAt,
-      status: updatedState.status || 'completed', // Provide a default status if needed
+      // Pass the status through as-is. A never-run conversation has status
+      // undefined; defaulting it to 'completed' here made the frontend show a
+      // "Conversation completed" badge as soon as a flow was selected.
+      status: updatedState.status,
     };
     return NextResponse.json(updatedSummary, { status: 200 });
 

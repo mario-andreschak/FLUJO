@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -82,6 +82,9 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error';
+  /** Node where execution currently sits (server truth). May reference a node
+   *  of a previously selected flow after a flow switch — validate before use. */
+  currentNodeId?: string;
   /** Aggregated token totals for the conversation (accumulated by the backend). */
   usage?: {
     promptTokens: number;
@@ -156,6 +159,13 @@ const Chat: React.FC = () => {
   const [requireApproval, setRequireApproval] = useState<boolean>(false);
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
+  // Flow the user asked to switch an already-executed conversation to; a
+  // confirmation dialog is shown before the switch is applied (Cancel discards).
+  const [pendingFlowSwitch, setPendingFlowSwitch] = useState<string | null>(null);
+  // Manually picked node for the NEXT message (the chat input's node picker).
+  // null = automatic (follow the conversation). Cleared once a message is sent
+  // with it, and on conversation switch.
+  const [nodeOverride, setNodeOverride] = useState<string | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
   const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
   // Whether a debug session is active (panel should stay open). Decoupled from
@@ -395,6 +405,8 @@ const Chat: React.FC = () => {
     // re-appears from the (replayed) event stream if the now-viewed conversation
     // is itself awaiting approval.
     setPendingToolCalls(null);
+    // A manual node pick belongs to the conversation it was made in.
+    setNodeOverride(null);
     if (currentConversationId) {
       fetchDetailedConversation(currentConversationId);
     } else {
@@ -449,6 +461,23 @@ const Chat: React.FC = () => {
         })) || [],
     [flows, detailedConversation?.flowId]
   );
+
+  // The node the NEXT message will be processed on, for the chat input's node
+  // pill: a manual pick wins, then the server's currentNodeId, then the most
+  // recent assistant message's node, then the flow's start node. Ids that don't
+  // exist in the current flow (e.g. left over from a flow switch) are skipped.
+  const currentNodeId = useMemo(() => {
+    const isValid = (id?: string | null): id is string =>
+      !!id && availableNodes.some(n => n.id === id);
+    if (isValid(nodeOverride)) return nodeOverride;
+    if (isValid(detailedConversation?.currentNodeId)) return detailedConversation!.currentNodeId!;
+    const msgs = detailedConversation?.messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i];
+      if (msg.role === 'assistant' && isValid(msg.processNodeId)) return msg.processNodeId!;
+    }
+    return availableNodes[0]?.id ?? null;
+  }, [nodeOverride, detailedConversation, availableNodes]);
 
   // Create a new conversation (now persists to backend immediately)
   const createNewConversation = async () => {
@@ -744,8 +773,28 @@ const Chat: React.FC = () => {
     }
   };
 
-  // Handle flow selection (Persists via PATCH and updates local state)
-  const handleFlowSelect = async (flowId: string) => {
+  // Handle flow selection from the selector. If the conversation has already
+  // been executed, switching flows means execution will restart on the new
+  // flow's Start node — ask for confirmation first (Cancel keeps the current
+  // flow). Fresh conversations switch immediately.
+  const handleFlowSelect = (flowId: string) => {
+    if (!currentConversationId) {
+      log.warn('Cannot update flow: No conversation selected.');
+      setError('Please select a conversation first.');
+      return;
+    }
+    const currentFlowId = detailedConversation?.flowId ?? currentConversationSummary?.flowId ?? null;
+    const hasMessages = (detailedConversation?.messages?.length ?? 0) > 0;
+    if (hasMessages && currentFlowId && flowId !== currentFlowId) {
+      log.debug('Flow switch on executed conversation — asking for confirmation', { flowId, currentFlowId });
+      setPendingFlowSwitch(flowId);
+      return;
+    }
+    applyFlowSelect(flowId);
+  };
+
+  // Apply a flow change (Persists via PATCH and updates local state)
+  const applyFlowSelect = async (flowId: string) => {
     log.debug('Flow selected, attempting to update', { flowId, currentConversationId });
     setError(null); // Clear previous errors
 
@@ -846,7 +895,13 @@ const Chat: React.FC = () => {
     const isFirstUserMessage = !existingMessages.some(msg => msg.role === 'user');
     const currentFlowId = detailedConversation.flowId;
 
-    if (isFirstUserMessage) {
+    if (nodeOverride) {
+      // The user manually picked a node in the chat input's node picker: the
+      // message resumes execution there. One-shot — consumed by this send.
+      nodeIdToAssign = nodeOverride;
+      setNodeOverride(null);
+      log.debug(`Assigning manually picked node ID to user message: ${nodeIdToAssign}`);
+    } else if (isFirstUserMessage) {
       // For the first user message, use the start node ID from the current flow
       const currentFlow = flows.find(f => f.id === currentFlowId);
       // Assuming the first node in the array is the start node
@@ -1721,8 +1776,9 @@ const Chat: React.FC = () => {
               {/* Completion banner: shown once the run has reached a Finish node
                   (status 'completed'). Driven by the same status the sidebar dot
                   uses. Hidden while a run is active or paused for debug so it
-                  never competes with the live indicator / debugger. */}
-              {!isLoading && !isDebugPaused && currentConversationSummary?.status === 'completed' && (
+                  never competes with the live indicator / debugger. Also hidden
+                  for an empty conversation (nothing ran, nothing "completed"). */}
+              {!isLoading && !isDebugPaused && detailedConversation.messages.length > 0 && currentConversationSummary?.status === 'completed' && (
                 <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
                   <Alert
                     icon={<CheckCircleIcon fontSize="inherit" />}
@@ -1744,7 +1800,21 @@ const Chat: React.FC = () => {
                     icon={<ErrorOutlineIcon fontSize="inherit" />}
                     severity="error"
                     variant="filled"
-                    sx={{ borderRadius: 2, py: 0.5 }}
+                    sx={{ borderRadius: 2, py: 0.5, alignItems: 'center' }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => {
+                          // Re-run the flow with the conversation as-is; the
+                          // backend resumes from the last message's node.
+                          sendToChatCompletions(detailedConversation);
+                        }}
+                      >
+                        Retry
+                      </Button>
+                    }
                   >
                     Conversation ended with an error
                   </Alert>
@@ -1810,6 +1880,12 @@ const Chat: React.FC = () => {
             onRequireApprovalChange={handleRequireApprovalChange}
             executeInDebugger={executeInDebugger} // Pass debugger state
             onExecuteInDebuggerChange={setExecuteInDebugger} // Pass debugger handler
+            // Node picker: shows where the next message resumes; a manual pick
+            // overrides it for one send (null = back to automatic).
+            availableNodes={availableNodes}
+            currentNodeId={currentNodeId}
+            nodeOverrideActive={!!nodeOverride}
+            onSelectNode={setNodeOverride}
           />
         </Box>
         </Box> {/* End Chat Area */}
@@ -1858,6 +1934,35 @@ const Chat: React.FC = () => {
           </>
         )}
       </Box> {/* End Main Content */}
+
+      {/* Flow-switch confirmation: switching an already-executed conversation
+          to another flow restarts execution on that flow's Start node. Cancel
+          keeps the current flow (the selector is controlled, so no revert is
+          needed — we simply never apply the change). */}
+      <Dialog open={!!pendingFlowSwitch} onClose={() => setPendingFlowSwitch(null)}>
+        <DialogTitle>Switch flow?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This conversation has already been processed with its current flow.
+            {' '}If you switch to
+            {' '}<strong>{flows.find(f => f.id === pendingFlowSwitch)?.name || 'the selected flow'}</strong>,
+            {' '}the conversation will continue processing from that flow&apos;s Start node again.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingFlowSwitch(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const flowId = pendingFlowSwitch;
+              setPendingFlowSwitch(null);
+              if (flowId) applyFlowSelect(flowId);
+            }}
+          >
+            Switch Flow
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

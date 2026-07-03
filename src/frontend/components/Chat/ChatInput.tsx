@@ -20,12 +20,21 @@ import {
   Button,
   Typography,
   FormControlLabel, // Added for checkbox
-  Checkbox // Added for checkbox
+  Checkbox, // Added for checkbox
+  Chip,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  Divider
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import MicIcon from '@mui/icons-material/Mic';
 import CloseIcon from '@mui/icons-material/Close';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import CheckIcon from '@mui/icons-material/Check';
+import AutoModeIcon from '@mui/icons-material/AutoMode';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
@@ -39,6 +48,13 @@ interface ChatInputProps {
   // Add callback and state for the debugger toggle
   executeInDebugger?: boolean;
   onExecuteInDebuggerChange?: (checked: boolean) => void;
+  // Node picker: nodes of the conversation's flow, the node the next message
+  // will resume on, whether that node is a manual pick, and the pick callback
+  // (null = back to automatic).
+  availableNodes?: { id: string; label: string }[];
+  currentNodeId?: string | null;
+  nodeOverrideActive?: boolean;
+  onSelectNode?: (nodeId: string | null) => void;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -47,7 +63,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
   requireApproval = false,
   onRequireApprovalChange,
   executeInDebugger = false, // Default to false
-  onExecuteInDebuggerChange
+  onExecuteInDebuggerChange,
+  availableNodes = [],
+  currentNodeId = null,
+  nodeOverrideActive = false,
+  onSelectNode
 }) => {
   const { settings } = useStorage();
   const [message, setMessage] = useState('');
@@ -61,6 +81,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   
+  // Node picker menu state
+  const [nodeMenuAnchor, setNodeMenuAnchor] = useState<HTMLElement | null>(null);
+  const currentNodeLabel = availableNodes.find(n => n.id === currentNodeId)?.label
+    || (currentNodeId ? `${currentNodeId.substring(0, 6)}...` : 'Start');
+
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogContent, setDialogContent] = useState('');
@@ -464,9 +489,59 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </Tooltip>
         </Box> {/* End of Input area Box */}
 
-        {/* Run options: tool approval + execute-in-debugger */}
-        {onRequireApprovalChange && ( // Only show if callback is provided
-          <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start', flexWrap: 'wrap' }}>
+        {/* Run options: current-node pill + tool approval + execute-in-debugger */}
+        {(onRequireApprovalChange || (onSelectNode && availableNodes.length > 0)) && (
+          <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+            {/* Node picker: shows the node the next message resumes on; click
+                to manually pick a different node (or go back to automatic). */}
+            {onSelectNode && availableNodes.length > 0 && (
+              <>
+                <Tooltip title={nodeOverrideActive
+                  ? 'Next message will run on this manually picked node — click to change'
+                  : 'Node the next message will run on — click to pick a different one'}>
+                  <Chip
+                    icon={<AccountTreeIcon />}
+                    label={currentNodeLabel}
+                    size="small"
+                    color={nodeOverrideActive ? 'primary' : 'default'}
+                    variant={nodeOverrideActive ? 'filled' : 'outlined'}
+                    onClick={(e) => setNodeMenuAnchor(e.currentTarget)}
+                    disabled={disabled}
+                  />
+                </Tooltip>
+                <Menu
+                  anchorEl={nodeMenuAnchor}
+                  open={!!nodeMenuAnchor}
+                  onClose={() => setNodeMenuAnchor(null)}
+                >
+                  <MenuItem
+                    selected={!nodeOverrideActive}
+                    onClick={() => { onSelectNode(null); setNodeMenuAnchor(null); }}
+                  >
+                    <ListItemIcon><AutoModeIcon fontSize="small" /></ListItemIcon>
+                    <ListItemText
+                      primary="Automatic"
+                      secondary="Follow the conversation"
+                      secondaryTypographyProps={{ variant: 'caption' }}
+                    />
+                  </MenuItem>
+                  <Divider />
+                  {availableNodes.map((node) => (
+                    <MenuItem
+                      key={node.id}
+                      selected={nodeOverrideActive && node.id === currentNodeId}
+                      onClick={() => { onSelectNode(node.id); setNodeMenuAnchor(null); }}
+                    >
+                      <ListItemIcon>
+                        {node.id === currentNodeId ? <CheckIcon fontSize="small" /> : null}
+                      </ListItemIcon>
+                      <ListItemText primary={node.label} />
+                    </MenuItem>
+                  ))}
+                </Menu>
+              </>
+            )}
+            {onRequireApprovalChange && (
             <FormControlLabel
               control={
                 <Checkbox
@@ -479,6 +554,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               label={<Typography variant="caption">Require Tool Approvals</Typography>}
               sx={{ mr: 'auto' }} // Push to the left
             />
+            )}
             {/* Debugger Checkbox */}
             {onExecuteInDebuggerChange && ( // Only show if callback is provided
               <FormControlLabel
