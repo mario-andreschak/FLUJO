@@ -160,7 +160,11 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     if (this.config.oauthTokens) {
       log.debug(`Returning stored tokens for ${this.config.name}`);
 
-      // Check if tokens are expired
+      // An expired access token must still be returned WITH its refresh_token intact:
+      // the SDK's auth() only attempts the silent refresh_token grant when tokens()
+      // yields one. Clearing the token set here (as this method once did) destroys the
+      // refresh token and forces a full interactive re-auth after every access-token
+      // lifetime (~1h for Asana), even though the grant is still perfectly valid.
       if (this.config.oauthTokens.expires_in && (this.config.oauthTokens as any).issued_at) {
         const issuedAt = (this.config.oauthTokens as any).issued_at;
         const expiresIn = this.config.oauthTokens.expires_in;
@@ -168,14 +172,10 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
         const expirationTime = issuedAt + expiresIn;
 
         if (currentTime >= expirationTime) {
-          log.warn(`Tokens for ${this.config.name} have expired (issued: ${issuedAt}, expires: ${expirationTime}, current: ${currentTime})`);
-          // Clear expired tokens
-          this.config.oauthTokens = undefined;
-          await this.persist();
-          return undefined;
+          log.info(`Access token for ${this.config.name} has expired (issued: ${issuedAt}, expires: ${expirationTime}, current: ${currentTime}); SDK will refresh via refresh_token`);
+        } else {
+          log.debug(`Tokens for ${this.config.name} are valid (expires in ${expirationTime - currentTime} seconds)`);
         }
-
-        log.debug(`Tokens for ${this.config.name} are valid (expires in ${expirationTime - currentTime} seconds)`);
       }
 
       return this.config.oauthTokens;

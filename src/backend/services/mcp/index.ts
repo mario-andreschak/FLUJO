@@ -1288,15 +1288,22 @@ export class MCPService {
           };
         }
         
-        // Check if tokens are expired
-        if (streamableConfig.oauthTokens.expires_in && (streamableConfig.oauthTokens as any).issued_at) {
+        // An expired access token only means "re-authenticate" when there is no refresh
+        // token to renew it with. With a refresh_token stored, the next connection attempt
+        // refreshes silently (see MCPOAuthClientProvider.tokens), so fall through to the
+        // real connection state instead of flashing the auth badge after every restart.
+        if (
+          !streamableConfig.oauthTokens.refresh_token &&
+          streamableConfig.oauthTokens.expires_in &&
+          (streamableConfig.oauthTokens as any).issued_at
+        ) {
           const issuedAt = (streamableConfig.oauthTokens as any).issued_at;
           const expiresIn = streamableConfig.oauthTokens.expires_in;
           const currentTime = Math.floor(Date.now() / 1000);
           const expirationTime = issuedAt + expiresIn;
-          
+
           if (currentTime >= expirationTime) {
-            log.info(`getServerStatus: OAuth tokens for ${serverName} have expired`);
+            log.info(`getServerStatus: OAuth tokens for ${serverName} have expired and no refresh token is available`);
             return {
               status: 'requires_authentication',
               message: 'OAuth tokens have expired. Please re-authenticate.'
