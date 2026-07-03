@@ -104,6 +104,14 @@ export class FlowConverter {
           // Add the successor with the action
           sourceNode.addSuccessor(targetNode, action);
 
+          // A bidirectional edge is one connector carrying both transitions:
+          // register the reverse successor under a derived action so the
+          // target can hand back to the source.
+          if ((edge.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+            targetNode.addSuccessor(sourceNode, `${action}__reverse`);
+            log.info(`Connected nodes (bidirectional): ${edge.target} -> ${edge.source} with action: ${action}__reverse`);
+          }
+
           // Log the connection for debugging
           log.info(`Connected nodes: ${edge.source} -> ${edge.target} with action: ${action}`);
 

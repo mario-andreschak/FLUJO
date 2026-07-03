@@ -25,6 +25,7 @@ import { flowService } from '@/frontend/services/flow';
 import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge } from '../CustomEdges';
+import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
 import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds } from './utils/edgeUtils';
@@ -287,7 +288,9 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   // A new edge replaces any edge it logically duplicates (one MCP connection
   // per Process/MCP node pair, one flow-control edge per direction), so users
   // can freely re-draw connections while re-organizing without stacking
-  // duplicates.
+  // duplicates. Drawing the REVERSE of an existing flow-control edge merges
+  // the two into one bidirectional connector (double arrows) instead of
+  // adding a second wire.
   const onConnect = useCallback(
     (params: Connection) => {
       // Check for missing source or target handles
@@ -304,6 +307,48 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
       // Create the edge with the appropriate type and options
       const edge = createEdgeFromConnection(params, nodes);
+
+      if ((edge.data as { edgeType?: string })?.edgeType === 'standard') {
+        // Re-drawing an existing bidirectional connection in either direction
+        // is a no-op — it must not downgrade it to one-way.
+        const sameDirection = edges.find(e =>
+          (e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp' &&
+          e.source === params.source &&
+          e.target === params.target
+        );
+        if ((sameDirection?.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+          return;
+        }
+
+        const reverse = edges.find(e =>
+          (e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp' &&
+          e.source === params.target &&
+          e.target === params.source
+        );
+        if (reverse) {
+          if (!(reverse.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+            log.info(`Merging reverse connection into bidirectional edge ${reverse.id}`);
+            onEdgesChange([{
+              type: 'replace',
+              id: reverse.id,
+              item: {
+                ...reverse,
+                data: { ...reverse.data, bidirectional: true },
+                // Arrowheads on both ends; the end marker comes from
+                // defaultEdgeOptions already.
+                markerStart: {
+                  type: MarkerType.ArrowClosed,
+                  width: 20,
+                  height: 20,
+                  color: theme.palette.text.secondary,
+                },
+              } as Edge,
+            }]);
+          }
+          return;
+        }
+      }
+
       const replaced = getReplacedEdgeIds(edge, edges);
 
       onEdgesChange([
@@ -311,8 +356,25 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         { type: 'add' as const, item: edge },
       ]);
     },
-    [nodes, edges, onEdgesChange]
+    [nodes, edges, onEdgesChange, theme.palette.text.secondary]
   );
+
+  // Commit edge waypoint changes from the edge grip (drag end / reset) into
+  // the controlled store — one undo entry per gesture.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { edgeId, waypoint } = (e as CustomEvent<EdgeWaypointEventDetail>).detail;
+      const edge = edges.find(ed => ed.id === edgeId);
+      if (!edge) return;
+      onEdgesChange([{
+        type: 'replace',
+        id: edgeId,
+        item: { ...edge, data: { ...edge.data, waypoint: waypoint ?? undefined } } as Edge,
+      }]);
+    };
+    document.addEventListener(EDGE_WAYPOINT_EVENT, handler);
+    return () => document.removeEventListener(EDGE_WAYPOINT_EVENT, handler);
+  }, [edges, onEdgesChange]);
 
   // Central deletion guard: every delete path (Delete/Backspace keys, context
   // menu, edge delete buttons, Ctrl+X) runs through deleteElements and lands

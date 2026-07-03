@@ -170,6 +170,18 @@ describe('validateFlow — connectivity', () => {
     expect(r.issues.find((i) => i.code === 'unreachable-node')?.nodeId).toBe('orphan');
   });
 
+  it('treats bidirectional edges as connecting both ways for reachability', () => {
+    // p2 has no forward path from start; the bidirectional edge stored as
+    // p2 -> p1 must still make it reachable (via p1 -> p2).
+    const biEdge: VEdge = { id: 'p2-p1', source: 'p2', target: 'p1', data: { edgeType: 'standard', bidirectional: true } };
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p1', { boundModel: 'm1' }), processNode('p2', { boundModel: 'm1' }), finishNode()],
+      edges: [edge('start', 'p1'), edge('p1', 'finish'), biEdge],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('unreachable-node');
+  });
+
   it('does not treat mcp edges as flow control for reachability', () => {
     // p is reachable via the standard edge; the mcp edge to mcp1 must not count.
     const flow: VFlow = {

@@ -81,18 +81,23 @@ const useHandoffTools = (
     }
   }, [open, node, connectedNodeIds, flowEdges, flowNodes]);
 
-  // Find non-MCP nodes this Process node hands off to (outgoing edges only)
+  // Find non-MCP nodes this Process node hands off to: targets of outgoing
+  // edges, plus sources of bidirectional edges pointing at this node.
   function findConnectedNonMCPNodes(nodeId: string, allEdges: Edge[]) {
-    const outgoingEdges = allEdges.filter(edge => {
-      const isOutgoing = edge.source === nodeId;
+    const targets: string[] = [];
+    for (const edge of allEdges) {
       // Some edges might not have edgeType defined at all
       const isMcpEdge = typeof edge.data?.edgeType === 'string' &&
                         edge.data.edgeType.includes('mcp');
-      return isOutgoing && !isMcpEdge;
-    });
-
+      if (isMcpEdge) continue;
+      if (edge.source === nodeId) {
+        targets.push(edge.target);
+      } else if (edge.target === nodeId && (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+        targets.push(edge.source);
+      }
+    }
     // Unique target node ids (there may be multiple edges between the same nodes)
-    return [...new Set(outgoingEdges.map(edge => edge.target))];
+    return [...new Set(targets)];
   }
 
   return {

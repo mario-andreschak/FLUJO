@@ -67,7 +67,7 @@ export interface VEdge {
   id?: string;
   source: string;
   target: string;
-  data?: { edgeType?: string } | null;
+  data?: { edgeType?: string; bidirectional?: boolean } | null;
 }
 export interface VFlow {
   id?: string;
@@ -117,13 +117,18 @@ export function mcpServersConnectedToProcess(
   return servers;
 }
 
-/** Build adjacency (source -> targets) over flow-control (non-mcp) edges only. */
+/** Build adjacency (source -> targets) over flow-control (non-mcp) edges only.
+ * Bidirectional edges connect both ways. */
 function buildControlAdjacency(edges: VEdge[]): Map<string, string[]> {
   const adj = new Map<string, string[]>();
+  const add = (from: string, to: string) => {
+    if (!adj.has(from)) adj.set(from, []);
+    adj.get(from)!.push(to);
+  };
   for (const edge of edges) {
     if (isMcpEdge(edge)) continue;
-    if (!adj.has(edge.source)) adj.set(edge.source, []);
-    adj.get(edge.source)!.push(edge.target);
+    add(edge.source, edge.target);
+    if (edge.data?.bidirectional) add(edge.target, edge.source);
   }
   return adj;
 }
