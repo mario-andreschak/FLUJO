@@ -5,6 +5,7 @@ import { ServerModalProps } from './types';
 import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
+import MarketplaceTab from './tabs/MarketplaceTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
 import RemoteTab from './tabs/RemoteTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
@@ -30,18 +31,20 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onUpdate,
   onRestartAfterUpdate
 }) => {
-  const [activeTab, setActiveTab] = useState<'github' | 'local' | 'reference' | 'remote'>('github');
+  const [activeTab, setActiveTab] = useState<'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('marketplace');
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
   
   // Track which tabs have been visited/initialized
   const [initializedTabs, setInitializedTabs] = useState<{
+    marketplace: boolean;
     github: boolean;
     local: boolean;
     reference: boolean;
     remote: boolean;
   }>({
+    marketplace: false,
     github: false,
     local: false,
     reference: false,
@@ -58,7 +61,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'github' | 'local' | 'reference' | 'remote') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => {
     setActiveTab(newValue);
   };
   
@@ -67,7 +70,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
     // Reset parsed config when modal is closed
     setParsedConfig(null);
     // Reset to default tab
-    setActiveTab('github');
+    setActiveTab('marketplace');
     // Call the original onClose
     onClose();
   };
@@ -121,6 +124,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               aria-label="server configuration tabs"
               sx={{ px: 2 }}
             >
+              <Tab label="Marketplace" value="marketplace" />
               <Tab label="GitHub" value="github" />
               <Tab label="Local Server" value="local" />
               <Tab label="Remote" value="remote" />
@@ -138,6 +142,13 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onUpdate={onUpdate}
               onClose={onClose}
               onRestartAfterUpdate={onRestartAfterUpdate}
+            />
+          ) : activeTab === 'marketplace' ? (
+            <MarketplaceTab
+              onAdd={onAdd}
+              onClose={onClose}
+              setActiveTab={setActiveTab}
+              onUpdate={(config) => setParsedConfig(config)}
             />
           ) : activeTab === 'github' ? (
             <GitHubTab
