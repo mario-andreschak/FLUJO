@@ -18,6 +18,8 @@ export const parseConfigFromReadme = async (
 ): Promise<{
   config: MCPServerConfig;
   message: MessageState | null;
+  /** True when the README contained an explicit mcpServers/command config block */
+  foundExplicitConfig?: boolean;
 }> => {
   try {
     // Parse README content using the server config parser
@@ -54,6 +56,7 @@ export const parseConfigFromReadme = async (
       
       return {
         config: mergedConfig,
+        foundExplicitConfig: parseResult.foundExplicitConfig,
         message: {
           type: 'success',
           text: `Server configuration extracted from README.`
@@ -62,6 +65,7 @@ export const parseConfigFromReadme = async (
     } else {
       return {
         config: defaultConfig,
+        foundExplicitConfig: false,
         message: {
           type: 'warning',
           text: 'No server configuration found in README.'

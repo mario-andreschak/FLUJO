@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import http2 from 'http2';
 import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
+import { REGISTRY_ORIGIN, registryGetRaw } from '@/backend/utils/registryClient';
 
 const log = createLogger('app/api/mcp-registry/route');
 
-const REGISTRY_ORIGIN = 'https://registry.modelcontextprotocol.io';
 const REGISTRY_LIST_PATH = '/v0.1/servers';
 const FETCH_TIMEOUT_MS = 15000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -38,70 +37,6 @@ function setCached(key: string, body: unknown): void {
     if (oldest !== undefined) cache.delete(oldest);
   }
   cache.set(key, { timestamp: Date.now(), body });
-}
-
-/**
- * GET a registry URL over HTTP/2.
- *
- * The registry's load balancer reliably answers HTTP/2 but lets HTTP/1.1
- * requests to the API paths stall until timeout (verified: `curl` succeeds in
- * ~0.5s while `curl --http1.1` and Node's HTTP/1.1-only `fetch` hang). Node's
- * built-in http2 client avoids that without extra dependencies.
- */
-function http2GetJson(url: URL, timeoutMs: number): Promise<{ status: number; body: string }> {
-  return new Promise((resolve, reject) => {
-    const client = http2.connect(url.origin);
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      fn();
-      client.close();
-    };
-
-    client.setTimeout(timeoutMs, () =>
-      finish(() => reject(new Error(`HTTP/2 session timed out after ${timeoutMs}ms`)))
-    );
-    client.on('error', err => finish(() => reject(err)));
-
-    const req = client.request({
-      ':method': 'GET',
-      ':path': url.pathname + url.search,
-      accept: 'application/json'
-    });
-    req.setTimeout(timeoutMs, () =>
-      finish(() => reject(new Error(`HTTP/2 request timed out after ${timeoutMs}ms`)))
-    );
-    req.on('error', err => finish(() => reject(err)));
-
-    let status = 0;
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('response', headers => {
-      status = Number(headers[':status'] || 0);
-    });
-    req.on('data', chunk => {
-      body += chunk;
-    });
-    req.on('end', () => finish(() => resolve({ status, body })));
-    req.end();
-  });
-}
-
-/** HTTP/1.1 fallback for environments where HTTP/2 is blocked (e.g. some proxies). */
-async function http1GetJson(url: URL, timeoutMs: number): Promise<{ status: number; body: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-      cache: 'no-store'
-    });
-    return { status: response.status, body: await response.text() };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 /**
@@ -142,16 +77,7 @@ export async function GET(request: NextRequest) {
   log.info(`Fetching from MCP Registry [RequestID: ${requestId}]`, cacheKey);
 
   try {
-    let result: { status: number; body: string };
-    try {
-      result = await http2GetJson(upstream, FETCH_TIMEOUT_MS);
-    } catch (h2Error) {
-      log.warn(
-        `HTTP/2 request to registry failed, retrying over HTTP/1.1 [${requestId}]`,
-        h2Error instanceof Error ? h2Error.message : h2Error
-      );
-      result = await http1GetJson(upstream, FETCH_TIMEOUT_MS);
-    }
+    const result = await registryGetRaw(upstream, FETCH_TIMEOUT_MS);
 
     if (result.status < 200 || result.status >= 300) {
       log.warn(`Registry returned ${result.status} [${requestId}]`);

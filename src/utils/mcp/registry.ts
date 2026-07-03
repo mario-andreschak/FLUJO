@@ -172,20 +172,40 @@ export function getInstallOptions(server: RegistryServer): InstallOption[] {
 // Naming helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Slugs so generic they identify nothing on their own. Many publishers name
+ * their server literally "mcp" (com.googleapis.firestore/mcp, com.notion/mcp,
+ * …) — without qualification every one of them would be called "mcp".
+ */
+const GENERIC_SLUGS = new Set(['mcp', 'server', 'mcp-server', 'mcpserver']);
+
+/**
+ * Qualify a generic slug with the most specific namespace segment:
+ * "com.googleapis.firestore/mcp" → "firestore-mcp". Returns the slug
+ * unchanged when it is distinctive enough by itself.
+ */
+function qualifiedSlug(registryName: string): string {
+  const slashIndex = registryName.indexOf('/');
+  const namespace = slashIndex >= 0 ? registryName.slice(0, slashIndex) : '';
+  const slug = slashIndex >= 0 ? registryName.slice(slashIndex + 1) : registryName;
+  if (!GENERIC_SLUGS.has(slug.toLowerCase()) || !namespace) return slug;
+  const nsSegment = namespace.split('.').pop() || '';
+  return nsSegment ? `${nsSegment}-${slug}` : slug;
+}
+
 /** Human-facing display name: title if present, else the part after the namespace. */
 export function displayName(server: RegistryServer): string {
   if (server.title) return server.title;
-  const slug = server.name.split('/').pop() || server.name;
-  return slug;
+  return qualifiedSlug(server.name);
 }
 
 /**
  * FLUJO server name derived from the registry name: the segment after the
- * namespace, restricted to safe characters (it becomes a config key and a
- * directory-name candidate).
+ * namespace (qualified when it is a generic word like "mcp"), restricted to
+ * safe characters (it becomes a config key and a directory-name candidate).
  */
 export function sanitizeServerName(registryName: string): string {
-  const slug = registryName.split('/').pop() || registryName;
+  const slug = qualifiedSlug(registryName);
   const sanitized = slug.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   return sanitized || 'mcp-server';
 }
@@ -336,6 +356,74 @@ export function buildConfigFromOption(
   return option.kind === 'package'
     ? buildPackageConfig(server, option.pkg)
     : buildRemoteConfig(server, option.remote);
+}
+
+// ---------------------------------------------------------------------------
+// Spotlight (curated servers)
+// ---------------------------------------------------------------------------
+
+/** One curated server, as resolved against the registry. */
+export interface SpotlightEntry {
+  /** The curated source URL (from the shipped spotlight list) */
+  url: string;
+  /** The resolved registry record; absent when resolution failed */
+  result?: RegistryServerResult;
+  /** Why resolution failed, when it did */
+  error?: string;
+}
+
+/** The cached result of resolving the curated list, persisted in storage. */
+export interface SpotlightCache {
+  /** ISO timestamp of the last (attempted) refresh */
+  updatedAt: string;
+  entries: SpotlightEntry[];
+}
+
+/**
+ * Resolve a curated spotlight URL into the registry API path (+query) that
+ * yields exactly one server. Two forms are supported:
+ *  - exact:  https://registry.modelcontextprotocol.io/v0.1/servers/<name>/versions/<version>
+ *  - search: https://registry.modelcontextprotocol.io/?q=<name>  (first result wins)
+ * Returns null for anything else.
+ */
+export function spotlightRequestPath(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const query = parsed.searchParams.get('q');
+  if (query) {
+    return `/v0.1/servers?search=${encodeURIComponent(query)}&version=latest&limit=1`;
+  }
+
+  // Exact server-version path: pass through verbatim (name stays URL-encoded)
+  if (/^\/v[\d.]+\/servers\/[^/]+\/versions\/[^/]+$/.test(parsed.pathname)) {
+    return parsed.pathname;
+  }
+
+  // Server path without a version: resolve via search for the latest version
+  const serverMatch = parsed.pathname.match(/^\/v[\d.]+\/servers\/([^/]+)$/);
+  if (serverMatch) {
+    const name = decodeURIComponent(serverMatch[1]);
+    return `/v0.1/servers?search=${encodeURIComponent(name)}&version=latest&limit=1`;
+  }
+
+  return null;
+}
+
+/**
+ * Normalize a registry response body into a single server result. Handles
+ * both the list shape ({ servers: [...] }, search form) and the single-server
+ * shape ({ server: {...}, _meta }, exact-version form).
+ */
+export function firstServerFromResponse(body: unknown): RegistryServerResult | null {
+  const data = body as { servers?: RegistryServerResult[]; server?: RegistryServer } | null;
+  if (data?.servers && data.servers.length > 0) return data.servers[0];
+  if (data?.server?.name) return data as RegistryServerResult;
+  return null;
 }
 
 /**

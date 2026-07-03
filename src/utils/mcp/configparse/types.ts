@@ -16,6 +16,8 @@ export interface ConfigParseResult {
   env?: Record<string, string>;
   message?: MessageState;
   config?: Partial<MCPServerConfig>;
+  /** True when the config came from an explicit config block in the README */
+  foundExplicitConfig?: boolean;
 }
 
 /**

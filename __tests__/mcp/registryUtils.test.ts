@@ -8,7 +8,9 @@ import {
   buildConfigFromOption,
   sanitizeServerName,
   displayName,
-  missingRequiredInputs
+  missingRequiredInputs,
+  spotlightRequestPath,
+  firstServerFromResponse
 } from '@/utils/mcp/registry';
 import { MCPStdioConfig, MCPStreamableConfig, MCPSSEConfig } from '@/shared/types/mcp/mcp';
 
@@ -35,6 +37,20 @@ describe('sanitizeServerName / displayName', () => {
   it('prefers the title for display', () => {
     expect(displayName(baseServer({ title: 'Weather' }))).toBe('Weather');
     expect(displayName(baseServer({}))).toBe('weather-mcp');
+  });
+
+  // Many publishers name their server literally "mcp" (all Google Cloud
+  // entries, com.notion/mcp, ...) — unqualified they would all collide.
+  it('qualifies generic slugs like "mcp" with the last namespace segment', () => {
+    expect(sanitizeServerName('com.googleapis.firestore/mcp')).toBe('firestore-mcp');
+    expect(sanitizeServerName('com.notion/mcp')).toBe('notion-mcp');
+    expect(sanitizeServerName('com.example/server')).toBe('example-server');
+  });
+
+  it('displays qualified names for generic slugs when there is no title', () => {
+    expect(displayName(baseServer({ name: 'com.googleapis.firestore/mcp' }))).toBe('firestore-mcp');
+    // Non-generic slugs stay untouched
+    expect(displayName(baseServer({ name: 'io.github.example/weather-mcp' }))).toBe('weather-mcp');
   });
 });
 
@@ -234,5 +250,50 @@ describe('buildConfigFromOption — remotes', () => {
       }]
     });
     expect(missingRequiredInputs(getInstallOptions(server)[0])).toEqual(['X-API-Key']);
+  });
+});
+
+describe('spotlightRequestPath', () => {
+  it('turns a search-form URL into a single-result registry query', () => {
+    expect(
+      spotlightRequestPath('https://registry.modelcontextprotocol.io/?q=ai.keenable%2Fweb-search')
+    ).toBe('/v0.1/servers?search=ai.keenable%2Fweb-search&version=latest&limit=1');
+  });
+
+  it('passes an exact server-version URL through verbatim', () => {
+    expect(
+      spotlightRequestPath(
+        'https://registry.modelcontextprotocol.io/v0.1/servers/ai.keenable%2Fweb-search/versions/0.1.2'
+      )
+    ).toBe('/v0.1/servers/ai.keenable%2Fweb-search/versions/0.1.2');
+  });
+
+  it('resolves a server URL without a version via search', () => {
+    expect(
+      spotlightRequestPath('https://registry.modelcontextprotocol.io/v0.1/servers/ai.keenable%2Fweb-search')
+    ).toBe('/v0.1/servers?search=ai.keenable%2Fweb-search&version=latest&limit=1');
+  });
+
+  it('rejects URLs it does not understand', () => {
+    expect(spotlightRequestPath('https://registry.modelcontextprotocol.io/')).toBeNull();
+    expect(spotlightRequestPath('not a url')).toBeNull();
+  });
+});
+
+describe('firstServerFromResponse', () => {
+  const server = { name: 'ai.keenable/web-search', version: '0.1.2' };
+
+  it('takes the first entry of a list response', () => {
+    expect(firstServerFromResponse({ servers: [{ server }], metadata: { count: 1 } })).toEqual({ server });
+  });
+
+  it('accepts the single-server response shape', () => {
+    expect(firstServerFromResponse({ server, _meta: {} })).toEqual({ server, _meta: {} });
+  });
+
+  it('returns null when nothing matched', () => {
+    expect(firstServerFromResponse({ servers: [] })).toBeNull();
+    expect(firstServerFromResponse(null)).toBeNull();
+    expect(firstServerFromResponse({})).toBeNull();
   });
 });

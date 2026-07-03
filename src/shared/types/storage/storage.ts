@@ -11,7 +11,8 @@ export enum StorageKey {
   GLOBAL_ENV_VARS = 'global_env_vars',
   CURRENT_CONVERSATION_ID = 'current_conversation_id',
   SELECTED_FLOW_ID = 'selected_flow_id',
-  SPEECH_SETTINGS = 'speech_settings'
+  SPEECH_SETTINGS = 'speech_settings',
+  SPOTLIGHT_SERVERS = 'spotlight_servers'
 }
 
 export const StorageKeys = {
@@ -25,6 +26,7 @@ export const StorageKeys = {
   CURRENT_CONVERSATION_ID: StorageKey.CURRENT_CONVERSATION_ID,
   SELECTED_FLOW_ID: StorageKey.SELECTED_FLOW_ID,
   SPEECH_SETTINGS: StorageKey.SPEECH_SETTINGS,
+  SPOTLIGHT_SERVERS: StorageKey.SPOTLIGHT_SERVERS,
 } as const;
 
 /**

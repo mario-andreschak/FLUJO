@@ -6,6 +6,7 @@ import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
 import MarketplaceTab from './tabs/MarketplaceTab';
+import SpotlightTab from './tabs/SpotlightTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
 import RemoteTab from './tabs/RemoteTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
@@ -31,7 +32,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onUpdate,
   onRestartAfterUpdate
 }) => {
-  const [activeTab, setActiveTab] = useState<'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('marketplace');
+  const [activeTab, setActiveTab] = useState<'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('spotlight');
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
@@ -43,12 +44,14 @@ const ServerModal: React.FC<ServerModalProps> = ({
   
   // Track which tabs have been visited/initialized
   const [initializedTabs, setInitializedTabs] = useState<{
+    spotlight: boolean;
     marketplace: boolean;
     github: boolean;
     local: boolean;
     reference: boolean;
     remote: boolean;
   }>({
+    spotlight: false,
     marketplace: false,
     github: false,
     local: false,
@@ -66,7 +69,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => {
     // A manual tab change is not a marketplace handoff — don't re-trigger the auto run
     // or keep a stale GitHub-URL prefill around
     setAutoTestRun(false);
@@ -81,7 +84,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
     setAutoTestRun(false);
     setGithubPrefillUrl('');
     // Reset to default tab
-    setActiveTab('marketplace');
+    setActiveTab('spotlight');
     // Call the original onClose
     onClose();
   };
@@ -135,6 +138,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               aria-label="server configuration tabs"
               sx={{ px: 2 }}
             >
+              <Tab label="Spotlight" value="spotlight" />
               <Tab label="Marketplace" value="marketplace" />
               <Tab label="GitHub" value="github" />
               <Tab label="Local Server" value="local" />
@@ -153,6 +157,11 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onUpdate={onUpdate}
               onClose={onClose}
               onRestartAfterUpdate={onRestartAfterUpdate}
+            />
+          ) : activeTab === 'spotlight' ? (
+            <SpotlightTab
+              onAdd={onAdd}
+              onClose={onClose}
             />
           ) : activeTab === 'marketplace' ? (
             <MarketplaceTab

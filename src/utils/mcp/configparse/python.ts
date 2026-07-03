@@ -65,44 +65,37 @@ export async function parsePythonConfig(options: ConfigParseOptions): Promise<Co
 }
 
 /**
- * Determine the appropriate install command based on project files
+ * Determine the appropriate install command based on project files.
+ *
+ * Always install into a project-local virtual environment via uv — never into
+ * the system Python: writing to the global site-packages fails with
+ * "Access is denied" on Windows (and needs sudo elsewhere) unless the shell
+ * runs elevated, and it pollutes the user's Python installation.
  */
 function determineInstallCommand(hasRequirements: boolean, hasPyproject: boolean): string {
-  // Check for UV first (newer, faster package manager)
-  try {
-    // This is just a heuristic - we can't actually check if UV is installed
-    if (hasRequirements) {
-      return 'uv pip install -r requirements.txt --system';
-    } else if (hasPyproject) {
-      return 'uv pip install -e . --system';
-    }
-  } catch (error) {
-    // UV not available, fall back to pip
+  if (hasPyproject) {
+    // Creates/updates .venv from pyproject.toml (and lockfile if present)
+    return 'uv sync';
   }
-  
-  // Fall back to pip
   if (hasRequirements) {
-    return 'pip install -r requirements.txt';
-  } else if (hasPyproject) {
-    return 'pip install -e .';
+    return 'uv venv && uv pip install -r requirements.txt';
   }
-  
-  // Default install command
-  return 'pip install -e .';
+  return 'uv venv && uv pip install -e .';
 }
 
 /**
- * Determine the appropriate run command and arguments
- * Always use direct python command instead of scripts
+ * Determine the appropriate run command and arguments.
+ * Runs python through `uv run` so it executes inside the project-local .venv
+ * the install command creates (a bare `python` would use the system
+ * interpreter, where the dependencies were never installed).
  */
 async function determineRunCommand(
   repoPath: string,
   pyprojectContent?: string,
   setupPyContent?: string
 ): Promise<{ runCommand: string; args: string[] }> {
-  // Always use python directly
-  const runCommand = 'python';
-  const args: string[] = [];
+  const runCommand = 'uv';
+  const args: string[] = ['run', 'python'];
   
   // Check for common entry point files
   const commonEntryPoints = [
@@ -136,8 +129,9 @@ async function determineRunCommand(
         const scriptsSection = poetryScriptsMatch[1];
         const scriptMatch = scriptsSection.match(/(\w+)\s*=\s*["']([^"']+)['"]/);
         if (scriptMatch) {
-          // Use the module path as the argument
-          const modulePath = scriptMatch[2];
+          // Script entries look like "package.module:function" — only the
+          // module path is valid after `python -m`
+          const modulePath = scriptMatch[2].split(':')[0];
           args.push('-m');
           args.push(modulePath);
           return { runCommand, args };
@@ -173,10 +167,10 @@ async function determineRunCommand(
   }
   
   // If we couldn't find anything, use a default
-  if (args.length === 0) {
+  if (args.length === 2) { // still just ['run', 'python']
     args.push('main.py');
   }
-  
+
   return { runCommand, args };
 }
 

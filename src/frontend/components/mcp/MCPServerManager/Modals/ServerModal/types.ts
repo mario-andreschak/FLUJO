@@ -29,7 +29,7 @@ export interface TabProps {
   onUpdate?: (config: MCPServerConfig, options?: { autoTestRun?: boolean }) => void;
   onClose: () => void;
   onRestartAfterUpdate?: (serverName: string) => void;
-  setActiveTab?: (tab: 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => void;
+  setActiveTab?: (tab: 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => void;
   /** When true (marketplace handoff), collapse define/build as done and auto-start a test run */
   autoTestRun?: boolean;
   /** GitHub tab: prefill for the repository URL field (marketplace → manual install handoff) */
