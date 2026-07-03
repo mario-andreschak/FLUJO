@@ -38,6 +38,11 @@ export function axisFromPosition(position: Position): Axis {
 
 const eq = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01;
 
+/** Minimum straight run through a bend point. Without it, a route that has
+ * to double back (e.g. a waypoint pulled below a horizontal edge) collapses
+ * into a zero-width hairpin spike. */
+const MIN_RUN = 24;
+
 /**
  * Build an orthogonal polyline source -> w1 -> … -> wn -> target.
  *
@@ -108,6 +113,8 @@ export function buildOrthogonalPath(
     }
   }
 
+  widenHairpins(points, gapOf);
+
   const segments: PathSegment[] = [];
   for (let i = 0; i < points.length - 1; i++) {
     segments.push({ a: points[i], b: points[i + 1], gap: gapOf[i] });
@@ -119,6 +126,59 @@ export function buildOrthogonalPath(
     segments,
     midpoint: pointAlong(points, 0.5),
   };
+}
+
+/**
+ * Replace doubled-back runs with a proper U. A route that must return the
+ * way it came (segment i and i+1 collinear but opposite) would render as a
+ * zero-width spike with two coincident lines; instead the apex gets a
+ * MIN_RUN-wide straight run — the bend point ends up mid-segment, like
+ * draw.io. Mutates points/gapOf in place.
+ */
+function widenHairpins(points: Point[], gapOf: number[]): void {
+  const d = MIN_RUN / 2;
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i - 1];
+    const apex = points[i];
+    const q = points[i + 1];
+
+    const verticalHairpin =
+      Math.abs(p.x - apex.x) < 0.01 && Math.abs(q.x - apex.x) < 0.01 &&
+      (apex.y - p.y) * (q.y - apex.y) < 0; // direction reverses
+    const horizontalHairpin =
+      Math.abs(p.y - apex.y) < 0.01 && Math.abs(q.y - apex.y) < 0.01 &&
+      (apex.x - p.x) * (q.x - apex.x) < 0;
+
+    if (!verticalHairpin && !horizontalHairpin) continue;
+
+    if (verticalHairpin) {
+      // Approach the run from the side the path comes from, leave on the other.
+      const cameFromLeft = (points[i - 2]?.x ?? apex.x - 1) <= apex.x;
+      const enterX = cameFromLeft ? apex.x - d : apex.x + d;
+      const exitX = cameFromLeft ? apex.x + d : apex.x - d;
+      const gap = gapOf[i - 1];
+      points.splice(i - 1, 3,
+        { x: enterX, y: p.y },
+        { x: enterX, y: apex.y },
+        { x: exitX, y: apex.y },
+        { x: exitX, y: q.y }
+      );
+      gapOf.splice(i - 1, 2, gap, gap, gap);
+    } else {
+      const cameFromAbove = (points[i - 2]?.y ?? apex.y - 1) <= apex.y;
+      const enterY = cameFromAbove ? apex.y - d : apex.y + d;
+      const exitY = cameFromAbove ? apex.y + d : apex.y - d;
+      const gap = gapOf[i - 1];
+      points.splice(i - 1, 3,
+        { x: p.x, y: enterY },
+        { x: apex.x, y: enterY },
+        { x: apex.x, y: exitY },
+        { x: q.x, y: exitY }
+      );
+      gapOf.splice(i - 1, 2, gap, gap, gap);
+    }
+    i++; // the widened run cannot hairpin again at the same spot
+  }
 }
 
 /** SVG path through the given corner points with rounded corners. */

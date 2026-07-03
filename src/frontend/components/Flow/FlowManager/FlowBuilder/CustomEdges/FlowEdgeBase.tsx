@@ -33,6 +33,11 @@ export interface EdgeWaypointEventDetail {
 // without ever moving the route.
 const DRAG_THRESHOLD = 4;
 
+// The delete button sits diagonally off the path midpoint so it never covers
+// the line or a bend dot (the path is always axis-aligned, so a diagonal
+// offset clears it in every orientation).
+const DELETE_OFFSET = { x: 16, y: -16 };
+
 const EdgeButton = styled('button')(({ theme }) => ({
   background: theme.palette.background.paper,
   border: `1px solid ${theme.palette.divider}`,
@@ -333,14 +338,14 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
             }}
           />
         ))}
-        {/* Delete button at the path midpoint (hidden while re-routing).
-            It sits on the path, so it also supports the bend gesture: a
-            genuine click deletes, dragging bends the edge like grabbing the
-            path itself. */}
+        {/* Delete button diagonally offset from the path midpoint (hidden
+            while re-routing) so it never overlaps the line or a bend dot.
+            A genuine click deletes; dragging from it still bends the edge
+            like grabbing the path itself. */}
         <div
           style={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${controlsPoint.x}px,${controlsPoint.y}px)`,
+            transform: `translate(-50%, -50%) translate(${controlsPoint.x + DELETE_OFFSET.x}px,${controlsPoint.y + DELETE_OFFSET.y}px)`,
             pointerEvents: controlsVisible && !dragging ? 'all' : 'none',
             opacity: controlsVisible && !dragging ? 1 : 0,
             transition: 'opacity 120ms ease',

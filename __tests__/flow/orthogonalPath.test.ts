@@ -68,6 +68,32 @@ describe('buildOrthogonalPath', () => {
     }
   });
 
+  it('widens a doubled-back route into a U instead of a zero-width hairpin', () => {
+    // Waypoint pulled straight below a horizontal edge: the naive route goes
+    // down and back up on the same pixel column. The built path must instead
+    // give the bend a straight run (the waypoint sits mid-segment) and never
+    // reverse direction within a column/row.
+    const wp = { x: 620, y: 590 };
+    const routed = buildOrthogonalPath(
+      { x: 490, y: 470 }, 'h',
+      { x: 780, y: 470 }, 'h',
+      [wp]
+    );
+    expect(passesThrough(routed.points, wp)).toBe(true);
+    for (let i = 1; i < routed.points.length - 1; i++) {
+      const p = routed.points[i - 1];
+      const apex = routed.points[i];
+      const q = routed.points[i + 1];
+      const verticalReversal = p.x === apex.x && q.x === apex.x && (apex.y - p.y) * (q.y - apex.y) < 0;
+      const horizontalReversal = p.y === apex.y && q.y === apex.y && (apex.x - p.x) * (q.x - apex.x) < 0;
+      expect(verticalReversal || horizontalReversal).toBe(false);
+    }
+    // The straight run through the waypoint has real width.
+    const run = routed.points.filter(p => p.y === wp.y);
+    expect(run.length).toBeGreaterThanOrEqual(2);
+    expect(Math.abs(run[run.length - 1].x - run[0].x)).toBeGreaterThanOrEqual(20);
+  });
+
   it('puts the midpoint on the polyline', () => {
     const routed = buildOrthogonalPath(
       { x: 0, y: 0 }, 'v',
