@@ -13,6 +13,13 @@ export interface ProcessNodePropertiesModalProps {
     flowEdges?: Edge[];
     flowNodes?: FlowNode[];
     flowId?: string; // Added flowId property
+    /**
+     * Adds an MCP node bound to the given server to the flow and connects it
+     * to this Process node — the connect-a-server shortcut in the Server
+     * Tools tab, so the user doesn't have to leave the modal to wire up
+     * tools.
+     */
+    onConnectMcpServer?: (serverName: string) => void;
 }
 
 export interface ProcessNodeData {

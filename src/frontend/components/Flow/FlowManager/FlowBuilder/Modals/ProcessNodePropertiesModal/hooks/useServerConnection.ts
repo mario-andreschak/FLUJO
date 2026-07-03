@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
-import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { Flow } from '@/frontend/types/flow/flow';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { mcpService } from '@/frontend/services/mcp';
+import { findConnectedMCPNodes } from '../utils';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useServerConnection');
@@ -244,8 +244,6 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
           ...prev,
           [serverName]: toolsArray
         }));
-        // Update the main map which triggers the ref update
-        setServerToolsMap(prev => ({ ...prev, [serverName]: toolsArray }));
         return true;
       }
     } catch (error) {
@@ -291,8 +289,6 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
           ...prev,
           [serverName]: toolsArray
         }));
-        // Update the main map which triggers the ref update
-        setServerToolsMap(prev => ({ ...prev, [serverName]: toolsArray }));
         return true;
       }
     } catch (error) {
@@ -307,23 +303,11 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }
   }, []); // Empty dependency array for stable function reference
 
-  // Find MCP nodes connected to this Process node
-  function findConnectedMCPNodes(nodeId: string, allEdges: Flow['edges']) {
-    return allEdges
-      .filter(edge =>
-        (edge.source === nodeId && edge.data?.edgeType === 'mcp') ||
-        (edge.target === nodeId && edge.data?.edgeType === 'mcp')
-      )
-      .map(edge => edge.source === nodeId ? edge.target : edge.source)
-      // Ensure uniqueness in case of multiple edges between the same nodes
-      .filter((value, index, self) => self.indexOf(value) === index);
-  }
-
   return {
     connectedMcpNodes, // Return the processed nodes list
+    allServers, // Every configured server (for the connect-a-server shortcut)
     isLoadingServers, // Keep overall loading state if needed
     selectedToolServerNodeId, // Return the selected node ID
-    // selectedNodeId, // Removed as redundant
     serverToolsMap,
     serverStatuses,
     isLoadingTools,

@@ -6,10 +6,6 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
-import ZoomInIcon from '@mui/icons-material/ZoomIn';
-import LayersIcon from '@mui/icons-material/Layers';
-import LinkIcon from '@mui/icons-material/Link';
-import LinkOffIcon from '@mui/icons-material/LinkOff';
 
 interface ContextMenuProps {
   open: boolean;
@@ -20,7 +16,11 @@ interface ContextMenuProps {
   onCopy?: () => void;
   onPaste?: () => void;
   canPaste?: boolean;
+  /** False when the target cannot be copied (e.g. a Start node). */
+  canCopy?: boolean;
   nodeId?: string;
+  /** True when the menu targets the current multi-selection. */
+  selection?: boolean;
   edgeId?: string;
 }
 
@@ -33,7 +33,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onCopy,
   onPaste,
   canPaste,
+  canCopy,
   nodeId,
+  selection,
   edgeId,
 }) => {
   const handleDelete = () => {
@@ -58,26 +60,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     onClose();
   };
 
-  const handleZoomToFit = () => {
-    console.log('Zoom to fit for', nodeId);
-    onClose();
-  };
-
-  const handleDisconnect = () => {
-    console.log('Disconnect edge', edgeId);
-    onClose();
-  };
-
-  const handleConnect = () => {
-    console.log('Create new connection from', nodeId);
-    onClose();
-  };
-
   // Build menu items array
   const menuItems = [];
-  
-  // Add node-specific menu items
-  if (nodeId) {
+
+  // Add node-specific menu items (a single node, not a multi-selection)
+  if (nodeId && !selection) {
     menuItems.push(
       <MenuItem key="edit" onClick={handleEditProperties}>
         <ListItemIcon>
@@ -86,49 +73,45 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemText>Edit Properties</ListItemText>
       </MenuItem>
     );
-    if (onCopy) {
-      menuItems.push(
-        <MenuItem key="copy" onClick={handleCopy}>
-          <ListItemIcon>
-            <ContentCopyIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>Copy</ListItemText>
-        </MenuItem>
-      );
-    }
-    menuItems.push(<Divider key="node-divider" />);
   }
 
-  // Paste is available wherever the user right-clicks (node, edge, or pane) as
-  // long as there is something on the clipboard.
-  if (onPaste && canPaste) {
+  // Copy applies to a copyable node or the current selection
+  if (onCopy && (nodeId || selection)) {
     menuItems.push(
-      <MenuItem key="paste" onClick={handlePaste}>
+      <MenuItem key="copy" onClick={handleCopy} disabled={!canCopy}>
+        <ListItemIcon>
+          <ContentCopyIcon fontSize="small" />
+        </ListItemIcon>
+        <ListItemText>Copy</ListItemText>
+      </MenuItem>
+    );
+  }
+
+  // Paste is available wherever the user right-clicks (node, edge, selection,
+  // or pane); disabled when the clipboard is empty.
+  if (onPaste) {
+    menuItems.push(
+      <MenuItem key="paste" onClick={handlePaste} disabled={!canPaste}>
         <ListItemIcon>
           <ContentPasteIcon fontSize="small" />
         </ListItemIcon>
         <ListItemText>Paste</ListItemText>
-      </MenuItem>,
-      <Divider key="paste-divider" />
+      </MenuItem>
     );
   }
 
-  // Add edge-specific menu items
-  if (edgeId) {
+  // Delete applies to a node, an edge, or the selection — not the empty pane.
+  if (nodeId || edgeId || selection) {
     menuItems.push(
-      <Divider key="edge-divider" />
+      <Divider key="delete-divider" />,
+      <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }}>
+        <ListItemIcon sx={{ color: 'error.main' }}>
+          <DeleteIcon fontSize="small" />
+        </ListItemIcon>
+        <ListItemText>Delete</ListItemText>
+      </MenuItem>
     );
   }
-
-  // Add delete menu item (always present)
-  menuItems.push(
-    <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }}>
-      <ListItemIcon sx={{ color: 'error.main' }}>
-        <DeleteIcon fontSize="small" />
-      </ListItemIcon>
-      <ListItemText>Delete</ListItemText>
-    </MenuItem>
-  );
 
   return (
     <Menu

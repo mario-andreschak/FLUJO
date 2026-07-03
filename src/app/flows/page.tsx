@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Box, 
   Typography, 
@@ -22,7 +22,8 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
-import FlowBuilder from '@/frontend/components/Flow/FlowManager/FlowBuilder';
+import FlowBuilder, { FlowBuilderHandle } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
+import { setNavigationGuard, clearNavigationGuard, NavigationGuard } from '@/frontend/utils/navigationGuard';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -39,6 +40,7 @@ const FlowsPage = () => {
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const flowBuilderRef = useRef<FlowBuilderHandle>(null);
   
   // Copy flow dialog state
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
@@ -91,10 +93,32 @@ const FlowsPage = () => {
     setIsEditing(true); // Auto-enter edit mode when a flow is selected
   }, []);
   
-  // Handle back to dashboard
+  // While the editor is open, app-wide navigation (the top menu) must run
+  // through the builder's guard too — otherwise switching to Models/MCP/Chat
+  // unmounts the editor and silently discards unsaved changes.
+  useEffect(() => {
+    if (!(isEditing && selectedFlow)) return;
+    const guard: NavigationGuard = (navigate) => {
+      if (flowBuilderRef.current) {
+        flowBuilderRef.current.requestNavigation(navigate);
+      } else {
+        navigate();
+      }
+    };
+    setNavigationGuard(guard);
+    return () => clearNavigationGuard(guard);
+  }, [isEditing, selectedFlow]);
+
+  // Handle back to dashboard — routed through the builder's navigation
+  // guard so unsaved changes get a Save/Discard dialog first.
   const handleBackToDashboard = useCallback(() => {
     log.debug('Returning to dashboard');
-    setIsEditing(false);
+    const leave = () => setIsEditing(false);
+    if (flowBuilderRef.current) {
+      flowBuilderRef.current.requestNavigation(leave);
+    } else {
+      leave();
+    }
   }, []);
   
   // Show snackbar notification
@@ -293,19 +317,9 @@ const FlowsPage = () => {
       counter++;
     }
     
-    // Create a new flow with the unique name
+    // Create a new flow with the unique name (includes the default Start node)
     const newFlow = flowService.createNewFlow(newName);
-    
-    // Add a Start node
-    const startNode = flowService.createNode('start', { x: 250, y: 150 });
-    if (!startNode.data.properties) {
-      startNode.data.properties = {};
-    }
-    startNode.data.properties.promptTemplate = '';
-    
-    newFlow.nodes = [startNode];
-    newFlow.edges = [];
-    
+
     // Save the new flow
     await handleSaveFlow(newFlow);
     setIsEditing(true); // Switch to editor mode automatically
@@ -338,11 +352,11 @@ const FlowsPage = () => {
           <Box sx={{ height: '100%' }}>
             <FlowBuilder
               key={selectedFlow}
+              ref={flowBuilderRef}
               initialFlow={selectedFlowData}
               onSave={handleSaveFlow}
               onDelete={handleDeleteFlow}
               allFlows={flows}
-              onSelectFlow={setSelectedFlow}
             />
           </Box>
         </Fade>

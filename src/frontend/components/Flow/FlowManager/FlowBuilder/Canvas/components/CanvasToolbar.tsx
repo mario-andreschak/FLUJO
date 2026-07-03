@@ -1,5 +1,5 @@
 import React from 'react';
-import { Panel } from '@xyflow/react';
+import { Panel, useReactFlow } from '@xyflow/react';
 import { Button, Tooltip } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
@@ -16,41 +16,28 @@ const ToolbarButton = styled(Button)(({ theme }) => ({
   }
 }));
 
-interface CanvasToolbarProps {
-  flowContainerRef: React.RefObject<HTMLDivElement>;
-}
-
 /**
- * Toolbar component for the Canvas with zoom controls
+ * Toolbar component for the Canvas with zoom controls, driven by the
+ * ReactFlow instance API (not the Controls component's DOM).
  */
-export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({ flowContainerRef }) => {
+export const CanvasToolbar: React.FC = () => {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+
   return (
     <Panel position="top-right" style={{ margin: '10px' }}>
       <div style={{ display: 'flex', gap: '5px' }}>
         <Tooltip title="Zoom In">
-          <ToolbarButton 
-            variant="outlined" 
-            size="small"
-            onClick={() => flowContainerRef.current?.querySelector<any>('.react-flow__controls-button:first-child')?.click()}
-          >
+          <ToolbarButton variant="outlined" size="small" onClick={() => zoomIn()}>
             <ZoomInIcon fontSize="small" />
           </ToolbarButton>
         </Tooltip>
         <Tooltip title="Zoom Out">
-          <ToolbarButton 
-            variant="outlined" 
-            size="small"
-            onClick={() => flowContainerRef.current?.querySelector<any>('.react-flow__controls-button:nth-child(2)')?.click()}
-          >
+          <ToolbarButton variant="outlined" size="small" onClick={() => zoomOut()}>
             <ZoomOutIcon fontSize="small" />
           </ToolbarButton>
         </Tooltip>
         <Tooltip title="Fit View">
-          <ToolbarButton 
-            variant="outlined" 
-            size="small"
-            onClick={() => flowContainerRef.current?.querySelector<any>('.react-flow__controls-button:nth-child(3)')?.click()}
-          >
+          <ToolbarButton variant="outlined" size="small" onClick={() => fitView()}>
             <FitScreenIcon fontSize="small" />
           </ToolbarButton>
         </Tooltip>

@@ -7,14 +7,17 @@ import {
   MarkerType
 } from '@xyflow/react';
 
+// The Canvas is fully controlled: the parent (FlowBuilder) owns the nodes and
+// edges, and every mutation the canvas makes is emitted as NodeChange/
+// EdgeChange arrays through the two change callbacks.
 export interface CanvasProps {
-  initialNodes?: FlowNode[];
-  initialEdges?: Edge[];
-  onNodesChange?: (changes: NodeChange<FlowNode>[]) => void;
-  onEdgesChange?: (changes: EdgeChange[]) => void;
+  nodes: FlowNode[];
+  edges: Edge[];
+  onNodesChange: (changes: NodeChange<FlowNode>[]) => void;
+  onEdgesChange: (changes: EdgeChange[]) => void;
   onDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
-  onInit?: (reactFlowInstance: ReactFlowInstance) => void;
+  onInit?: (reactFlowInstance: ReactFlowInstance<FlowNode, Edge>) => void;
   reactFlowWrapper?: React.RefObject<HTMLDivElement | null>;
   onEditNode?: (node: FlowNode) => void;
 }
@@ -37,6 +40,8 @@ export interface ContextMenuState {
   position: { x: number; y: number };
   nodeId?: string;
   edgeId?: string;
+  /** True when the menu targets the current multi-selection. */
+  selection?: boolean;
 }
 
 export interface SelectedElementsState {

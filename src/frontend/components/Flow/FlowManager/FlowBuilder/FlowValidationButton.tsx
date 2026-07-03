@@ -24,6 +24,9 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { validateFlow, FlowValidationIssue } from '@/utils/shared/flowValidation';
+import { modelService } from '@/frontend/services/model';
+import { mcpService } from '@/frontend/services/mcp';
+import { MCPServerConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('components/flow/FlowBuilder/FlowValidationButton');
@@ -48,35 +51,19 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
     setLoading(true);
     try {
       // Load the current models and servers so we can detect deleted/renamed references.
-      // Crucially, only pass a context when the load genuinely SUCCEEDED — a failed fetch
+      // Crucially, only pass a context when the load genuinely SUCCEEDED — a failed load
       // must leave it undefined so validateFlow SKIPS those checks rather than reporting
       // every binding as "deleted". A legitimately empty list ([]) still runs the checks.
-      let models: Array<{ id: string; name?: string; displayName?: string }> | undefined;
-      let servers: Array<{ name: string; status?: string }> | undefined;
+      // Both service calls preserve that distinction: tryLoadModels returns null on
+      // failure, loadServerConfigs returns {error} instead of an array.
+      const models = (await modelService.tryLoadModels()) ?? undefined;
 
-      try {
-        const res = await fetch('/api/model');
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) models = data;
-        }
-      } catch (error) {
-        log.warn('Could not load models for flow check', error);
-      }
-
-      try {
-        // Server live status isn't needed — names (and the disabled flag) are enough to
-        // catch renames/deletions; a disabled server is reported as unavailable.
-        const res = await fetch('/api/mcp/servers');
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) {
-            servers = data.map((s: any) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
-          }
-        }
-      } catch (error) {
-        log.warn('Could not load servers for flow check', error);
-      }
+      // Server live status isn't needed — names (and the disabled flag) are enough to
+      // catch renames/deletions; a disabled server is reported as unavailable.
+      const configs = await mcpService.loadServerConfigs();
+      const servers = Array.isArray(configs)
+        ? (configs as MCPServerConfig[]).map(s => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }))
+        : undefined;
 
       const result = validateFlow({ nodes, edges } as any, { models, servers });
       setIssues(result.issues);
