@@ -284,10 +284,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
             {selectionMode && onSelect && (
               <Checkbox
                 checked={selected}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  onSelect(e.target.checked);
-                }}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => onSelect(e.target.checked)}
                 size="small"
                 sx={{ mr: 1, p: 0.5 }}
               />
@@ -489,8 +487,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <Switch
             checked={enabled}
+            onClick={(e) => e.stopPropagation()}
             onChange={(e) => {
-              e.stopPropagation();
               log.debug(`Server ${name} toggle changed to: ${e.target.checked}`);
               onToggle(e.target.checked);
             }}
