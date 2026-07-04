@@ -12,10 +12,9 @@ import RunTools from './RunTools';
 import ArgumentsManager from './ArgumentsManager';
 import RootsManager from './RootsManager';
 import SamplingManager from './SamplingManager';
-import { 
+import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
+import {
   handleSubmit,
-  handleRootPathSelect,
-  handleFolderSelect,
   handleParseClipboard,
   handleParseEnvClipboard,
   handleParseEnvExample,
@@ -132,12 +131,18 @@ const LocalServerTab: React.FC<TabProps> = ({
     );
   };
 
+  // Folder pickers browse the BACKEND filesystem (the machine running FLUJO
+  // and the MCP servers) via /api/browse — the browser's own directory picker
+  // can neither browse a remote backend nor return real absolute paths.
+  const [rootPickerOpen, setRootPickerOpen] = useState(false);
+  const [argPickerIndex, setArgPickerIndex] = useState<number | null>(null);
+
   const onRootPathSelect = async () => {
-    await handleRootPathSelect(localConfig, setLocalConfig);
+    setRootPickerOpen(true);
   };
 
   const onFolderSelect = async (index: number) => {
-    await handleFolderSelect(index, localConfig, handleArgChange);
+    setArgPickerIndex(index);
   };
 
   const onParseClipboard = async () => {
@@ -609,6 +614,25 @@ const LocalServerTab: React.FC<TabProps> = ({
           {initialConfig ? 'Update Server' : 'Add Server'}
         </Button>
       </Box>
+
+      <FolderPickerDialog
+        open={rootPickerOpen}
+        title="Choose the server folder"
+        initialPath={localConfig.rootPath || undefined}
+        onClose={() => setRootPickerOpen(false)}
+        onSelect={(path) => setLocalConfig({ ...localConfig, rootPath: path })}
+      />
+      <FolderPickerDialog
+        open={argPickerIndex !== null}
+        title="Choose a folder or file"
+        selectFiles
+        onClose={() => setArgPickerIndex(null)}
+        onSelect={(path) => {
+          if (argPickerIndex !== null) {
+            handleArgChange(argPickerIndex, path);
+          }
+        }}
+      />
     </Box>
   );
 };

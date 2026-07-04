@@ -473,6 +473,16 @@ export const API_GROUPS: ApiGroup[] = [
       { method: 'GET', path: '/api/init', summary: 'Server-side initialization: verify storage and start enabled MCP servers.' },
       { method: 'GET', path: '/api/cwd', summary: 'Return the current working directory and the mcp-servers directory path.' },
       {
+        method: 'GET',
+        path: '/api/browse',
+        summary:
+          'List a directory of the machine running FLUJO, for the folder-picker dialogs (file-watch triggers, MCP server paths). Defaults to the home directory; includes available drives on Windows.',
+        paramsLabel: 'Query',
+        params: [{ name: 'path', type: 'string', description: 'Absolute directory path to list.' }],
+        response: '{ path, parent, home, sep, drives, entries: [{ name, path, isDirectory }] }',
+        notes: ['Exposes backend filesystem listings — like the rest of the API it assumes a single trusted user.'],
+      },
+      {
         method: 'POST',
         path: '/api/git',
         summary: 'Repository operations for MCP servers: clone, install, build, run, exists, readFile, listDir, list, checkUpdates, checkUpdatesBatch, pullUpdates.',

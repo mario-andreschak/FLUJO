@@ -21,6 +21,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createLogger } from '@/utils/logger';
 import Spinner from '@/frontend/components/shared/Spinner';
+import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 import { useThemeUtils } from '@/frontend/utils/theme';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
@@ -83,63 +84,6 @@ const ToolTester: React.FC<ToolTesterProps> = ({
       // Valid value (-1 or positive)
       setTimeoutValue(parsedValue);
     }
-  };
-
-  const handleParamChange = (key: string, value: string, schema: any) => {
-    let parsedValue: any;
-
-    // Handle empty values based on parameter type
-    if (value === '') {
-      if (schema.type === 'number') {
-        // Use 0 for empty number fields
-        parsedValue = 0;
-        log.debug(`Using default value 0 for empty number parameter: ${key}`);
-      } else if (schema.type === 'boolean') {
-        // Use false for empty boolean fields
-        parsedValue = false;
-        log.debug(`Using default value false for empty boolean parameter: ${key}`);
-      } else if (schema.type === 'object') {
-        // Use empty object for empty object fields
-        parsedValue = {};
-        log.debug(`Using empty object for empty object parameter: ${key}`);
-      } else if (schema.type === 'array') {
-        // Use empty array for empty array fields
-        parsedValue = [];
-        log.debug(`Using empty array for empty array parameter: ${key}`);
-      } else {
-        // For string and other types, use empty string
-        parsedValue = '';
-        log.debug(`Using empty string for empty parameter: ${key}`);
-      }
-    } else {
-      // Handle non-empty values
-      if (schema.type === 'number') {
-        parsedValue = parseFloat(value);
-        if (isNaN(parsedValue)) {
-          // Handle invalid number input
-          log.warn(`Invalid number input for ${key}: ${value}`);
-          // Use 0 as default for invalid numbers instead of returning early
-          parsedValue = 0;
-        }
-      } else if (schema.type === 'boolean') {
-        parsedValue = value.toLowerCase() === 'true';
-      } else if (schema.type === 'object' || schema.type === 'array') {
-        try {
-          parsedValue = JSON.parse(value);
-        } catch (error) {
-          log.warn(`Invalid JSON input for ${key}: ${value}`);
-          // Use appropriate default instead of returning early
-          parsedValue = schema.type === 'array' ? [] : {};
-        }
-      } else {
-        parsedValue = value;
-      }
-    }
-
-    setParams((prev) => ({
-      ...prev,
-      [key]: parsedValue,
-    }));
   };
 
   const handleTest = async () => {
@@ -327,62 +271,12 @@ const ToolTester: React.FC<ToolTesterProps> = ({
           </Box>
 
           <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {Object.entries(selectedToolData.inputSchema.properties || {}).map(
-              ([key, schema]: [string, any]) => (
-                <Box key={key}>
-                  <Typography 
-                    component="label" 
-                    variant="body2" 
-                    sx={{ 
-                      display: 'block', 
-                      mb: 0.5, 
-                      fontWeight: 'medium',
-                      color: (theme) => theme.palette.mode === 'dark' ? '#d1d5db' : '#4b5563'
-                    }}
-                  >
-                    {key}
-                    {selectedToolData.inputSchema.required?.includes(key) && (
-                      <Box component="span" sx={{ color: 'error.main', ml: 0.5 }}>*</Box>
-                    )}
-                  </Typography>
-                  
-                  {schema.type === 'boolean' ? (
-                    // Switch for boolean parameters
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={params[key] === true}
-                          onChange={(e) => {
-                            setParams((prev) => ({
-                              ...prev,
-                              [key]: e.target.checked,
-                            }));
-                          }}
-                          size="small"
-                        />
-                      }
-                      label={schema.description || ''}
-                    />
-                  ) : (
-                    // TextField for other parameter types
-                    <TextField
-                      fullWidth
-                      size="small"
-                      value={params[key] !== undefined ? String(params[key]) : ''}
-                      onChange={(e) => handleParamChange(key, e.target.value, schema)}
-                      placeholder={schema.description || ''}
-                      sx={{
-                        bgcolor: (theme) => theme.palette.background.paper,
-                        '& .MuiOutlinedInput-notchedOutline': {
-                          borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'
-                        }
-                      }}
-                    />
-                  )}
-                </Box>
-              )
-            )}
-            
+            <SchemaParamsForm
+              schema={selectedToolData.inputSchema}
+              values={params}
+              onChange={setParams}
+            />
+
             <Box>
               <Typography 
                 component="label" 

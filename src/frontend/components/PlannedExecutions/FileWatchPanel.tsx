@@ -1,6 +1,6 @@
 "use client";
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -10,11 +10,16 @@ import {
   Checkbox,
   FormControlLabel,
   FormGroup,
+  IconButton,
+  InputAdornment,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import FolderIcon from '@mui/icons-material/Folder';
 import { FileWatchEvent, FileWatchTriggerConfig } from '@/shared/types/plannedExecution';
+import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
 
 interface FileWatchPanelProps {
   config: FileWatchTriggerConfig;
@@ -29,6 +34,8 @@ const EVENT_OPTIONS: Array<{ value: FileWatchEvent; label: string }> = [
 
 /** File-watch trigger editor: folder, optional pattern, event kinds. */
 const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   const toggleEvent = (event: FileWatchEvent, checked: boolean) => {
     const events = checked
       ? [...config.events, event]
@@ -45,6 +52,25 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
         onChange={(e) => onChange({ ...config, path: e.target.value })}
         placeholder="e.g. C:\Users\me\Documents\inbox"
         margin="normal"
+        InputProps={{
+          endAdornment: (
+            <InputAdornment position="end">
+              <Tooltip title="Browse folders (on the FLUJO machine)">
+                <IconButton edge="end" onClick={() => setPickerOpen(true)}>
+                  <FolderIcon />
+                </IconButton>
+              </Tooltip>
+            </InputAdornment>
+          ),
+        }}
+      />
+      <FolderPickerDialog
+        open={pickerOpen}
+        title="Choose what to watch"
+        selectFiles
+        initialPath={config.path || undefined}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(path) => onChange({ ...config, path })}
       />
       <TextField
         fullWidth

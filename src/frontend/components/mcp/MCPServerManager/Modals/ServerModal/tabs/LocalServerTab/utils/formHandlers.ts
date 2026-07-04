@@ -7,24 +7,6 @@ import { installDependencies, buildServer } from '../../../utils/buildUtils';
 import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } from '../hooks/useLocalServerState';
 import { mcpService } from '@/frontend/services/mcp';
 
-// Function to get the MCP servers directory from the CWD API
-export const getMCPServersDir = async (): Promise<string> => {
-  try {
-    const response = await fetch('/api/cwd');
-    const data = await response.json();
-    
-    if (!data.success) {
-      console.error('Failed to get MCP servers directory:', data.error);
-      return 'mcp-servers'; // Fallback to relative path if API fails
-    }
-    
-    return data.mcpServersDir;
-  } catch (error) {
-    console.error('Error fetching MCP servers directory:', error);
-    return 'mcp-servers'; // Fallback to relative path if API fails
-  }
-};
-
 export const handleSubmit = (
   e: React.FormEvent,
   localConfig: MCPServerConfig,
@@ -115,63 +97,12 @@ export const handleSubmit = (
   }
 };
 
-export const handleFolderSelect = async (
-  index: number,
-  localConfig: MCPServerConfig,
-  handleArgChange: (index: number, value: string) => void
-) => {
-  try {
-    // Note: We can't directly specify a custom starting directory due to security restrictions
-    // The File System Access API only allows starting in well-known directories
-    
-    // @ts-ignore - window.showDirectoryPicker is experimental
-    const dirHandle = await window.showDirectoryPicker();
-    
-    // Due to browser security restrictions, we can't directly get the absolute path
-    // Instead, we'll construct it based on the project structure
-    
-    // Get the MCP servers directory from the API
-    const basePath = await getMCPServersDir();
-    const dirName = localConfig.name || dirHandle.name;
-    const absolutePath = `${basePath}/${dirName}`;
-    
-    // Normalize path by replacing backslashes with forward slashes
-    const normalizedPath = absolutePath.replace(/\\/g, '/');
-    handleArgChange(index, normalizedPath);
-  } catch (error) {
-    console.error('Failed to select folder:', error);
-  }
-};
-
-export const handleRootPathSelect = async (
-  localConfig: MCPServerConfig,
-  setLocalConfig: (config: MCPServerConfig) => void
-) => {
-  try {
-    // Note: We can't directly specify a custom starting directory due to security restrictions
-    // The File System Access API only allows starting in well-known directories
-    
-    // @ts-ignore - window.showDirectoryPicker is experimental
-    const dirHandle = await window.showDirectoryPicker();
-    
-    // Due to browser security restrictions, we can't directly get the absolute path
-    // Instead, we'll construct it based on the project structure
-    
-    // Get the MCP servers directory from the API
-    const basePath = await getMCPServersDir();
-    const dirName = localConfig.name || dirHandle.name;
-    const absolutePath = `${basePath}/${dirName}`;
-    
-    // Normalize path by replacing backslashes with forward slashes
-    const normalizedPath = absolutePath.replace(/\\/g, '/');
-    setLocalConfig({
-      ...localConfig,
-      rootPath: normalizedPath
-    });
-  } catch (error) {
-    console.error('Failed to select folder:', error);
-  }
-};
+// The old handleFolderSelect/handleRootPathSelect helpers (browser
+// File System Access API) were removed: the browser cannot browse the
+// BACKEND's filesystem (which may be a different machine) nor return real
+// absolute paths — it synthesized "<mcpServersDir>/<name>" regardless of what
+// the user picked. Folder selection now goes through the shared
+// FolderPickerDialog, which browses server-side via /api/browse.
 
 export const handleParseClipboard = async (
   localConfig: MCPServerConfig,
