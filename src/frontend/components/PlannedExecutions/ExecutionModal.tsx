@@ -24,10 +24,12 @@ import CloseIcon from '@mui/icons-material/Close';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import WebhookIcon from '@mui/icons-material/Webhook';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import {
   FileWatchTriggerConfig,
+  McpPollTriggerConfig,
   PlannedExecution,
   ScheduleTriggerConfig,
   TriggerConfig,
@@ -42,6 +44,7 @@ import OptionCard from './OptionCard';
 import SchedulePanel from './SchedulePanel';
 import WebhookPanel from './WebhookPanel';
 import FileWatchPanel from './FileWatchPanel';
+import WatchToolPanel from './WatchToolPanel';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -51,6 +54,14 @@ const DEFAULT_FILE_WATCH: FileWatchTriggerConfig = {
   type: 'file-watch',
   path: '',
   events: ['add', 'change'],
+};
+const DEFAULT_MCP_POLL: McpPollTriggerConfig = {
+  type: 'mcp-poll',
+  serverName: '',
+  toolName: '',
+  args: {},
+  intervalMs: 5 * 60 * 1000,
+  evaluate: { mode: 'on-change' },
 };
 
 interface ExecutionModalProps {
@@ -248,6 +259,19 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             title="When files change"
             description="Watch a folder on this computer and run when files appear, change, or disappear."
           />
+          <OptionCard
+            selected={trigger.type === 'mcp-poll'}
+            onClick={() => {
+              if (trigger.type !== 'mcp-poll') {
+                setTrigger(
+                  execution?.trigger.type === 'mcp-poll' ? execution.trigger : DEFAULT_MCP_POLL
+                );
+              }
+            }}
+            icon={<TravelExploreIcon />}
+            title="Watch a tool"
+            description="Check one of your MCP tools regularly — run when its result changes or new items appear."
+          />
         </Box>
 
         {trigger.type === 'schedule' && (
@@ -262,6 +286,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         )}
         {trigger.type === 'file-watch' && (
           <FileWatchPanel config={trigger} onChange={setTrigger} />
+        )}
+        {trigger.type === 'mcp-poll' && (
+          <WatchToolPanel config={trigger} onChange={setTrigger} />
         )}
 
         <TextField

@@ -13,6 +13,7 @@ import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './triggers/types';
 import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
+import { armMcpPoll, MIN_POLL_INTERVAL_MS } from './triggers/mcpPoll';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
 
@@ -177,10 +178,37 @@ export class SchedulerService {
         );
         break;
       }
+      case 'mcp-poll': {
+        this.armed.set(
+          execution.id,
+          armMcpPoll(trigger, {
+            callTool: async (serverName, toolName, args) => {
+              // Lazy import: don't pull the MCP stack into scheduler tests.
+              const { mcpService } = await import('@/backend/services/mcp');
+              const response = await mcpService.callTool(serverName, toolName, args);
+              return {
+                success: response.success === true,
+                data: response.data,
+                error: typeof response.error === 'string' ? response.error : undefined,
+              };
+            },
+            loadState: () => loadExecutionState(execution.id),
+            saveState: async patch => {
+              const current = await loadExecutionState(execution.id);
+              await saveExecutionState(execution.id, { ...current, ...patch });
+            },
+            onFire: ({ summary, context }) => {
+              this.lastTriggerErrors.delete(execution.id);
+              void this.fire(execution, { kind: 'mcp-poll', summary, context });
+            },
+            onError: message => this.lastTriggerErrors.set(execution.id, message),
+          })
+        );
+        break;
+      }
       default:
-        // mcp-poll lands in a later slice.
         log.warn(
-          `Trigger type "${trigger.type}" is not implemented yet — "${execution.name}" not armed`
+          `Trigger type "${(trigger as { type: string }).type}" is not implemented — "${execution.name}" not armed`
         );
     }
   }
@@ -301,10 +329,16 @@ export class SchedulerService {
     return { success: true };
   }
 
-  /** Fill server-side trigger fields (an empty webhook token = generate one). */
+  /**
+   * Fill/clamp server-side trigger fields: an empty webhook token generates
+   * one; poll intervals are floored to the minimum.
+   */
   private normalizeTrigger(trigger: PlannedExecution['trigger']): PlannedExecution['trigger'] {
     if (trigger?.type === 'webhook' && !trigger.token) {
       return { ...trigger, token: uuidv4() };
+    }
+    if (trigger?.type === 'mcp-poll') {
+      return { ...trigger, intervalMs: Math.max(trigger.intervalMs || 0, MIN_POLL_INTERVAL_MS) };
     }
     return trigger;
   }
@@ -343,6 +377,12 @@ export class SchedulerService {
       case 'mcp-poll':
         if (!trigger.serverName || !trigger.toolName) {
           return 'A server and tool are required';
+        }
+        if (trigger.evaluate?.mode === 'new-items' && !trigger.evaluate.idField?.trim()) {
+          return 'An id field is required to detect new items';
+        }
+        if (trigger.evaluate?.mode === 'llm-gate' && !trigger.evaluate.condition?.trim()) {
+          return 'A condition is required for the AI to check';
         }
         return null;
       default:
