@@ -183,6 +183,67 @@ Lists all repositories in the MCP servers directory.
 }
 ```
 
+### Check for Updates
+
+```json
+{
+  "action": "checkUpdates",
+  "savePath": "/path/to/repo"
+}
+```
+
+Compares the local HEAD of a cloned repository against its origin (via `git ls-remote`, a single
+cheap round-trip — no fetch). Powers the "Update available" badge on server cards. Also reports
+modifications to tracked files, since those would be discarded by an update. A batch variant,
+`checkUpdatesBatch`, takes `"paths": ["/path/a", "/path/b"]` instead of `savePath` and returns
+`{ "success": true, "results": { "<path>": { ...status } } }`; a failing repository degrades to
+an `error` field in its entry instead of failing the batch.
+
+#### Response
+
+```json
+{
+  "success": true,
+  "isGitRepo": true,
+  "remoteUrl": "https://github.com/username/repo.git",
+  "branch": "main",
+  "localSha": "abc123...",
+  "remoteSha": "def456...",
+  "updateAvailable": true,
+  "hasLocalChanges": false,
+  "dirtyFiles": []
+}
+```
+
+`isGitRepo: false` (with `updateAvailable: false`) is returned for directories that are not
+clones; this is not an error.
+
+### Pull Updates
+
+```json
+{
+  "action": "pullUpdates",
+  "savePath": "/path/to/repo"
+}
+```
+
+Updates a cloned repository to the latest remote commit. Because clones are shallow
+(`--depth 1`), this runs `git fetch --depth 1 origin <branch>` followed by
+`git reset --hard FETCH_HEAD` rather than a plain `git pull`. The hard reset only touches
+tracked files, so untracked files (e.g. a user-created `.env`) survive; local modifications
+to tracked files are discarded (the UI warns first, based on `checkUpdates`' `dirtyFiles`).
+
+#### Response
+
+```json
+{
+  "success": true,
+  "oldSha": "abc123...",
+  "newSha": "def456...",
+  "updated": true
+}
+```
+
 ## Error Handling
 
 The API returns appropriate HTTP status codes and error messages:

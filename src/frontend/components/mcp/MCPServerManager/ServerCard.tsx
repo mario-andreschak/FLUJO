@@ -16,9 +16,12 @@ import LoginIcon from '@mui/icons-material/Login';
 import KeyOffIcon from '@mui/icons-material/KeyOff';
 import PublicIcon from '@mui/icons-material/Public';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { mcpService } from '@/frontend/services/mcp';
 import TransportBadge from './TransportBadge';
+import ServerUpdateDialog from './ServerUpdateDialog';
+import { ServerUpdateInfo, shortSha } from './utils/serverUpdates';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
@@ -26,17 +29,18 @@ import DialogActions from '@mui/material/DialogActions';
 import Button from '@mui/material/Button';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
-import { 
-  Switch, 
-  Typography, 
-  IconButton, 
-  Tooltip, 
-  useTheme, 
-  Card, 
-  CardContent, 
+import {
+  Switch,
+  Typography,
+  IconButton,
+  Tooltip,
+  useTheme,
+  Card,
+  CardContent,
   CardActions,
   Box,
-  Checkbox
+  Checkbox,
+  Chip
 } from '@mui/material';
 
 interface ServerCardProps {
@@ -59,6 +63,10 @@ interface ServerCardProps {
   selectionMode?: boolean; // Whether selection mode is active
   hasOAuthTokens?: boolean; // Whether the server has OAuth tokens that can be reset
   exposeAsMcpServer?: boolean; // Whether this server is re-exposed at /mcp-proxy/<name> (#17A)
+  updateInfo?: ServerUpdateInfo; // Git update status for locally cloned servers
+  installCommand?: string; // Stored install command, re-run after a git update
+  buildCommand?: string; // Stored build command, re-run after a git update
+  onUpdated?: () => void; // Called after a successful git update
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -81,8 +89,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
   selectionMode = false,
   hasOAuthTokens = false,
   exposeAsMcpServer = false,
+  updateInfo,
+  installCommand,
+  buildCommand,
+  onUpdated,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastSeverity, setToastSeverity] = useState<'success' | 'error'>('success');
@@ -284,7 +297,26 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
-            <TransportBadge transport={transport} size="small" />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              {updateInfo?.updateAvailable && (
+                <Tooltip
+                  title={`Update available: ${shortSha(updateInfo.localSha)} → ${shortSha(updateInfo.remoteSha)}. Click to update.`}
+                >
+                  <Chip
+                    icon={<SystemUpdateAltIcon />}
+                    label="Update"
+                    color="warning"
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      log.debug(`Update badge clicked for server: ${name}`);
+                      setShowUpdateDialog(true);
+                    }}
+                  />
+                </Tooltip>
+              )}
+              <TransportBadge transport={transport} size="small" />
+            </Box>
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
               {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
               {status === 'disconnected' && <CancelIcon color="action" sx={{ mr: 0.5 }} fontSize="small" />}
@@ -623,6 +655,22 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </DialogActions>
       </Dialog>
       
+      {/* Git update dialog for locally cloned servers */}
+      {updateInfo && (
+        <ServerUpdateDialog
+          open={showUpdateDialog}
+          onClose={() => setShowUpdateDialog(false)}
+          serverName={name}
+          rootPath={path}
+          installCommand={installCommand}
+          buildCommand={buildCommand}
+          enabled={enabled}
+          updateInfo={updateInfo}
+          onToggle={onToggle}
+          onUpdated={onUpdated}
+        />
+      )}
+
       {/* Toast notification */}
       <Snackbar
         open={showToast}

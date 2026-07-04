@@ -4,6 +4,7 @@ import Spinner from '@/frontend/components/shared/Spinner';
 import { MCPServerConfig, MCPServerState, MCPStreamableConfig } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
 import { Grid, Box, Typography, Paper } from '@mui/material';
+import { ServerUpdateInfo } from './utils/serverUpdates';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerList');
 
@@ -19,6 +20,10 @@ interface ServerListProps {
   selectionMode?: boolean;
   selectedServers?: Set<string>;
   onServerSelectionChange?: (serverName: string, selected: boolean) => void;
+  /** Git update status per repository rootPath, for locally cloned servers. */
+  updates?: Record<string, ServerUpdateInfo>;
+  /** Called after a server was successfully updated from git. */
+  onServerUpdated?: (serverName: string, rootPath: string) => void;
 }
 
 const ServerList: React.FC<ServerListProps> = ({
@@ -33,6 +38,8 @@ const ServerList: React.FC<ServerListProps> = ({
   selectionMode = false,
   selectedServers = new Set(),
   onServerSelectionChange,
+  updates,
+  onServerUpdated,
 }) => {
   log.debug('Rendering ServerList', { 
     serverCount: servers.length, 
@@ -104,6 +111,10 @@ const ServerList: React.FC<ServerListProps> = ({
               selected={selectedServers.has(server.name)}
               onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
               hasOAuthTokens={hasOAuthTokens}
+              updateInfo={server.rootPath ? updates?.[server.rootPath] : undefined}
+              installCommand={server._installCommand}
+              buildCommand={server._buildCommand}
+              onUpdated={onServerUpdated ? () => onServerUpdated(server.name, server.rootPath) : undefined}
             />
           </Grid>
         );

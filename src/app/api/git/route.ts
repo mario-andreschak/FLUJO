@@ -37,6 +37,127 @@ async function ensureReposDir() {
   }
 }
 
+// Result shape for update checks on cloned server repositories
+type RepoUpdateStatus = {
+  isGitRepo: boolean;
+  repoRoot?: string;
+  remoteUrl?: string;
+  branch?: string;
+  localSha?: string;
+  remoteSha?: string;
+  updateAvailable: boolean;
+  hasLocalChanges: boolean;
+  dirtyFiles: string[];
+  error?: string;
+};
+
+// Resolve the ref to compare against: the checked-out branch, or the remote HEAD
+// when the clone is in detached-HEAD state (e.g. cloned at a tag/commit).
+function remoteRefForBranch(branch: string): string {
+  return branch && branch !== 'HEAD' ? `refs/heads/${branch}` : 'HEAD';
+}
+
+// Find the git repository containing savePath, walking upward like git itself does.
+// Server rootPaths often point at a subdirectory of a monorepo clone (e.g.
+// mcp-servers/servers/src/everything), so probing savePath/.git is not enough.
+// Returns null when savePath is missing or not inside any repository.
+async function resolveRepoRoot(savePath: string): Promise<string | null> {
+  try {
+    await fs.access(savePath);
+  } catch {
+    return null;
+  }
+  try {
+    const git = simpleGit({ baseDir: savePath, timeout: { block: 15000 } });
+    const top = (await git.revparse(['--show-toplevel'])).trim();
+    return top || null;
+  } catch {
+    return null;
+  }
+}
+
+// Guard: never treat FLUJO's own repository as an updatable server clone. A rootPath
+// that resolves upward into the app repo (e.g. a hand-configured local server living
+// inside the project folder) must not offer a pull, since the update runs a hard reset
+// on the whole repository.
+function isFlujoAppRepo(repoRoot: string): boolean {
+  const norm = (p: string) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
+  return norm(repoRoot) === norm(process.cwd());
+}
+
+// Check whether a cloned repository is behind its origin. Uses `ls-remote` (a single
+// cheap network round-trip) instead of a fetch, so it is safe to run in batches on
+// page load. Never throws: failures are reported in the `error` field so a batch
+// check degrades per-repository instead of failing wholesale.
+async function checkRepoUpdateStatus(savePath: string, requestId: string): Promise<RepoUpdateStatus> {
+  const status: RepoUpdateStatus = {
+    isGitRepo: false,
+    updateAvailable: false,
+    hasLocalChanges: false,
+    dirtyFiles: []
+  };
+
+  const repoRoot = await resolveRepoRoot(savePath);
+  if (!repoRoot) {
+    log.debug(`Not inside a git repository: ${savePath} [${requestId}]`);
+    return status;
+  }
+  if (isFlujoAppRepo(repoRoot)) {
+    log.debug(`Path resolves to the FLUJO app repository, skipping: ${savePath} [${requestId}]`);
+    status.error = 'Path is inside the FLUJO application repository';
+    return status;
+  }
+  status.isGitRepo = true;
+  status.repoRoot = repoRoot;
+
+  try {
+    const git = simpleGit({ baseDir: repoRoot, timeout: { block: 15000 } });
+
+    const remoteUrl = ((await git.remote(['get-url', 'origin'])) || '').trim();
+    if (!remoteUrl) {
+      status.error = 'No origin remote configured';
+      return status;
+    }
+    status.remoteUrl = remoteUrl;
+
+    status.localSha = (await git.revparse(['HEAD'])).trim();
+    const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+    status.branch = branch;
+
+    const ref = remoteRefForBranch(branch);
+    let lsRemote = await git.listRemote(['origin', ref]);
+    if (!lsRemote.trim() && ref !== 'HEAD') {
+      // Branch no longer exists on the remote (renamed default branch etc.) - fall
+      // back to the remote HEAD so the user can still update onto the new default.
+      log.debug(`Remote ref ${ref} not found, falling back to HEAD [${requestId}]`);
+      lsRemote = await git.listRemote(['origin', 'HEAD']);
+    }
+    const remoteSha = lsRemote.trim().split('\n')[0]?.split(/\s+/)[0] || '';
+    if (!remoteSha) {
+      status.error = `Could not resolve remote ref ${ref}`;
+      return status;
+    }
+    status.remoteSha = remoteSha;
+    status.updateAvailable = remoteSha !== status.localSha;
+
+    // Tracked-file modifications only: untracked files (like a user-created .env)
+    // survive the update, so they are not a reason to warn.
+    const porcelain = await git.raw(['status', '--porcelain', '--untracked-files=no']);
+    status.dirtyFiles = porcelain
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => line.replace(/^\S+\s+/, ''));
+    status.hasLocalChanges = status.dirtyFiles.length > 0;
+
+    return status;
+  } catch (error) {
+    log.warn(`Update check failed for ${savePath} [${requestId}]`, error);
+    status.error = error instanceof Error ? error.message : 'Unknown error';
+    return status;
+  }
+}
+
 // Helper function to execute a command in a repository directory
 async function executeCommandInRepo({ savePath, command, args, actionName, requestId, env }: CommandExecutionOptions) {
   if (!savePath) {
@@ -512,6 +633,83 @@ export async function POST(request: NextRequest) {
         }
       }
       
+      case 'checkUpdates': {
+        log.info(`Starting checkUpdates action [${requestId}]`);
+        if (!savePath) {
+          log.error(`Missing repository path [${requestId}]`);
+          return NextResponse.json({ error: 'Missing repository path' }, { status: 400 });
+        }
+
+        const status = await checkRepoUpdateStatus(savePath, requestId);
+        log.info(`Update check for ${savePath}: updateAvailable=${status.updateAvailable} [${requestId}]`);
+        return NextResponse.json({ success: true, ...status });
+      }
+
+      case 'checkUpdatesBatch': {
+        log.info(`Starting checkUpdatesBatch action [${requestId}]`);
+        const paths = requestBody.paths;
+        if (!Array.isArray(paths) || paths.length === 0) {
+          log.error(`Missing or empty paths array [${requestId}]`);
+          return NextResponse.json({ error: 'Missing paths array' }, { status: 400 });
+        }
+
+        const validPaths = paths.filter((p): p is string => typeof p === 'string' && p.trim() !== '');
+        const entries = await Promise.all(
+          validPaths.map(async (p) => [p, await checkRepoUpdateStatus(p, requestId)] as const)
+        );
+        const results = Object.fromEntries(entries);
+        log.info(`Batch update check completed for ${validPaths.length} repositories [${requestId}]`);
+        return NextResponse.json({ success: true, results });
+      }
+
+      case 'pullUpdates': {
+        log.info(`Starting pullUpdates action [${requestId}]`);
+        if (!savePath) {
+          log.error(`Missing repository path [${requestId}]`);
+          return NextResponse.json({ error: 'Missing repository path' }, { status: 400 });
+        }
+
+        const repoRoot = await resolveRepoRoot(savePath);
+        if (!repoRoot) {
+          log.error(`Not a git repository: ${savePath} [${requestId}]`);
+          return NextResponse.json({ error: 'Not a git repository' }, { status: 400 });
+        }
+        if (isFlujoAppRepo(repoRoot)) {
+          log.error(`Refusing to update the FLUJO app repository via ${savePath} [${requestId}]`);
+          return NextResponse.json({ error: 'Refusing to update the FLUJO application repository' }, { status: 400 });
+        }
+
+        try {
+          const git = simpleGit({ baseDir: repoRoot, timeout: { block: 120000 } });
+
+          const oldSha = (await git.revparse(['HEAD'])).trim();
+          const currentBranch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+          const fetchRef = currentBranch && currentBranch !== 'HEAD' ? currentBranch : 'HEAD';
+
+          // Clones are shallow (--depth 1), where a plain `git pull` misbehaves. The
+          // shallow-safe update is: fetch the tip at depth 1, then hard-reset onto it.
+          // `reset --hard` only touches tracked files, so an untracked .env survives.
+          log.info(`Fetching origin/${fetchRef} for ${repoRoot} [${requestId}]`);
+          await git.raw(['fetch', '--depth', '1', 'origin', fetchRef]);
+          await git.raw(['reset', '--hard', 'FETCH_HEAD']);
+
+          const newSha = (await git.revparse(['HEAD'])).trim();
+          log.info(`Repository updated ${oldSha} -> ${newSha} [${requestId}]`);
+          return NextResponse.json({
+            success: true,
+            repoRoot,
+            oldSha,
+            newSha,
+            updated: oldSha !== newSha
+          });
+        } catch (error) {
+          log.error(`Pull updates failed for ${savePath} [${requestId}]`, error);
+          return NextResponse.json({
+            error: `Failed to pull updates: ${error instanceof Error ? error.message : 'Unknown error'}`
+          }, { status: 500 });
+        }
+      }
+
       default:
         log.error(`Invalid action: ${action} [${requestId}]`);
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
