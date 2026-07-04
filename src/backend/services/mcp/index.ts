@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
@@ -20,6 +21,15 @@ declare global {
   // True from process boot until startEnabledServers() finishes its first sweep.
   // eslint-disable-next-line no-var
   var __mcp_starting_up: boolean | undefined;
+  // The CURRENT transport per server name. onclose/onerror handlers close over the
+  // transport they were registered on and fire for ANY instance — including a zombie
+  // process exiting minutes after it was replaced, and closes FLUJO itself initiated.
+  // A handler may only clean up / schedule reconnection when its transport IS the one
+  // registered here; FLUJO-initiated closes deregister BEFORE closing, so their close
+  // events are ignored. Global-backed for the same cross-module-instance reason as
+  // __mcp_recovery.
+  // eslint-disable-next-line no-var
+  var __mcp_active_transports: Map<string, Transport> | undefined;
 }
 
 // Initialize the global recovery map if it doesn't exist
@@ -31,6 +41,9 @@ if (typeof global.__mcp_connecting === 'undefined') {
 }
 if (typeof global.__mcp_starting_up === 'undefined') {
   global.__mcp_starting_up = true;
+}
+if (typeof global.__mcp_active_transports === 'undefined') {
+  global.__mcp_active_transports = new Map<string, Transport>();
 }
 
 // Import from backend modules
@@ -97,6 +110,41 @@ export class MCPService {
   // so the set is shared across module instances / hot reloads.
   private get connectingServers(): Set<string> {
     return global.__mcp_connecting!;
+  }
+
+  // The currently-registered transport per server. Global-backed (see
+  // __mcp_active_transports) so a deregistration in one module instance is visible to
+  // the onclose/onerror handlers that were registered by another.
+  private get activeTransports(): Map<string, Transport> {
+    return global.__mcp_active_transports!;
+  }
+
+  // Cap per-server stderr retention: a chatty or crash-looping server would otherwise
+  // grow the array without bound for the lifetime of the process.
+  private static readonly MAX_STDERR_LOG_ENTRIES = 200;
+
+  /** Append a stderr/transport-error line for a server, keeping only the newest entries. */
+  private appendStderrLog(serverName: string, message: string): void {
+    const logs = this.stderrLogs.get(serverName) || [];
+    logs.push(message);
+    if (logs.length > MCPService.MAX_STDERR_LOG_ENTRIES) {
+      logs.splice(0, logs.length - MCPService.MAX_STDERR_LOG_ENTRIES);
+    }
+    this.stderrLogs.set(serverName, logs);
+  }
+
+  /**
+   * Remove every live reference to a server's client BEFORE an intentional close.
+   *
+   * Deregistering first is what marks the close as FLUJO-initiated: the transport's
+   * onclose/onerror handlers only act when their transport is still the registered one
+   * (see connectServer), so a close that follows a deregistration never schedules a
+   * reconnect against ourselves.
+   */
+  private deregisterClient(serverName: string): void {
+    this.clients.delete(serverName);
+    this.removeFromGlobalRecovery(serverName);
+    this.activeTransports.delete(serverName);
   }
 
   /**
@@ -203,12 +251,32 @@ export class MCPService {
         this.connectionRetryAttempts.delete(serverName);
         return;
       }
-      
+
+      // If the server meanwhile has a live, RESPONSIVE connection (e.g. this timer was
+      // scheduled by a zombie's late close event, or another path already reconnected),
+      // reconnecting here would tear the healthy server down — the exact mechanism of
+      // the restart death-spiral. Verify with a real ping, not just map presence.
+      const existingClient = this.getClient(serverName);
+      if (existingClient) {
+        try {
+          await existingClient.ping({ timeout: 5000 });
+          log.info(`Server ${serverName} is already connected and responsive, cancelling retry`);
+          this.connectionRetryAttempts.delete(serverName);
+          return;
+        } catch (pingError) {
+          log.warn(`Server ${serverName} has a registered client but ping failed (${pingError instanceof Error ? pingError.message : String(pingError)}); reconnecting from scratch`);
+        }
+      }
+
       // Increment retry count
       this.connectionRetryAttempts.set(serverName, currentAttempts + 1);
-      
+
       try {
-        const result = await this.connectServer(currentConfig);
+        // A dead-but-present client must be torn down first (connectServer would
+        // short-circuit on it); with no client a plain connect is enough.
+        const result = existingClient
+          ? await this.forceReconnect(serverName)
+          : await this.connectServer(currentConfig);
         if (result.success) {
           log.info(`Successfully reconnected server ${serverName} after ${currentAttempts + 1} attempts`);
           // Reset retry count on successful connection
@@ -416,17 +484,22 @@ export class MCPService {
         if (!needsNewClient) {
           log.info(`connectServer: Server ${config.name} is already connected`);
           this.lastConnectionError.delete(config.name);
+          // The connection is established - a pending retry (e.g. scheduled by a
+          // zombie's late close) must not fire against it later.
+          this.clearRetryTimer(config.name);
+          this.connectionRetryAttempts.delete(config.name);
           return { success: true };
         }
 
         log.info(`connectServer: Existing client for ${config.name} is stale (${reason}), recreating`);
+        // Deregister BEFORE closing so the transport's own close event is recognized
+        // as FLUJO-initiated and does not schedule a reconnect (see deregisterClient).
+        this.deregisterClient(config.name);
         try {
           await safelyCloseClient(client, config.name, config);
         } catch (closeError) {
           log.debug(`connectServer: error closing stale client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
         }
-        this.clients.delete(config.name);
-        this.removeFromGlobalRecovery(config.name);
         client = undefined;
       }
 
@@ -440,11 +513,9 @@ export class MCPService {
         transport.stderr.on('data', (data: Buffer) => {
           const stderrMessage = data.toString();
           log.warn(`stderr: [${serverName}]: ${stderrMessage}`);
-          
-          // Store stderr logs
-          const logs = this.stderrLogs.get(serverName) || [];
-          logs.push(stderrMessage);
-          this.stderrLogs.set(serverName, logs);
+
+          // Store stderr logs (capped, see appendStderrLog)
+          this.appendStderrLog(serverName, stderrMessage);
         });
       }
 
@@ -452,25 +523,35 @@ export class MCPService {
       await client.connect(transport);
 
       transport.onclose = () => {
+        // Only act if THIS transport is still the registered one for the server.
+        // Two cases must be ignored: (a) a zombie process from a replaced connection
+        // finally exiting — its late close event used to delete the CURRENT healthy
+        // client from the maps and schedule a retry against it; (b) closes FLUJO
+        // itself initiated (disconnect/reconnect/config change), which deregister
+        // before closing and must not schedule a self-defeating reconnect.
+        if (this.activeTransports.get(config.name) !== transport) {
+          log.debug(`connectServer: ignoring close event from a stale/deregistered transport for ${config.name}`);
+          return;
+        }
+
         log.warn(`connectServer: Connection closed for server ${config.name}`);
-        
-        // Check if server is still enabled before processing
+
+        // Clean up client references for the transport that actually closed
+        this.deregisterClient(config.name);
+
+        // Check if server is still enabled before scheduling reconnection
         this.getServerConfig(config.name).then(currentConfig => {
           if (!currentConfig || currentConfig.disabled) {
             log.info(`Server ${config.name} is now disabled, skipping reconnection logic`);
             return;
           }
-          
+
           // Only schedule reconnection if server is still enabled
           log.info(`Connection closed for enabled server ${config.name}, scheduling reconnection`);
           this.scheduleConnectionRetry(config.name, currentConfig);
         }).catch(error => {
           log.warn(`Error checking server config for ${config.name} during onclose:`, error);
         });
-        
-        // Always clean up client references
-        this.clients.delete(config.name);
-        this.removeFromGlobalRecovery(config.name);
       };
 
       transport.onerror = (error) => {
@@ -485,6 +566,14 @@ export class MCPService {
           log.debug(
             `connectServer: transient SSE stream disconnect for ${config.name} (self-healing, ignored): ${error instanceof Error ? error.message : String(error)}`
           );
+          return;
+        }
+
+        // Same stale/deregistered guard as onclose: errors surfacing from a replaced
+        // or intentionally-closed transport must not tear down the CURRENT connection
+        // or schedule a reconnect against it.
+        if (this.activeTransports.get(config.name) !== transport) {
+          log.debug(`connectServer: ignoring error event from a stale/deregistered transport for ${config.name}`);
           return;
         }
 
@@ -539,14 +628,12 @@ export class MCPService {
         
         // Store more detailed error information. Walk the full cause chain so a generic
         // "fetch failed" becomes the real underlying error (e.g. TLS verification failure).
-        const errorLogs = this.stderrLogs.get(config.name) || [];
-        errorLogs.push(`Transport error: ${formatErrorChain(error)}`);
-        this.stderrLogs.set(config.name, errorLogs);
-        
-        // Always clean up client references first
-        this.clients.delete(config.name);
-        this.removeFromGlobalRecovery(config.name);
-        
+        this.appendStderrLog(config.name, `Transport error: ${formatErrorChain(error)}`);
+
+        // Clean up client references for the transport that actually errored
+        this.deregisterClient(config.name);
+
+
         // Check if server is still enabled before scheduling reconnection
         this.getServerConfig(config.name).then(currentConfig => {
           if (!currentConfig || currentConfig.disabled) {
@@ -562,14 +649,20 @@ export class MCPService {
         });
       };
 
-      // Store the new client
+      // Store the new client and register its transport as the CURRENT one for this
+      // server — the reference the onclose/onerror stale guards compare against.
       this.clients.set(config.name, client);
-      
+      this.activeTransports.set(config.name, transport);
+
       // Add to global recovery map
       this.addToGlobalRecovery(config.name, client);
 
-      // Connected successfully - clear any persisted failure from previous attempts.
+      // Connected successfully - clear any persisted failure from previous attempts,
+      // and cancel any pending retry so an old timer can't fire against the fresh
+      // connection later (the retry state is orphaned once we're connected).
       this.lastConnectionError.delete(config.name);
+      this.clearRetryTimer(config.name);
+      this.connectionRetryAttempts.delete(config.name);
 
       log.info(`connectServer: Successfully connected to ${config.name}`);
       return { success: true };
@@ -728,7 +821,9 @@ export class MCPService {
     } finally {
       if (client) {
         try {
-          await safelyCloseClient(client, config.name, config);
+          // Short grace: this is a throwaway probe and the Test Run response is
+          // waiting on this close - don't hold it for the full production window.
+          await safelyCloseClient(client, config.name, config, { gracePeriodMs: 3000, killEscalationMs: 2000 });
         } catch (closeError) {
           log.debug(`testConnection: error closing test client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
         }
@@ -752,29 +847,22 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
+    // Deregister BEFORE closing: this marks the close as FLUJO-initiated, so the
+    // transport's close event is ignored by the stale guard instead of scheduling a
+    // reconnect that would immediately undo this disconnect.
+    this.deregisterClient(serverName);
+
     try {
       // Get the server config to pass to safelyCloseClient
       const config = await this.getServerConfig(serverName);
-      
+
       // Close the client following the MCP shutdown sequence
       await safelyCloseClient(client, serverName, config || undefined);
-      
-      // Remove the client from our map
-      this.clients.delete(serverName);
-      
-      // Remove from global recovery map
-      this.removeFromGlobalRecovery(serverName);
-      
+
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true };
     } catch (error) {
       log.warn(`disconnectServer: Failed to disconnect server ${serverName}:`, error);
-      // Even if close fails, remove the client from our map
-      this.clients.delete(serverName);
-      
-      // Remove from global recovery map
-      this.removeFromGlobalRecovery(serverName);
-      
       return {
         success: false,
         error: `Failed to disconnect server: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -794,14 +882,15 @@ export class MCPService {
 
     const existing = this.clients.get(serverName);
     if (existing) {
+      // Deregister BEFORE closing so the close event is recognized as FLUJO-initiated
+      // (see deregisterClient) and does not schedule a competing reconnect.
+      this.deregisterClient(serverName);
       const config = await this.getServerConfig(serverName);
       try {
         await safelyCloseClient(existing, serverName, config || undefined);
       } catch (closeError) {
         log.debug(`forceReconnect: error closing stale client for ${serverName}: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
       }
-      this.clients.delete(serverName);
-      this.removeFromGlobalRecovery(serverName);
     }
 
     return this.connectServer(serverName);

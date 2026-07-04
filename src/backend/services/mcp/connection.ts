@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { ChildProcess } from 'child_process';
 import { createOAuthClientProvider } from './oauth';
 import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
@@ -26,14 +26,51 @@ function capabilityKey(config: MCPServerConfig): string {
   return `${rootsConfigKey(config)}|${samplingConfigKey(config)}`;
 }
 
+// We stash the RAW stdio config key on the transport at creation time so
+// shouldRecreateClient can compare config-to-config (see stdioConfigKey below).
+interface TransportWithConfigKey { __flujoStdioKey?: string }
+
 const log = createLogger('backend/services/mcp/connection');
 
-interface StdioTransportParameters {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-  stderr?: 'pipe' | 'ignore' | 'inherit';
+/**
+ * Flatten stored env vars to plain string values. Env vars may be persisted either as
+ * plain strings or as { value, metadata } objects (secrets); spawning and config
+ * comparison both need the flat form.
+ */
+function transformEnv(env?: Record<string, unknown>): Record<string, string> {
+  const transformed: Record<string, string> = {};
+  if (env) {
+    for (const [key, envVar] of Object.entries(env)) {
+      if (envVar && typeof envVar === 'object' && 'value' in envVar) {
+        transformed[key] = (envVar as { value: string }).value;
+      } else {
+        transformed[key] = envVar as string;
+      }
+    }
+  }
+  return transformed;
+}
+
+/**
+ * Identity key of everything in a stdio config that affects the spawned process.
+ *
+ * The spawn pipeline REWRITES the configured command/args (.bat -> `cmd.exe /c`, bare
+ * `node`/`npm`/`npx` -> absolute path — see createStdioTransport), so the transport's
+ * final _serverParams can never be compared against the raw config: for a config with
+ * command "node" that comparison was ALWAYS unequal, making shouldRecreateClient report
+ * "parameters changed" for a byte-identical config. Every connectServer() call on a live
+ * client then tore down and respawned a perfectly healthy server — the engine of the
+ * restart death-spiral. So the transport is keyed with the RAW config at creation time
+ * and compared raw-to-raw here.
+ */
+function stdioConfigKey(config: MCPStdioConfig): string {
+  return JSON.stringify({
+    command: config.command,
+    args: config.args ?? [],
+    env: transformEnv(config.env),
+    cwd: String(config.cwd ?? ''),
+    rootPath: config.rootPath ?? '',
+  });
 }
 
 /**
@@ -284,31 +321,10 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 
   // Create the transport with stderr capture
   log.info(`Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`);
-  
-  // Define the type for environment variables that may have metadata
-  interface EnvVarWithMetadata {
-    value: string;
-    metadata?: {
-      isSecret?: boolean;
-      [key: string]: unknown;
-    };
-  }
 
   // Transform the env object to extract only the value part from each key
-  const transformedEnv: Record<string, string> = {};
-  if (config.env) {
-    for (const [key, envVar] of Object.entries(config.env)) {
-      // Check if the env variable is an object with a 'value' property
-      if (envVar && typeof envVar === 'object' && 'value' in (envVar as EnvVarWithMetadata)) {
-        const typedEnvVar = envVar as EnvVarWithMetadata;
-        transformedEnv[key] = typedEnvVar.value;
-      } else {
-        // If it's already a simple value, use it as is
-        transformedEnv[key] = envVar as string;
-      }
-    }
-  }
-  
+  const transformedEnv = transformEnv(config.env);
+
   log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
   const transportoptions: StdioServerParameters = {
     command: command, 
@@ -319,6 +335,10 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   };
 
   const transport = new StdioClientTransport(transportoptions);
+
+  // Key the transport with the RAW config so shouldRecreateClient can tell whether a
+  // later config is byte-identical, independent of the command/args rewrites above.
+  (transport as unknown as TransportWithConfigKey).__flujoStdioKey = stdioConfigKey(config);
 
   // Check if stderr is available
   if (transport.stderr) {
@@ -401,43 +421,25 @@ export function shouldRecreateClient(
       };
     }
 
-    // For stdio, check command parameters
-    const transport = client.transport as StdioClientTransport;
-
-    // Access the transport properties safely using type assertion to unknown first
-    const serverParams: StdioTransportParameters | undefined = (transport as unknown as { _serverParams: StdioTransportParameters })._serverParams;
-    if (!serverParams) {
-      return { needsNewClient: true, reason: 'Cannot access transport options' };
-    }
-
     // Ensure we're working with a stdio config
     if (config.transport !== 'stdio') {
       return { needsNewClient: true, reason: 'Transport type changed from stdio' };
     }
 
-    // Check if connection parameters have changed
-    const commandChanged = serverParams.command !== config.command;
-    const argsChanged =
-      JSON.stringify(serverParams.args) !== JSON.stringify(config.args);
-      
-    // Transform the env object to extract only the value part from each key for comparison
-    const transformedEnv: Record<string, string> = {};
-    if (config.env) {
-      for (const [key, envVar] of Object.entries(config.env)) {
-        // Check if the env variable is an object with a 'value' property
-        if (envVar && typeof envVar === 'object' && 'value' in (envVar as any)) {
-          transformedEnv[key] = (envVar as any).value;
-        } else {
-          // If it's already a simple value, use it as is
-          transformedEnv[key] = envVar as string;
-        }
-      }
+    // Compare the RAW config the transport was created from against the incoming raw
+    // config. Comparing against the transport's _serverParams is wrong: those hold the
+    // REWRITTEN command/args (.bat -> cmd.exe, bare node -> absolute path), so for e.g.
+    // command "node" they never matched the raw config and every reconnect attempt
+    // needlessly killed and respawned a healthy server (the restart death-spiral).
+    const existingKey = (client.transport as unknown as TransportWithConfigKey).__flujoStdioKey;
+    if (!existingKey) {
+      // Transport predates the config-key mechanism (only possible for a client adopted
+      // across a dev hot-reload via the global recovery map) — we cannot prove the
+      // config still matches, so rebuild once to get a keyed transport.
+      return { needsNewClient: true, reason: 'Existing stdio transport has no config key' };
     }
-    
-    const envChanged =
-      JSON.stringify(serverParams.env) !== JSON.stringify(transformedEnv);
 
-    if (commandChanged || argsChanged || envChanged) {
+    if (existingKey !== stdioConfigKey(config)) {
       return {
         needsNewClient: true,
         reason: 'Connection parameters changed',
@@ -449,60 +451,96 @@ export function shouldRecreateClient(
 }
 
 /**
- * Safely close a client connection following the MCP shutdown sequence
+ * Wait for a child process to exit, up to timeoutMs.
+ * Resolves true if the process exited (or had already exited), false on timeout.
  */
-export async function safelyCloseClient(client: Client, serverName: string, config?: MCPServerConfig): Promise<void> {
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>(resolve => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      resolve(false);
+    }, timeoutMs);
+    timer.unref?.();
+    child.once('exit', onExit);
+  });
+}
+
+export interface SafeCloseOptions {
+  /** How long to wait for the child to exit after stdin is closed (graceful window). */
+  gracePeriodMs?: number;
+  /** After SIGTERM, how long to wait before escalating to SIGKILL. */
+  killEscalationMs?: number;
+}
+
+/**
+ * Safely close a client connection following the MCP shutdown sequence.
+ *
+ * For stdio transports the graceful path is closing stdin and WAITING for the child to
+ * exit on its own BEFORE calling client.close(). Order matters: the SDK's
+ * StdioClientTransport.close() has a hardcoded stdin -> 2s -> SIGTERM -> 2s -> SIGKILL
+ * ladder, and on Windows SIGTERM is TerminateProcess (no handlers run), so calling
+ * close() while the child is still shutting down hard-kills it mid-teardown and orphans
+ * its own children (e.g. a puppeteer browser holding a profile lock). Servers with real
+ * teardown work (browser destroy, session flush) legitimately need more than 2s.
+ * Once the child has exited, the SDK's ladder is a no-op.
+ */
+export async function safelyCloseClient(client: Client, serverName: string, config?: MCPServerConfig, options?: SafeCloseOptions): Promise<void> {
   log.debug('Entering safelyCloseClient method');
+  const gracePeriodMs = options?.gracePeriodMs ?? 15000;
+  const killEscalationMs = options?.killEscalationMs ?? 5000;
   try {
     // Check if the transport is stdio
     if (client.transport instanceof StdioClientTransport) {
       const stdioTransport = client.transport as StdioClientTransport;
-      const process: ChildProcess | undefined = (stdioTransport as unknown as { _process: ChildProcess | undefined })._process;
+      const child: ChildProcess | undefined = (stdioTransport as unknown as { _process: ChildProcess | undefined })._process;
 
-      if (process && !process.killed) {
-        // First try to close stdin to signal graceful shutdown
+      if (child && child.exitCode === null && child.signalCode === null) {
+        // First close stdin to signal graceful shutdown (the MCP stdio convention)
         try {
-          if (process.stdin && !process.stdin.destroyed) {
-            process.stdin.end();
+          if (child.stdin && !child.stdin.destroyed) {
+            child.stdin.end();
             log.debug(`Closed stdin for graceful shutdown for ${serverName}`);
           }
         } catch (stdinError) {
           log.warn(`Error closing stdin for ${serverName}:`, stdinError);
         }
-        
-        // Set a timeout to force terminate if needed
-        const terminateTimeout = setTimeout(() => {
+
+        let exited = await waitForExit(child, gracePeriodMs);
+
+        if (!exited) {
+          log.warn(`Process did not exit within ${gracePeriodMs}ms after stdin close, sending SIGTERM for ${serverName}`);
           try {
-            if (process && !process.killed) {
-              log.warn(`Process did not exit gracefully, sending SIGTERM for ${serverName}`);
-              process.kill('SIGTERM');
-              
-              // Last resort: SIGKILL after another timeout
-              setTimeout(() => {
-                try {
-                  if (process && !process.killed) {
-                    log.warn(`Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`);
-                    process.kill('SIGKILL');
-                  }
-                } catch (killError) {
-                  log.error(`Error sending SIGKILL for ${serverName}:`, killError);
-                }
-              }, 5000);
-            }
+            child.kill('SIGTERM');
           } catch (termError) {
             log.error(`Error sending SIGTERM for ${serverName}:`, termError);
           }
-        }, 5000);
-        
-        // Clear timeout if process exits naturally
-        process.once('exit', () => {
-          clearTimeout(terminateTimeout);
-          log.info(`Process exited naturally for ${serverName}`);
-        });
+          // On Windows SIGTERM is already TerminateProcess, so this second wait
+          // resolves almost immediately; on POSIX it gives handlers a chance.
+          exited = await waitForExit(child, killEscalationMs);
+        }
+
+        if (!exited) {
+          log.warn(`Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`);
+          try {
+            child.kill('SIGKILL');
+          } catch (killError) {
+            log.error(`Error sending SIGKILL for ${serverName}:`, killError);
+          }
+        } else {
+          log.info(`Process exited gracefully for ${serverName}`);
+        }
       }
     }
-    
-    // Close the client
+
+    // Close the client. For stdio the child has already exited (or been killed) at this
+    // point, so the SDK's internal kill ladder cannot land mid-teardown.
     await client.close();
     log.info(`Client closed successfully for ${serverName}`);
   } catch (error) {
