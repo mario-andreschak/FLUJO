@@ -36,7 +36,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
 
   const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
   const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
-  const stuck = !!liveStats && sinceLast >= 20;
+  const stuck = !!liveStats && sinceLast >= 60;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>

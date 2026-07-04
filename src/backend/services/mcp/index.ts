@@ -36,7 +36,7 @@ if (typeof global.__mcp_starting_up === 'undefined') {
 // Import from backend modules
 import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
-import { listServerTools as listTools, callTool as callToolFunction } from './tools';
+import { listServerTools as listTools, callTool as callToolFunction, ToolCallProgress } from './tools';
 import {
   listServerResources as listResources,
   listServerResourceTemplates as listResourceTemplates,
@@ -856,7 +856,7 @@ export class MCPService {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number): Promise<MCPServiceResponse> {
+  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
 
     let client = this.getClient(serverName);
@@ -881,7 +881,7 @@ export class MCPService {
       }
     }
 
-    const result = await callToolFunction(client, serverName, toolName, args, timeout);
+    const result = await callToolFunction(client, serverName, toolName, args, timeout, onProgress);
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
   }

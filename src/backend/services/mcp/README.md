@@ -142,7 +142,7 @@ await mcpService.deleteServerConfig('serverName');
 #### Tool Management
 
 - `listServerTools(serverName)`: List tools available from an MCP server
-- `callTool(serverName, toolName, args, timeout?)`: Call a tool on an MCP server
+- `callTool(serverName, toolName, args, timeout?, onProgress?)`: Call a tool on an MCP server. `timeout` is in seconds; `-1`/omitted means no timeout. The timeout is enforced by the MCP SDK's request timer (`RequestOptions.timeout`) — never wrap the call in a local race, the SDK times every request out at 60s by default and rejects with `-32001`. Server progress notifications reset the timer (`resetTimeoutOnProgress`) and are forwarded to `onProgress`.
 
 ## Best Practices
 

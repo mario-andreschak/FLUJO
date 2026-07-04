@@ -4,6 +4,7 @@ import {
   ToolCallInfo
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
+import { EmitFn } from '@/shared/types/execution/events';
 
 // Input for model call
 export interface ModelCallInput {
@@ -54,6 +55,13 @@ export interface ToolCallProcessingInput {
    * falls back to the legacy `_-_-_SERVER_-_-_TOOL` scheme.
    */
   toolNameMap?: Record<string, { server: string; tool: string }>;
+  /**
+   * Live-event emitter for the run. When present, each MCP call is bracketed by
+   * tool:call / tool:result events and server progress notifications become
+   * tool:progress events — which keeps the chat UI's stall detector fed during
+   * long-running tools.
+   */
+  emit?: EmitFn;
 }
 
 // Tool call processing result
