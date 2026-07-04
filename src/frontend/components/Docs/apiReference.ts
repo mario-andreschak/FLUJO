@@ -405,7 +405,7 @@ export const API_GROUPS: ApiGroup[] = [
       {
         method: 'POST',
         path: '/api/git',
-        summary: 'Repository operations for MCP servers: clone, install, build, run, exists, readFile, listDir, list.',
+        summary: 'Repository operations for MCP servers: clone, install, build, run, exists, readFile, listDir, list, checkUpdates, checkUpdatesBatch, pullUpdates.',
         paramsLabel: 'Body',
         params: [{ name: 'action', type: 'string', required: true, description: 'Operation to perform.' }],
       },

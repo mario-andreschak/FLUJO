@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import ServerDetailsModal from './ServerDetailsModal';
 import { MCPServerConfig } from '@/shared/types/mcp';
+import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { MCP_FORMATS, getMcpFormat, McpFormatId } from '@/utils/mcp/mcpFormats';
 import { createLogger } from '@/utils/logger';
@@ -78,6 +79,48 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [importMenuAnchor, setImportMenuAnchor] = useState<null | HTMLElement>(null);
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
+  // Git update status per repository rootPath (locally cloned stdio servers).
+  const [updates, setUpdates] = useState<Record<string, ServerUpdateInfo>>({});
+
+  // Paths of servers that live in a local clone. A stable string key keeps the
+  // effect from re-firing on every status poll of the servers array.
+  const gitServerPathsKey = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          servers
+            .filter((s) => s.transport === 'stdio' && s.rootPath)
+            .map((s) => s.rootPath)
+        )
+      ).join('|'),
+    [servers]
+  );
+
+  useEffect(() => {
+    const paths = gitServerPathsKey.split('|').filter(Boolean);
+    if (paths.length === 0) return;
+    let cancelled = false;
+    // Results are cached (10 min TTL) inside checkServerUpdates, so this stays
+    // cheap even if the server list re-materializes.
+    checkServerUpdates(paths)
+      .then((results) => {
+        if (!cancelled) setUpdates((prev) => ({ ...prev, ...results }));
+      })
+      .catch((err) => log.warn('Server update check failed', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [gitServerPathsKey]);
+
+  const handleServerUpdated = async (serverName: string, rootPath: string) => {
+    // Re-check every clone, not just the updated one: several servers can share a
+    // repository (monorepo clones like modelcontextprotocol/servers), and the pull
+    // just cleared the badge for all of them.
+    log.info(`Server ${serverName} updated from git, refreshing update status`);
+    const paths = gitServerPathsKey.split('|').filter(Boolean);
+    const results = await checkServerUpdates(paths.length > 0 ? paths : [rootPath], true);
+    setUpdates((prev) => ({ ...prev, ...results }));
+  };
 
   // Open the details modal only for ENABLED servers — a disabled server has no live
   // connection, so there's nothing to inspect (no modal, per design).
@@ -603,6 +646,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           selectionMode={selectionMode}
           selectedServers={selectedServers}
           onServerSelectionChange={handleServerSelect}
+          updates={updates}
+          onServerUpdated={handleServerUpdated}
         />
       </Box>
 
