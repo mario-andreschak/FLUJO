@@ -102,9 +102,15 @@ export const API_GROUPS: ApiGroup[] = [
         alsoMethods: ['PATCH', 'DELETE'],
         path: '/v1/chat/conversations/{conversationId}',
         summary:
-          'GET full conversation state (messages + metadata); PATCH updates flowId; DELETE removes the conversation.',
+          'GET the displayed conversation (messages + metadata); PATCH updates flowId; DELETE removes the conversation and its event log.',
         paramsLabel: 'Body',
         params: [{ name: 'flowId', type: 'string', description: 'New flow id (PATCH only).' }],
+        response:
+          'Conversation with messages, plus usage (token totals, per-node breakdown), status, and contextInfo (latest prompt-token count + the bound model\'s context window — what the chat token counter and context meter display).',
+        notes: [
+          'Messages are a projection of the append-only conversation log when one exists (legacy conversations without a log are served as stored). Node system prompts are never included.',
+          'Subflow steps appear inline as depth-tagged, display-only messages (nested in the chat UI); they are never part of the parent\'s model context.',
+        ],
       },
       {
         method: 'GET',
