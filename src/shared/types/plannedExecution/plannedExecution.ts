@@ -56,9 +56,15 @@ export type McpPollEvaluate =
   | { mode: 'new-items'; itemsPath: string; idField: string }
   /**
    * Ask a pinned model whether the result satisfies a natural-language
-   * condition. Costs one completion per poll — budget-capped.
+   * condition. Costs one completion per (changed) poll — budget-capped.
    */
-  | { mode: 'llm-gate'; condition: string; modelId: string; maxCallsPerDay?: number };
+  | { mode: 'llm-gate'; condition: string; modelId: string; maxCallsPerDay?: number }
+  /**
+   * Let one of the user's FLOWS decide (ephemeral run): the flow gets the
+   * condition + tool result and must answer with the same {"fire": …} JSON.
+   * Strictly more powerful than llm-gate — the flow can use tools to verify.
+   */
+  | { mode: 'flow-gate'; condition: string; flowId: string; maxCallsPerDay?: number };
 
 export interface McpPollTriggerConfig {
   type: 'mcp-poll';
@@ -70,11 +76,21 @@ export interface McpPollTriggerConfig {
   evaluate: McpPollEvaluate;
 }
 
+export interface UrlWatchTriggerConfig {
+  type: 'url-watch';
+  /** The http(s) resource to watch. */
+  url: string;
+  /** When to check, as a cron pattern (same editor as schedule triggers). */
+  cron: string;
+  timezone?: string;
+}
+
 export type TriggerConfig =
   | ScheduleTriggerConfig
   | WebhookTriggerConfig
   | FileWatchTriggerConfig
-  | McpPollTriggerConfig;
+  | McpPollTriggerConfig
+  | UrlWatchTriggerConfig;
 
 export type TriggerType = TriggerConfig['type'];
 
@@ -143,7 +159,7 @@ export interface PlannedExecutionState {
 
 /** What a trigger hands to the scheduler when it fires. */
 export interface TriggerFirePayload {
-  kind: 'manual' | 'schedule' | 'schedule-catchup' | 'webhook' | 'file' | 'mcp-poll';
+  kind: 'manual' | 'schedule' | 'schedule-catchup' | 'webhook' | 'file' | 'mcp-poll' | 'url-watch';
   /** Short human-readable summary, stored on the RunRecord. */
   summary: string;
   /** Structured data appended to the run prompt as a fenced JSON block. */

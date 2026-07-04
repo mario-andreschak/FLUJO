@@ -14,14 +14,16 @@ import {
   Typography,
 } from '@mui/material';
 import DifferenceIcon from '@mui/icons-material/Difference';
-import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import { McpPollTriggerConfig } from '@/shared/types/plannedExecution';
 import { Model } from '@/shared/types/model';
+import { Flow } from '@/frontend/types/flow/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { modelService } from '@/frontend/services/model';
+import { flowService } from '@/frontend/services/flow';
 import { createLogger } from '@/utils/logger';
 import OptionCard from './OptionCard';
+import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 
 const log = createLogger('frontend/components/PlannedExecutions/WatchToolPanel');
 
@@ -33,6 +35,7 @@ interface WatchToolPanelProps {
 interface ToolEntry {
   name: string;
   description?: string;
+  inputSchema?: Record<string, any>;
 }
 
 /**
@@ -52,6 +55,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [models, setModels] = useState<Model[]>([]);
+  const [flows, setFlows] = useState<Flow[]>([]);
 
   // Load the configured MCP servers once.
   useEffect(() => {
@@ -90,7 +94,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
     return () => { cancelled = true; };
   }, [config.serverName]);
 
-  // Load the models for the "AI decides" picker.
+  // Load the models + flows for the "AI decides" pickers.
   useEffect(() => {
     let cancelled = false;
     modelService.loadModels()
@@ -99,6 +103,13 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       })
       .catch(() => {
         if (!cancelled) setModels([]);
+      });
+    flowService.loadFlows()
+      .then(list => {
+        if (!cancelled) setFlows(list || []);
+      })
+      .catch(() => {
+        if (!cancelled) setFlows([]);
       });
     return () => { cancelled = true; };
   }, []);
@@ -145,6 +156,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
 
   const evaluate = config.evaluate;
   const intervalSeconds = Math.round((config.intervalMs || 60000) / 1000);
+  const selectedTool = tools.find(t => t.name === config.toolName);
 
   return (
     <Box sx={{ mt: 1 }}>
@@ -172,7 +184,8 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
             labelId="watch-tool-label"
             label="Tool"
             value={tools.some(t => t.name === config.toolName) ? config.toolName : ''}
-            onChange={(e) => onChange({ ...config, toolName: e.target.value })}
+            // Args belong to a specific tool — reset them on tool change.
+            onChange={(e) => onChange({ ...config, toolName: e.target.value, args: {} })}
           >
             {tools.length === 0 && (
               <MenuItem value="" disabled>
@@ -191,27 +204,40 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
           margin="normal"
           value={intervalSeconds}
           onChange={(e) =>
-            onChange({ ...config, intervalMs: Math.max(30, Number(e.target.value) || 30) * 1000 })
+            onChange({ ...config, intervalMs: Math.max(5, Number(e.target.value) || 5) * 1000 })
           }
-          inputProps={{ min: 30, step: 30 }}
-          helperText="Minimum 30s"
+          inputProps={{ min: 5, step: 5 }}
+          helperText="Minimum 5s"
           sx={{ width: 180 }}
         />
       </Box>
 
-      <TextField
-        fullWidth
-        label="Tool arguments (JSON, optional)"
-        value={argsText}
-        onChange={(e) => handleArgsChange(e.target.value)}
-        margin="normal"
-        multiline
-        minRows={2}
-        placeholder='{ "query": "is:unread" }'
-        error={!!argsError}
-        helperText={argsError ?? 'Sent to the tool on every check.'}
-        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 14 } } }}
-      />
+      {selectedTool ? (
+        <Box sx={{ my: 1.5 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
+            Tool parameters — sent on every check
+          </Typography>
+          <SchemaParamsForm
+            schema={selectedTool.inputSchema}
+            values={config.args || {}}
+            onChange={(args) => onChange({ ...config, args })}
+          />
+        </Box>
+      ) : (
+        <TextField
+          fullWidth
+          label="Tool arguments (JSON, optional)"
+          value={argsText}
+          onChange={(e) => handleArgsChange(e.target.value)}
+          margin="normal"
+          multiline
+          minRows={2}
+          placeholder='{ "query": "is:unread" }'
+          error={!!argsError}
+          helperText={argsError ?? 'Sent to the tool on every check.'}
+          slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 14 } } }}
+        />
+      )}
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
         <Button
@@ -258,55 +284,19 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
           description="Any difference from the last check runs the flow. Simplest — no setup."
         />
         <OptionCard
-          selected={evaluate.mode === 'new-items'}
-          onClick={() =>
-            onChange({
-              ...config,
-              evaluate:
-                evaluate.mode === 'new-items' ? evaluate : { mode: 'new-items', itemsPath: '', idField: 'id' },
-            })
-          }
-          icon={<PlaylistAddIcon />}
-          title="New items appear"
-          description="The result is a list (emails, tasks, orders …); run once when unseen entries show up."
-        />
-        <OptionCard
-          selected={evaluate.mode === 'llm-gate'}
-          onClick={() =>
-            onChange({
-              ...config,
-              evaluate:
-                evaluate.mode === 'llm-gate' ? evaluate : { mode: 'llm-gate', condition: '', modelId: '' },
-            })
-          }
+          selected={evaluate.mode === 'llm-gate' || evaluate.mode === 'flow-gate'}
+          onClick={() => {
+            if (evaluate.mode !== 'llm-gate' && evaluate.mode !== 'flow-gate') {
+              onChange({ ...config, evaluate: { mode: 'llm-gate', condition: '', modelId: '' } });
+            }
+          }}
           icon={<PsychologyIcon />}
           title="AI decides"
-          description="Describe the condition in plain language; a model checks the result whenever it changes."
+          description="Describe the condition in plain language; a model — or one of your flows — checks the result whenever it changes."
         />
       </Box>
 
-      {evaluate.mode === 'new-items' && (
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1 }}>
-          <TextField
-            label="Where the list lives (optional)"
-            value={evaluate.itemsPath}
-            onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, itemsPath: e.target.value } })}
-            placeholder="e.g. content.0.items — empty if the result is the list"
-            helperText="Dot path into the result. Use the test button above to inspect it."
-            sx={{ minWidth: 300, flex: 1 }}
-          />
-          <TextField
-            label="Field that identifies an item"
-            value={evaluate.idField}
-            onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, idField: e.target.value } })}
-            placeholder="id"
-            helperText='Usually "id". Used to remember what was already seen.'
-            sx={{ minWidth: 220 }}
-          />
-        </Box>
-      )}
-
-      {evaluate.mode === 'llm-gate' && (
+      {(evaluate.mode === 'llm-gate' || evaluate.mode === 'flow-gate') && (
         <Box sx={{ mt: 1 }}>
           <TextField
             fullWidth
@@ -319,22 +309,71 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
             placeholder="e.g. any email mentions an invoice or a payment reminder"
           />
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <FormControl sx={{ minWidth: 260, flex: 1 }}>
-              <InputLabel id="gate-model-label">Model that checks</InputLabel>
+            <FormControl sx={{ minWidth: 170 }}>
+              <InputLabel id="gate-checker-label">Checked by</InputLabel>
               <Select
-                labelId="gate-model-label"
-                label="Model that checks"
-                value={models.some(m => m.id === evaluate.modelId) ? evaluate.modelId : ''}
-                onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, modelId: e.target.value } })}
+                labelId="gate-checker-label"
+                label="Checked by"
+                value={evaluate.mode}
+                onChange={(e) => {
+                  const mode = e.target.value as 'llm-gate' | 'flow-gate';
+                  if (mode === evaluate.mode) return;
+                  const common = {
+                    condition: evaluate.condition,
+                    maxCallsPerDay: evaluate.maxCallsPerDay,
+                  };
+                  onChange({
+                    ...config,
+                    evaluate:
+                      mode === 'llm-gate'
+                        ? { mode, ...common, modelId: '' }
+                        : { mode, ...common, flowId: '' },
+                  });
+                }}
               >
-                {models.length === 0 && (
-                  <MenuItem value="" disabled>No models configured</MenuItem>
-                )}
-                {models.map(m => (
-                  <MenuItem key={m.id} value={m.id}>{m.displayName || m.name}</MenuItem>
-                ))}
+                <MenuItem value="llm-gate">A model</MenuItem>
+                <MenuItem value="flow-gate">One of my flows</MenuItem>
               </Select>
             </FormControl>
+
+            {evaluate.mode === 'llm-gate' && (
+              <FormControl sx={{ minWidth: 240, flex: 1 }}>
+                <InputLabel id="gate-model-label">Model that checks</InputLabel>
+                <Select
+                  labelId="gate-model-label"
+                  label="Model that checks"
+                  value={models.some(m => m.id === evaluate.modelId) ? evaluate.modelId : ''}
+                  onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, modelId: e.target.value } })}
+                >
+                  {models.length === 0 && (
+                    <MenuItem value="" disabled>No models configured</MenuItem>
+                  )}
+                  {models.map(m => (
+                    <MenuItem key={m.id} value={m.id}>{m.displayName || m.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+
+            {evaluate.mode === 'flow-gate' && (
+              <FormControl sx={{ minWidth: 240, flex: 1 }}>
+                <InputLabel id="gate-flow-label">Flow that checks</InputLabel>
+                <Select
+                  labelId="gate-flow-label"
+                  label="Flow that checks"
+                  value={flows.some(f => f.id === evaluate.flowId) ? evaluate.flowId : ''}
+                  onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, flowId: e.target.value } })}
+                >
+                  {flows.length === 0 && (
+                    <MenuItem value="" disabled>No flows available</MenuItem>
+                  )}
+                  {flows.map(f => (
+                    <MenuItem key={f.id} value={f.id}>{f.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+
             <TextField
               label="Max checks per day"
               type="number"
@@ -346,13 +385,14 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
                 })
               }
               inputProps={{ min: 1 }}
-              helperText="Cost guard — each check is one small model call."
-              sx={{ width: 200 }}
+              helperText="Cost guard per check."
+              sx={{ width: 180 }}
             />
           </Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            The model is only asked when the result actually changed since the
-            last check — an idle feed costs nothing. Pick a small, cheap model.
+            {evaluate.mode === 'flow-gate'
+              ? 'The checker flow runs invisibly (never in the chat), gets the condition + tool result, and must answer with {"fire": true/false, "reason": "…"} — it can use its own tools to verify before deciding.'
+              : 'The model is only asked when the result actually changed since the last check — an idle feed costs nothing. Pick a small, cheap model.'}
           </Typography>
         </Box>
       )}

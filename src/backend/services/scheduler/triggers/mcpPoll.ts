@@ -8,8 +8,11 @@ import { evaluateNewItems, evaluateOnChange, PollEvaluation } from './pollEvalua
 
 const log = createLogger('backend/services/scheduler/triggers/mcpPoll');
 
-/** Floor for the poll interval — protects servers from misconfigured spam. */
-export const MIN_POLL_INTERVAL_MS = 30_000;
+/**
+ * Floor for the poll interval. Deliberately low — how hard to poll their own
+ * machine is the user's call; this only guards against a zero/garbage value.
+ */
+export const MIN_POLL_INTERVAL_MS = 5_000;
 /** Cap the error backoff at skipping this many intervals. */
 const MAX_BACKOFF_SKIPS = 8;
 
@@ -28,10 +31,10 @@ export interface McpPollDeps {
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
   onFire: (payload: { summary: string; context: unknown }) => void;
   onError: (message: string) => void;
-  /** llm-gate evaluator (absent until the llm-gate slice wires it). */
-  evaluateLlmGate?: (
+  /** "AI decides" evaluator — handles both llm-gate and flow-gate modes. */
+  evaluateAiGate?: (
     result: unknown,
-    config: Extract<McpPollTriggerConfig['evaluate'], { mode: 'llm-gate' }>,
+    config: Extract<McpPollTriggerConfig['evaluate'], { mode: 'llm-gate' } | { mode: 'flow-gate' }>,
     state: PlannedExecutionState
   ) => Promise<PollEvaluation>;
 }
@@ -73,8 +76,8 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
         evaluation = evaluateOnChange(response.data, state);
       } else if (evaluate.mode === 'new-items') {
         evaluation = evaluateNewItems(response.data, evaluate.itemsPath, evaluate.idField, state);
-      } else if (deps.evaluateLlmGate) {
-        evaluation = await deps.evaluateLlmGate(response.data, evaluate, state);
+      } else if (deps.evaluateAiGate) {
+        evaluation = await deps.evaluateAiGate(response.data, evaluate, state);
       } else {
         evaluation = {
           fire: false,

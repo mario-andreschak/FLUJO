@@ -25,6 +25,7 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import WebhookIcon from '@mui/icons-material/Webhook';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
+import LanguageIcon from '@mui/icons-material/Language';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import {
@@ -33,6 +34,7 @@ import {
   PlannedExecution,
   ScheduleTriggerConfig,
   TriggerConfig,
+  UrlWatchTriggerConfig,
   WebhookTriggerConfig,
 } from '@/shared/types/plannedExecution';
 import {
@@ -45,6 +47,7 @@ import SchedulePanel from './SchedulePanel';
 import WebhookPanel from './WebhookPanel';
 import FileWatchPanel from './FileWatchPanel';
 import WatchToolPanel from './WatchToolPanel';
+import UrlWatchPanel from './UrlWatchPanel';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -67,6 +70,11 @@ const DEFAULT_MCP_POLL: McpPollTriggerConfig = {
   args: {},
   intervalMs: 5 * 60 * 1000,
   evaluate: { mode: 'on-change' },
+};
+const DEFAULT_URL_WATCH: UrlWatchTriggerConfig = {
+  type: 'url-watch',
+  url: '',
+  cron: '*/15 * * * *',
 };
 
 interface ExecutionModalProps {
@@ -281,12 +289,31 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             }}
             icon={<TravelExploreIcon />}
             title="Watch a tool"
-            description="Check one of your MCP tools regularly — run when its result changes or new items appear."
+            description="Check one of your MCP tools regularly — run when its result changes, or let AI decide."
+          />
+          <OptionCard
+            selected={trigger.type === 'url-watch'}
+            onClick={() => {
+              if (trigger.type !== 'url-watch') {
+                setTrigger(
+                  execution?.trigger.type === 'url-watch' ? execution.trigger : DEFAULT_URL_WATCH
+                );
+              }
+            }}
+            icon={<LanguageIcon />}
+            title="When a website changes"
+            description="Check a URL regularly and run when its content is different from the last check."
           />
         </Box>
 
         {trigger.type === 'schedule' && (
-          <SchedulePanel config={trigger} onChange={setTrigger} />
+          <SchedulePanel
+            cron={trigger.cron}
+            timezone={trigger.timezone}
+            onChange={({ cron, timezone }) => setTrigger({ ...trigger, cron, timezone })}
+            catchUp={trigger.catchUp === true}
+            onCatchUpChange={(catchUp) => setTrigger({ ...trigger, catchUp })}
+          />
         )}
         {trigger.type === 'webhook' && (
           <WebhookPanel
@@ -301,6 +328,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         )}
         {trigger.type === 'mcp-poll' && (
           <WatchToolPanel config={trigger} onChange={setTrigger} />
+        )}
+        {trigger.type === 'url-watch' && (
+          <UrlWatchPanel config={trigger} onChange={setTrigger} />
         )}
 
         <TextField

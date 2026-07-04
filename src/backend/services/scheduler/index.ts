@@ -14,6 +14,7 @@ import { ArmedTrigger } from './triggers/types';
 import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll, MIN_POLL_INTERVAL_MS } from './triggers/mcpPoll';
+import { armUrlWatch } from './triggers/urlWatch';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
 
@@ -202,11 +203,29 @@ export class SchedulerService {
               void this.fire(execution, { kind: 'mcp-poll', summary, context });
             },
             onError: message => this.lastTriggerErrors.set(execution.id, message),
-            evaluateLlmGate: async (result, gateConfig, state) => {
-              // Lazy import: the gate pulls in the model/adapter stack.
-              const { evaluateLlmGate } = await import('./triggers/llmGate');
-              return evaluateLlmGate(result, gateConfig, state);
+            evaluateAiGate: async (result, gateConfig, state) => {
+              // Lazy import: the gate pulls in the model/flow stack.
+              const { evaluateAiGate } = await import('./triggers/llmGate');
+              return evaluateAiGate(result, gateConfig, state);
             },
+          })
+        );
+        break;
+      }
+      case 'url-watch': {
+        this.armed.set(
+          execution.id,
+          armUrlWatch(trigger, {
+            loadState: () => loadExecutionState(execution.id),
+            saveState: async patch => {
+              const current = await loadExecutionState(execution.id);
+              await saveExecutionState(execution.id, { ...current, ...patch });
+            },
+            onFire: ({ summary, context }) => {
+              this.lastTriggerErrors.delete(execution.id);
+              void this.fire(execution, { kind: 'url-watch', summary, context });
+            },
+            onError: message => this.lastTriggerErrors.set(execution.id, message),
           })
         );
         break;
@@ -393,10 +412,31 @@ export class SchedulerService {
         if (trigger.evaluate?.mode === 'new-items' && !trigger.evaluate.idField?.trim()) {
           return 'An id field is required to detect new items';
         }
-        if (trigger.evaluate?.mode === 'llm-gate' && !trigger.evaluate.condition?.trim()) {
+        if (
+          (trigger.evaluate?.mode === 'llm-gate' || trigger.evaluate?.mode === 'flow-gate') &&
+          !trigger.evaluate.condition?.trim()
+        ) {
           return 'A condition is required for the AI to check';
         }
+        if (trigger.evaluate?.mode === 'llm-gate' && !trigger.evaluate.modelId) {
+          return 'A model is required to check the condition';
+        }
+        if (trigger.evaluate?.mode === 'flow-gate' && !trigger.evaluate.flowId) {
+          return 'A flow is required to check the condition';
+        }
         return null;
+      case 'url-watch': {
+        try {
+          const parsed = new URL(trigger.url ?? '');
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return 'The URL must start with http:// or https://';
+          }
+        } catch {
+          return 'A valid URL is required';
+        }
+        const result = validateSchedule(trigger.cron, trigger.timezone);
+        return result.valid ? null : `Invalid schedule: ${result.error}`;
+      }
       default:
         return 'Unknown trigger type';
     }

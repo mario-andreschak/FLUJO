@@ -13,6 +13,13 @@ export function describeTrigger(trigger: TriggerConfig): string {
       return `Watching ${trigger.path}`;
     case 'mcp-poll':
       return `Watching ${trigger.serverName} › ${trigger.toolName}`;
+    case 'url-watch': {
+      try {
+        return `Watching ${new URL(trigger.url).hostname}`;
+      } catch {
+        return 'Watching a URL';
+      }
+    }
     default:
       return 'Trigger';
   }
