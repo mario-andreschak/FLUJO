@@ -266,25 +266,32 @@ export class SchedulerService {
   }
 
   /**
-   * Create a new execution. Fills id/timestamps/webhook-token server-side.
-   * Returns the stored execution or a validation error.
+   * Create a new execution. Fills timestamps/webhook-token server-side. The
+   * client MAY supply the id (a UUID) — that's what lets the editor show the
+   * webhook URL before the first save.
    */
   async create(
-    input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>
+    input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
   ): Promise<{ execution?: PlannedExecution; error?: string }> {
     const error = this.validateInput(input);
     if (error) {
       return { error };
     }
+    if (input.id !== undefined && !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(input.id)) {
+      return { error: 'The id must be a UUID' };
+    }
     const now = new Date().toISOString();
     const execution: PlannedExecution = {
       ...input,
       trigger: this.normalizeTrigger(input.trigger),
-      id: uuidv4(),
+      id: input.id ?? uuidv4(),
       createdAt: now,
       updatedAt: now,
     };
     const file = await this.loadFile();
+    if (file.executions.some(e => e.id === execution.id)) {
+      return { error: `A planned execution with id "${execution.id}" already exists` };
+    }
     await this.saveFile({ ...file, executions: [...file.executions, execution] });
     await this.reconcile();
     return { execution };

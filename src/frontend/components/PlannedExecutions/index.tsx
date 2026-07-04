@@ -13,6 +13,8 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import { IconButton, Tooltip } from '@mui/material';
 import { PlannedExecution } from '@/shared/types/plannedExecution';
 import {
   plannedExecutionsService,
@@ -44,6 +46,17 @@ const PlannedExecutionsManager = () => {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  // Triggers fire in the background (schedules, external webhooks, watchers),
+  // so poll for fresh statuses while the page is actually being looked at.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden) {
+        void refresh();
+      }
+    }, 10_000);
+    return () => clearInterval(timer);
   }, [refresh]);
 
   const handleTogglePaused = async (nextPaused: boolean) => {
@@ -81,6 +94,11 @@ const PlannedExecutionsManager = () => {
       >
         <Typography variant="h5">Planned Executions</Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Tooltip title="Refresh">
+            <IconButton onClick={() => void refresh()}>
+              <RefreshIcon />
+            </IconButton>
+          </Tooltip>
           <FormControlLabel
             control={
               <Switch

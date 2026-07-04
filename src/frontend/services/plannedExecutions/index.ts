@@ -21,7 +21,10 @@ export interface PlannedExecutionListResponse {
 export type PlannedExecutionInput = Omit<
   PlannedExecution,
   'id' | 'createdAt' | 'updatedAt'
->;
+> & {
+  /** Optional client-generated UUID (lets the editor show the webhook URL pre-save). */
+  id?: string;
+};
 
 /**
  * Frontend service for the Planned Executions REST API.

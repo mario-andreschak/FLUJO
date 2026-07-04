@@ -249,6 +249,18 @@ describe('SchedulerService', () => {
     });
   });
 
+  it('accepts a client-supplied UUID id and rejects duplicates and non-UUIDs', async () => {
+    const id = 'a388f4f8-132c-44d8-a412-ed082456b029';
+    const { execution } = await scheduler.create(scheduleInput({ id }));
+    expect(execution?.id).toBe(id);
+
+    const dup = await scheduler.create(scheduleInput({ id }));
+    expect(dup.error).toMatch(/already exists/);
+
+    const bad = await scheduler.create(scheduleInput({ id: '../evil' }));
+    expect(bad.error).toMatch(/must be a UUID/);
+  });
+
   it('generates a webhook token server-side when absent', async () => {
     const { execution } = await scheduler.create(
       scheduleInput({ trigger: { type: 'webhook', token: '' } })

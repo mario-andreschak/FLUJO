@@ -49,7 +49,12 @@ import WatchToolPanel from './WatchToolPanel';
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
 const DEFAULT_SCHEDULE: ScheduleTriggerConfig = { type: 'schedule', cron: '0 9 * * *' };
-const DEFAULT_WEBHOOK: WebhookTriggerConfig = { type: 'webhook', token: '' };
+const newWebhookTrigger = (): WebhookTriggerConfig => ({
+  type: 'webhook',
+  // Generated client-side so the URL + token are visible BEFORE the first
+  // save; the backend keeps a provided token as-is.
+  token: crypto.randomUUID(),
+});
 const DEFAULT_FILE_WATCH: FileWatchTriggerConfig = {
   type: 'file-watch',
   path: '',
@@ -84,6 +89,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [prompt, setPrompt] = useState('');
   const [saveConversations, setSaveConversations] = useState(false);
   const [trigger, setTrigger] = useState<TriggerConfig>(DEFAULT_SCHEDULE);
+  // Pre-generated id for NEW executions, so trigger types whose config is
+  // id-derived (the webhook URL) can be shown before the first save.
+  const [draftId, setDraftId] = useState('');
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loadingFlows, setLoadingFlows] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -98,6 +106,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setPrompt(execution?.prompt ?? '');
     setSaveConversations(execution?.saveConversations === true);
     setTrigger(execution?.trigger ?? DEFAULT_SCHEDULE);
+    setDraftId(execution ? '' : crypto.randomUUID());
   }, [open, execution]);
 
   // Load the available flows to choose from when the modal opens.
@@ -131,6 +140,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       saveConversations,
       trigger,
       enabled: execution?.enabled ?? true,
+      // The pre-generated id makes the webhook URL shown in the panel real.
+      ...(execution ? {} : { id: draftId }),
     };
     const result = execution
       ? await plannedExecutionsService.update(execution.id, input)
@@ -238,7 +249,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             onClick={() => {
               if (trigger.type !== 'webhook') {
                 setTrigger(
-                  execution?.trigger.type === 'webhook' ? execution.trigger : DEFAULT_WEBHOOK
+                  execution?.trigger.type === 'webhook' ? execution.trigger : newWebhookTrigger()
                 );
               }
             }}
@@ -281,7 +292,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           <WebhookPanel
             config={trigger}
             onChange={setTrigger}
-            executionId={execution?.id}
+            executionId={execution?.id ?? draftId}
+            saved={execution !== null}
           />
         )}
         {trigger.type === 'file-watch' && (

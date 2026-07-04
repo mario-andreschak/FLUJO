@@ -82,11 +82,13 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
     setLoadingRuns(false);
   }, [execution.id]);
 
+  // Reload on expand AND whenever the list poller reports a fresh last run,
+  // so an expanded history keeps up with background fires (webhooks, schedules).
   useEffect(() => {
     if (expanded) {
       void loadRuns();
     }
-  }, [expanded, loadRuns]);
+  }, [expanded, loadRuns, lastRun?.runId]);
 
   const handleRunNow = async () => {
     setRunningNow(true);
