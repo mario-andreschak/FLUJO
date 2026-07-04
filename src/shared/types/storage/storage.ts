@@ -12,7 +12,8 @@ export enum StorageKey {
   CURRENT_CONVERSATION_ID = 'current_conversation_id',
   SELECTED_FLOW_ID = 'selected_flow_id',
   SPEECH_SETTINGS = 'speech_settings',
-  SPOTLIGHT_SERVERS = 'spotlight_servers'
+  SPOTLIGHT_SERVERS = 'spotlight_servers',
+  PLANNED_EXECUTIONS = 'planned_executions'
 }
 
 export const StorageKeys = {
@@ -27,6 +28,7 @@ export const StorageKeys = {
   SELECTED_FLOW_ID: StorageKey.SELECTED_FLOW_ID,
   SPEECH_SETTINGS: StorageKey.SPEECH_SETTINGS,
   SPOTLIGHT_SERVERS: StorageKey.SPOTLIGHT_SERVERS,
+  PLANNED_EXECUTIONS: StorageKey.PLANNED_EXECUTIONS,
 } as const;
 
 /**

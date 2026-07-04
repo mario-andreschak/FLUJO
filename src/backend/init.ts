@@ -1,6 +1,7 @@
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
+import { getSchedulerService } from '@/backend/services/scheduler';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/init');
@@ -52,4 +53,11 @@ async function runInitialization(): Promise<void> {
   await mcpService.startEnabledServers().catch(error => {
     log.error('Failed to start enabled servers:', error);
   });
+
+  // Arm planned-execution triggers AFTER the MCP sweep so a catch-up or
+  // early scheduled run doesn't race servers that are still connecting.
+  // start() is idempotent and catches per-execution arming failures.
+  await getSchedulerService()
+    .start()
+    .catch(error => log.error('Failed to start scheduler:', error));
 }
