@@ -3,9 +3,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box,
+  Button,
   Chip,
   CircularProgress,
   Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   IconButton,
   Paper,
   Switch,
@@ -17,6 +22,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import { RunRecord, RunRecordStatus } from '@/shared/types/plannedExecution';
 import {
   plannedExecutionsService,
@@ -66,6 +72,7 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
+  const [detail, setDetail] = useState<RunRecord | null>(null);
 
   const loadRuns = useCallback(async () => {
     setLoadingRuns(true);
@@ -174,7 +181,13 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
           {runs?.map(record => (
             <Box
               key={record.runId}
-              sx={{ display: 'flex', gap: 1, py: 0.75, alignItems: 'flex-start' }}
+              sx={{
+                display: 'flex',
+                gap: 1,
+                py: 0.75,
+                alignItems: 'flex-start',
+                '&:hover .run-detail-button': { opacity: 1 },
+              }}
             >
               <Box
                 sx={{
@@ -186,7 +199,7 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
                   flexShrink: 0,
                 }}
               />
-              <Box sx={{ minWidth: 0 }}>
+              <Box sx={{ minWidth: 0, flexGrow: 1 }}>
                 <Typography variant="body2">
                   {formatTime(record.firedAt)}
                   {formatDuration(record) ? ` · ${formatDuration(record)}` : ''}
@@ -214,10 +227,83 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
                   </Typography>
                 )}
               </Box>
+              <Tooltip title="Show full output">
+                <IconButton
+                  className="run-detail-button"
+                  size="small"
+                  onClick={() => setDetail(record)}
+                  sx={{ opacity: { xs: 1, md: 0.35 }, transition: 'opacity 120ms', flexShrink: 0 }}
+                >
+                  <OpenInFullIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
             </Box>
           ))}
         </Box>
       </Collapse>
+
+      <Dialog open={detail !== null} onClose={() => setDetail(null)} maxWidth="md" fullWidth>
+        <DialogTitle component="div">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box
+              sx={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                bgcolor: detail ? statusColor(detail.status) : 'transparent',
+                flexShrink: 0,
+              }}
+            />
+            <Typography variant="h6">
+              {execution.name} — {detail ? formatTime(detail.firedAt) : ''}
+            </Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          {detail && (
+            <>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                {detail.status}
+                {formatDuration(detail) ? ` · ${formatDuration(detail)}` : ''}
+                {' · '}{detail.triggerSummary}
+                {detail.usage?.totalTokens
+                  ? ` · ${detail.usage.totalTokens.toLocaleString()} tokens (${detail.usage.promptTokens.toLocaleString()} in / ${detail.usage.completionTokens.toLocaleString()} out)`
+                  : ''}
+              </Typography>
+              {detail.error && (
+                <Typography variant="body2" color="error" sx={{ mb: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {detail.error}
+                </Typography>
+              )}
+              {detail.outputText ? (
+                <Box
+                  sx={{
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    bgcolor: 'action.hover',
+                    borderRadius: 1,
+                    p: 2,
+                    fontSize: 14,
+                    maxHeight: '55vh',
+                    overflow: 'auto',
+                  }}
+                >
+                  {detail.outputText}
+                </Box>
+              ) : (
+                !detail.error && (
+                  <Typography variant="body2" color="text.secondary">
+                    This run produced no output text.
+                  </Typography>
+                )
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDetail(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 };
