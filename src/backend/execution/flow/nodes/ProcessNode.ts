@@ -196,7 +196,7 @@ export class ProcessNode extends BaseNode {
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
-        sharedState.toolNameMap[tool.name] = { server: tool.server, tool: tool.originalName };
+        sharedState.toolNameMap[tool.name] = { server: tool.server, tool: tool.originalName, timeout: tool.timeout };
       }
     }
 
@@ -280,10 +280,10 @@ export class ProcessNode extends BaseNode {
       // Rebuild the model-facing-name -> (server, tool) map from the bound tools
       // (mirrors prep()'s SharedState.toolNameMap) so adapters that run their own
       // agentic tool loop (Claude subscription) can dispatch calls to mcpService.
-      const toolNameMap: Record<string, { server: string; tool: string }> = {};
+      const toolNameMap: Record<string, { server: string; tool: string; timeout?: number }> = {};
       for (const t of prepResult.availableTools ?? []) {
         if (t.server && t.originalName) {
-          toolNameMap[t.name] = { server: t.server, tool: t.originalName };
+          toolNameMap[t.name] = { server: t.server, tool: t.originalName, timeout: t.timeout };
         }
       }
 

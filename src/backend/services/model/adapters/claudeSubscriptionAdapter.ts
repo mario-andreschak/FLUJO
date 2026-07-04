@@ -7,6 +7,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
@@ -221,11 +222,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           });
         }
 
-        const { server, tool: originalTool } = decoded!;
+        const { server, tool: originalTool, timeout } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
-          const result = await mcpService.callTool(server, originalTool, args ?? {});
+          // Same timeout policy as the OpenAI-path tool loop: the MCP node's
+          // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
+          const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS);
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {

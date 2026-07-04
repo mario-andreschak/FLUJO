@@ -15,6 +15,7 @@ import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mcpService } from '@/backend/services/mcp';
+import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
@@ -696,15 +697,17 @@ export class ModelHandler {
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
 
-          // Call the tool via MCP service. No timeout: a flow's tool call may
-          // legitimately run for a long time; server progress notifications are
-          // forwarded as live tool:progress events (they also reset the SDK's
-          // request timer, see services/mcp/tools.ts).
+          // Call the tool via MCP service. The timeout comes from the tool's MCP
+          // node (properties.toolTimeout, seconds; -1 = none), defaulting to 5
+          // minutes. Server progress notifications are forwarded as live
+          // tool:progress events AND reset the SDK's request timer (see
+          // services/mcp/tools.ts), so a finite timeout only kills silent calls.
+          const timeout = decoded.timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS;
           const result = await mcpService.callTool(
             serverName,
             toolName,
             args,
-            undefined,
+            timeout,
             (progress) => emit?.({
               type: 'tool:progress',
               toolCallId: id,

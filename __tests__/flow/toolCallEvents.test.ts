@@ -42,9 +42,9 @@ describe('ModelHandler.processToolCalls events', () => {
     });
 
     expect(result.success).toBe(true);
-    // The decoded (server, tool) reached mcpService with no timeout (flow tool
-    // calls may legitimately run long) and a progress callback.
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', { a: 1 }, undefined, expect.any(Function));
+    // The decoded (server, tool) reached mcpService with the default 5-minute
+    // timeout (no toolTimeout configured on the MCP node) and a progress callback.
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', { a: 1 }, 300, expect.any(Function));
 
     const types = emit.mock.calls.map(([e]) => e.type);
     expect(types).toEqual(['tool:call', 'tool:progress', 'tool:result']);
@@ -74,6 +74,31 @@ describe('ModelHandler.processToolCalls events', () => {
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tool:result', toolCallId: 'call1', isError: true,
     }));
+  });
+
+  it('passes the MCP node\'s configured toolTimeout through to mcpService', async () => {
+    callToolMock.mockResolvedValueOnce({ success: true, data: { ok: 1 } });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})],
+      toolNameMap: { mcp_srv_abc123: { server: 'srv', tool: 'long_op', timeout: 42 } },
+    });
+
+    expect(result.success).toBe(true);
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', {}, 42, expect.any(Function));
+  });
+
+  it('passes -1 (infinite) through unchanged when the node disables the timeout', async () => {
+    callToolMock.mockResolvedValueOnce({ success: true, data: { ok: 1 } });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})],
+      toolNameMap: { mcp_srv_abc123: { server: 'srv', tool: 'long_op', timeout: -1 } },
+    });
+
+    expect(result.success).toBe(true);
+    // -1 reaches callTool, which maps it to the SDK's setTimeout ceiling ("no timeout").
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', {}, -1, expect.any(Function));
   });
 
   it('still processes tool calls when no emitter is provided', async () => {

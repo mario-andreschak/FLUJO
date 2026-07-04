@@ -22,8 +22,10 @@ export interface CompletionInput {
    * Maps model-facing MCP tool names back to (server, tool). Needed by adapters
    * that execute tools themselves (e.g. the Claude subscription adapter runs the
    * agentic loop in-process and must dispatch tool calls to `mcpService`).
+   * `timeout` is the tool's per-call timeout in seconds (-1 = none; unset = the
+   * 5-minute default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number }>;
   /**
    * Upper bound on agentic turns for adapters that orchestrate their own tool
    * loop (Claude subscription). Ignored by the request/response adapters, where

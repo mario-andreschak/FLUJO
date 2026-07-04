@@ -34,6 +34,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Tooltip from '@mui/material/Tooltip';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
 import  EnvEditor  from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import { createLogger } from '@/utils/logger/index';
 
@@ -258,6 +259,9 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
 
   const boundServer = nodeData.properties?.boundServer || '';
   const enabledTools = nodeData.properties?.enabledTools || [];
+  // Tool call timeout: seconds; -1 = infinite; undefined = 5-minute default.
+  const toolTimeout = nodeData.properties?.toolTimeout;
+  const isTimeoutInfinite = toolTimeout === TOOL_CALL_TIMEOUT_INFINITE;
 
   return (
     <Dialog 
@@ -398,6 +402,57 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
           helperText="This description will be displayed on the node"
         />
         
+        {/* Tool Call Timeout section */}
+        {boundServer && (
+          <Box sx={{ mt: 4 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Tool Call Timeout
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              How long a single tool call on this server may run before it is aborted.
+              Tools that report progress keep the timeout alive while they work.
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <TextField
+                label="Timeout (seconds)"
+                type="number"
+                size="small"
+                sx={{ width: 200 }}
+                value={isTimeoutInfinite ? '' : (toolTimeout ?? '')}
+                placeholder={String(DEFAULT_TOOL_CALL_TIMEOUT_SECONDS)}
+                disabled={isTimeoutInfinite}
+                inputProps={{ min: 1 }}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    handlePropertyChange('toolTimeout', undefined);
+                    return;
+                  }
+                  const parsed = parseInt(raw, 10);
+                  if (!isNaN(parsed) && parsed > 0) {
+                    handlePropertyChange('toolTimeout', parsed);
+                  }
+                }}
+                helperText={isTimeoutInfinite
+                  ? 'No timeout — tool calls run until they finish.'
+                  : `Empty = default (${DEFAULT_TOOL_CALL_TIMEOUT_SECONDS} seconds / 5 minutes).`}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={isTimeoutInfinite}
+                    onChange={(e) => handlePropertyChange(
+                      'toolTimeout',
+                      e.target.checked ? TOOL_CALL_TIMEOUT_INFINITE : undefined
+                    )}
+                  />
+                }
+                label="No timeout (infinite)"
+              />
+            </Box>
+          </Box>
+        )}
+
         {/* Allowed Tools section - new */}
         {boundServer && (
           <Box sx={{ mt: 4 }}>

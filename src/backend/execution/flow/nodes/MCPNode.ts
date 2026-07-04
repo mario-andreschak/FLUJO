@@ -130,6 +130,7 @@ export class MCPNode extends BaseNode {
     
     // Store MCP context in shared state if execution was successful
     if (execResult.success && execResult.server && execResult.tools) {
+      const toolTimeout = node_params?.properties?.toolTimeout;
       // Filter available tools based on enabled tools
       const availableTools = execResult.tools
         .filter(tool => execResult.enabledTools?.includes(tool.name))
@@ -139,7 +140,8 @@ export class MCPNode extends BaseNode {
             ...tool,
             originalName: tool.name,
             server: execResult.server,
-            name: encodeToolName(execResult.server!, tool.name)
+            name: encodeToolName(execResult.server!, tool.name),
+            timeout: toolTimeout
           };
         });
       
@@ -168,7 +170,7 @@ export class MCPNode extends BaseNode {
       // be decoded later, including across a tool-approval resume (#16).
       sharedState.toolNameMap = sharedState.toolNameMap || {};
       for (const tool of availableTools) {
-        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName };
+        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName, timeout: tool.timeout };
       }
 
       // Get tool names for logging

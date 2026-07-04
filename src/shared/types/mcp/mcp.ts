@@ -7,6 +7,15 @@ import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens } from '@model
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
 
+/**
+ * Default timeout for an MCP tool call made from a flow, in seconds (5 minutes).
+ * An MCP node can override it via `properties.toolTimeout`; TOOL_CALL_TIMEOUT_INFINITE
+ * (-1) disables the timeout entirely. Server progress notifications reset the timer
+ * (see backend/services/mcp/tools.ts), so a finite timeout only kills silent calls.
+ */
+export const DEFAULT_TOOL_CALL_TIMEOUT_SECONDS = 300;
+export const TOOL_CALL_TIMEOUT_INFINITE = -1;
+
 // Types
 export type EnvVarValue = string | { 
   value: string; 

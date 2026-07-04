@@ -64,6 +64,9 @@ export interface MCPNodeProperties {
     boundServer?: string;
     enabledTools?: string[];
     env?: Record<string, string>;
+    /** Per-tool-call timeout in seconds for this node's tools. -1 = no timeout;
+     *  unset = DEFAULT_TOOL_CALL_TIMEOUT_SECONDS (5 minutes). */
+    toolTimeout?: number;
 }
 
 // SubflowNode specific properties
@@ -112,6 +115,8 @@ export interface MCPNodeReference {
         boundServer?: string;
         enabledTools?: string[];
         env?: Record<string, string>;
+        /** Per-tool-call timeout in seconds. -1 = no timeout; unset = 5-minute default. */
+        toolTimeout?: number;
     };
 }
 
@@ -187,8 +192,10 @@ export interface SharedState {
      * back to its (server, tool). Populated when tools are bound for a Process node
      * and persisted so a tool-approval resume (a separate request) can still decode
      * the call. Legacy `_-_-_SERVER_-_-_TOOL` names decode without this map.
+     * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
+     * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number }>;
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
@@ -234,6 +241,9 @@ export interface ToolDefinition {
     originalName?: string;
     /** Source MCP server, used to decode the model-facing name back to (server, tool). */
     server?: string;
+    /** Per-call timeout in seconds from the tool's MCP node (-1 = no timeout;
+     *  unset = 5-minute default). Carried into SharedState.toolNameMap. */
+    timeout?: number;
     description?: string;
     inputSchema: Record<string, unknown>;
 }

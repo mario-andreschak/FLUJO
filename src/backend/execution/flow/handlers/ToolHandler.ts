@@ -182,6 +182,7 @@ export class ToolHandler {
         if (properties && properties.boundServer) {
           const boundServer = properties.boundServer;
           const enabledTools = properties.enabledTools || [];
+          const toolTimeout = properties.toolTimeout;
 
           // Ensure the server is connected. connectServer recreates a client whose config
           // changed; listServerTools below additionally self-heals a dead transport by
@@ -231,6 +232,7 @@ export class ToolHandler {
               originalName: tool.name,
               server: boundServer,
               name: encodeToolName(boundServer, tool.name),
+              timeout: toolTimeout,
               description: tool.description,
               inputSchema: tool.inputSchema
             }));
