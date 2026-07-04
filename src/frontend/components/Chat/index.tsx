@@ -623,6 +623,14 @@ const Chat: React.FC = () => {
       case 'node:enter':
         touch({ activeNode: event.node?.nodeName || event.node?.nodeId || null });
         break;
+      case 'tool:call':
+        touch({ activeNode: event.name });
+        break;
+      case 'tool:progress':
+        // Server-side progress for a long-running tool: refreshes lastEventAt (so
+        // the stall warning stays away) and shows the server's message if any.
+        touch({ activeNode: event.message ? `${event.name} — ${event.message}` : event.name });
+        break;
       case 'subflow:start':
         touch({ activeNode: `↳ ${event.subflowName || event.subflowId}` });
         break;

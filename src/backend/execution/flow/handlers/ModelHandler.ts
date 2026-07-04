@@ -609,7 +609,7 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    const { toolCalls, toolNameMap } = input;
+    const { toolCalls, toolNameMap, emit } = input;
 
     // Add verbose logging of the input
     log.verbose('processToolCalls input', input);
@@ -694,17 +694,41 @@ export class ModelHandler {
           const serverName = decoded.server;
           const toolName = decoded.tool;
 
-          // Call the tool via MCP service
+          emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+
+          // Call the tool via MCP service. No timeout: a flow's tool call may
+          // legitimately run for a long time; server progress notifications are
+          // forwarded as live tool:progress events (they also reset the SDK's
+          // request timer, see services/mcp/tools.ts).
           const result = await mcpService.callTool(
             serverName,
             toolName,
-            args
+            args,
+            undefined,
+            (progress) => emit?.({
+              type: 'tool:progress',
+              toolCallId: id,
+              name,
+              progress: progress.progress,
+              total: progress.total,
+              message: progress.message
+            })
           );
 
           // Format the result
           const resultContent = result.success
             ? JSON.stringify(result.data)
             : `Error: ${result.error}`;
+
+          // The full result reaches the conversation as the tool message below;
+          // the event carries a preview so the log stays light.
+          emit?.({
+            type: 'tool:result',
+            toolCallId: id,
+            name,
+            result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+            isError: !result.success
+          });
 
             // Add tool result message with timestamp and ID
             toolCallMessages.push({
@@ -724,6 +748,7 @@ export class ModelHandler {
           });
         } catch (error) {
           const errorMessage = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+          emit?.({ type: 'tool:result', toolCallId: id, name, result: errorMessage, isError: true });
           // Add error message for this specific tool call with timestamp and ID
           toolCallMessages.push({
             id: uuidv4(), // Generate unique ID

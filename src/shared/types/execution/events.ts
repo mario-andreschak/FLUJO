@@ -20,6 +20,7 @@ export type ExecutionEventType =
   | 'model:delta'
   | 'model:end'
   | 'tool:call'
+  | 'tool:progress'
   | 'tool:result'
   | 'handoff'
   | 'usage'
@@ -99,6 +100,21 @@ export interface ToolCallEvent extends ExecutionEventBase {
   name: string;
   args?: string;
 }
+/**
+ * A server-side progress notification for a running MCP tool call (MCP
+ * `notifications/progress`, forwarded by the SDK). Live-only, like model:delta:
+ * it keeps the UI's stall detector fed during long tool calls and is never
+ * persisted to the conversation log.
+ */
+export interface ToolProgressEvent extends ExecutionEventBase {
+  type: 'tool:progress';
+  node?: NodeRef;
+  toolCallId: string;
+  name: string;
+  progress: number;
+  total?: number;
+  message?: string;
+}
 export interface ToolResultEvent extends ExecutionEventBase {
   type: 'tool:result';
   node?: NodeRef;
@@ -173,6 +189,7 @@ export type ExecutionEvent =
   | ModelDeltaEvent
   | ModelEndEvent
   | ToolCallEvent
+  | ToolProgressEvent
   | ToolResultEvent
   | HandoffEvent
   | UsageEvent

@@ -1,12 +1,22 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPToolResponse as ToolResponse, MCPServiceResponse } from '@/shared/types/mcp';
-// eslint-disable-next-line import/named
-import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('backend/services/mcp/tools');
+
+/** Progress update forwarded from an MCP server during a long-running tool call. */
+export interface ToolCallProgress {
+  progress: number;
+  total?: number;
+  message?: string;
+}
+
+// Node's setTimeout ceiling (2^31-1 ms ≈ 24.8 days); larger values overflow and fire
+// immediately. The SDK arms a timer for EVERY request (60s when none is given), so
+// "no timeout" has to be expressed as this ceiling rather than by omitting the option.
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
  * Normalize tool arguments to ensure we don't pass undefined values to MCP servers
@@ -89,155 +99,97 @@ export async function listServerTools(client: Client | undefined, serverName: st
 }
 
 /**
- * Call a tool on an MCP server with support for progress tracking
+ * Call a tool on an MCP server with support for progress tracking.
+ *
+ * Timeout semantics: `timeout` is in SECONDS; `-1` or `undefined` means no timeout.
+ * The timeout is enforced by the SDK itself (via RequestOptions), NOT wrapped here:
+ * the SDK arms a 60s timer for every request when none is given and rejects with
+ * McpError -32001, so a local Promise.race could only ever *shorten* that window,
+ * never extend it — which is exactly the bug this replaces. "No timeout" is passed
+ * as the setTimeout ceiling because the SDK has no off switch for its timer.
+ *
+ * Progress: passing `onprogress` makes the SDK attach its own `_meta.progressToken`
+ * (the JSON-RPC request id) and register a handler for it — which is also what makes
+ * `resetTimeoutOnProgress` work, so a long-running-but-alive tool that reports
+ * progress keeps its finite timeout from firing. Server progress notifications are
+ * forwarded to `onProgress` (the flow engine turns them into live execution events).
  */
 export async function callTool(
-  client: Client | undefined, 
-  serverName: string, 
-  toolName: string, 
-  args: Record<string, unknown>, 
-  timeout?: number
+  client: Client | undefined,
+  serverName: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  timeout?: number,
+  onProgress?: (progress: ToolCallProgress) => void
 ): Promise<MCPServiceResponse> {
   log.debug('Entering callTool method');
   if (!client) {
     log.warn(`Server ${serverName} not found`);
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: `Server ${serverName} not found`,
       statusCode: 404
     };
   }
 
+  const timeoutMs = timeout !== undefined && timeout > 0
+    ? Math.min(timeout * 1000, MAX_TIMEOUT_MS)
+    : MAX_TIMEOUT_MS;
+
   try {
     // Resolve any global variable references in the arguments
     log.debug(`Original args for tool ${toolName}:`, args);
     const resolvedArgs = await resolveGlobalVars(args);
-    
+
     // Ensure resolvedArgs is a record before normalizing
-    const argsRecord = (typeof resolvedArgs === 'object' && resolvedArgs !== null) 
-      ? resolvedArgs as Record<string, unknown> 
+    const argsRecord = (typeof resolvedArgs === 'object' && resolvedArgs !== null)
+      ? resolvedArgs as Record<string, unknown>
       : {};
-    
+
     // Normalize undefined/null values based on parameter types
     // This ensures we don't pass undefined values to MCP servers
     const normalizedArgs = normalizeToolArguments(argsRecord, toolName);
     log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
-    
-    // Generate a progress token for tracking this tool call
-    const progressToken = uuidv4();
-    log.debug(`Generated progress token: ${progressToken} for tool ${toolName}`);
-    
-    // Add metadata to the tool call for progress tracking
-    const toolCallParams = {
-      name: toolName,
-      arguments: normalizedArgs as Record<string, unknown>,
-      _meta: {
-        progressToken
+
+    log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
+    const response = await client.callTool(
+      { name: toolName, arguments: normalizedArgs },
+      undefined,
+      {
+        timeout: timeoutMs,
+        resetTimeoutOnProgress: true,
+        onprogress: (progress) => {
+          log.debug(`Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ''}${progress.message ? ` — ${progress.message}` : ''}`);
+          onProgress?.(progress);
+        },
       }
+    );
+
+    return {
+      success: true,
+      data: response
     };
-    
-    // Handle timeout if specified
-    if (timeout !== undefined) {
-      log.debug(`Using timeout: ${timeout} seconds for tool ${toolName}`);
-      
-      if (timeout === -1) {
-        // No timeout (infinite)
-        log.debug(`No timeout set for tool ${toolName}`);
-        const response = await client.callTool(toolCallParams);
-        return { 
-          success: true, 
-          data: response, 
-          progressToken 
-        };
-      } else {
-        // Set timeout in milliseconds
-        const timeoutMs = timeout * 1000;
-        log.debug(`Setting timeout of ${timeoutMs}ms for tool ${toolName}`);
-        
-        // Create an AbortController for the timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-          controller.abort();
-        }, timeoutMs);
-        
-        try {
-          // Call the tool with timeout
-          const response = await Promise.race([
-            client.callTool(toolCallParams),
-            new Promise((_, reject) => {
-              controller.signal.addEventListener('abort', () => {
-                reject(new Error(`Tool execution timed out after ${timeout} seconds`));
-              });
-            })
-          ]);
-          
-          // Clear the timeout
-          clearTimeout(timeoutId);
-          
-          return { 
-            success: true, 
-            data: response, 
-            progressToken 
-          };
-        } catch (error) {
-          // Clear the timeout
-          clearTimeout(timeoutId);
-          
-          // Check if it's a timeout error
-          if (error instanceof Error && error.message.includes('timed out')) {
-            log.warn(`Tool ${toolName} execution timed out after ${timeout} seconds`);
-            
-            // Try to send a cancellation notification
-            try {
-              await cancelToolExecution(client, progressToken, `Execution timed out after ${timeout} seconds`);
-              log.info(`Sent cancellation notification for timed out tool ${toolName}`);
-            } catch (cancelError) {
-              log.warn(`Failed to send cancellation notification: ${cancelError instanceof Error ? cancelError.message : 'Unknown error'}`);
-            }
-            
-            // Create a standardized timeout error response
-            const timeoutError = {
-              success: false, 
-              error: `Tool execution timed out after ${timeout} seconds`,
-              errorType: 'timeout',
-              toolName,
-              timeout,
-              progressToken,
-              statusCode: 408
-            };
-            
-            // We can't directly emit events from the client, but we can log the error
-            // which will be captured by the stderr handler in the SSE route
-            log.error(JSON.stringify({
-              type: 'error',
-              source: 'timeout',
-              message: `Tool ${toolName} execution timed out after ${timeout} seconds`,
-              toolName,
-              timeout,
-              progressToken
-            }));
-            
-            return timeoutError;
-          }
-          
-          // Re-throw other errors
-          throw error;
-        }
-      }
-    } else {
-      // No timeout specified, use default behavior (no timeout)
-      log.debug(`No timeout specified for tool ${toolName}, using default (no timeout)`);
-      const response = await client.callTool(toolCallParams);
-      return { 
-        success: true, 
-        data: response, 
-        progressToken 
-      };
-    }
   } catch (error) {
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
     let errorMessage = error instanceof Error ? error.message : 'Unknown error';
     let statusCode = 500;
+
+    // SDK request timer fired (-32001). The SDK has already sent a
+    // notifications/cancelled for the in-flight request as part of its timeout
+    // handling, so the server has been told to stop; just map it to the
+    // standardized timeout response shape.
+    if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+      const timeoutSeconds = Math.round(timeoutMs / 1000);
+      log.warn(`Tool ${toolName} execution timed out after ${timeoutSeconds} seconds`);
+      return {
+        success: false,
+        error: `Tool execution timed out after ${timeoutSeconds} seconds`,
+        errorType: 'timeout',
+        toolName,
+        timeout: timeoutSeconds,
+        statusCode: 408
+      };
+    }
 
     // Check for OAuth-related errors
     if (errorMessage.includes('401') || errorMessage.includes('Unauthorized') || 
@@ -278,47 +230,5 @@ export async function callTool(
       error: errorMessage,
       statusCode
     };
-  }
-}
-
-/**
- * Cancel a tool execution in progress
- */
-export async function cancelToolExecution(client: Client, requestId: string, reason: string): Promise<void> {
-  log.debug(`Cancelling request ${requestId}: ${reason}`);
-  
-  try {
-    // Send a cancellation notification as per MCP specification
-    // Note: This is a custom implementation since the SDK doesn't expose this directly
-    const transport = client.transport;
-    if (!transport) {
-      throw new Error('Client has no transport');
-    }
-    
-    // Create a cancellation notification
-    const cancellationNotification = {
-      jsonrpc: "2.0",
-      method: "notifications/cancelled",
-      params: {
-        requestId,
-        reason
-      }
-    };
-    
-    // Define a type for transports that support sending messages
-    interface SendableTransport {
-      send(message: string): Promise<void>;
-    }
-    
-    // Send the notification through the transport
-    if ('send' in transport) {
-      await (transport as unknown as SendableTransport).send(JSON.stringify(cancellationNotification));
-      log.info(`Sent cancellation notification for request ${requestId}`);
-    } else {
-      throw new Error('Transport does not support sending messages');
-    }
-  } catch (error) {
-    log.error(`Failed to cancel tool execution: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    throw error;
   }
 }

@@ -31,6 +31,8 @@ const log = createLogger('backend/execution/flow/conversationLog');
 // Event types worth persisting. Excluded on purpose:
 //  - model:start/delta/end — streaming noise; the final content arrives as a
 //    'message' event anyway.
+//  - tool:progress — same: live liveness ticks during a long tool call; the
+//    outcome arrives as tool:result.
 //  - run:paused / run:awaiting_approval / breakpoint:hit — transient control
 //    signals for live subscribers; they describe the run's momentary state,
 //    not the conversation.
