@@ -202,6 +202,11 @@ export class SchedulerService {
               void this.fire(execution, { kind: 'mcp-poll', summary, context });
             },
             onError: message => this.lastTriggerErrors.set(execution.id, message),
+            evaluateLlmGate: async (result, gateConfig, state) => {
+              // Lazy import: the gate pulls in the model/adapter stack.
+              const { evaluateLlmGate } = await import('./triggers/llmGate');
+              return evaluateLlmGate(result, gateConfig, state);
+            },
           })
         );
         break;

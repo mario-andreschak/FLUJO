@@ -15,8 +15,11 @@ import {
 } from '@mui/material';
 import DifferenceIcon from '@mui/icons-material/Difference';
 import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
+import PsychologyIcon from '@mui/icons-material/Psychology';
 import { McpPollTriggerConfig } from '@/shared/types/plannedExecution';
+import { Model } from '@/shared/types/model';
 import { mcpService } from '@/frontend/services/mcp';
+import { modelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 import OptionCard from './OptionCard';
 
@@ -48,6 +51,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  const [models, setModels] = useState<Model[]>([]);
 
   // Load the configured MCP servers once.
   useEffect(() => {
@@ -85,6 +89,19 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       });
     return () => { cancelled = true; };
   }, [config.serverName]);
+
+  // Load the models for the "AI decides" picker.
+  useEffect(() => {
+    let cancelled = false;
+    modelService.loadModels()
+      .then(list => {
+        if (!cancelled) setModels(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleArgsChange = (text: string) => {
     setArgsText(text);
@@ -253,6 +270,19 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
           title="New items appear"
           description="The result is a list (emails, tasks, orders …); run once when unseen entries show up."
         />
+        <OptionCard
+          selected={evaluate.mode === 'llm-gate'}
+          onClick={() =>
+            onChange({
+              ...config,
+              evaluate:
+                evaluate.mode === 'llm-gate' ? evaluate : { mode: 'llm-gate', condition: '', modelId: '' },
+            })
+          }
+          icon={<PsychologyIcon />}
+          title="AI decides"
+          description="Describe the condition in plain language; a model checks the result whenever it changes."
+        />
       </Box>
 
       {evaluate.mode === 'new-items' && (
@@ -273,6 +303,57 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
             helperText='Usually "id". Used to remember what was already seen.'
             sx={{ minWidth: 220 }}
           />
+        </Box>
+      )}
+
+      {evaluate.mode === 'llm-gate' && (
+        <Box sx={{ mt: 1 }}>
+          <TextField
+            fullWidth
+            label="Run the flow if…"
+            value={evaluate.condition}
+            onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, condition: e.target.value } })}
+            multiline
+            minRows={2}
+            margin="normal"
+            placeholder="e.g. any email mentions an invoice or a payment reminder"
+          />
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <FormControl sx={{ minWidth: 260, flex: 1 }}>
+              <InputLabel id="gate-model-label">Model that checks</InputLabel>
+              <Select
+                labelId="gate-model-label"
+                label="Model that checks"
+                value={models.some(m => m.id === evaluate.modelId) ? evaluate.modelId : ''}
+                onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, modelId: e.target.value } })}
+              >
+                {models.length === 0 && (
+                  <MenuItem value="" disabled>No models configured</MenuItem>
+                )}
+                {models.map(m => (
+                  <MenuItem key={m.id} value={m.id}>{m.displayName || m.name}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <TextField
+              label="Max checks per day"
+              type="number"
+              value={evaluate.maxCallsPerDay ?? 500}
+              onChange={(e) =>
+                onChange({
+                  ...config,
+                  evaluate: { ...evaluate, maxCallsPerDay: Math.max(1, Number(e.target.value) || 1) },
+                })
+              }
+              inputProps={{ min: 1 }}
+              helperText="Cost guard — each check is one small model call."
+              sx={{ width: 200 }}
+            />
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+            The model is only asked when the result actually changed since the
+            last check — an idle feed costs nothing. Pick a small, cheap model.
+          </Typography>
         </Box>
       )}
 
