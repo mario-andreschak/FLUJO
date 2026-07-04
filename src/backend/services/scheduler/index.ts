@@ -224,10 +224,7 @@ export class SchedulerService {
     const now = new Date().toISOString();
     const execution: PlannedExecution = {
       ...input,
-      trigger:
-        input.trigger.type === 'webhook' && !input.trigger.token
-          ? { ...input.trigger, token: uuidv4() }
-          : input.trigger,
+      trigger: this.normalizeTrigger(input.trigger),
       id: uuidv4(),
       createdAt: now,
       updatedAt: now,
@@ -250,6 +247,7 @@ export class SchedulerService {
     const merged: PlannedExecution = {
       ...file.executions[index],
       ...patch,
+      ...(patch.trigger ? { trigger: this.normalizeTrigger(patch.trigger) } : {}),
       id,
       createdAt: file.executions[index].createdAt,
       updatedAt: new Date().toISOString(),
@@ -279,6 +277,14 @@ export class SchedulerService {
     await deleteRunHistory(id);
     await deleteExecutionState(id);
     return { success: true };
+  }
+
+  /** Fill server-side trigger fields (an empty webhook token = generate one). */
+  private normalizeTrigger(trigger: PlannedExecution['trigger']): PlannedExecution['trigger'] {
+    if (trigger?.type === 'webhook' && !trigger.token) {
+      return { ...trigger, token: uuidv4() };
+    }
+    return trigger;
   }
 
   private validateInput(
@@ -359,12 +365,13 @@ export class SchedulerService {
    */
   async fire(
     execution: PlannedExecution,
-    payload: TriggerFirePayload
+    payload: TriggerFirePayload,
+    runId: string = uuidv4()
   ): Promise<RunRecord> {
     const firedAt = new Date().toISOString();
     if (this.running.has(execution.id)) {
       const record: RunRecord = {
-        runId: uuidv4(),
+        runId,
         conversationId: '',
         firedAt,
         finishedAt: firedAt,
@@ -378,7 +385,6 @@ export class SchedulerService {
     }
 
     this.running.add(execution.id);
-    const runId = uuidv4();
     const conversationId = uuidv4();
     let record: RunRecord;
     try {

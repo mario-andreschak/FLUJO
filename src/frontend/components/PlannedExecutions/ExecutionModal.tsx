@@ -22,12 +22,14 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ScheduleIcon from '@mui/icons-material/Schedule';
+import WebhookIcon from '@mui/icons-material/Webhook';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import {
   PlannedExecution,
   ScheduleTriggerConfig,
   TriggerConfig,
+  WebhookTriggerConfig,
 } from '@/shared/types/plannedExecution';
 import {
   plannedExecutionsService,
@@ -36,10 +38,12 @@ import {
 import { createLogger } from '@/utils/logger';
 import OptionCard from './OptionCard';
 import SchedulePanel from './SchedulePanel';
+import WebhookPanel from './WebhookPanel';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
 const DEFAULT_SCHEDULE: ScheduleTriggerConfig = { type: 'schedule', cron: '0 9 * * *' };
+const DEFAULT_WEBHOOK: WebhookTriggerConfig = { type: 'webhook', token: '' };
 
 interface ExecutionModalProps {
   open: boolean;
@@ -200,16 +204,40 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           <OptionCard
             selected={trigger.type === 'schedule'}
             onClick={() => {
-              if (trigger.type !== 'schedule') setTrigger(DEFAULT_SCHEDULE);
+              if (trigger.type !== 'schedule') {
+                setTrigger(
+                  execution?.trigger.type === 'schedule' ? execution.trigger : DEFAULT_SCHEDULE
+                );
+              }
             }}
             icon={<ScheduleIcon />}
             title="On a schedule"
             description="Run at fixed times — every few minutes, daily, on weekdays, or a custom rhythm."
           />
+          <OptionCard
+            selected={trigger.type === 'webhook'}
+            onClick={() => {
+              if (trigger.type !== 'webhook') {
+                setTrigger(
+                  execution?.trigger.type === 'webhook' ? execution.trigger : DEFAULT_WEBHOOK
+                );
+              }
+            }}
+            icon={<WebhookIcon />}
+            title="When called (webhook)"
+            description="Other apps run this flow by calling a URL — GitHub, Stripe, Slack and most services can send webhooks."
+          />
         </Box>
 
         {trigger.type === 'schedule' && (
           <SchedulePanel config={trigger} onChange={setTrigger} />
+        )}
+        {trigger.type === 'webhook' && (
+          <WebhookPanel
+            config={trigger}
+            onChange={setTrigger}
+            executionId={execution?.id}
+          />
         )}
 
         <TextField
