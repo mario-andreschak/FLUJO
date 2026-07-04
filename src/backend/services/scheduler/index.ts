@@ -12,6 +12,7 @@ import {
 import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './triggers/types';
 import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
+import { armFileWatch } from './triggers/fileWatch';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
 
@@ -155,8 +156,29 @@ export class SchedulerService {
       case 'webhook':
         // Nothing to arm — the /api/webhooks/[id] route fires directly.
         break;
+      case 'file-watch': {
+        this.armed.set(
+          execution.id,
+          armFileWatch(
+            trigger,
+            ({ events }) => {
+              this.lastTriggerErrors.delete(execution.id);
+              void this.fire(execution, {
+                kind: 'file',
+                summary:
+                  events.length === 1
+                    ? `File ${events[0].event === 'unlink' ? 'deleted' : events[0].event === 'add' ? 'added' : 'changed'}`
+                    : `${events.length} file changes`,
+                context: { watchedPath: trigger.path, events },
+              });
+            },
+            message => this.lastTriggerErrors.set(execution.id, message)
+          )
+        );
+        break;
+      }
       default:
-        // file-watch / mcp-poll land in later slices.
+        // mcp-poll lands in a later slice.
         log.warn(
           `Trigger type "${trigger.type}" is not implemented yet — "${execution.name}" not armed`
         );

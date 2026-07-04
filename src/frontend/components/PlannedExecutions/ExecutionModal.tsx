@@ -23,9 +23,11 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import WebhookIcon from '@mui/icons-material/Webhook';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import {
+  FileWatchTriggerConfig,
   PlannedExecution,
   ScheduleTriggerConfig,
   TriggerConfig,
@@ -39,11 +41,17 @@ import { createLogger } from '@/utils/logger';
 import OptionCard from './OptionCard';
 import SchedulePanel from './SchedulePanel';
 import WebhookPanel from './WebhookPanel';
+import FileWatchPanel from './FileWatchPanel';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
 const DEFAULT_SCHEDULE: ScheduleTriggerConfig = { type: 'schedule', cron: '0 9 * * *' };
 const DEFAULT_WEBHOOK: WebhookTriggerConfig = { type: 'webhook', token: '' };
+const DEFAULT_FILE_WATCH: FileWatchTriggerConfig = {
+  type: 'file-watch',
+  path: '',
+  events: ['add', 'change'],
+};
 
 interface ExecutionModalProps {
   open: boolean;
@@ -227,6 +235,19 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             title="When called (webhook)"
             description="Other apps run this flow by calling a URL — GitHub, Stripe, Slack and most services can send webhooks."
           />
+          <OptionCard
+            selected={trigger.type === 'file-watch'}
+            onClick={() => {
+              if (trigger.type !== 'file-watch') {
+                setTrigger(
+                  execution?.trigger.type === 'file-watch' ? execution.trigger : DEFAULT_FILE_WATCH
+                );
+              }
+            }}
+            icon={<FolderOpenIcon />}
+            title="When files change"
+            description="Watch a folder on this computer and run when files appear, change, or disappear."
+          />
         </Box>
 
         {trigger.type === 'schedule' && (
@@ -238,6 +259,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             onChange={setTrigger}
             executionId={execution?.id}
           />
+        )}
+        {trigger.type === 'file-watch' && (
+          <FileWatchPanel config={trigger} onChange={setTrigger} />
         )}
 
         <TextField
