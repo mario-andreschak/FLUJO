@@ -61,13 +61,17 @@ const EdgeButton = styled('button')(({ theme }) => ({
   }
 }));
 
+// The doubled `&&` bumps specificity above ReactFlow's built-in
+// `.react-flow__edge.animated path` rule, which otherwise wins (edges carry
+// animated: true) and forces its own one-way dash animation — visibly
+// breaking the bidirectional back-and-forth.
 const EdgePath = styled(BaseEdge)({
-  '&.animated': {
+  '&&.animated': {
     strokeDasharray: 5,
     animation: 'flowPathAnimation 0.5s infinite linear',
   },
   // Bidirectional: the dashes swing back and forth instead of flowing one way.
-  '&.animated-both': {
+  '&&.animated-both': {
     strokeDasharray: 5,
     animation: 'flowPathAnimation 0.75s infinite linear alternate',
   },

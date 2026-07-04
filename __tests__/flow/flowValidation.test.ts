@@ -36,11 +36,22 @@ const finishNode = (id = 'finish'): VNode => ({
   type: 'finish',
   data: { label: 'Finish', type: 'finish', properties: {} },
 });
+const subflowNode = (id: string, label = id): VNode => ({
+  id,
+  type: 'subflow',
+  data: { label, type: 'subflow', properties: {} },
+});
 const edge = (source: string, target: string, mcp = false): VEdge => ({
   id: `${source}-${target}`,
   source,
   target,
   data: { edgeType: mcp ? 'mcp' : 'standard' },
+});
+const biEdge = (source: string, target: string): VEdge => ({
+  id: `${source}-${target}`,
+  source,
+  target,
+  data: { edgeType: 'standard', bidirectional: true },
 });
 
 const codes = (r: { issues: { code: string }[] }) => r.issues.map((i) => i.code);
@@ -76,6 +87,48 @@ describe('validateFlow — structure', () => {
     const r = validateFlow(flow, { models: [{ id: 'm1', name: 'gpt' }] });
     expect(r.issues).toEqual([]);
     expect(r.isRunnable).toBe(true);
+  });
+});
+
+describe('validateFlow — subflow single outgoing path', () => {
+  const base = [startNode(), processNode('p', { boundModel: 'm1' }), finishNode()];
+  const ctx = { models: [{ id: 'm1', name: 'gpt' }] };
+
+  it('passes a linear pass-through subflow (A > S > C)', () => {
+    const flow: VFlow = {
+      nodes: [...base, subflowNode('sub')],
+      edges: [edge('start', 'p'), edge('p', 'sub'), edge('sub', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).not.toContain('subflow-multiple-outgoing');
+  });
+
+  it('passes a bidirectional call-and-return subflow (A <> S)', () => {
+    const flow: VFlow = {
+      nodes: [...base, subflowNode('sub')],
+      edges: [edge('start', 'p'), biEdge('p', 'sub'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).not.toContain('subflow-multiple-outgoing');
+  });
+
+  it('flags a subflow with two outgoing edges as an error', () => {
+    const flow: VFlow = {
+      nodes: [...base, subflowNode('sub'), processNode('p2', { boundModel: 'm1' })],
+      edges: [edge('start', 'p'), edge('p', 'sub'), edge('sub', 'p2'), edge('sub', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-multiple-outgoing');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('flags a subflow with a forward edge plus a bidirectional back-edge', () => {
+    const flow: VFlow = {
+      nodes: [...base, subflowNode('sub')],
+      edges: [edge('start', 'p'), biEdge('p', 'sub'), edge('sub', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-multiple-outgoing');
   });
 });
 

@@ -3,15 +3,37 @@ import { FlowNode } from '@/frontend/types/flow/flow';
 import { mcpEdgeOptions } from '../types';
 import { getConnectionError, isMcpHandle } from './connectionRules';
 
+/** A subflow node's outgoing flow-control paths: standard edges it is the
+ * source of, plus bidirectional edges pointing at it (whose reverse
+ * transition it owns). Edges to/from `exceptOtherNodeId` are ignored so
+ * re-draws and merges against that same node don't count as a second path. */
+function subflowOutgoingEdges(
+  subflowId: string,
+  edges: Edge[],
+  exceptOtherNodeId?: string
+): Edge[] {
+  const isMcp = (e: Edge) => (e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp';
+  return edges.filter(e => {
+    if (isMcp(e)) return false;
+    if (e.source === subflowId) return e.target !== exceptOtherNodeId;
+    if (e.target === subflowId && (e.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+      return e.source !== exceptOtherNodeId;
+    }
+    return false;
+  });
+}
+
 /**
  * Validates if a connection between nodes is valid
  * @param params Connection parameters
  * @param nodes Array of flow nodes
+ * @param edges Current edges, for rules that depend on existing connections
  * @returns Boolean indicating if the connection is valid
  */
 export function validateConnection(
   params: Connection,
-  nodes: FlowNode[]
+  nodes: FlowNode[],
+  edges: Edge[] = []
 ): boolean {
   // Reject connections without source, target, or handles
   if (!params.source || !params.target || !params.sourceHandle || !params.targetHandle) {
@@ -31,6 +53,17 @@ export function validateConnection(
   const error = getConnectionError(sourceNode.type, params.sourceHandle, targetNode.type, params.targetHandle);
   if (error) {
     console.error(`Invalid connection: ${error}`);
+    return false;
+  }
+
+  // A subflow hands off blindly to its single successor — it has no model to
+  // choose between multiple outgoing edges. Allowed shapes: one outgoing
+  // edge (A > S > C) or one bidirectional edge back to the caller (A <> S).
+  // Connections to the node it is already linked with are exempt: those
+  // re-draw or merge rather than add a second path.
+  if (sourceNode.type === 'subflow' &&
+      subflowOutgoingEdges(sourceNode.id, edges, params.target).length > 0) {
+    console.error('Invalid connection: Subflow nodes can only have one outgoing connection');
     return false;
   }
 
@@ -88,6 +121,29 @@ export function createEdgeFromConnection(
       animated: true
     } as Edge;
   }
+}
+
+/**
+ * Whether an existing one-way flow edge may be upgraded to a bidirectional
+ * handoff. Bidirectional means traffic also flows target -> source, so that
+ * direction must be a legal connection in its own right — e.g. an edge into
+ * a Finish node or out of a Start node must stay one-way. And since the
+ * upgrade gives the TARGET an outgoing back-path, a subflow target must not
+ * end up with a second outgoing edge (see validateConnection).
+ */
+export function canConvertToBidirectional(
+  edge: Edge,
+  nodes: FlowNode[],
+  edges: Edge[] = []
+): boolean {
+  const sourceNode = nodes.find(node => node.id === edge.source);
+  const targetNode = nodes.find(node => node.id === edge.target);
+  if (!sourceNode || !targetNode) return false;
+  if (targetNode.type === 'subflow' &&
+      subflowOutgoingEdges(targetNode.id, edges, edge.source).length > 0) {
+    return false;
+  }
+  return getConnectionError(targetNode.type, null, sourceNode.type, null) === null;
 }
 
 /**

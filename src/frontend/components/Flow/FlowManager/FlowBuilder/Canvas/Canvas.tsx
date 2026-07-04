@@ -14,9 +14,8 @@ import {
   OnInit,
   OnBeforeDelete,
   useReactFlow,
-  OnConnectStart,
-  OnConnectEnd,
-  OnConnectStartParams
+  useStoreApi,
+  OnConnectEnd
 } from '@xyflow/react';
 import { styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
@@ -28,8 +27,8 @@ import { CustomEdge, MCPEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
-import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds } from './utils/edgeUtils';
-import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
+import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
+import { validTargetTypesFor, defaultTargetHandleFor, isMcpHandle } from './utils/connectionRules';
 import { findNodeById } from './utils/nodeUtils';
 import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
@@ -233,20 +232,22 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   } = useCanvasEvents(nodes);
 
   const { deleteElements } = useReactFlow();
+  const storeApi = useStoreApi<FlowNode, Edge>();
 
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
 
-  // State for connection tracking
-  const [connectionStart, setConnectionStart] = useState<{
-    nodeId: string | null;
-    handleId: string | null;
-  }>({ nodeId: null, handleId: null });
-
-  // State for node selection modal
+  // State for the node selection modal. It also carries the pending
+  // connection source (captured at drop time from xyflow's connection state)
+  // so the source survives until the user picks a node type or closes the
+  // modal. Deliberately NOT tracked via onConnectStart + component state:
+  // xyflow snapshots the onConnectEnd callback at pointerdown, so state set
+  // during the drag is invisible to the closure that runs at drop — it would
+  // always see the *previous* drag's source.
   const [nodeSelectionModal, setNodeSelectionModal] = useState<{
     open: boolean;
     position: { x: number; y: number } | null;
+    sourceNodeId?: string;
     sourceNodeType?: NodeType;
     sourceHandleId?: string;
   }>({ open: false, position: null });
@@ -290,7 +291,8 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   // can freely re-draw connections while re-organizing without stacking
   // duplicates. Drawing the REVERSE of an existing flow-control edge merges
   // the two into one bidirectional connector (double arrows) instead of
-  // adding a second wire.
+  // adding a second wire — either by dragging bottom(B) -> top(A), or by
+  // retracing the edge backwards from the top handle (top(B) -> bottom(A)).
   const onConnect = useCallback(
     (params: Connection) => {
       // Check for missing source or target handles
@@ -299,8 +301,18 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         return;
       }
 
+      // ReactFlow normalizes connections: `source`/`target` follow the handle
+      // TYPES, not the drag direction, so a drag from B's top (target) handle
+      // to A's bottom (source) handle arrives as A -> B — indistinguishable
+      // in params from re-drawing the existing forward edge. The gesture
+      // origin is still present in the connection state here (it is cleared
+      // only after the connect callbacks have run), so read it to tell the
+      // two gestures apart.
+      const draggedFromTargetHandle =
+        storeApi.getState().connection.fromHandle?.type === 'target';
+
       // Validate the connection
-      if (!validateConnection(params, nodes)) {
+      if (!validateConnection(params, nodes, edges)) {
         // The validateConnection function now logs specific error messages
         return;
       }
@@ -309,41 +321,61 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       const edge = createEdgeFromConnection(params, nodes);
 
       if ((edge.data as { edgeType?: string })?.edgeType === 'standard') {
-        // Re-drawing an existing bidirectional connection in either direction
-        // is a no-op — it must not downgrade it to one-way.
+        const isStandard = (e: Edge) =>
+          (e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp';
+        const isBidirectional = (e: Edge) =>
+          !!(e.data as { bidirectional?: boolean } | undefined)?.bidirectional;
         const sameDirection = edges.find(e =>
-          (e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp' &&
-          e.source === params.source &&
-          e.target === params.target
+          isStandard(e) && e.source === params.source && e.target === params.target
         );
-        if ((sameDirection?.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+        const reverse = edges.find(e =>
+          isStandard(e) && e.source === params.target && e.target === params.source
+        );
+
+        const mergeToBidirectional = (existing: Edge) => {
+          log.info(`Merging reverse connection into bidirectional edge ${existing.id}`);
+          onEdgesChange([{
+            type: 'replace',
+            id: existing.id,
+            item: {
+              ...existing,
+              data: { ...existing.data, bidirectional: true },
+              // Arrowheads on both ends; the end marker comes from
+              // defaultEdgeOptions already.
+              markerStart: {
+                type: MarkerType.ArrowClosed,
+                width: 20,
+                height: 20,
+                color: theme.palette.text.secondary,
+              },
+            } as Edge,
+          }]);
+        };
+
+        // A drag that started on a top (target-type) handle never creates a
+        // new edge — its only meaning is "convert the existing one-way
+        // connection between these two nodes into a bidirectional handoff".
+        if (draggedFromTargetHandle) {
+          const existing = sameDirection ?? reverse;
+          if (!existing) {
+            log.info('Connection drawn from a top handle is only allowed to convert an existing edge to bidirectional');
+            return;
+          }
+          if (!isBidirectional(existing) && canConvertToBidirectional(existing, nodes, edges)) {
+            mergeToBidirectional(existing);
+          }
           return;
         }
 
-        const reverse = edges.find(e =>
-          (e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp' &&
-          e.source === params.target &&
-          e.target === params.source
-        );
+        // Re-drawing an existing bidirectional connection in either direction
+        // is a no-op — it must not downgrade it to one-way.
+        if (sameDirection && isBidirectional(sameDirection)) {
+          return;
+        }
+
         if (reverse) {
-          if (!(reverse.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
-            log.info(`Merging reverse connection into bidirectional edge ${reverse.id}`);
-            onEdgesChange([{
-              type: 'replace',
-              id: reverse.id,
-              item: {
-                ...reverse,
-                data: { ...reverse.data, bidirectional: true },
-                // Arrowheads on both ends; the end marker comes from
-                // defaultEdgeOptions already.
-                markerStart: {
-                  type: MarkerType.ArrowClosed,
-                  width: 20,
-                  height: 20,
-                  color: theme.palette.text.secondary,
-                },
-              } as Edge,
-            }]);
+          if (!isBidirectional(reverse) && canConvertToBidirectional(reverse, nodes, edges)) {
+            mergeToBidirectional(reverse);
           }
           return;
         }
@@ -356,7 +388,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         { type: 'add' as const, item: edge },
       ]);
     },
-    [nodes, edges, onEdgesChange, theme.palette.text.secondary]
+    [nodes, edges, onEdgesChange, storeApi, theme.palette.text.secondary]
   );
 
   // Commit edge re-route gestures (bend drag end, waypoint move/removal)
@@ -464,59 +496,72 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     [onEditNode]
   );
 
-  // Handle connection start
-  const onConnectStart: OnConnectStart = useCallback(
-    (event, params: OnConnectStartParams) => {
-      const { nodeId, handleId } = params;
-      log.debug(`onConnectStart: Connection started from node ${nodeId}, handle ${handleId}`);
-      setConnectionStart({ nodeId, handleId });
-    },
-    []
-  );
-
-  // Handle connection end. When the connection is dropped on the empty pane,
-  // the node-selection modal opens; connectionStart must stay set until the
-  // modal consumes it (handleNodeTypeSelection) or is closed — resetting it
-  // here would break the promised auto-connection to the new node.
+  // Handle connection end. The drag source comes from xyflow's own
+  // connection state for the gesture that just ended — never from component
+  // state, which the snapshotted callback would read stale (see the modal
+  // state comment above). When the connection is dropped on the empty pane,
+  // the node-selection modal opens carrying the source with it.
   const onConnectEnd: OnConnectEnd = useCallback(
-    (event) => {
-      if (!connectionStart.nodeId || !connectionStart.handleId || !reactFlowInstance) {
+    (event, connectionState) => {
+      const { fromNode, fromHandle } = connectionState;
+      if (!fromNode || !fromHandle?.id || !reactFlowInstance) {
         log.debug('onConnectEnd: No valid connection start data');
         return;
       }
 
-      log.debug(`onConnectEnd: Connection ended from node ${connectionStart.nodeId}`);
+      log.debug(`onConnectEnd: Connection ended from node ${fromNode.id}, handle ${fromHandle.id}`);
 
-      // Check if the target is the pane (not a node)
-      const targetIsPane = (event.target as Element).classList.contains('react-flow__pane');
-
-      if (targetIsPane) {
-        // Convert screen coordinates to flow coordinates
-        const position = reactFlowInstance.screenToFlowPosition({
-          x: event instanceof MouseEvent ? event.clientX : event.touches[0].clientX,
-          y: event instanceof MouseEvent ? event.clientY : event.touches[0].clientY,
-        });
-
-        log.debug(`onConnectEnd: Connection dropped on pane at position (${position.x}, ${position.y})`);
-
-        // Get the source node type
-        const sourceNode = findNodeById(connectionStart.nodeId!, nodes);
-        const sourceNodeType = sourceNode ? sourceNode.type as NodeType : undefined;
-
-        // Show the node selection modal with source node type and handle ID
-        setNodeSelectionModal({
-          open: true,
-          position,
-          sourceNodeType,
-          sourceHandleId: connectionStart.handleId!
-        });
-      } else {
-        // Connection ended on a node (or was cancelled) — onConnect handled
-        // any edge creation, so the tracking state can be cleared.
-        setConnectionStart({ nodeId: null, handleId: null });
+      // Drags starting on a top (target-type) flow handle can only convert an
+      // existing edge to bidirectional (see onConnect) — dropping one on the
+      // pane must not offer to create a node that would hang off a backwards
+      // edge. MCP handles are exempt: MCP wiring is non-directional.
+      if (fromHandle.type === 'target' && !isMcpHandle(fromHandle.id)) {
+        log.debug('onConnectEnd: Drag from a target handle cannot create a new node');
+        return;
       }
+
+      // A subflow has a single outgoing path — once it has one, dropping on
+      // the pane must not offer to create a second successor. (The same rule
+      // is enforced for direct connections in validateConnection.)
+      if (fromNode.type === 'subflow' && fromHandle.type === 'source') {
+        const hasOutgoing = edges.some(e => {
+          const data = e.data as { edgeType?: string; bidirectional?: boolean } | undefined;
+          if (data?.edgeType === 'mcp') return false;
+          return e.source === fromNode.id || (e.target === fromNode.id && !!data?.bidirectional);
+        });
+        if (hasOutgoing) {
+          log.debug('onConnectEnd: Subflow already has an outgoing connection; not offering a new node');
+          return;
+        }
+      }
+
+      // Check if the target is the pane (not a node). If it isn't, onConnect
+      // handled any edge creation and there is nothing to do here.
+      const targetIsPane = (event.target as Element).classList.contains('react-flow__pane');
+      if (!targetIsPane) {
+        return;
+      }
+
+      // Convert screen coordinates to flow coordinates. touchend events
+      // carry the lifted finger in changedTouches (touches is empty).
+      const point = event instanceof MouseEvent ? event : event.changedTouches[0];
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: point.clientX,
+        y: point.clientY,
+      });
+
+      log.debug(`onConnectEnd: Connection dropped on pane at position (${position.x}, ${position.y})`);
+
+      // Show the node selection modal with the pending connection source
+      setNodeSelectionModal({
+        open: true,
+        position,
+        sourceNodeId: fromNode.id,
+        sourceNodeType: fromNode.type as NodeType,
+        sourceHandleId: fromHandle.id,
+      });
     },
-    [connectionStart, reactFlowInstance, nodes]
+    [reactFlowInstance, edges]
   );
 
   // Handle node type selection from modal
@@ -529,16 +574,17 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
       onNodesChange(buildAddNodeChanges(newNode));
 
-      // Get the source node
-      const sourceNode = findNodeById(connectionStart.nodeId!, nodes);
+      // Get the pending connection source captured when the drag was dropped
+      const { sourceNodeId, sourceHandleId } = nodeSelectionModal;
+      const sourceNode = sourceNodeId ? findNodeById(sourceNodeId, nodes) : undefined;
 
-      if (sourceNode) {
+      if (sourceNode && sourceHandleId) {
         const targetHandle = defaultTargetHandleFor(nodeType);
 
         // Create a connection from the source node to the new node
         const connection = {
-          source: connectionStart.nodeId!,
-          sourceHandle: connectionStart.handleId!,
+          source: sourceNode.id,
+          sourceHandle: sourceHandleId,
           target: newNode.id,
           targetHandle,
         };
@@ -546,7 +592,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         log.debug(`handleNodeTypeSelection: Creating connection from ${connection.source} to ${connection.target}`);
 
         // Create and add the edge if the connection is valid
-        if (validateConnection(connection, [...nodes, newNode])) {
+        if (validateConnection(connection, [...nodes, newNode], edges)) {
           const edge = createEdgeFromConnection(connection, [...nodes, newNode]);
           const replaced = getReplacedEdgeIds(edge, edges);
           onEdgesChange([
@@ -558,10 +604,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         }
       }
 
-      // The pending connection has been consumed.
-      setConnectionStart({ nodeId: null, handleId: null });
-
-      // Close the modal
+      // Close the modal; this also discards the consumed connection source.
       setNodeSelectionModal({ open: false, position: null });
 
       // Select the newly created node in the properties panel
@@ -569,15 +612,13 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onEditNode(newNode);
       }
     },
-    [connectionStart, nodes, edges, buildAddNodeChanges, onNodesChange, onEdgesChange, onEditNode]
+    [nodeSelectionModal, nodes, edges, buildAddNodeChanges, onNodesChange, onEdgesChange, onEditNode]
   );
 
-  // Close the node selection modal
+  // Close the node selection modal, abandoning the pending connection.
   const handleCloseNodeSelectionModal = useCallback(() => {
     log.debug('handleCloseNodeSelectionModal: Closing node selection modal');
-    setNodeSelectionModal({ open: false, position: null, sourceNodeType: undefined, sourceHandleId: undefined });
-    // The pending connection was abandoned.
-    setConnectionStart({ nodeId: null, handleId: null });
+    setNodeSelectionModal({ open: false, position: null });
   }, []);
 
   // --- Copy / paste of nodes (within a flow and across flows) ---
@@ -769,7 +810,6 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onSelectionContextMenu={onSelectionContextMenu}
         onKeyDown={handleCanvasKeyDown}
         onNodeDoubleClick={onNodeDoubleClick}
-        onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
         tabIndex={0}
         fitView
@@ -778,7 +818,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         maxZoom={2}
         snapToGrid={true}
         snapGrid={[15, 15]}
-        connectOnClick={true}
+        // Click-to-connect is off (default is on): a stray click on a handle
+        // would silently arm a connection that survives waypoint editing and
+        // completes on the next handle click — and the edges' 20px grab path
+        // overlaps the handles at the endpoints, making stray clicks easy.
+        connectOnClick={false}
       >
         <CanvasToolbar />
         <CanvasControls />

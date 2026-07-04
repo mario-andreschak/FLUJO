@@ -11,6 +11,7 @@ import {
   validateConnection,
   createEdgeFromConnection,
   getReplacedEdgeIds,
+  canConvertToBidirectional,
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/edgeUtils';
 import { validTargetTypesFor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/connectionRules';
 import { FlowNode } from '@/frontend/types/flow/flow';
@@ -98,6 +99,73 @@ describe('validateConnection', () => {
 
   it('rejects an MCP handle used for flow control between two Process nodes', () => {
     expect(validateConnection(connect('p1', 'process-left-mcp', 'p2', 'process-top'), nodes)).toBe(false);
+  });
+});
+
+describe('validateConnection — subflow single outgoing path', () => {
+  const withSubflow = [...nodes, node('s1', 'subflow'), node('f1', 'finish')];
+  const bidi = (e: Edge): Edge => ({ ...e, data: { ...e.data, bidirectional: true } });
+
+  it('allows the first outgoing edge from a subflow', () => {
+    expect(validateConnection(connect('s1', 'subflow-bottom', 'p1', 'process-top'), withSubflow, [])).toBe(true);
+  });
+
+  it('rejects a second outgoing edge from a subflow', () => {
+    const existing = createEdgeFromConnection(connect('s1', 'subflow-bottom', 'p1', 'process-top'), withSubflow);
+    expect(validateConnection(connect('s1', 'subflow-bottom', 'p2', 'process-top'), withSubflow, [existing])).toBe(false);
+  });
+
+  it('rejects an outgoing edge when a bidirectional edge already points at the subflow', () => {
+    const back = bidi(createEdgeFromConnection(connect('p1', 'process-bottom', 's1', 'subflow-top'), withSubflow));
+    expect(validateConnection(connect('s1', 'subflow-bottom', 'f1', 'finish-top'), withSubflow, [back])).toBe(false);
+  });
+
+  it('still allows re-drawing the existing outgoing edge (replacement, not addition)', () => {
+    const existing = createEdgeFromConnection(connect('s1', 'subflow-bottom', 'p1', 'process-top'), withSubflow);
+    expect(validateConnection(connect('s1', 'subflow-bottom', 'p1', 'process-top'), withSubflow, [existing])).toBe(true);
+  });
+
+  it('does not restrict Process nodes with multiple outgoing edges', () => {
+    const existing = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), withSubflow);
+    expect(validateConnection(connect('p1', 'process-bottom', 'f1', 'finish-top'), withSubflow, [existing])).toBe(true);
+  });
+});
+
+describe('canConvertToBidirectional', () => {
+  it('allows upgrading an edge between two Process nodes', () => {
+    const edge = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), nodes);
+    expect(canConvertToBidirectional(edge, nodes)).toBe(true);
+  });
+
+  it('allows upgrading an edge between Process and Subflow nodes', () => {
+    const withSubflow = [...nodes, node('s1', 'subflow')];
+    const edge = createEdgeFromConnection(connect('p1', 'process-bottom', 's1', 'subflow-top'), withSubflow);
+    expect(canConvertToBidirectional(edge, withSubflow)).toBe(true);
+  });
+
+  it('rejects upgrading an edge out of a Start node (nothing may hand back to Start)', () => {
+    const edge = createEdgeFromConnection(connect('start', 'start-bottom', 'p1', 'process-top'), nodes);
+    expect(canConvertToBidirectional(edge, nodes)).toBe(false);
+  });
+
+  it('rejects upgrading an edge into a Finish node (Finish never hands off)', () => {
+    const withFinish = [...nodes, node('f1', 'finish')];
+    const edge = createEdgeFromConnection(connect('p1', 'process-bottom', 'f1', 'finish-top'), withFinish);
+    expect(canConvertToBidirectional(edge, withFinish)).toBe(false);
+  });
+
+  it('rejects when an endpoint node no longer exists', () => {
+    const edge = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), nodes);
+    expect(canConvertToBidirectional(edge, nodes.filter(n => n.id !== 'p2'))).toBe(false);
+  });
+
+  it('rejects upgrading an edge into a subflow that already has an outgoing edge', () => {
+    const withSubflow = [...nodes, node('s1', 'subflow')];
+    const intoSubflow = createEdgeFromConnection(connect('p1', 'process-bottom', 's1', 'subflow-top'), withSubflow);
+    const onward = createEdgeFromConnection(connect('s1', 'subflow-bottom', 'p2', 'process-top'), withSubflow);
+    expect(canConvertToBidirectional(intoSubflow, withSubflow, [intoSubflow, onward])).toBe(false);
+    // Without the onward edge the same upgrade is fine (call-and-return shape).
+    expect(canConvertToBidirectional(intoSubflow, withSubflow, [intoSubflow])).toBe(true);
   });
 });
 

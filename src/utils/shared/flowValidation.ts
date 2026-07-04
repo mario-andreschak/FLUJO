@@ -275,6 +275,29 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     }
   }
 
+  // --- Subflow nodes: single outgoing path ---
+  // A subflow hands off blindly to its first successor — it has no model to
+  // choose between routes. Allowed shapes: one outgoing edge (A > B > C) or
+  // one bidirectional edge back to the caller (A <> B). More than one
+  // outgoing path (counting the reverse transition a bidirectional edge
+  // gives its target) makes the follow-up node order-dependent.
+  const subflowNodes = nodes.filter((n) => getNodeType(n) === 'subflow');
+  for (const node of subflowNodes) {
+    const outgoing = edges.filter(
+      (e) =>
+        !isMcpEdge(e) &&
+        (e.source === node.id || (e.target === node.id && !!e.data?.bidirectional))
+    );
+    if (outgoing.length > 1) {
+      add(
+        'error',
+        'subflow-multiple-outgoing',
+        `Subflow node "${getNodeLabel(node)}" has ${outgoing.length} outgoing connections; a subflow can only have one (either A > B > C or a bidirectional A <> B).`,
+        node
+      );
+    }
+  }
+
   // --- Dangling tool/resource pills in Process prompts ---
   for (const node of processNodes) {
     const promptTemplate = node.data?.properties?.promptTemplate;

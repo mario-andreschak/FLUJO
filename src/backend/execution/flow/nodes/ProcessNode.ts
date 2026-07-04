@@ -52,7 +52,11 @@ export class ProcessNode extends BaseNode {
       actions
     });
 
-    // Create a handoff tool for each action
+    // Create a handoff tool for each action. Tool names must be unique per
+    // request (providers reject duplicates), so two routes to the same node
+    // — e.g. a legacy forward edge plus a bidirectional back-edge — yield a
+    // single tool; either route hands off to the same target anyway.
+    const seenToolNames = new Set<string>();
     actions.forEach(edgeId => {
       // Get the target node
       const targetNode = this.successors instanceof Map
@@ -68,9 +72,16 @@ export class ProcessNode extends BaseNode {
       const targetNodeLabel = targetNode.node_params?.label || 'Unknown Node';
       const targetNodeType = targetNode.node_params?.type || 'unknown';
 
+      const toolName = `handoff_to_${targetNodeId}`;
+      if (seenToolNames.has(toolName)) {
+        log.debug(`Skipping duplicate handoff tool for edge ${edgeId}`, { toolName });
+        return;
+      }
+      seenToolNames.add(toolName);
+
       // Create a handoff tool for this edge
       const handoffTool: ToolDefinition = {
-        name: `handoff_to_${targetNodeId}`,
+        name: toolName,
         description: `Hand off execution to ${targetNodeLabel} (${targetNodeType})`,
         inputSchema: {
           type: "object",
