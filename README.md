@@ -18,88 +18,134 @@ Prefer to set it up manually? See [Getting Started](#-getting-started). To remov
 For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
 -> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
 
+### FLUJO animated Short #1 — "A sad song about MCP"
 
-FLUJO animated Short #1 - "A sad song about MCP"
-[![image](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
-
-![FLUJO Logo](https://github.com/user-attachments/assets/881ad34c-73fa-4b71-ba47-123b5da8e05e)
+[![FLUJO animated short: A sad song about MCP](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
 
 # FLUJO
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.3.3-green.svg)](package.json)
 
-FLUJO is an open-source platform that bridges the gap between **workflow orchestration**, **Model-Context-Protocol (MCP)**, and **AI tool integration**. It provides a unified interface for managing AI models, MCP servers, and complex workflows - all locally and open-source.
+FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
 
-![FLUJO Overview](https://github.com/user-attachments/assets/397ef3a5-e4c1-4667-ac74-6fe96f854ff1)
+![FLUJO Overview](docs/images/readme/home.png)
 
-FLUJO is powered by the [PocketFlowFramework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with [CLine](https://github.com/cline/cline) and a lot of LOVE.
+FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code and a lot of LOVE.
 
 ## 🌟 Key Features
 
-### 🔑 Environment & API Key Management
+### 🔑 Secure Environment & API Key Management
 
-- **Secure Storage**: Store environment variables and API keys with encryption
-- **Global Access**: Use your stored keys across the entire application
-- **Centralized Management**: Keep all your credentials in one secure place
+- **Encrypted at rest**: API keys and other secrets are encrypted in local storage, with an optional custom encryption password for extra protection
+- **Never sent to the browser**: secrets stay server-side — the frontend only ever sees a masked placeholder, even in your own DevTools
+- **Global variables, bound anywhere**: define a key once (e.g. `openrouter_key`) and bind it into any model or MCP server config instead of pasting it repeatedly
+- **Backup & restore** your encrypted store from the Settings page
 
-![API Keys Management](https://github.com/user-attachments/assets/f5acd60f-129d-4e0c-8bc1-b5410d3c8d1d)
+![Settings — Global Environment Variables](docs/images/readme/settings.png)
 
 ### 🤖 Model Management
 
-- **Multiple Models**: Configure and use different AI models simultaneously
-- **Pre-defined Prompts**: Create custom system instructions for each model
-- **Provider Flexibility**: Connect to various API providers (OpenAI, Anthropic, etc.)
-- **Local Models**: Integrate with Ollama for local model execution
+- **Multiple providers**: OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
+- **Claude Subscription**: use your Claude Pro/Max plan directly (via the Claude Agent SDK) instead of a metered API key
+- **Per-model system prompts** and tunable parameters, reused across any flow
 
-![Model Configuration](https://github.com/user-attachments/assets/06036daa-c576-4483-b13e-47ef21a82395)
-![Model Settings](https://github.com/user-attachments/assets/4e6f8390-eaab-448a-9a38-bbbd64fd3de8)
-![Ollama Integration](https://github.com/user-attachments/assets/8a04632a-4cc2-4738-ac9b-e856170a9e7c)
+![Model Configuration](docs/images/readme/models.png)
+![Model Configuration Modal](docs/images/readme/model-edit.png)
 
 ### 🔌 MCP Server Integration
 
-- **Easy Installation**: Install MCP servers from GitHub or local filesystem
-- **Server Management**: Comprehensive interface for managing MCP servers
-- **Tool Inspection**: View and manage available tools from MCP servers
-- **Environment Binding**: Connect server environment variables to global storage
+- **Install from anywhere**: the **Marketplace** tab searches the official [MCP Registry](https://registry.modelcontextprotocol.io) and installs with one click; **Spotlight** curates servers verified to work well with FLUJO; or install manually from a GitHub repo / local folder
+- **Full MCP capability support**: tools, resources, prompts, roots (workspace folders), and sampling (let a server borrow one of your models under a trust policy you control)
+- **Tool inspection & testing**: browse and call a server's tools, resources, and prompts straight from its detail view
+- **FLUJO as an MCP proxy**: re-expose any server you've configured in FLUJO to other MCP clients (Claude Desktop, Cursor, Cline, …) over Streamable HTTP — configure a server once, use it everywhere
 
-![MCP Server Installation](https://github.com/user-attachments/assets/4c4055fd-c769-4155-b48f-1350b689545f)
-![MCP Server Management](https://github.com/user-attachments/assets/bd10b76f-aeb0-48c2-98e3-313e35ace50f)
-![MCP Server Tools](https://github.com/user-attachments/assets/a29effb6-07d4-42e2-886f-6cf7c96fe4a6)
-![MCP Environment Variables](https://github.com/user-attachments/assets/27b257bf-a6ad-42bf-9ccf-4178c454c7ce)
+![MCP Marketplace](docs/images/readme/mcp-marketplace.png)
 
-### 🔄 Workflow Orchestration
+Configuring a server is a guided, three-step form (define it → install & build → define how to run it) with a one-click connection test before you save:
 
-- **Visual Flow Builder**: Create and design complex workflows
-- **Model Integration**: Connect different models in your workflow
-- **Tool Management**: Allow or restrict specific tools for each model
-- **Prompt Design**: Configure system prompts at multiple levels (Model, Flow, Node)
-![image](https://github.com/user-attachments/assets/36d417ca-a0e6-4f87-90cb-b17a70641372)
-![Flow Design](https://github.com/user-attachments/assets/30fc4c8f-78fe-4a44-9fe7-d7837d7359d2)
-![Flow Configuration](https://github.com/user-attachments/assets/6b84025f-5240-4277-87e9-02e0f5aac867)
-![System Prompts](https://github.com/user-attachments/assets/b1725c4d-2b0f-420d-92cc-3eba13a5a7de)
-![Tool References](https://github.com/user-attachments/assets/8bc8ee61-2f21-42ef-b1df-9c88a4ad13a6)
-![Screenshot 2025-03-08 223218](https://github.com/user-attachments/assets/922b9368-c0b6-4a06-b500-c8d71506173a)
+![MCP Server Configuration](docs/images/readme/mcp-server-setup.png)
+
+Every connected server gets a detail view to browse and test its tools, resources, and prompts directly:
+
+![MCP Tool Tester](docs/images/readme/mcp-tool-tester.png)
+
+### 🔄 Visual Flow Builder
+
+- **Drag-and-drop orchestration**: connect Start, Process (LLM), MCP, Subflow, and Finish nodes into a graph
+- **Branching & handoff**: let a model hand off to another node/agent based on the conversation, build loops, or fan out into multiple specialists
+- **Subflows**: call another flow as a single step, with its own isolated state — reuse a flow like a function
+- **Per-node tool & prompt scoping**: decide exactly which tools, resources, and system-prompt fragments each node can see
+
+![Flow Builder](docs/images/readme/flow-builder.png)
+
+#### Branching & handoff
+
+Connect one node to several successors, then tell the model when to use each handoff tool from the "Agent Tools" tab of its Process Node:
+
+![Branching](https://github.com/user-attachments/assets/73be3153-5dea-4729-bf10-40657b2a12c4)
+![Branching prompt configuration](docs/images/readme/flow-branching-config.png)
+![Branching handoff tools](https://github.com/user-attachments/assets/d3bc188f-8a7a-4fb0-830c-e4d85a9a37bf)
+
+#### Loops
+
+Connect a node back to a previous one the same way to build a loop:
+
+![Loops](https://github.com/user-attachments/assets/3c026812-a895-4c3a-a37d-fe51550b273b)
+
+#### Orchestration & Subflows
+
+Combine multiple handoffs and loops to build an orchestrator, or drop in a **Subflow** node to run another flow as a single, reusable step with its own isolated state:
+
+![Orchestration](https://github.com/user-attachments/assets/0a3abfe9-8e83-49ea-a8da-bede3bed31e3)
+![Subflow configuration](docs/images/readme/flow-subflow-config.png)
 
 ### 💬 Chat Interface
 
-- **Flow Interaction**: Interact with your flows through a chat interface
-- **Message Management**: Edit or disable messages or split conversations to reduce context size 
-- **File Attachments**: Attach documents or audio for LLM processing (really bad atm, because for this you should use mcp!)
-- **Transcription**: Process audio inputs with automatic transcription (really bad atm, see roadmap)
-  
-![Screenshot 2025-04-05 210835](https://github.com/user-attachments/assets/c9738f5b-01c7-4b18-b816-2323ebc2a94a)
+- **Live execution view**: watch a run progress node-by-node in real time, with token usage and a context-window meter per conversation
+- **Visual debugger**: set breakpoints, step through a run node-by-node, and inspect state before/after each step
+- **Human-in-the-loop tool approval**: optionally require approval before any tool call executes, for any provider (including Claude Subscription's agentic tool use)
+- **File & audio attachments**, message editing, and conversation branching
+
+![Chat Interface](docs/images/readme/chat-handoff.png)
+
+Step through a run node-by-node with the visual debugger, inspecting prep/exec state at every stop:
+
+![Visual Debugger](docs/images/readme/chat-debugger.png)
+
+### ⏱️ Planned Executions (Automation)
+
+Run your flows automatically — on a schedule or when something happens — without opening the chat. FLUJO just needs to be running for triggers to fire.
+
+- **Schedule**: cron-style recurring runs (with second-level precision and catch-up for missed runs)
+- **Webhook**: trigger a flow via an authenticated HTTP call
+- **File watch**: fire when files change under a folder
+- **MCP tool polling**: periodically call a tool and fire on change, on new items, or let a model/checker-flow decide
+- **URL watch**: fire when a fetched page's content changes
+
+![Planned Executions](docs/images/readme/planned-executions.png)
+![New Planned Execution](docs/images/readme/planned-execution-new.png)
+
+Run history is kept per trigger, with the full output of every run one click away:
+
+![Planned Execution Run Detail](docs/images/readme/planned-execution-detail.png)
+
+As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn FLUJO into an autonomous auto-responder:
+
+![WhatsApp auto-reply demo](docs/images/readme/whatsapp-demo.png)
 
 ### 🔄 External Tool Integration
 
-- **OpenAI Compatible Endpoint**: Integrate with tools like Cline or Roo Code. In the client, choose the **OpenAI Compatible** provider, set the **Base URL** to `http://localhost:4200/v1` (note: `/v1`, not `/v1/models`), put any value as the API key, and pick a **model** named `flow-<your-flow-name>` (the list comes from `/v1/models`).
-- **FLUJO as an MCP server (proxy)**: Re-expose any configured MCP server to external MCP clients (Claude Desktop, Cursor, Cline, …) so you set a server up once in FLUJO and use it everywhere. Toggle **"Expose to external apps"** on the server's card, then add a **Streamable-HTTP** MCP server in your client pointing at `http://localhost:4200/mcp-proxy/<server-name>`. (Localhost-only in the current version.)
-- **Seamless Connection**: Use FLUJO as a backend for other AI applications
+- **OpenAI-compatible endpoint**: point Cline, Roo Code, Cursor, or any OpenAI-SDK client at `http://localhost:4200/v1`, use any API key value, and pick a model named `flow-<your-flow-name>`
+- **FLUJO as an MCP server (proxy)**: point an external MCP client at `http://localhost:4200/mcp-proxy/<server-name>` to reuse a server you configured once in FLUJO (localhost-only in the current version)
 
-> **Note:** to consume flows from other apps, use the **OpenAI Compatible** provider (above). FLUJO does not expose an Ollama-compatible *server* endpoint. (Connecting FLUJO *to* a local Ollama instance as a model provider is a separate, supported feature.)
+> **Note:** FLUJO does not expose an Ollama-compatible *server* endpoint — use the OpenAI-compatible provider above to consume flows from other apps. (Connecting FLUJO *to* a local Ollama instance as a model provider is a separate, supported feature.)
 
-![Screenshot 2025-03-27 130144](https://github.com/user-attachments/assets/7ba68655-2a38-48b1-8d52-c0e2c217e506)
-![Screenshot 2025-03-26 213657](https://github.com/user-attachments/assets/43add66a-ba69-4651-9722-f920c4ef746b)
+### 📖 Built-in API Documentation
+
+A searchable `/docs` page inside the app documents every REST endpoint FLUJO exposes (chat, conversations, models, flows, MCP, planned executions, env/encryption, backups) — useful when integrating FLUJO into your own tooling.
+
+![API Documentation](docs/images/readme/docs.png)
 
 ## 🚀 Getting Started
 
@@ -197,6 +243,8 @@ once writes the manifest for future uninstalls. See
 1. Navigate to Settings
 2. Save your API Keys globally to secure them
 
+![Settings — Global Environment Variables](docs/images/readme/settings.png)
+
 ### Setting Up Models
 
 1. Navigate to the Models page
@@ -207,10 +255,10 @@ once writes the manifest for future uninstalls. See
 ### Managing MCP Servers
 
 1. Go to the MCP page
-2. Click "Add Server" to install a new MCP server
-3. Choose from GitHub repository or local filesystem
+2. Click "Add Server"
+3. Pick a tab: **Spotlight** (curated, one click), **Marketplace** (search the official MCP Registry), **GitHub** (install from a repo), **Local Server**, **Remote**, or **Reference Servers**
 4. Configure server settings and environment variables
-5. Start and manage your server
+5. Start and manage your server, or open its card to browse/test its tools, resources, and prompts
 
 ### Using SSE MCP-Servers
 1. Got to the MCP Page
@@ -221,81 +269,46 @@ once writes the manifest for future uninstalls. See
 6. Enter "npx" as Run Command
 7. Add 1. Argument "mcp-remote"
 8. Add 2. Argument "(your MCP SSE-Url here)"
-   ![image](https://github.com/user-attachments/assets/f5c97c26-72c6-4ba9-a9d2-a34e3f34ec19)
 
-
-### Using official Reference servers
-
-1. Go to the MCP page
-2. Click "Add Server" to install a new MCP server
-3. Go to the "Reference Servers" Tab
-4. (First time executing:) Click "Refresh" and waaaaaaait.
-5. Click a server of your choice, wait for the screen to change, click "Save" / "Update Server" at the bottom.
-   
 ### Creating Workflows
 
 1. Visit the Flows page
 2. Click "Create Flow" to start a new workflow
-3. Add processing nodes and connect them 
+3. Add processing nodes and connect them
 4. Configure each node with models and tools
 5. Save your flow
 
-![Screenshot 2025-04-12 123657](https://github.com/user-attachments/assets/06b40a36-a906-44d5-b53a-9eaa125acb74)
+![Flow Dashboard](docs/images/readme/flows-dashboard.png)
 
+For branching, loops, and subflows, see [Orchestration & Subflows](#orchestration--subflows) above.
 
-### Branching
+### Automating Flows (Planned Executions)
 
-1. Connect one MCP node to multiple subsequent ones
-![Screenshot 2025-04-07 094237](https://github.com/user-attachments/assets/73be3153-5dea-4729-bf10-40657b2a12c4)
-2. Define the branching in the prompt, using the handoff-tools on the "Agent Tools" tab
-![Screenshot 2025-04-07 095433](https://github.com/user-attachments/assets/d3bc188f-8a7a-4fb0-830c-e4d85a9a37bf)
-
-### Loops
-
-1. Same as branching, but connect back to a previous node
-![Screenshot 2025-04-08 165640](https://github.com/user-attachments/assets/3c026812-a895-4c3a-a37d-fe51550b273b)
-
-### Orchestration
-
-1. Same as loops but with multiple ones
-![Screenshot 2025-04-08 180631](https://github.com/user-attachments/assets/0a3abfe9-8e83-49ea-a8da-bede3bed31e3)
-
-
+1. Go to the Executions page
+2. Click "Add" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
+3. Pick the flow to run and configure the trigger-specific options
+4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the same page
 
 ### Using the Chat Interface
 
 1. Go to the Chat page
 2. Select a flow to interact with
-3. Start chatting with your configured workflow
-![Screenshot 2025-04-07 095653](https://github.com/user-attachments/assets/efcb78ba-9a85-401e-a4c7-df5ec7458b26)
-
-
-## 🔄 MCP Integration
-
-FLUJO provides comprehensive support for the Model Context Protocol (MCP), allowing you to:
-
-- Install and manage MCP servers
-- Inspect server tools
-- Connect MCP servers to your workflows
-- Reference tools directly in prompts
-- Bind environment variables to your global encrypted storage
-![image](https://github.com/user-attachments/assets/4c638f0d-a6cb-4f4f-a3c0-cc1e3a369297)
+3. Start chatting with your configured workflow — enable "Execute in Debugger" or "Require Tool Approvals" from the input bar if you want more control over the run
 
 ## 📄 License
 
 FLUJO is licensed under the [MIT License](LICENSE).
-## 🚀 Roadmap
-Here's a roadmap of upcoming features and improvements:
 
-- Real-time Voice Feature: Adding support for Whisper.js or OpenWhisper to enable real-time voice capabilities.
-- Visual Debugger: Introducing a visual tool to help debug and troubleshoot more effectively.
-- MCP Roots Support: Implementing Checkpoints and Restore features within MCP Roots for better control and recovery options.
-- MCP Prompts: Enabling users to build custom prompts that fully leverage the capabilities of the MCP server.
-- MCP Proxying STDIO<>SSE: Likely utilizing SuperGateway to proxy standard input/output with Server-Sent Events for enhanced communication: Use MCP Servers managed in FLUJo in any other MCP client.
-- Enhanced Integrations: Improving compatibility and functionality with tools like Windsurf, Cursor, and Cline.
-- Advanced Orchestration: Adding agent-driven orchestration, batch processing, and incorporating features inspired by Pocketflow.
-- Online Template Repository: Creating a platform for sharing models, flows, or complete "packages," making it easy to distribute FLUJO flows to others.
-- Edge Device Optimization: Enhancing performance and usability for edge devices.
+## 🚀 Roadmap
+
+Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Planned Executions (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
+
+Beyond that, ideas we're keeping an eye on:
+- Real-time voice input/output
+- Deeper MCP roots support (checkpoints/restore)
+- Edge-device-friendly builds
+
+Have a feature request? Open a GitHub issue or drop it on Discord — see [above](#a-few-words-in-advance).
 
 ## 🤝 Contributing
 
@@ -316,9 +329,6 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 - You can add ~FLUJO=HTML, ~FLUJO=MARKDOWN, ~FLUJO=JSON, ~FLUJO=TEXT in your message to format the response, this will give varying results in different tools where you integrate FLUJO.
 - You can add ~FLUJOEXPAND=1 or ~FLUJODEBUG=1 somewhere in your message to show more details
 - in config/features.ts you can change the Logging-level for the whole application
-- in config/features.ts you can enable SSE support which is currently disabled by default
 ---
 
 FLUJO - Empowering your AI workflows with open-source orchestration.
-
-#
