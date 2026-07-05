@@ -203,6 +203,7 @@ export class SchedulerService {
               void this.fire(execution, { kind: 'mcp-poll', summary, context });
             },
             onError: message => this.lastTriggerErrors.set(execution.id, message),
+            onSuccess: () => this.lastTriggerErrors.delete(execution.id),
             evaluateAiGate: async (result, gateConfig, state) => {
               // Lazy import: the gate pulls in the model/flow stack.
               const { evaluateAiGate } = await import('./triggers/llmGate');
@@ -226,6 +227,7 @@ export class SchedulerService {
               void this.fire(execution, { kind: 'url-watch', summary, context });
             },
             onError: message => this.lastTriggerErrors.set(execution.id, message),
+            onSuccess: () => this.lastTriggerErrors.delete(execution.id),
           })
         );
         break;

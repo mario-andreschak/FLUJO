@@ -31,6 +31,12 @@ export interface McpPollDeps {
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
   onFire: (payload: { summary: string; context: unknown }) => void;
   onError: (message: string) => void;
+  /**
+   * Called after every successful poll+evaluation (fired or not), so a stale
+   * trigger error (e.g. the startup race while servers are still connecting)
+   * clears as soon as polling recovers — not only on the next fire.
+   */
+  onSuccess?: () => void;
   /** "AI decides" evaluator — handles both llm-gate and flow-gate modes. */
   evaluateAiGate?: (
     result: unknown,
@@ -94,7 +100,9 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
       }
       if (evaluation.error) {
         deps.onError(evaluation.error);
-      } else if (evaluation.fire) {
+      } else if (!evaluation.fire) {
+        deps.onSuccess?.();
+      } else {
         deps.onFire({
           summary: `Watched tool: ${evaluation.summary ?? 'condition met'}`,
           context: {

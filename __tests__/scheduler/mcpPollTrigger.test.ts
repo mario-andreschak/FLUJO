@@ -128,6 +128,7 @@ describe('armMcpPoll', () => {
       saveState: jest.fn(async patch => { state = { ...state, ...patch }; }),
       onFire: jest.fn(),
       onError: jest.fn(),
+      onSuccess: jest.fn(),
     };
     return { deps, getState: () => state };
   };
@@ -195,6 +196,24 @@ describe('armMcpPoll', () => {
     await flush();
     expect(deps.callTool).toHaveBeenCalledTimes(2);
 
+    expect(deps.onFire).not.toHaveBeenCalled();
+    trigger.dispose();
+  });
+
+  it('reports success on quiet polls, so a startup-race error self-clears', async () => {
+    const { deps } = makeDeps();
+    // First tick: server still connecting (the startup race) → trigger error.
+    (deps.callTool as jest.Mock).mockResolvedValueOnce({ success: false, error: 'Not connected' });
+    const trigger = armMcpPoll(config(), deps);
+    await flush();
+    expect(deps.onError).toHaveBeenCalledWith('Not connected');
+    expect(deps.onSuccess).not.toHaveBeenCalled();
+
+    // Failure #1 skips one interval; the tick after that succeeds (primes)
+    // and must report success so the stale error is cleared from the card.
+    jest.advanceTimersByTime(2 * MIN_POLL_INTERVAL_MS);
+    await flush();
+    expect(deps.onSuccess).toHaveBeenCalled();
     expect(deps.onFire).not.toHaveBeenCalled();
     trigger.dispose();
   });

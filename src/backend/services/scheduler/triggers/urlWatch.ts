@@ -19,6 +19,8 @@ export interface UrlWatchDeps {
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
   onFire: (payload: { summary: string; context: unknown }) => void;
   onError: (message: string) => void;
+  /** Called after every successful check (fired or not) — clears stale errors. */
+  onSuccess?: () => void;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -63,9 +65,11 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
       }
       if (!state.lastHash) {
         await deps.saveState({ lastHash: hash });
+        deps.onSuccess?.();
         return; // first fetch primes the baseline without firing
       }
       if (state.lastHash === hash) {
+        deps.onSuccess?.();
         return;
       }
       await deps.saveState({ lastHash: hash });
