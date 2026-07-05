@@ -118,7 +118,8 @@ describe('SchedulerService', () => {
     expect(input.mode).toBe('ephemeral');
     expect(input.requireApproval).toBe(false);
     expect(input.userTurn).toBe(true);
-    expect(input.prompt).toBe('Summarize the news');
+    // The user prompt leads; run info (timing metadata) is appended after it.
+    expect(input.prompt).toMatch(/^Summarize the news\n\n\[Run info/);
 
     expect(record?.status).toBe('completed');
     expect(record?.outputText).toBe('All done');
@@ -135,7 +136,7 @@ describe('SchedulerService', () => {
     expect(runFlowMock.mock.calls[0][0].mode).toBe('conversation');
   });
 
-  it('appends the trigger context to the prompt as a fenced block', async () => {
+  it('appends run info (timing + trigger data) to the prompt as a fenced block', async () => {
     const { execution } = await scheduler.create(scheduleInput());
     await scheduler.fire(execution!, {
       kind: 'webhook',
@@ -144,8 +145,26 @@ describe('SchedulerService', () => {
     });
     const prompt = runFlowMock.mock.calls[0][0].prompt as string;
     expect(prompt).toContain('Summarize the news');
-    expect(prompt).toContain('Trigger context');
+    expect(prompt).toContain('Run info');
+    // Trigger data nested under "data", labeled untrusted.
     expect(prompt).toContain('"hello": "world"');
+    expect(prompt).toContain('"data"');
+    // Timing metadata: current time, trigger kind, no previous run yet, and
+    // the armed schedule's next occurrence.
+    expect(prompt).toContain('"now"');
+    expect(prompt).toContain('"trigger": "webhook"');
+    expect(prompt).toContain('"lastRun": null');
+    expect(prompt).toMatch(/"nextPlannedRun": "\d{4}-/);
+  });
+
+  it('reports the previous run in the next run info', async () => {
+    const { execution } = await scheduler.create(scheduleInput());
+    const first = await scheduler.runNow(execution!.id);
+    await scheduler.runNow(execution!.id);
+
+    const secondPrompt = runFlowMock.mock.calls[1][0].prompt as string;
+    expect(secondPrompt).toContain(`"at": "${first.record!.firedAt}"`);
+    expect(secondPrompt).toContain('"status": "completed"');
   });
 
   it('records an error run when the flow ends non-completed or throws', async () => {

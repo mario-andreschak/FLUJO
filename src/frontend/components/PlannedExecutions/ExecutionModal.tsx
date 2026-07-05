@@ -346,7 +346,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           margin="normal"
           multiline
           rows={3}
-          helperText="Sent to the flow as the user message each time this runs. Details about what triggered the run are attached automatically."
+          helperText="Sent to the flow as the user message each time this runs. Run details are attached automatically: current time, what triggered it, the previous run, the next planned run, and any trigger data."
         />
 
         <FormControlLabel
