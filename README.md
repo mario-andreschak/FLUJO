@@ -78,13 +78,13 @@ Every connected server gets a detail view to browse and test its tools, resource
 - **Per-node tool & prompt scoping**: decide exactly which tools, resources, and system-prompt fragments each node can see
 
 ![Flow Builder](docs/images/readme/flow-builder.png)
+![Branching prompt configuration](docs/images/readme/flow-branching-config.png)
 
 #### Branching & handoff
 
 Connect one node to several successors, then tell the model when to use each handoff tool from the "Agent Tools" tab of its Process Node:
 
 ![Branching](https://github.com/user-attachments/assets/73be3153-5dea-4729-bf10-40657b2a12c4)
-![Branching prompt configuration](docs/images/readme/flow-branching-config.png)
 ![Branching handoff tools](https://github.com/user-attachments/assets/d3bc188f-8a7a-4fb0-830c-e4d85a9a37bf)
 
 #### Loops
@@ -259,16 +259,6 @@ once writes the manifest for future uninstalls. See
 3. Pick a tab: **Spotlight** (curated, one click), **Marketplace** (search the official MCP Registry), **GitHub** (install from a repo), **Local Server**, **Remote**, or **Reference Servers**
 4. Configure server settings and environment variables
 5. Start and manage your server, or open its card to browse/test its tools, resources, and prompts
-
-### Using SSE MCP-Servers
-1. Got to the MCP Page
-2. Click "Add Server" to install a new MCP server
-3. Select "Local Server"
-4. Enter a Server Name, enter "/" as Server Root Path
-5. Leave Build Command and Install Command empty
-6. Enter "npx" as Run Command
-7. Add 1. Argument "mcp-remote"
-8. Add 2. Argument "(your MCP SSE-Url here)"
 
 ### Creating Workflows
 
