@@ -233,6 +233,70 @@ export const API_GROUPS: ApiGroup[] = [
     ],
   },
   {
+    id: 'planned-executions',
+    name: 'Planned Executions',
+    description:
+      'Run flows headlessly on triggers: schedules (cron), inbound webhooks, and more. Managed from the Executions page; each run is recorded in a per-execution run history.',
+    endpoints: [
+      {
+        method: 'GET',
+        alsoMethods: ['POST', 'PATCH'],
+        path: '/api/planned-executions',
+        summary:
+          'GET lists all planned executions with live trigger status and last run; POST creates one; PATCH toggles the global pause switch ({ paused: boolean }).',
+        response: 'GET: { paused, executions: [{ execution, status, lastRun }] }.',
+      },
+      {
+        method: 'GET',
+        alsoMethods: ['PATCH', 'DELETE'],
+        path: '/api/planned-executions/{id}',
+        summary:
+          'GET / PATCH / DELETE a single planned execution. PATCH takes a partial config and re-arms the trigger.',
+      },
+      {
+        method: 'POST',
+        path: '/api/planned-executions/{id}/run',
+        summary: 'Run now: fire the execution immediately (even while disabled or paused) and wait for the run.',
+        response: '{ record: RunRecord } with status, output preview, and token usage.',
+      },
+      {
+        method: 'GET',
+        path: '/api/planned-executions/{id}/runs',
+        summary: 'The execution’s run history (newest 100 runs, oldest first).',
+      },
+      {
+        method: 'POST',
+        path: '/api/planned-executions/preview-schedule',
+        summary: 'Validate a cron pattern and preview its next fire times (editor helper).',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'cron', type: 'string', required: true, description: 'Cron pattern (5 or 6 fields).' },
+          { name: 'timezone', type: 'string', description: 'IANA timezone name.' },
+        ],
+        response: '{ valid, error?, nextRuns: string[] }.',
+      },
+      {
+        method: 'POST',
+        path: '/api/webhooks/{id}',
+        summary:
+          'Inbound webhook trigger. Fires the planned execution with the request body as trigger context and responds 202 { runId } immediately (the flow runs in the background). For a synchronous answer use /v1/chat/completions instead.',
+        paramsLabel: 'Query',
+        params: [
+          {
+            name: 'token',
+            type: 'string',
+            required: true,
+            description: 'Per-execution secret (alternatively send the X-Flujo-Token header).',
+          },
+        ],
+        notes: [
+          'Localhost-only by default; external callers must be explicitly allowed per execution.',
+          'The webhook body is untrusted input to the flow — prompts should treat it as data.',
+        ],
+      },
+    ],
+  },
+  {
     id: 'mcp',
     name: 'MCP Servers',
     description: 'Manage MCP server configurations, connection state, tool discovery, and tool invocation.',
@@ -408,6 +472,16 @@ export const API_GROUPS: ApiGroup[] = [
     endpoints: [
       { method: 'GET', path: '/api/init', summary: 'Server-side initialization: verify storage and start enabled MCP servers.' },
       { method: 'GET', path: '/api/cwd', summary: 'Return the current working directory and the mcp-servers directory path.' },
+      {
+        method: 'GET',
+        path: '/api/browse',
+        summary:
+          'List a directory of the machine running FLUJO, for the folder-picker dialogs (file-watch triggers, MCP server paths). Defaults to the home directory; includes available drives on Windows.',
+        paramsLabel: 'Query',
+        params: [{ name: 'path', type: 'string', description: 'Absolute directory path to list.' }],
+        response: '{ path, parent, home, sep, drives, entries: [{ name, path, isDirectory }] }',
+        notes: ['Exposes backend filesystem listings — like the rest of the API it assumes a single trusted user.'],
+      },
       {
         method: 'POST',
         path: '/api/git',

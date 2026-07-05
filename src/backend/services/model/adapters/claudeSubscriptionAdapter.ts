@@ -328,7 +328,26 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     let resultText = '';
     let accumulatedText = '';
-    let usage: { input_tokens?: number; output_tokens?: number } | undefined;
+    // Token accounting. The SDK's terminal `result` message carries the run's
+    // usage, but a handoff ABORTS the loop before that message arrives — so we
+    // also track per-turn usage from each assistant message as a fallback
+    // (otherwise every run that ends by routing to another node reports 0
+    // tokens). Prompt tokens include the cache read/creation tokens: they ARE
+    // context the model consumed, and without them a warmed-cache turn reports
+    // an absurd input_tokens of ~2.
+    interface SdkUsage {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    }
+    const promptTokensOf = (u: SdkUsage | undefined) =>
+      (u?.input_tokens ?? 0) +
+      (u?.cache_creation_input_tokens ?? 0) +
+      (u?.cache_read_input_tokens ?? 0);
+    let usage: SdkUsage | undefined;
+    let lastTurnUsage: SdkUsage | undefined;
+    let totalOutputTokens = 0;
 
     try {
       for await (const message of response) {
@@ -342,14 +361,19 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           break;
         }
         if (message.type === 'assistant') {
-          const content = (message as { message?: { content?: unknown } }).message?.content;
+          const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
+          const content = assistant?.content;
           if (Array.isArray(content)) {
             for (const block of content) {
               if (block?.type === 'text' && typeof block.text === 'string') accumulatedText += block.text;
             }
           }
+          if (assistant?.usage) {
+            lastTurnUsage = assistant.usage;
+            totalOutputTokens += assistant.usage.output_tokens ?? 0;
+          }
         } else if (message.type === 'result') {
-          usage = (message as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+          usage = (message as { usage?: SdkUsage }).usage;
           if (message.subtype === 'success') {
             resultText = (message as { result?: string }).result ?? '';
           } else if (!handoffCall) {
@@ -365,8 +389,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
 
     const finalText = resultText || accumulatedText;
-    const promptTokens = usage?.input_tokens ?? 0;
-    const completionTokens = usage?.output_tokens ?? 0;
+    // Prefer the result message's totals; on handoff-aborted runs fall back to
+    // the last turn's context size + the summed output of all turns.
+    const promptTokens = usage ? promptTokensOf(usage) : promptTokensOf(lastTurnUsage);
+    const completionTokens = usage?.output_tokens ?? totalOutputTokens;
 
     // The per-tool assistant(tool_call)+tool(result) pairs were already recorded
     // and streamed live as they happened (see recordToolPair). Here we only add

@@ -1,10 +1,12 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Box, Typography, TextField, IconButton, Button, Stack, Tooltip } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import FolderIcon from '@mui/icons-material/Folder';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
 
 interface RootsManagerProps {
   roots: string[];
@@ -19,6 +21,8 @@ interface RootsManagerProps {
  */
 const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
   const list = Array.isArray(roots) ? roots : [];
+  // Which row's backend folder picker is open (null = closed).
+  const [pickIndex, setPickIndex] = useState<number | null>(null);
 
   const update = (index: number, value: string) => {
     onChange(list.map((r, i) => (i === index ? value : r)));
@@ -48,6 +52,11 @@ const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
               value={root}
               onChange={(e) => update(index, e.target.value)}
             />
+            <Tooltip title="Browse folders (on the FLUJO machine)">
+              <IconButton size="small" onClick={() => setPickIndex(index)} aria-label="browse for folder">
+                <FolderOpenIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="Remove">
               <IconButton size="small" onClick={() => remove(index)} aria-label="remove workspace folder">
                 <DeleteIcon fontSize="small" />
@@ -60,6 +69,18 @@ const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
       <Button size="small" startIcon={<AddIcon />} onClick={add} sx={{ mt: 1 }}>
         Add folder
       </Button>
+
+      <FolderPickerDialog
+        open={pickIndex !== null}
+        title="Choose a workspace folder"
+        initialPath={pickIndex !== null ? list[pickIndex] || undefined : undefined}
+        onClose={() => setPickIndex(null)}
+        onSelect={(path) => {
+          if (pickIndex !== null) {
+            update(pickIndex, path);
+          }
+        }}
+      />
     </Box>
   );
 };
