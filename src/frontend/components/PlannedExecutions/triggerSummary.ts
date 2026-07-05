@@ -32,7 +32,9 @@ const two = (n: number) => String(n).padStart(2, '0');
  * language. Anything else returns null (shown as the raw pattern).
  */
 export function matchCronPreset(cron: string): string | null {
-  let m = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
+  let m = /^\*\/(\d+) \* \* \* \* \*$/.exec(cron);
+  if (m) return `Every ${m[1]}s`;
+  m = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
   if (m) return `Every ${m[1]} min`;
   m = /^0 \*\/(\d+) \* \* \*$/.exec(cron);
   if (m) return Number(m[1]) === 1 ? 'Every hour' : `Every ${m[1]} hours`;

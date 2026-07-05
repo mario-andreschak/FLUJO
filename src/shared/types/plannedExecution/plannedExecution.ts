@@ -71,8 +71,15 @@ export interface McpPollTriggerConfig {
   serverName: string;
   toolName: string;
   args: Record<string, unknown>;
-  /** Poll interval in ms. Enforced minimum: 30 000. */
-  intervalMs: number;
+  /**
+   * When to check, as a cron pattern (croner; 6-field form for seconds).
+   * Always set on save; may be absent on configs saved before the cron
+   * switch — those derive it from the legacy intervalMs at arm time.
+   */
+  cron?: string;
+  timezone?: string;
+  /** LEGACY (pre-cron): poll interval in ms. Superseded by `cron`. */
+  intervalMs?: number;
   evaluate: McpPollEvaluate;
 }
 

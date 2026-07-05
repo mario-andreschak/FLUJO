@@ -13,7 +13,8 @@ import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './triggers/types';
 import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
-import { armMcpPoll, MIN_POLL_INTERVAL_MS } from './triggers/mcpPoll';
+import { armMcpPoll } from './triggers/mcpPoll';
+import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
@@ -363,15 +364,15 @@ export class SchedulerService {
   }
 
   /**
-   * Fill/clamp server-side trigger fields: an empty webhook token generates
-   * one; poll intervals are floored to the minimum.
+   * Fill server-side trigger fields: an empty webhook token generates one;
+   * legacy interval-based poll configs gain an equivalent cron on save.
    */
   private normalizeTrigger(trigger: PlannedExecution['trigger']): PlannedExecution['trigger'] {
     if (trigger?.type === 'webhook' && !trigger.token) {
       return { ...trigger, token: uuidv4() };
     }
-    if (trigger?.type === 'mcp-poll') {
-      return { ...trigger, intervalMs: Math.max(trigger.intervalMs || 0, MIN_POLL_INTERVAL_MS) };
+    if (trigger?.type === 'mcp-poll' && !trigger.cron) {
+      return { ...trigger, cron: intervalMsToCron(trigger.intervalMs) };
     }
     return trigger;
   }
@@ -407,9 +408,15 @@ export class SchedulerService {
           return 'At least one file event is required';
         }
         return null;
-      case 'mcp-poll':
+      case 'mcp-poll': {
         if (!trigger.serverName || !trigger.toolName) {
           return 'A server and tool are required';
+        }
+        if (trigger.cron) {
+          const result = validateSchedule(trigger.cron, trigger.timezone);
+          if (!result.valid) {
+            return `Invalid schedule: ${result.error}`;
+          }
         }
         if (trigger.evaluate?.mode === 'new-items' && !trigger.evaluate.idField?.trim()) {
           return 'An id field is required to detect new items';
@@ -427,6 +434,7 @@ export class SchedulerService {
           return 'A flow is required to check the condition';
         }
         return null;
+      }
       case 'url-watch': {
         try {
           const parsed = new URL(trigger.url ?? '');

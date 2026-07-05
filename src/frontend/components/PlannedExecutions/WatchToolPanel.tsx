@@ -23,7 +23,9 @@ import { modelService } from '@/frontend/services/model';
 import { flowService } from '@/frontend/services/flow';
 import { createLogger } from '@/utils/logger';
 import OptionCard from './OptionCard';
+import SchedulePanel from './SchedulePanel';
 import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
+import { intervalMsToCron } from '@/utils/shared/cron';
 
 const log = createLogger('frontend/components/PlannedExecutions/WatchToolPanel');
 
@@ -155,7 +157,6 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
   };
 
   const evaluate = config.evaluate;
-  const intervalSeconds = Math.round((config.intervalMs || 60000) / 1000);
   const selectedTool = tools.find(t => t.name === config.toolName);
 
   return (
@@ -198,19 +199,17 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
           </Select>
         </FormControl>
 
-        <TextField
-          label="Check every (seconds)"
-          type="number"
-          margin="normal"
-          value={intervalSeconds}
-          onChange={(e) =>
-            onChange({ ...config, intervalMs: Math.max(5, Number(e.target.value) || 5) * 1000 })
-          }
-          inputProps={{ min: 5, step: 5 }}
-          helperText="Minimum 5s"
-          sx={{ width: 180 }}
-        />
       </Box>
+
+      <Typography variant="subtitle2" sx={{ mt: 1 }}>
+        How often to check
+      </Typography>
+      <SchedulePanel
+        verb="Check"
+        cron={config.cron ?? intervalMsToCron(config.intervalMs)}
+        timezone={config.timezone}
+        onChange={({ cron, timezone }) => onChange({ ...config, cron, timezone })}
+      />
 
       {selectedTool ? (
         <Box sx={{ my: 1.5 }}>

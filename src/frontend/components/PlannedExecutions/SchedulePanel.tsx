@@ -19,7 +19,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
 
-type PresetMode = 'minutes' | 'hours' | 'daily' | 'weekdays' | 'custom';
+type PresetMode = 'seconds' | 'minutes' | 'hours' | 'daily' | 'weekdays' | 'custom';
 
 /**
  * Non-technician cron editor: presets that generate a cron pattern, with the
@@ -33,7 +33,9 @@ const two = (n: number) => String(n).padStart(2, '0');
 
 /** Recognize the patterns the presets generate, to re-open saved configs. */
 function presetFromCron(cron: string): { mode: PresetMode; n: number; time: string } {
-  let m = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
+  let m = /^\*\/(\d+) \* \* \* \* \*$/.exec(cron);
+  if (m) return { mode: 'seconds', n: Number(m[1]), time: '09:00' };
+  m = /^\*\/(\d+) \* \* \* \*$/.exec(cron);
   if (m) return { mode: 'minutes', n: Number(m[1]), time: '09:00' };
   m = /^0 \*\/(\d+) \* \* \*$/.exec(cron);
   if (m) return { mode: 'hours', n: Number(m[1]), time: '09:00' };
@@ -47,6 +49,8 @@ function presetFromCron(cron: string): { mode: PresetMode; n: number; time: stri
 function cronFromPreset(mode: PresetMode, n: number, time: string, custom: string): string {
   const [hh, mm] = time.split(':').map(Number);
   switch (mode) {
+    case 'seconds':
+      return `*/${Math.max(1, Math.min(59, Math.floor(n) || 1))} * * * * *`;
     case 'minutes':
       return `*/${Math.max(1, Math.min(59, Math.floor(n) || 1))} * * * *`;
     case 'hours':
@@ -123,6 +127,7 @@ const SchedulePanel = ({
             value={mode}
             onChange={(e) => setMode(e.target.value as PresetMode)}
           >
+            <MenuItem value="seconds">Every N seconds</MenuItem>
             <MenuItem value="minutes">Every N minutes</MenuItem>
             <MenuItem value="hours">Every N hours</MenuItem>
             <MenuItem value="daily">Daily at a time</MenuItem>
@@ -131,13 +136,13 @@ const SchedulePanel = ({
           </Select>
         </FormControl>
 
-        {(mode === 'minutes' || mode === 'hours') && (
+        {(mode === 'seconds' || mode === 'minutes' || mode === 'hours') && (
           <TextField
-            label={mode === 'minutes' ? 'Minutes' : 'Hours'}
+            label={mode === 'seconds' ? 'Seconds' : mode === 'minutes' ? 'Minutes' : 'Hours'}
             type="number"
             value={n}
             onChange={(e) => setN(Number(e.target.value))}
-            inputProps={{ min: 1, max: mode === 'minutes' ? 59 : 23 }}
+            inputProps={{ min: 1, max: mode === 'hours' ? 23 : 59 }}
             sx={{ width: 120 }}
           />
         )}

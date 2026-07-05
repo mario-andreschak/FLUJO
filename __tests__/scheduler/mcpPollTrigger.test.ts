@@ -11,11 +11,7 @@ import {
   evaluateOnChange,
   evaluateNewItems,
 } from '@/backend/services/scheduler/triggers/pollEvaluators';
-import {
-  armMcpPoll,
-  MIN_POLL_INTERVAL_MS,
-  McpPollDeps,
-} from '@/backend/services/scheduler/triggers/mcpPoll';
+import { armMcpPoll, McpPollDeps } from '@/backend/services/scheduler/triggers/mcpPoll';
 import type { PlannedExecutionState } from '@/shared/types/plannedExecution';
 
 describe('stableStringify / hashResult', () => {
@@ -110,15 +106,34 @@ describe('evaluateNewItems', () => {
   });
 });
 
+describe('intervalMsToCron (legacy migration)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { intervalMsToCron } = require('@/utils/shared/cron');
+  it.each([
+    [5_000, '*/5 * * * * *'],
+    [10_000, '*/10 * * * * *'],
+    [60_000, '*/1 * * * *'],
+    [5 * 60_000, '*/5 * * * *'],
+    [2 * 60 * 60_000, '0 */2 * * *'],
+    [undefined, '*/1 * * * *'], // no legacy value → every minute
+    [0, '*/5 * * * * *'], // garbage → 5s floor
+  ])('%s ms → %s', (ms, expected) => {
+    expect(intervalMsToCron(ms as number | undefined)).toBe(expected);
+  });
+});
+
 describe('armMcpPoll', () => {
-  const config = (intervalMs = MIN_POLL_INTERVAL_MS) => ({
+  // 6-field croner pattern: check every second (fast under fake timers).
+  const config = (overrides: Record<string, unknown> = {}) => ({
     type: 'mcp-poll' as const,
     serverName: 'srv',
     toolName: 'tool',
     args: {},
-    intervalMs,
+    cron: '* * * * * *',
     evaluate: { mode: 'on-change' as const },
+    ...overrides,
   });
+  const TICK_MS = 1100;
 
   const makeDeps = () => {
     let state: PlannedExecutionState = {};
@@ -152,13 +167,13 @@ describe('armMcpPoll', () => {
     expect(deps.onFire).not.toHaveBeenCalled();
 
     // Same result: quiet.
-    jest.advanceTimersByTime(MIN_POLL_INTERVAL_MS);
+    jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.onFire).not.toHaveBeenCalled();
 
     // Changed result: fire with context.
     (deps.callTool as jest.Mock).mockResolvedValue({ success: true, data: { v: 2 } });
-    jest.advanceTimersByTime(MIN_POLL_INTERVAL_MS);
+    jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.onFire).toHaveBeenCalledTimes(1);
     const payload = (deps.onFire as jest.Mock).mock.calls[0][0];
@@ -168,15 +183,26 @@ describe('armMcpPoll', () => {
     trigger.dispose();
   });
 
-  it('clamps the interval to the minimum', async () => {
+  it('derives a cron from a legacy intervalMs config and exposes nextRun', async () => {
+    // "*/10" fires at wall-clock seconds divisible by 10 — align the clock so
+    // the advances below are deterministic.
+    jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     const { deps } = makeDeps();
-    const trigger = armMcpPoll(config(1000), deps);
+    // Pre-cron config shape: intervalMs only. 10s → "*/10 * * * * *".
+    const trigger = armMcpPoll(config({ cron: undefined, intervalMs: 10_000 }), deps);
+    await flush();
+    expect(deps.callTool).toHaveBeenCalledTimes(1); // priming tick
+
+    expect(trigger.nextRun && trigger.nextRun()).toBeTruthy();
+
+    // No tick before the derived 10s cadence…
+    jest.advanceTimersByTime(9_000);
     await flush();
     expect(deps.callTool).toHaveBeenCalledTimes(1);
-    // Under the floor nothing else may run.
-    jest.advanceTimersByTime(MIN_POLL_INTERVAL_MS - 1000);
+    // …and one after it.
+    jest.advanceTimersByTime(2_000);
     await flush();
-    expect(deps.callTool).toHaveBeenCalledTimes(1);
+    expect(deps.callTool).toHaveBeenCalledTimes(2);
     trigger.dispose();
   });
 
@@ -187,12 +213,12 @@ describe('armMcpPoll', () => {
     await flush();
     expect(deps.onError).toHaveBeenCalledWith('server down');
 
-    // Failure #1 → skip 1 interval: the next tick does NOT call the tool.
-    jest.advanceTimersByTime(MIN_POLL_INTERVAL_MS);
+    // Failure #1 → skip 1 check: the next tick does NOT call the tool.
+    jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.callTool).toHaveBeenCalledTimes(1);
     // The tick after that polls again.
-    jest.advanceTimersByTime(MIN_POLL_INTERVAL_MS);
+    jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.callTool).toHaveBeenCalledTimes(2);
 
@@ -209,9 +235,11 @@ describe('armMcpPoll', () => {
     expect(deps.onError).toHaveBeenCalledWith('Not connected');
     expect(deps.onSuccess).not.toHaveBeenCalled();
 
-    // Failure #1 skips one interval; the tick after that succeeds (primes)
+    // Failure #1 skips one check; the tick after that succeeds (primes)
     // and must report success so the stale error is cleared from the card.
-    jest.advanceTimersByTime(2 * MIN_POLL_INTERVAL_MS);
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.onSuccess).toHaveBeenCalled();
     expect(deps.onFire).not.toHaveBeenCalled();
@@ -223,7 +251,7 @@ describe('armMcpPoll', () => {
     const trigger = armMcpPoll(config(), deps);
     await flush();
     trigger.dispose();
-    jest.advanceTimersByTime(5 * MIN_POLL_INTERVAL_MS);
+    jest.advanceTimersByTime(5 * TICK_MS);
     await flush();
     expect(deps.callTool).toHaveBeenCalledTimes(1);
   });

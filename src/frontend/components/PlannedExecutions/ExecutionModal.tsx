@@ -68,7 +68,7 @@ const DEFAULT_MCP_POLL: McpPollTriggerConfig = {
   serverName: '',
   toolName: '',
   args: {},
-  intervalMs: 5 * 60 * 1000,
+  cron: '*/5 * * * *',
   evaluate: { mode: 'on-change' },
 };
 const DEFAULT_URL_WATCH: UrlWatchTriggerConfig = {
@@ -207,36 +207,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           placeholder="e.g. Morning news digest"
         />
 
-        <FormControl fullWidth margin="normal">
-          <InputLabel id="execution-flow-label">Flow to run</InputLabel>
-          <Select
-            labelId="execution-flow-label"
-            label="Flow to run"
-            value={selectedMissing ? '' : flowId}
-            onChange={(e) => setFlowId(e.target.value)}
-            displayEmpty
-          >
-            {flows.length === 0 && (
-              <MenuItem value="" disabled>
-                {loadingFlows ? 'Loading flows…' : 'No flows available'}
-              </MenuItem>
-            )}
-            {flows.map((f) => (
-              <MenuItem key={f.id} value={f.id}>
-                {f.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-
-        {selectedMissing && (
-          <Alert severity="warning" sx={{ mt: 1 }}>
-            The previously selected flow no longer exists. Please choose another.
-          </Alert>
-        )}
-
-        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          When should it run?
+        <Typography variant="subtitle1" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>
+          1 · When should it run?
         </Typography>
         <Box role="radiogroup" aria-label="Trigger type" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <OptionCard
@@ -331,6 +303,39 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         )}
         {trigger.type === 'url-watch' && (
           <UrlWatchPanel config={trigger} onChange={setTrigger} />
+        )}
+
+        <Divider sx={{ mt: 3 }} />
+        <Typography variant="subtitle1" sx={{ mt: 2, mb: 0, fontWeight: 600 }}>
+          2 · What should it run?
+        </Typography>
+
+        <FormControl fullWidth margin="normal">
+          <InputLabel id="execution-flow-label">Flow to run</InputLabel>
+          <Select
+            labelId="execution-flow-label"
+            label="Flow to run"
+            value={selectedMissing ? '' : flowId}
+            onChange={(e) => setFlowId(e.target.value)}
+            displayEmpty
+          >
+            {flows.length === 0 && (
+              <MenuItem value="" disabled>
+                {loadingFlows ? 'Loading flows…' : 'No flows available'}
+              </MenuItem>
+            )}
+            {flows.map((f) => (
+              <MenuItem key={f.id} value={f.id}>
+                {f.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        {selectedMissing && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            The previously selected flow no longer exists. Please choose another.
+          </Alert>
         )}
 
         <TextField

@@ -1,19 +1,16 @@
+import { Cron } from 'croner';
 import {
   McpPollTriggerConfig,
   PlannedExecutionState,
 } from '@/shared/types/plannedExecution';
+import { intervalMsToCron } from '@/utils/shared/cron';
 import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './types';
 import { evaluateNewItems, evaluateOnChange, PollEvaluation } from './pollEvaluators';
 
 const log = createLogger('backend/services/scheduler/triggers/mcpPoll');
 
-/**
- * Floor for the poll interval. Deliberately low — how hard to poll their own
- * machine is the user's call; this only guards against a zero/garbage value.
- */
-export const MIN_POLL_INTERVAL_MS = 5_000;
-/** Cap the error backoff at skipping this many intervals. */
+/** Cap the error backoff at skipping this many checks. */
 const MAX_BACKOFF_SKIPS = 8;
 
 /**
@@ -46,14 +43,16 @@ export interface McpPollDeps {
 }
 
 /**
- * Arm an MCP polling trigger: every interval, call the configured tool and
- * evaluate the result (on-change hash / new-items dedup / llm-gate). The
- * first successful poll primes the baseline without firing. Failed polls back
- * off exponentially (skip 1, 2, 4 … up to 8 intervals) and surface as a
- * trigger error without producing run records.
+ * Arm an MCP polling trigger: on a cron schedule, call the configured tool
+ * and evaluate the result (on-change hash / new-items dedup / AI gate). The
+ * first successful poll primes the baseline without firing; an immediate
+ * check runs at arm time. Failed polls back off exponentially (skip 1, 2, 4 …
+ * up to 8 checks) and surface as trigger errors without producing run
+ * records. Configs saved before the cron switch derive a pattern from their
+ * legacy intervalMs.
  */
 export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): ArmedTrigger {
-  const intervalMs = Math.max(config.intervalMs || 0, MIN_POLL_INTERVAL_MS);
+  const cron = config.cron || intervalMsToCron(config.intervalMs);
   let busy = false;
   let disposed = false;
   let consecutiveFailures = 0;
@@ -119,7 +118,7 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
       skipsRemaining = Math.min(2 ** (consecutiveFailures - 1), MAX_BACKOFF_SKIPS);
       const message = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Poll failed for ${config.serverName}/${config.toolName} (backing off ${skipsRemaining} interval(s)): ${message}`
+        `Poll failed for ${config.serverName}/${config.toolName} (backing off ${skipsRemaining} check(s)): ${message}`
       );
       deps.onError(message);
     } finally {
@@ -127,15 +126,15 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
     }
   };
 
-  const timer = setInterval(() => void tick(), intervalMs);
-  timer.unref?.();
-  // Prime immediately so a fresh trigger has its baseline before the first interval.
+  const job = new Cron(cron, { timezone: config.timezone, unref: true }, () => void tick());
+  // Prime immediately so a fresh trigger has its baseline before the first tick.
   void tick();
 
   return {
     dispose: () => {
       disposed = true;
-      clearInterval(timer);
+      job.stop();
     },
+    nextRun: () => job.nextRun()?.toISOString() ?? null,
   };
 }
