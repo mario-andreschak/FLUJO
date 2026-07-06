@@ -13,6 +13,7 @@ import { decodeToolName } from './toolNamespace';
 import { stripHandoffPlumbing } from '../buildNodeContext';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import { resolveEffectiveMaxTurns } from './maxTurns';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
@@ -137,21 +138,29 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, tools, nodeName, nodeId, toolNameMap, maxIterations, conversationId, requireToolApproval } = input; // Added nodeId
+    const { modelId, prompt, messages, tools, nodeName, nodeId, toolNameMap, maxTurns, conversationId, requireToolApproval } = input; // Added nodeId
 
-    // Fetch model information for display name
+    // Fetch model information for display name (and the model's own maxTurns cap)
     let modelDisplayName = '';
     let modelTechnicalName = '';
+    let modelMaxTurns: number | undefined;
     const nodeDisplayName = nodeName;
     try {
       const model = await modelService.getModel(modelId);
       if (model) {
         modelDisplayName = model.displayName || model.name;
         modelTechnicalName = model.name;
+        modelMaxTurns = model.maxTurns;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    // Resolve the effective agentic-turn cap. Precedence: per-node override →
+    // bound-model setting → system default (50). This replaces the former
+    // hard-coded 30 that ProcessNode passed straight through as maxTurns and
+    // caused long agentic runs (Claude subscription) to abort mid-execution (#48).
+    const effectiveMaxTurns = resolveEffectiveMaxTurns(maxTurns, modelMaxTurns);
 
     log.info(`callModel - Single execution`, {
       modelId,
@@ -209,7 +218,7 @@ export class ModelHandler {
     // Call generateCompletion ONCE
     const response = await this.generateCompletion(modelId, prompt, messages, tools, {
       toolNameMap,
-      maxTurns: maxIterations,
+      maxTurns: effectiveMaxTurns,
       requestToolApproval,
       onTranscriptMessage,
     });

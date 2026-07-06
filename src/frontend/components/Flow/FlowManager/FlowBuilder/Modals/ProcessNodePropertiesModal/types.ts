@@ -39,4 +39,5 @@ export interface PropertyDefinition {
     max?: number;
     step?: number;
     options?: string[];
+    helperText?: string;
 }

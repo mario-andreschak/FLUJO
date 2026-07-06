@@ -14,6 +14,13 @@ export interface ModelCallInput {
   tools?: OpenAI.ChatCompletionTool[];
   iteration: number;
   maxIterations: number;
+  /**
+   * Optional per-node override of the agentic-turn cap for self-orchestrating
+   * adapters (Claude subscription). When set (> 0) it wins; otherwise callModel
+   * resolves the bound model's `maxTurns`, then DEFAULT_AGENTIC_MAX_TURNS (50).
+   * This is the authoritative cap that replaced the former hard-coded 30.
+   */
+  maxTurns?: number;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
   /**

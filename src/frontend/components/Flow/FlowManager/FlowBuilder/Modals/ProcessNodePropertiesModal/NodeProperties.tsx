@@ -28,6 +28,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
             value={value}
             onChange={(e) => handlePropertyChange(property.key, e.target.value)}
             margin="normal"
+            helperText={property.helperText}
           />
         );
       case 'number':
@@ -43,8 +44,14 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
               max: property.max,
               step: property.step,
             }}
-            onChange={(e) => handlePropertyChange(property.key, Number(e.target.value))}
+            onChange={(e) => {
+              // Empty input clears the property (undefined) so it can mean
+              // "inherit / unset" rather than 0; otherwise store the number.
+              const raw = e.target.value;
+              handlePropertyChange(property.key, raw === '' ? undefined : Number(raw));
+            }}
             margin="normal"
+            helperText={property.helperText}
           />
         );
       case 'select':

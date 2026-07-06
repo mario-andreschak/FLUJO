@@ -1,5 +1,13 @@
 import { ModelProvider, ModelAdapter } from './provider';
 
+/**
+ * System default upper bound on agentic turns for self-orchestrating adapters
+ * (e.g. the Claude subscription / Agent SDK path). Used when neither the Process
+ * node nor the bound model specifies a Max Turns value. Chosen higher than the
+ * old hard-coded cap of 30 so existing flows never get a tighter limit.
+ */
+export const DEFAULT_AGENTIC_MAX_TURNS = 50;
+
 export interface Model {
     id: string;
     name: string;
@@ -26,4 +34,10 @@ export interface Model {
      * prompt tokens vs. this limit).
      */
     contextWindow?: number;
+    /**
+     * Upper bound on agentic turns for self-orchestrating adapters (e.g. the
+     * Claude subscription / Agent SDK path). A Process node can override this
+     * per-node. Unset = the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
+     */
+    maxTurns?: number;
   }

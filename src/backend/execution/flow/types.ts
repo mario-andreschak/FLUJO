@@ -51,6 +51,12 @@ export interface ProcessNodeProperties {
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
+    /**
+     * Per-node override of the bound model's Max Turns cap (agentic turns for
+     * self-orchestrating adapters). Unset/0 = inherit the model setting, then
+     * the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
+     */
+    maxTurns?: number;
 }
 
 // FinishNode specific properties

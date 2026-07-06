@@ -287,6 +287,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         promptTemplate: formState.promptTemplate,
         temperature: formState.temperature,
         contextWindow: formState.contextWindow,
+        maxTurns: formState.maxTurns,
       } as Model);
 
       if (result.success) {
@@ -542,6 +543,24 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     }));
                   }}
                   helperText="Optional. Enables the context-usage meter in chat (e.g. 200000 for Claude, 128000 for GPT-4o)."
+                />
+
+                <TextField
+                  margin="dense"
+                  label="Max Turns"
+                  fullWidth
+                  type="number"
+                  value={formState.maxTurns ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const parsed = raw === '' ? undefined : Number(raw);
+                    setFormState(prev => ({
+                      ...prev,
+                      maxTurns: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
+                    }));
+                  }}
+                  inputProps={{ min: 1 }}
+                  helperText="Max agentic turns before a run stops (default 50). Process nodes can override this per-node."
                 />
               </Box>
             </Grid>

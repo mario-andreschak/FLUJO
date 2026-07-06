@@ -1,8 +1,17 @@
 import { Edge } from '@xyflow/react';
 import { PropertyDefinition } from './types';
 
-// No properties since we removed operation and enabled
-export const getNodeProperties = (): PropertyDefinition[] => [];
+// Editable per-node properties surfaced in the Process node modal.
+export const getNodeProperties = (): PropertyDefinition[] => [
+  {
+    key: 'maxTurns',
+    label: 'Max Turns (override)',
+    type: 'number',
+    min: 1,
+    helperText:
+      'Optional. Overrides the bound model\'s Max Turns for this node. Leave empty to inherit the model setting (default 50).',
+  },
+];
 
 // Find MCP nodes connected to this Process node (unique ids — there may be
 // multiple edges between the same nodes)

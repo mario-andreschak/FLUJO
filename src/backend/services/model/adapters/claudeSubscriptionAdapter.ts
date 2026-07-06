@@ -12,11 +12,15 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
+import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
 
-// Bound the agentic loop when the node doesn't specify its own iteration cap.
-const DEFAULT_MAX_TURNS = 10;
+// Bound the agentic loop when the caller doesn't specify a cap. Aligned with the
+// system default so behaviour is consistent whether or not maxTurns is threaded.
+// In practice ModelHandler always resolves and passes a positive maxTurns, so
+// this fallback is only a safety net.
+const DEFAULT_MAX_TURNS = DEFAULT_AGENTIC_MAX_TURNS;
 
 // Name of the in-process MCP server we expose FLUJO's tools through. The Agent
 // SDK prefixes the model-facing tool names as `mcp__<server>__<tool>`.

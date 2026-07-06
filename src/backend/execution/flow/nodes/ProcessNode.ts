@@ -310,7 +310,11 @@ export class ProcessNode extends BaseNode {
         messages: prepResult.messages,
         tools,
         iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
-        maxIterations: 30, // Also the agentic-turn cap for self-orchestrating adapters (Claude subscription)
+        maxIterations: 1, // Vestigial: the agentic-turn cap is now resolved from maxTurns (see below)
+        // Per-node override of the agentic-turn cap. ModelHandler merges this with
+        // the bound model's maxTurns setting and the system default (50), replacing
+        // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
+        maxTurns: node_params?.properties?.maxTurns,
           nodeName, // Pass the node name to be included in the response header
           nodeId: prepResult.nodeId, // Pass the node ID
           toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
