@@ -10,6 +10,7 @@ import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { ExecutionEvent } from '@/shared/types/execution/events';
+import { modelService } from '@/backend/services/model';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -177,6 +178,24 @@ export async function processChatCompletion(
   continueDebug: boolean = false,
   userTurn: boolean = false
 ) {
+  // --- Direct model completions (`model-<identifier>`) ---
+  // Issue #53: `/v1/chat/completions` differentiates `flow-` vs `model-`
+  // requests. `model-` routes to a single-turn ModelService completion (no
+  // flow, no conversation persistence, no MCP tool loop). Everything else
+  // (`flow-` or legacy/unprefixed ids) keeps the existing flow path unchanged.
+  if (typeof data.model === 'string' && data.model.startsWith('model-')) {
+    // Flow-only flags are meaningless here; ignore them (but note it).
+    if (flujo || requireApproval || flujodebug || conversationId) {
+      log.debug('Ignoring flow-only flags on a direct model completion', {
+        flujo,
+        requireApproval,
+        flujodebug,
+        conversationId,
+      });
+    }
+    return processDirectModelCompletion(data);
+  }
+
   // Handle streaming requests differently
   if (data.stream === true) {
     // Generate a conversation ID if not provided
@@ -220,6 +239,119 @@ export async function processChatCompletion(
     // Non-streaming path - use the internal function directly
     return processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
   }
+}
+
+// --- Direct model completions (Issue #53) ---
+//
+// Single-turn pass-through to a configured FLUJO model via
+// ModelService.generateChatCompletion. No flow, no conversation persistence,
+// no MCP tool loop: one request → one provider call → one OpenAI-shaped
+// response. Tools supplied by the client are forwarded per standard OpenAI
+// semantics (the client executes its own tools).
+async function processDirectModelCompletion(data: ChatCompletionRequest) {
+  const identifier = data.model.slice('model-'.length);
+  log.info('Processing direct model completion', {
+    model: data.model,
+    messageCount: data.messages?.length || 0,
+    stream: data.stream,
+    hasTools: Boolean(data.tools && data.tools.length > 0),
+  });
+
+  const result = await modelService.generateChatCompletion({
+    modelIdentifier: identifier,
+    messages: data.messages,
+    temperature: data.temperature,
+    tools: data.tools,
+  });
+
+  if (!result.success) {
+    log.warn('Direct model completion failed', {
+      model: data.model,
+      code: result.error.code,
+      statusCode: result.statusCode,
+    });
+    return NextResponse.json(
+      {
+        error: {
+          message: result.error.message,
+          type: result.error.type,
+          code: result.error.code,
+          param: result.error.param ?? null,
+        },
+      },
+      { status: result.statusCode }
+    );
+  }
+
+  if (data.stream === true) {
+    return createDirectModelStreamingResponse(data.model, result.completion);
+  }
+
+  return NextResponse.json(result.completion);
+}
+
+// Emulate SSE streaming for a completion that already arrived in full — the
+// same emulation the flow path uses for complete assistant messages: role
+// chunk → one content chunk (+ tool_calls deltas if present) → empty-delta
+// finish chunk → [DONE]. Deliberately NOT createStreamingResponse: that helper
+// is coupled to FlowExecutor.conversationStates / the execution event bus,
+// which this path bypasses entirely.
+function createDirectModelStreamingResponse(
+  model: string,
+  completion: OpenAI.Chat.Completions.ChatCompletion
+) {
+  const encoder = new TextEncoder();
+  const chunkId = completion.id || `chatcmpl-${Date.now()}`;
+  const createdTimestamp = completion.created || Math.floor(Date.now() / 1000);
+  const choice = completion.choices?.[0];
+  const finishReason = choice?.finish_reason ?? 'stop';
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (obj: unknown) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+      const baseChunk = (delta: unknown, finish_reason: string | null) => ({
+        id: chunkId,
+        object: 'chat.completion.chunk',
+        created: createdTimestamp,
+        model,
+        choices: [{ index: 0, delta, finish_reason }],
+      });
+
+      // Initial chunk announcing the assistant role (OpenAI convention).
+      send(baseChunk({ role: 'assistant', content: '' }, null));
+
+      const content = typeof choice?.message?.content === 'string' ? choice.message.content : '';
+      if (content.length > 0) {
+        send(baseChunk({ content }, null));
+      }
+
+      const toolCalls = choice?.message?.tool_calls;
+      if (toolCalls && toolCalls.length > 0) {
+        // Delta-shaped tool calls: each carries its index within the array.
+        send(
+          baseChunk(
+            { tool_calls: toolCalls.map((tc, index) => ({ index, ...tc })) },
+            null
+          )
+        );
+      }
+
+      // Standard OpenAI empty-delta terminator chunk, then [DONE].
+      send(baseChunk({}, finishReason));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }
 
 // Create a streaming response using Server-Sent Events (SSE).

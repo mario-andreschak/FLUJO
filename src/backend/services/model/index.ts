@@ -1,3 +1,4 @@
+import OpenAI from 'openai';
 import { Model } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -27,6 +28,20 @@ import {
 import { modelCache, filterModels } from './cache';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
+import { getCompletionAdapter } from './adapters';
+
+/**
+ * Result of a direct (single-turn) chat completion through ModelService.
+ * On failure the error carries only sanitized, client-safe fields — the raw
+ * provider body (which can echo request headers) is never passed through.
+ */
+export type DirectCompletionResult =
+  | { success: true; completion: OpenAI.Chat.Completions.ChatCompletion }
+  | {
+      success: false;
+      error: { message: string; type: string; code: string; param?: string | null };
+      statusCode: number;
+    };
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/index');
@@ -500,6 +515,262 @@ class ModelService {
       // Native adapters need a Model-shaped object to run via getCompletionAdapter.
       model: storedModel ?? undefined,
     });
+  }
+
+  /**
+   * Single-turn chat completion for the OpenAI-compatible `/v1/chat/completions`
+   * endpoint (`model-<identifier>` requests). One request → one provider call →
+   * one OpenAI-shaped response.
+   *
+   * Explicitly NOT included (this is the flow layer's job, see ModelHandler):
+   * MCP tool execution loop, tool-approval gates, conversation persistence,
+   * event-bus emission, debugger.
+   *
+   * Identifier resolution: FLUJO enforces uniqueness on displayName only; the
+   * technical `name` may legitimately repeat across configured models. So the
+   * identifier is matched case-insensitively against displayName FIRST, and
+   * only when no display name matches, against the technical name. Zero
+   * matches → 404, more than one → 400 (ambiguous) rather than guessing.
+   *
+   * SECURITY: the decrypted API key stays inside this method (passed to the
+   * backend completion adapter only). It is never logged and never appears in
+   * any returned error message. Provider errors are reduced to sanitized
+   * message/type/code/param fields.
+   */
+  async generateChatCompletion(params: {
+    /** The identifier with the `model-` prefix already stripped. */
+    modelIdentifier: string;
+    messages: OpenAI.ChatCompletionMessageParam[];
+    temperature?: number;
+    /** Client-supplied tool definitions — passed through per standard OpenAI semantics. */
+    tools?: OpenAI.ChatCompletionTool[];
+  }): Promise<DirectCompletionResult> {
+    const { modelIdentifier, messages, tools } = params;
+    log.debug('generateChatCompletion: Entering method', {
+      modelIdentifier,
+      messageCount: messages?.length || 0,
+      hasTools: Boolean(tools && tools.length > 0),
+    });
+
+    try {
+      // --- Resolve the identifier to a configured model (displayName first) ---
+      const models = await this.loadModels();
+      const needle = modelIdentifier.trim().toLowerCase();
+
+      let candidates = models.filter(
+        m => (m.displayName?.trim().toLowerCase() || '') === needle
+      );
+      if (candidates.length === 0) {
+        candidates = models.filter(m => (m.name || '').trim().toLowerCase() === needle);
+      }
+
+      if (candidates.length === 0) {
+        return {
+          success: false,
+          error: {
+            message: `Model not found: model-${modelIdentifier}`,
+            type: 'invalid_request_error',
+            code: 'model_not_found',
+            param: 'model',
+          },
+          statusCode: 404,
+        };
+      }
+      if (candidates.length > 1) {
+        return {
+          success: false,
+          error: {
+            message:
+              `The identifier "${modelIdentifier}" matches more than one configured model. ` +
+              'Address the model by its unique display name instead.',
+            type: 'invalid_request_error',
+            code: 'model_ambiguous',
+            param: 'model',
+          },
+          statusCode: 400,
+        };
+      }
+      const model = candidates[0];
+
+      // The Claude-subscription adapter self-orchestrates an agentic loop when
+      // given tools, which diverges from standard OpenAI tool semantics (the
+      // CLIENT is supposed to execute its own tools). Reject rather than
+      // silently diverge.
+      if (model.adapter === 'claude-cli' && tools && tools.length > 0) {
+        return {
+          success: false,
+          error: {
+            message: 'Tool definitions are not supported for this model via the direct completion endpoint.',
+            type: 'invalid_request_error',
+            code: 'tools_not_supported_for_this_model',
+            param: 'tools',
+          },
+          statusCode: 400,
+        };
+      }
+
+      // --- Resolve + decrypt the API key (never logged, never returned) ---
+      const decryptedApiKey = await resolveAndDecryptApiKey(model.ApiKey);
+      if (!decryptedApiKey) {
+        return {
+          success: false,
+          error: {
+            message: 'Failed to resolve the API key for this model.',
+            type: 'api_error',
+            code: 'api_key_error',
+            param: null,
+          },
+          statusCode: 500,
+        };
+      }
+
+      const temperature =
+        typeof params.temperature === 'number'
+          ? params.temperature
+          : model.temperature
+            ? parseFloat(model.temperature)
+            : 0.0;
+
+      // --- Single provider call through the completion-adapter seam ---
+      const adapter = getCompletionAdapter(model);
+      log.debug('generateChatCompletion: calling completion adapter', {
+        adapter: model.adapter || 'openai',
+        model: model.name,
+        temperature,
+      });
+
+      const { completion } = await adapter.createCompletion({
+        model,
+        apiKey: decryptedApiKey,
+        messages,
+        tools: tools && tools.length > 0 ? tools : undefined,
+        temperature,
+        // Only relevant for self-orchestrating adapters: keep it single-turn.
+        maxTurns: 1,
+      });
+
+      // Some providers (e.g. OpenRouter) return HTTP 200 with an error object
+      // in the body instead of throwing. Sanitize before echoing to the client.
+      if (completion && typeof completion === 'object' && 'error' in completion && (completion as { error?: unknown }).error) {
+        const body = (completion as { error?: unknown }).error as Record<string, unknown>;
+        log.warn('generateChatCompletion: provider returned an in-band error object', {
+          code: body?.code,
+          type: body?.type,
+        });
+        return {
+          success: false,
+          error: ModelService.sanitizeProviderError(body),
+          statusCode: 502,
+        };
+      }
+
+      if (!completion?.choices?.[0]) {
+        return {
+          success: false,
+          error: {
+            message: 'Invalid response structure from provider: missing choices.',
+            type: 'api_error',
+            code: 'invalid_provider_response',
+            param: null,
+          },
+          statusCode: 502,
+        };
+      }
+
+      // Return the adapter's OpenAI-shaped completion unchanged, except the
+      // public model id so clients see the identifier they addressed.
+      return {
+        success: true,
+        completion: { ...completion, model: `model-${modelIdentifier}` },
+      };
+    } catch (error) {
+      // Never include the key or the raw provider payload in what goes back out.
+      log.error('generateChatCompletion: provider call failed', {
+        modelIdentifier,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      if (error instanceof OpenAI.APIError) {
+        const body = (error as unknown as { error?: unknown }).error as Record<string, unknown> | undefined;
+        const sanitized = ModelService.sanitizeProviderError(body, error.message);
+        return {
+          success: false,
+          error: {
+            message: sanitized.message,
+            type: sanitized.type !== 'api_error' ? sanitized.type : (typeof error.type === 'string' ? error.type : 'api_error'),
+            code: sanitized.code !== 'provider_error' ? sanitized.code : (typeof error.code === 'string' ? error.code : 'provider_error'),
+            param: sanitized.param ?? (typeof error.param === 'string' ? error.param : null),
+          },
+          statusCode: typeof error.status === 'number' ? error.status : 500,
+        };
+      }
+
+      return {
+        success: false,
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to generate completion',
+          type: 'api_error',
+          code: 'internal_error',
+          param: null,
+        },
+        statusCode: 500,
+      };
+    }
+  }
+
+  /**
+   * Reduce a provider error body to client-safe scalar fields. Mirrors the
+   * message-extraction of ModelHandler.extractProviderErrorDetails (including
+   * OpenRouter's nested `metadata.raw`) but deliberately DROPS the raw provider
+   * payload — it can echo request internals and must not reach `/v1` clients.
+   */
+  private static sanitizeProviderError(
+    body: Record<string, unknown> | undefined,
+    baseMessage?: string
+  ): { message: string; type: string; code: string; param?: string | null } {
+    let message =
+      baseMessage ||
+      (typeof body?.message === 'string' ? (body.message as string) : '') ||
+      'Provider returned an unspecified error.';
+
+    if (
+      baseMessage &&
+      typeof body?.message === 'string' &&
+      body.message &&
+      body.message !== baseMessage
+    ) {
+      message = `${baseMessage} - ${body.message}`;
+    }
+
+    // OpenRouter nests the real upstream reason under metadata.raw.
+    const meta = body?.metadata as Record<string, unknown> | undefined;
+    if (meta) {
+      let rawMsg: string | undefined;
+      if (typeof meta.raw === 'string') {
+        try {
+          const parsed = JSON.parse(meta.raw);
+          rawMsg = parsed?.error?.message || parsed?.message || meta.raw;
+        } catch {
+          rawMsg = meta.raw;
+        }
+      } else if (meta.raw && typeof meta.raw === 'object') {
+        const rawObj = meta.raw as { error?: { message?: string }; message?: string };
+        rawMsg = rawObj.error?.message || rawObj.message;
+      }
+      const upstreamParts: string[] = [];
+      if (meta.provider_name) upstreamParts.push(String(meta.provider_name));
+      if (rawMsg) upstreamParts.push(rawMsg);
+      if (upstreamParts.length > 0) {
+        message = `${message} (upstream: ${upstreamParts.join(': ')})`;
+      }
+    }
+
+    return {
+      message,
+      type: typeof body?.type === 'string' ? (body.type as string) : 'api_error',
+      code: typeof body?.code === 'string' ? (body.code as string) : 'provider_error',
+      param: typeof body?.param === 'string' ? (body.param as string) : null,
+    };
   }
 
   // Re-export encryption methods for convenience

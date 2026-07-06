@@ -16,6 +16,11 @@ export interface ChatCompletionRequest {
   frequency_penalty?: number;
   presence_penalty?: number;
   user?: string;
+  // Tool definitions (standard OpenAI semantics). Only honored on direct
+  // `model-` completions, where they are passed through to the provider and
+  // any tool_calls are returned to the CLIENT for execution. The flow path
+  // manages its own MCP tools and ignores this field.
+  tools?: Array<OpenAI.ChatCompletionTool>;
   // Custom extension for conversation state management (DEPRECATED - use metadata)
   conversation_id?: string;
   // Use the strict metadata type
