@@ -185,6 +185,22 @@ export class SchedulerService {
         break;
       }
       case 'mcp-poll': {
+        // Arm-time pre-check (issue #54): polling a disabled server can never succeed,
+        // so surface a precise trigger error immediately instead of letting the first
+        // tick fail. The trigger is still armed — once the server is re-enabled the
+        // next successful tick clears the error on its own (onSuccess/onFire below).
+        void import('@/backend/services/mcp')
+          .then(async ({ mcpService }) => {
+            if (await mcpService.isServerDisabled(trigger.serverName)) {
+              this.lastTriggerErrors.set(
+                execution.id,
+                `MCP server '${trigger.serverName}' is disabled — enable it on the MCP page or change the trigger`
+              );
+            }
+          })
+          .catch(error =>
+            log.warn(`Arm-time disabled-server check failed for ${execution.id}:`, error)
+          );
         this.armed.set(
           execution.id,
           armMcpPoll(trigger, {

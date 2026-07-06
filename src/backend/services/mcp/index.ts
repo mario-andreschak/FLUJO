@@ -394,6 +394,17 @@ export class MCPService {
   }
 
   /**
+   * Whether a server's stored config marks it disabled (issue #54).
+   *
+   * Unknown servers return false — a missing config is a different failure that is
+   * surfaced elsewhere with its own message.
+   */
+  async isServerDisabled(serverName: string): Promise<boolean> {
+    const config = await this.getServerConfig(serverName);
+    return config?.disabled === true;
+  }
+
+  /**
    * Connect to an MCP server by name
    */
   async connectServer(serverName: string): Promise<MCPServiceResponse>;
@@ -454,7 +465,27 @@ export class MCPService {
       // We're connecting with a config object
       config = configOrName;
     }
-    
+
+    // HARD GATE (issue #54): a disabled server must never spawn. This is the single
+    // choke point where clients + transports are born — createTransport() is only
+    // reachable through this method — so gating here covers every caller (scheduler
+    // polls, flow handlers, API routes, self-heal reconnects) and every transport
+    // type. Re-resolve the STORED config by name even when the caller passed a
+    // config object: flow nodes pass node-bound snapshots that may be stale, and
+    // the stored config is the source of truth for `disabled`.
+    const storedConfig =
+      typeof configOrName === 'string' ? config : await this.getServerConfig(config.name);
+    if ((storedConfig ?? config).disabled) {
+      log.info(`connectServer: Server ${config.name} is disabled — refusing to create a client/transport`);
+      // Disabled servers must not keep retry machinery alive either.
+      this.clearRetryTimer(config.name);
+      this.connectionRetryAttempts.delete(config.name);
+      return {
+        success: false,
+        error: `Server '${config.name}' is disabled. Enable it on the MCP page to use it.`,
+      };
+    }
+
     const requestId = uuidv4();
     log.info(`connectServer: Starting connection for server ${config.name} [RequestID: ${requestId}]`);
 
@@ -918,6 +949,14 @@ export class MCPService {
   async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
     log.debug(`listServerTools: Entering method for server ${serverName}`);
 
+    // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
+    // loudly instead of attempting a pointless reconnect against a disabled server.
+    if (await this.isServerDisabled(serverName)) {
+      const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
+      log.warn(`listServerTools: ${error}`);
+      return { tools: [], error };
+    }
+
     let client = this.getClient(serverName);
     if (!client) {
       log.warn(`listServerTools: Client not found for ${serverName}`);
@@ -956,6 +995,16 @@ export class MCPService {
    */
   async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
+
+    // Disabled servers must never be invoked — even if a live client somehow
+    // lingers after disabling (issue #54). This point-of-use guard sits on top of
+    // the connect-time hard gate so callers (scheduler polls, chat tool calls) get
+    // a precise error instead of a pointless reconnect attempt.
+    if (await this.isServerDisabled(serverName)) {
+      const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
+      log.warn(`callTool: ${error}`);
+      return { success: false, error };
+    }
 
     let client = this.getClient(serverName);
 
@@ -999,6 +1048,13 @@ export class MCPService {
     lister: (client: Client | undefined, serverName: string) => Promise<T>,
     emptyResult: T
   ): Promise<T> {
+    // Point-of-use guard on top of the connect-time hard gate (issue #54).
+    if (await this.isServerDisabled(serverName)) {
+      const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
+      log.warn(`listWithReconnect: ${error}`);
+      return { ...emptyResult, error };
+    }
+
     let client = this.clients.get(serverName);
     if (!client) {
       log.warn(`listWithReconnect: Client not found for ${serverName}`);

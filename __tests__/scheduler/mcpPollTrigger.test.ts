@@ -226,6 +226,24 @@ describe('armMcpPoll', () => {
     trigger.dispose();
   });
 
+  it('surfaces the disabled-server error as a trigger error with backoff, never a run (issue #54)', async () => {
+    const { deps } = makeDeps();
+    // With the disabled-server gate, mcpService.callTool rejects a disabled
+    // server with this precise message instead of spawning it.
+    const disabledError = "Server 'srv' is disabled. Enable it on the MCP page to use it.";
+    (deps.callTool as jest.Mock).mockResolvedValue({ success: false, error: disabledError });
+    const trigger = armMcpPoll(config(), deps);
+    await flush();
+    expect(deps.onError).toHaveBeenCalledWith(disabledError);
+
+    // Failure #1 → skip 1 check (exponential backoff), and no run record is produced.
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.callTool).toHaveBeenCalledTimes(1);
+    expect(deps.onFire).not.toHaveBeenCalled();
+    trigger.dispose();
+  });
+
   it('reports success on quiet polls, so a startup-race error self-clears', async () => {
     const { deps } = makeDeps();
     // First tick: server still connecting (the startup race) → trigger error.
