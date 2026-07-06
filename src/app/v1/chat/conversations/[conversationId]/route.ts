@@ -8,6 +8,7 @@ import {
   projectMessages,
   flushConversationLog,
   deleteConversationLog,
+  repairTruncatedConversationLog,
 } from '@/backend/execution/flow/conversationLog';
 import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
@@ -131,17 +132,28 @@ export async function GET(
       // and are excluded from the displayed transcript on BOTH paths.
       let displayedMessages: SharedState['messages'];
       await flushConversationLog(conversationId);
-      const logEvents = await readConversationLog(conversationId);
-      const projected = logEvents ? projectMessages(logEvents) : [];
-      if (projected.length > 0) {
-        displayedMessages = projected;
+      // Self-heal conversations whose log lost events (issue #49): when a
+      // planned run's bus events were dropped by the (formerly per-instance)
+      // log tap, the `.jsonl` holds only the turn-start reconcile line while
+      // the `.json` snapshot is complete. Rebuild the log from the snapshot and
+      // display it. Returns undefined when there is nothing to repair (the
+      // common case), leaving the normal projection path below untouched.
+      const repaired = await repairTruncatedConversationLog(sharedState);
+      if (repaired) {
+        displayedMessages = repaired;
       } else {
-        displayedMessages = (sharedState.messages || [])
-          .filter(msg => msg.role !== 'system')
-          .map(msg => ({
-            ...msg,
-            id: msg.id || crypto.randomUUID() // Add ID if missing (legacy data)
-          }));
+        const logEvents = await readConversationLog(conversationId);
+        const projected = logEvents ? projectMessages(logEvents) : [];
+        if (projected.length > 0) {
+          displayedMessages = projected;
+        } else {
+          displayedMessages = (sharedState.messages || [])
+            .filter(msg => msg.role !== 'system')
+            .map(msg => ({
+              ...msg,
+              id: msg.id || crypto.randomUUID() // Add ID if missing (legacy data)
+            }));
+        }
       }
       const messagesWithIds = displayedMessages;
 

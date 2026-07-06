@@ -90,6 +90,26 @@ function chainAppend(conversationId: string, lines: string): Promise<void> {
   }) as Promise<void>;
 }
 
+// Truncating rewrite of a whole log, serialized through the SAME per-conversation
+// chain as appends so it never interleaves with an in-flight append. Used only
+// by the self-heal repair (repairTruncatedConversationLog) to replace a log that
+// lost events with one rebuilt from the authoritative SharedState snapshot.
+function chainWrite(conversationId: string, content: string): Promise<void> {
+  const previous = appendChains.get(conversationId) ?? Promise.resolve();
+  const run = previous
+    .catch(() => { /* prior op's error was logged by its own caller */ })
+    .then(async () => {
+      await fs.mkdir(logDir, { recursive: true });
+      await fs.writeFile(logFilePath(conversationId), content);
+    });
+  appendChains.set(conversationId, run);
+  return run.finally(() => {
+    if (appendChains.get(conversationId) === run) {
+      appendChains.delete(conversationId);
+    }
+  }) as Promise<void>;
+}
+
 /**
  * Is this conversation allowed to persist a log? The ephemeral policy travels
  * ON the state (see persistConversationState): a state marked `ephemeral`
@@ -349,6 +369,61 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
   );
   state.messages = projectedParent;
   return true;
+}
+
+/**
+ * Inverse of recoverMessagesFromLog: repair a log that lost events so the
+ * projection fell BEHIND the SharedState snapshot (issue #49). The
+ * conversation-log bus tap used to drop every event of a planned
+ * (saveConversations) run because FlowExecutor.conversationStates was
+ * per-instance; the fix global-backs that map, but conversations already
+ * written keep a complete `.json` snapshot and a truncated `.jsonl` (often just
+ * the turn-start reconcile line). Because the display route prefers the
+ * projection, those still render as one message until the log is rebuilt.
+ *
+ * We rebuild ONLY when it is safe and clearly the #49 signature:
+ *  - a log exists, and
+ *  - its parent-level projection is STRICTLY shorter than the snapshot's
+ *    non-system messages, and
+ *  - every projected id still exists in the snapshot (a subset) — so we are
+ *    extending a truncated prefix, not clobbering a legitimately diverged log
+ *    (edited/pruned history, where lengths match or ids differ).
+ * On a match the `.jsonl` is rewritten as a sequence of `message` events from
+ * the snapshot (system messages excluded, matching projection semantics) and
+ * the authoritative messages are returned for display. Otherwise returns
+ * undefined and the log is left untouched. Never throws.
+ */
+export async function repairTruncatedConversationLog(
+  state: SharedState,
+): Promise<FlujoChatMessage[] | undefined> {
+  if (state.ephemeral) return undefined;
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) return undefined;
+
+  const events = await readConversationLog(conversationId);
+  if (!events) return undefined; // no log — route falls back to the snapshot itself
+
+  const projectedParent = projectMessages(events).filter((m) => !((m.depth ?? 0) > 0));
+  const snapshot = (state.messages ?? []).filter((m) => m.role !== 'system' && !!m.id);
+  // Not the truncation signature: log is level with / ahead of the snapshot.
+  if (projectedParent.length >= snapshot.length) return undefined;
+  const snapshotIds = new Set(snapshot.map((m) => m.id));
+  // Diverged (not a truncated prefix) — don't clobber a legitimately edited log.
+  if (!projectedParent.every((m) => snapshotIds.has(m.id))) return undefined;
+
+  const content = snapshot
+    .map((m) => serialize({ type: 'message', message: m, conversationId, seq: -1, timestamp: Date.now() } as ExecutionEvent))
+    .join('');
+  try {
+    await chainWrite(conversationId, content);
+    log.info(
+      `Rebuilt truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} message(s)); issue #49 self-heal.`
+    );
+  } catch (err) {
+    log.warn(`Failed to rebuild truncated conversation log ${conversationId}`, { err });
+    // Still return the snapshot for display; the rewrite can retry next read.
+  }
+  return snapshot;
 }
 
 /** True if a persisted log exists for this conversation. */

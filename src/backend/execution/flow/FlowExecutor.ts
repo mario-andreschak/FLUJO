@@ -18,6 +18,8 @@ const log = createLogger('backend/execution/flow/FlowExecutor');
 declare global {
   // eslint-disable-next-line no-var
   var __flujo_flow_engine: FlowEngine | undefined;
+  // eslint-disable-next-line no-var
+  var __flujo_conversation_states: Map<string, SharedState> | undefined;
 }
 
 // --- Debug snapshot slimming -------------------------------------------------
@@ -68,8 +70,22 @@ function slimResultSnapshot<T>(result: T | undefined): T | undefined {
  * the API routes or UI that depend on this class.
  */
 export class FlowExecutor {
-  // Store conversation states globally - accessible for step-by-step execution
-  public static conversationStates = new Map<string, SharedState>();
+  // Store conversation states globally - accessible for step-by-step execution.
+  //
+  // Global-backed (via globalThis) so the scheduler/startup instance, the API-
+  // route instance, and the global event-bus log tap (conversationLog's
+  // isPersistable) all read/write ONE map. A per-instance `static` diverged
+  // across Next.js module instances — the same cross-instance-coherence problem
+  // fixed for the engine cache and the scheduler/MCP maps in commit c824a5b.
+  // That divergence made the conversation-log tap drop every bus event of a
+  // planned (saveConversations) run, so its .jsonl held only the turn-start
+  // reconcile line and the transcript vanished on reload (issue #49).
+  static get conversationStates(): Map<string, SharedState> {
+    if (!global.__flujo_conversation_states) {
+      global.__flujo_conversation_states = new Map<string, SharedState>();
+    }
+    return global.__flujo_conversation_states;
+  }
 
   // The active execution engine. Replace the constructed engine to swap
   // frameworks. Global-backed (see the declare global above) so its compiled

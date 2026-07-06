@@ -21,6 +21,7 @@ import {
   flushConversationLog,
   projectMessages,
   recoverMessagesFromLog,
+  repairTruncatedConversationLog,
   _setConversationLogDirForTests,
 } from '@/backend/execution/flow/conversationLog';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -297,5 +298,85 @@ describe('recoverMessagesFromLog (crash recovery: snapshot behind the log)', () 
     expect(await recoverMessagesFromLog(state)).toBe(true);
     // Recovery adopts the projection (system-free, like every post-Phase-3 state).
     expect(state.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+});
+
+describe('FlowExecutor.conversationStates is global-backed (issue #49 root cause)', () => {
+  // The conversation-log bus tap resolves the ephemeral policy via
+  // FlowExecutor.conversationStates. That map used to be a per-instance static,
+  // so a planned run registered in the scheduler instance was invisible to the
+  // global-bus tap in another Next.js module instance — every bus event was
+  // dropped. Global-backing makes it ONE map, so a state registered through the
+  // globalThis handle is seen by the tap and its events persist.
+  it('shares one map via globalThis so a bus event for a registered state persists', async () => {
+    expect(FlowExecutor.conversationStates).toBe(
+      (globalThis as unknown as { __flujo_conversation_states?: unknown }).__flujo_conversation_states
+    );
+
+    const convId = 'conv-global-backed';
+    // Register the state through the raw global handle (as a different module
+    // instance's scheduler would), NOT through FlowExecutor directly.
+    (globalThis as unknown as { __flujo_conversation_states: Map<string, SharedState> })
+      .__flujo_conversation_states.set(convId, makeState(convId));
+
+    appendFromBus(messageEvent(convId, msg('m1', 'assistant', 'from a scheduler run')));
+    await flushConversationLog(convId);
+
+    const events = await readConversationLog(convId);
+    expect(events?.map((e) => (e as MessageEvent).message.id)).toEqual(['m1']);
+  });
+});
+
+describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', () => {
+  // The inverse of recoverMessagesFromLog. A planned run whose bus events were
+  // dropped keeps a COMPLETE .json snapshot but a TRUNCATED .jsonl (often just
+  // the turn-start reconcile line). Because the display route prefers the
+  // projection, it renders one message until the log is rebuilt.
+
+  it('rebuilds the log from the snapshot when the projection is a strict truncated subset', async () => {
+    const convId = 'conv-repair-truncated';
+    // Truncated log: only the first (reconcile) message survived.
+    await appendRawForState(makeState(convId), [{ type: 'message', message: msg('u1', 'user') }]);
+
+    // Authoritative snapshot has the full transcript.
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user'), msg('a1', 'assistant', 'answer'), msg('u2', 'user', 'thanks')];
+
+    const repaired = await repairTruncatedConversationLog(state);
+    expect(repaired?.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+
+    // The log itself is rebuilt so future reads project the full transcript.
+    await flushConversationLog(convId);
+    const events = await readConversationLog(convId);
+    expect(projectMessages(events!).map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+  });
+
+  it('does nothing when the log is level with or ahead of the snapshot', async () => {
+    const convId = 'conv-repair-level';
+    await appendRawForState(makeState(convId), [{ type: 'message', message: msg('u1', 'user') }]);
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user')];
+    expect(await repairTruncatedConversationLog(state)).toBeUndefined();
+  });
+
+  it('does not clobber a legitimately diverged log (projected id absent from snapshot)', async () => {
+    const convId = 'conv-repair-diverged';
+    // Log holds a message the snapshot no longer has (edited/pruned history).
+    await appendRawForState(makeState(convId), [{ type: 'message', message: msg('x1', 'user') }]);
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user'), msg('a1', 'assistant')]; // shorter projection but NOT a subset
+
+    expect(await repairTruncatedConversationLog(state)).toBeUndefined();
+    // Log untouched.
+    const events = await readConversationLog(convId);
+    expect(events?.map((e) => (e as MessageEvent).message.id)).toEqual(['x1']);
+  });
+
+  it('never rewrites an ephemeral state', async () => {
+    const convId = 'conv-repair-ephemeral';
+    const eph = makeState(convId, true);
+    eph.messages = [msg('u1', 'user'), msg('a1', 'assistant')];
+    expect(await repairTruncatedConversationLog(eph)).toBeUndefined();
+    expect(await hasConversationLog(convId)).toBe(false);
   });
 });
