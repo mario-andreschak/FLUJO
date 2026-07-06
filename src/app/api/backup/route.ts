@@ -10,8 +10,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/backup/route');
 
-// Store files in .next directory to ensure they're writable in production
-const STORAGE_DIR = path.join(process.cwd(), 'storage');
 const MCP_SERVERS_DIR = path.join(process.cwd(), 'mcp-servers');
 
 export async function POST(request: NextRequest) {
@@ -69,19 +67,18 @@ export async function POST(request: NextRequest) {
       
       if (storageKey) {
         try {
-          const filePath = path.join(STORAGE_DIR, `${storageKey}.json`);
-          log.debug(`Reading file for backup [${requestId}]:`, filePath);
+          log.debug(`Loading storage item for backup [${requestId}]:`, storageKey);
           
-          // Check if file exists
-          try {
-            await fs.access(filePath);
-          } catch (error) {
-            log.warn(`File does not exist [${requestId}]:`, filePath);
+          // Read through the storage backend (persists to db/), not raw files.
+          const data = await loadItem<unknown>(storageKey, null);
+          if (data === null) {
+            log.warn(`No data stored for key [${requestId}]:`, storageKey);
             continue;
           }
           
-          const content = await fs.readFile(filePath, 'utf-8');
-          zip.file(`storage/${storageKey}.json`, content);
+          // Keep the zip entry layout storage/<key>.json — restore and
+          // previously created backups depend on it.
+          zip.file(`storage/${storageKey}.json`, JSON.stringify(data, null, 2));
           log.debug(`Added file to backup [${requestId}]:`, `storage/${storageKey}.json`);
         } catch (error) {
           log.error(`Error adding file to backup [${requestId}]:`, error);

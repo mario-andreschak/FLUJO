@@ -10,8 +10,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/restore/route');
 
-// Store files in .next directory to ensure they're writable in production
-const STORAGE_DIR = path.join(process.cwd(), 'storage');
 const MCP_SERVERS_DIR = path.join(process.cwd(), 'mcp-servers');
 
 export async function POST(request: NextRequest) {
@@ -54,10 +52,7 @@ export async function POST(request: NextRequest) {
     const metadata = JSON.parse(await metadataFile.async('string'));
     log.debug(`Backup metadata [${requestId}]:`, metadata);
     
-    // Ensure storage directory exists
-    await ensureDir(STORAGE_DIR);
-    
-    // Restore storage files
+    // Restore storage files (saveItem creates the storage directory itself)
     const storageSelections = selections.filter(s => s !== 'mcpServersFolder');
     for (const selection of storageSelections) {
       let storageKey: StorageKey | undefined;
