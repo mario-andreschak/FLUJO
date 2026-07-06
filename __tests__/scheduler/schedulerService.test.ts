@@ -206,6 +206,34 @@ describe('SchedulerService', () => {
     expect(statuses).toEqual(['completed', 'skipped']);
   });
 
+  it('exposes a live running flag + runningSince while a fire is in flight (issue #50)', async () => {
+    const { execution } = await scheduler.create(scheduleInput());
+    // Nothing running yet.
+    expect(scheduler.getStatus(execution!).running).toBe(false);
+    expect(scheduler.getStatus(execution!).runningSince).toBeUndefined();
+
+    let release!: () => void;
+    runFlowMock.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve(completedResult); })
+    );
+
+    const inFlight = scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    // Let the fire take the running lock.
+    await new Promise(r => setTimeout(r, 10));
+
+    const during = scheduler.getStatus(execution!);
+    expect(during.running).toBe(true);
+    expect(during.runningSince).toMatch(/^\d{4}-/); // ISO start time for the elapsed timer
+
+    release();
+    await inFlight;
+
+    // Cleared once the run resolves (finally deletes the entry).
+    const after = scheduler.getStatus(execution!);
+    expect(after.running).toBe(false);
+    expect(after.runningSince).toBeUndefined();
+  });
+
   it('catch-up: fires once at arm time when a run was missed and catchUp is on', async () => {
     const { execution } = await scheduler.create(
       scheduleInput({ trigger: { type: 'schedule', cron: '0 9 * * *', catchUp: true } })

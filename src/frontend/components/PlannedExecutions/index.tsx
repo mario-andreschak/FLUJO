@@ -50,14 +50,19 @@ const PlannedExecutionsManager = () => {
 
   // Triggers fire in the background (schedules, external webhooks, watchers),
   // so poll for fresh statuses while the page is actually being looked at.
+  // While any execution is mid-run, tighten the cadence so the live
+  // "Running… → completed/error" transition surfaces within a few seconds
+  // instead of up to 10s (issue #50); relax back to 10s when nothing runs.
+  const anyRunning = entries.some(entry => entry.status.running);
   useEffect(() => {
+    const intervalMs = anyRunning ? 3_000 : 10_000;
     const timer = setInterval(() => {
       if (!document.hidden) {
         void refresh();
       }
-    }, 10_000);
+    }, intervalMs);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, anyRunning]);
 
   const handleTogglePaused = async (nextPaused: boolean) => {
     setPaused(nextPaused); // optimistic

@@ -111,14 +111,26 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
             <Chip size="small" label={describeTrigger(execution.trigger)} />
             {!execution.enabled && <Chip size="small" label="Off" variant="outlined" />}
           </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {status.nextRun && execution.enabled
-              ? `Next run: ${formatTime(status.nextRun)}`
-              : execution.enabled && !status.armed
-                ? 'Not armed'
-                : ''}
-            {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
-          </Typography>
+          {status.running ? (
+            // Live "in flight" state (issue #50): shown as soon as a run starts,
+            // independent of saveConversations, and cleared within a poll of it
+            // finishing. Takes precedence over the "Next run" line.
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.5 }}>
+              <CircularProgress size={12} thickness={6} />
+              <Typography variant="body2" color="text.secondary">
+                Running…{status.runningSince ? ` — started ${formatTime(status.runningSince)}` : ''}
+              </Typography>
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              {status.nextRun && execution.enabled
+                ? `Next run: ${formatTime(status.nextRun)}`
+                : execution.enabled && !status.armed
+                  ? 'Not armed'
+                  : ''}
+              {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
+            </Typography>
+          )}
           {lastRun && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.5 }}>
               <Tooltip title={lastRun.status}>

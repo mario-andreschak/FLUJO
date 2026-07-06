@@ -49,8 +49,12 @@ export interface PlannedExecutionListEntry {
 export class SchedulerService {
   /** Armed trigger per enabled execution id. */
   private armed = new Map<string, ArmedTrigger>();
-  /** Execution ids with a flow run currently in flight (overlap policy: skip). */
-  private running = new Set<string>();
+  /**
+   * Execution ids with a flow run currently in flight (overlap policy: skip),
+   * mapped to the ISO time that run started. Surfaced via getStatus() so the
+   * UI can show a live "Running…" state + elapsed timer — issue #50.
+   */
+  private running = new Map<string, string>();
   /** Most recent trigger-level error (watcher/poll failures), for the UI. */
   private lastTriggerErrors = new Map<string, string>();
   /** Serializes reconcile/arm mutations so concurrent API calls can't interleave. */
@@ -464,10 +468,13 @@ export class SchedulerService {
         execution.trigger.type === 'webhook' &&
         this.started &&
         !this.pausedCache);
+    const runningSince = this.running.get(execution.id);
     return {
       armed,
       nextRun: trigger?.nextRun ? trigger.nextRun() : undefined,
       lastTriggerError: this.lastTriggerErrors.get(execution.id),
+      running: runningSince !== undefined,
+      runningSince,
     };
   }
 
@@ -508,7 +515,7 @@ export class SchedulerService {
       return record;
     }
 
-    this.running.add(execution.id);
+    this.running.set(execution.id, firedAt);
     const conversationId = uuidv4();
     let record: RunRecord;
     try {

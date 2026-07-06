@@ -180,4 +180,12 @@ export interface PlannedExecutionStatus {
   nextRun?: string | null;
   /** Most recent trigger-level error (e.g. failed poll or watcher error). */
   lastTriggerError?: string;
+  /**
+   * True while a run for this execution is in flight (overlap tracking). Lets
+   * the UI show a live "Running…" state without opening the chat and without
+   * waiting for the run to finish — issue #50.
+   */
+  running: boolean;
+  /** ISO time the in-flight run started, for a live elapsed timer. */
+  runningSince?: string;
 }
