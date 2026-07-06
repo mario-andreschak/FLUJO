@@ -16,18 +16,31 @@ export class MCPHandler {
   static async executeMCP(
     input: MCPExecutionInput
   ): Promise<Result<MCPExecutionResult>> {
-    const { mcpServer, enabledTools, mcpEnv } = input;
+    const { mcpServer, enabledTools, nodeId, nodeRoots } = input;
     
     // Add verbose logging of the input
     log.verbose('executeMCP input', JSON.stringify(input));
     
     try {
+      // Node-level roots (issue 46): register this node's workspace-folder overlay
+      // BEFORE connecting. Connections are singletons keyed by server name, so node
+      // roots are additive — roots/list answers with the union of server-level and
+      // node-level roots. An empty list clears this node's previous overlay.
+      if (nodeId) {
+        mcpService.setNodeRoots(mcpServer, nodeId, nodeRoots);
+      }
+
       // Check server status. getServerStatus reports the connection state in `status`
       // (not `message`, which only carries error/auth detail) - checking the wrong field
       // here previously made this branch always run, masking the real intent.
       const status = await mcpService.getServerStatus(mcpServer);
 
-      if (status.status !== 'connected') {
+      // When this execution carries a node identity, always run connectServer: a change
+      // in roots-capability presence (none <-> some) alters the client capability key,
+      // and connectServer's shouldRecreateClient check is where the client gets rebuilt
+      // with (or without) the roots capability. For an unchanged, already-connected
+      // client this is a cheap in-memory fast path.
+      if (status.status !== 'connected' || nodeId) {
         // Try to connect
         const connectResult = await mcpService.connectServer(mcpServer);
         

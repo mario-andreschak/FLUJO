@@ -13,7 +13,7 @@ import { ChildProcess } from 'child_process';
 import { createOAuthClientProvider } from './oauth';
 import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
 import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
-import { hasRoots, registerRootsHandler, rootsConfigKey } from './roots';
+import { hasAnyRoots, registerRootsHandler, rootsConfigKey } from './roots';
 import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
@@ -23,7 +23,13 @@ interface ClientWithCapKey { __flujoCapKey?: string }
 
 /** Combined key of the config that drives client-declared capabilities. */
 function capabilityKey(config: MCPServerConfig): string {
-  return `${rootsConfigKey(config)}|${samplingConfigKey(config)}`;
+  // The node-roots overlay (FlowBuilder MCP nodes, issue 46) only matters here through
+  // whether the roots capability is DECLARED at all: content changes are picked up
+  // live by the roots/list handler and must NOT force a rebuild (a rebuild respawns
+  // the server process). hasAnyRoots captures exactly the declared-or-not bit, so a
+  // node adding roots to a server that already has server-level roots stays on the
+  // existing connection, while none -> some (and back) triggers a controlled rebuild.
+  return `${rootsConfigKey(config)}|declared:${hasAnyRoots(config) ? 1 : 0}|${samplingConfigKey(config)}`;
 }
 
 // We stash the RAW config key on the transport at creation time so
@@ -127,12 +133,13 @@ export function createNewClient(config: MCPServerConfig): Client {
   // e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER capabilities and
   // are consumed regardless of what we declare here, so they do not belong here.
   //
-  // Roots (#15) are declared ONLY when this server has workspace folders configured.
+  // Roots (#15) are declared ONLY when this server has workspace folders configured —
+  // either on the server itself or contributed by a FlowBuilder MCP node (issue 46).
   // Advertising roots with an empty list could make a roots-aware server refuse
   // everything, so servers without roots behave exactly as they did before. Sampling is
   // likewise declared only when the server has an enabled sampling trust policy, so a
   // server can't ask FLUJO to run LLM calls unless the user opted in.
-  const serverHasRoots = hasRoots(config);
+  const serverHasRoots = hasAnyRoots(config);
   const serverHasSampling = samplingEnabled(config);
   const client = new Client(
     {

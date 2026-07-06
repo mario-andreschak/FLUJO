@@ -19,7 +19,7 @@ import {
   shouldRecreateClient,
   safelyCloseClient,
 } from '@/backend/services/mcp/connection';
-import { rootsConfigKey } from '@/backend/services/mcp/roots';
+import { hasAnyRoots, rootsConfigKey } from '@/backend/services/mcp/roots';
 import { samplingConfigKey } from '@/backend/services/mcp/sampling';
 import { MCPServerConfig } from '@/shared/types/mcp';
 
@@ -43,7 +43,9 @@ function stdioConfig(overrides: Record<string, unknown> = {}): MCPServerConfig {
 function fakeClientFor(transport: unknown, config: MCPServerConfig): Client {
   return {
     transport,
-    __flujoCapKey: `${rootsConfigKey(config)}|${samplingConfigKey(config)}`,
+    // Mirrors capabilityKey() in connection.ts (roots key + declared-roots presence
+    // bit for the node-roots overlay, issue 46 + sampling key).
+    __flujoCapKey: `${rootsConfigKey(config)}|declared:${hasAnyRoots(config) ? 1 : 0}|${samplingConfigKey(config)}`,
   } as unknown as Client;
 }
 

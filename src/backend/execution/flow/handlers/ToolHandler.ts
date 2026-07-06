@@ -184,6 +184,13 @@ export class ToolHandler {
           const enabledTools = properties.enabledTools || [];
           const toolTimeout = properties.toolTimeout;
 
+          // Node-level roots (issue 46): register this node's workspace-folder overlay
+          // BEFORE connecting, so roots/list answers with the union of server-level and
+          // node-level roots, and so a roots-capability presence change (none <-> some)
+          // is picked up by connectServer's shouldRecreateClient rebuild below. An empty
+          // list clears this node's previous overlay.
+          mcpService.setNodeRoots(boundServer, mcpNode.id, properties.roots);
+
           // Ensure the server is connected. connectServer recreates a client whose config
           // changed; listServerTools below additionally self-heals a dead transport by
           // reconnecting and retrying. We deliberately do NOT gate this on getServerStatus:

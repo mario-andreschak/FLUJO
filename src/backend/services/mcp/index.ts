@@ -79,6 +79,7 @@ import {
   shouldRecreateClient,
   safelyCloseClient
 } from './connection';
+import { setNodeRoots as setNodeRootsOverlay } from './roots';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -829,6 +830,19 @@ export class MCPService {
         }
       }
     }
+  }
+
+  /**
+   * Register (or clear, when `roots` is empty) the workspace-folder overlay a FlowBuilder
+   * MCP node contributes to its bound server (issue 46). Connections are singletons keyed
+   * by server name, so node roots are additive: roots/list answers with the union of the
+   * server-level roots and all currently-registered node roots. A capability-presence
+   * change (no roots at all <-> some roots) changes the client capability key, so the
+   * next connectServer() call rebuilds the client with (or without) the roots capability
+   * declared; content-only changes are picked up live without a reconnect.
+   */
+  setNodeRoots(serverName: string, nodeId: string, roots?: string[]): void {
+    setNodeRootsOverlay(serverName, nodeId, roots);
   }
 
   /**
