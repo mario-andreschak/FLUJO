@@ -274,9 +274,43 @@ describe('spotlightRequestPath', () => {
     ).toBe('/v0.1/servers?search=ai.keenable%2Fweb-search&version=latest&limit=1');
   });
 
+  // Issue #55: the registry's versions-list form (no version specified) must
+  // resolve to the latest version instead of "Unrecognized spotlight URL format".
+  it('resolves a version-less /versions URL via search (latest version)', () => {
+    expect(
+      spotlightRequestPath(
+        'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-abap-adt/versions'
+      )
+    ).toBe('/v0.1/servers?search=io.github.mario-andreschak%2Fmcp-abap-adt&version=latest&limit=1');
+  });
+
+  it('tolerates a trailing slash on the version-less /versions form', () => {
+    expect(
+      spotlightRequestPath(
+        'https://registry.modelcontextprotocol.io/v0.1/servers/ai.keenable%2Fweb-search/versions/'
+      )
+    ).toBe('/v0.1/servers?search=ai.keenable%2Fweb-search&version=latest&limit=1');
+  });
+
+  // Guards the regex-ordering invariant: the exact-version check runs before the
+  // version-less one, so an explicit version still passes through verbatim.
+  it('still passes an exact server-version URL through verbatim after the /versions change', () => {
+    expect(
+      spotlightRequestPath(
+        'https://registry.modelcontextprotocol.io/v0.1/servers/ai.keenable%2Fweb-search/versions/1.2.3'
+      )
+    ).toBe('/v0.1/servers/ai.keenable%2Fweb-search/versions/1.2.3');
+  });
+
   it('rejects URLs it does not understand', () => {
     expect(spotlightRequestPath('https://registry.modelcontextprotocol.io/')).toBeNull();
     expect(spotlightRequestPath('not a url')).toBeNull();
+    // Extra segments after an exact version are still unrecognized.
+    expect(
+      spotlightRequestPath(
+        'https://registry.modelcontextprotocol.io/v0.1/servers/ai.keenable%2Fweb-search/versions/1.2.3/extra'
+      )
+    ).toBeNull();
   });
 });
 

@@ -381,9 +381,11 @@ export interface SpotlightCache {
 
 /**
  * Resolve a curated spotlight URL into the registry API path (+query) that
- * yields exactly one server. Two forms are supported:
- *  - exact:  https://registry.modelcontextprotocol.io/v0.1/servers/<name>/versions/<version>
- *  - search: https://registry.modelcontextprotocol.io/?q=<name>  (first result wins)
+ * yields exactly one server. Three forms are supported:
+ *  - exact:    https://registry.modelcontextprotocol.io/v0.1/servers/<name>/versions/<version>
+ *  - versions: https://registry.modelcontextprotocol.io/v0.1/servers/<name>/versions
+ *              (no version specified — resolved to the latest version via search)
+ *  - search:   https://registry.modelcontextprotocol.io/?q=<name>  (first result wins)
  * Returns null for anything else.
  */
 export function spotlightRequestPath(url: string): string | null {
@@ -404,8 +406,11 @@ export function spotlightRequestPath(url: string): string | null {
     return parsed.pathname;
   }
 
-  // Server path without a version: resolve via search for the latest version
-  const serverMatch = parsed.pathname.match(/^\/v[\d.]+\/servers\/([^/]+)$/);
+  // Server path without a version — plain (/servers/<name>) or the registry's
+  // versions-list form (/servers/<name>/versions): resolve via search for the
+  // latest version. Order matters: the exact-version regex above must run first
+  // so /servers/<name>/versions/<version> keeps passing through verbatim.
+  const serverMatch = parsed.pathname.match(/^\/v[\d.]+\/servers\/([^/]+)(?:\/versions)?\/?$/);
   if (serverMatch) {
     const name = decodeURIComponent(serverMatch[1]);
     return `/v0.1/servers?search=${encodeURIComponent(name)}&version=latest&limit=1`;

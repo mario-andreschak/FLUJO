@@ -1,9 +1,12 @@
 /**
  * Curated MCP servers shown in the ServerModal's "Spotlight" tab.
  *
- * Each entry is a URL into the official MCP Registry, in one of two forms:
+ * Each entry is a URL into the official MCP Registry, in one of three forms:
  *  - exact version:
  *    https://registry.modelcontextprotocol.io/v0.1/servers/<url-encoded name>/versions/<version>
+ *  - version-less (versions list; resolved to the latest available version):
+ *    https://registry.modelcontextprotocol.io/v0.1/servers/<url-encoded name>/versions
+ *    (the plain /servers/<url-encoded name> form works too)
  *  - search (first result wins):
  *    https://registry.modelcontextprotocol.io/?q=<url-encoded name>
  *
@@ -13,7 +16,8 @@
  */
 export const SPOTLIGHT_SERVER_URLS: string[] = [
   // Web search + page fetch (offers both a local npm package and a remote endpoint)
-  'https://registry.modelcontextprotocol.io/?q=ai.keenable%2Fweb-search'
+  'https://registry.modelcontextprotocol.io/?q=ai.keenable%2Fweb-search',
+  'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-abap-adt/versions',
   // Up-to-date library docs for any prompt
   // 'https://registry.modelcontextprotocol.io/?q=io.github.upstash%2Fcontext7',
   // Exa web search & crawling
