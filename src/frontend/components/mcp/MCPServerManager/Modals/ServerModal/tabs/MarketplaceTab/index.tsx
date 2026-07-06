@@ -63,7 +63,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const [activeSearch, setActiveSearch] = useState<string>('');
   const [results, setResults] = useState<RegistryServerResult[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
   const [selectedServer, setSelectedServer] = useState<RegistryServer | null>(null);
@@ -115,14 +115,24 @@ const MarketplaceTab: React.FC<TabProps> = ({
     }
   }, []);
 
-  // Initial load + committed searches (Enter / clear) — no search while typing
+  // Committed searches only (Enter) — nothing is fetched on mount or while typing,
+  // so opening the tab issues no request to the registry
   useEffect(() => {
-    fetchServers(activeSearch);
+    if (activeSearch) {
+      fetchServers(activeSearch);
+    }
   }, [activeSearch, fetchServers]);
 
   const handleClearSearch = () => {
     setSearchInput('');
     setActiveSearch('');
+    // Empty the grid without a network request and invalidate any in-flight fetch
+    fetchIdRef.current++;
+    setIsLoading(false);
+    setIsLoadingMore(false);
+    setResults([]);
+    setNextCursor(null);
+    setMessage(null);
   };
 
   const handleInstall = (server: RegistryServer, option: InstallOption) => {
@@ -220,7 +230,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
             if (e.key === 'Enter') {
               e.preventDefault();
               const term = searchInput.trim();
-              if (term === activeSearch) {
+              if (!term) {
+                // Committing an empty search clears the results instead of fetching
+                handleClearSearch();
+              } else if (term === activeSearch) {
                 // Same term committed again — re-run it (e.g. retry after an error)
                 fetchServers(term);
               } else {
@@ -260,8 +273,14 @@ const MarketplaceTab: React.FC<TabProps> = ({
           <>
             {results.length === 0 && !message && (
               <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
-                No servers found{activeSearch ? ` for "${activeSearch}"` : ''}. The registry
-                matches on server names — try a shorter term.
+                {activeSearch ? (
+                  <>
+                    No servers found for &quot;{activeSearch}&quot;. The registry matches on
+                    server names — try a shorter term.
+                  </>
+                ) : (
+                  <>Search the MCP Registry to get started — type a term and press Enter.</>
+                )}
               </Typography>
             )}
 
