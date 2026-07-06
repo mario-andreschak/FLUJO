@@ -841,9 +841,18 @@ export class MCPService {
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
     
-    const client = this.clients.get(serverName);
+    // Resolve via getClient (not the local this.clients map): in production the
+    // live client is often owned by a DIFFERENT module instance and only survives
+    // in the shared global recovery map. Looking it up locally made a config/PAT
+    // update's teardown a no-op, leaving the stale-token client alive in the
+    // recovery map for the scheduler to adopt (-> `unauthorized`).
+    const client = this.getClient(serverName);
     if (!client) {
       log.warn(`disconnectServer: Server ${serverName} not found in clients map`);
+      // Even without a live client, purge any lingering global references so a
+      // stale entry can never be adopted by another instance after this call.
+      this.removeFromGlobalRecovery(serverName);
+      this.activeTransports.delete(serverName);
       return { success: false, error: `Server ${serverName} not found` };
     }
 
@@ -1235,7 +1244,11 @@ export class MCPService {
   private async handleConnectionStateChange(serverName: string, config: MCPServerConfig): Promise<void> {
     log.debug(`handleConnectionStateChange: Entering method for server ${serverName}`);
     
-    const isCurrentlyConnected = this.clients.has(serverName);
+    // Global-aware: the live client may exist only in the shared recovery map
+    // (owned by another module instance). A local this.clients.has() check would
+    // miss it and skip the "re-apply config to connected server" path that a PAT/
+    // header edit needs to rebuild the connection.
+    const isCurrentlyConnected = !!this.getClient(serverName);
     const shouldBeConnected = !config.disabled;
 
     if (isCurrentlyConnected && !shouldBeConnected) {

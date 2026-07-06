@@ -26,9 +26,11 @@ function capabilityKey(config: MCPServerConfig): string {
   return `${rootsConfigKey(config)}|${samplingConfigKey(config)}`;
 }
 
-// We stash the RAW stdio config key on the transport at creation time so
-// shouldRecreateClient can compare config-to-config (see stdioConfigKey below).
-interface TransportWithConfigKey { __flujoStdioKey?: string }
+// We stash the RAW config key on the transport at creation time so
+// shouldRecreateClient can compare config-to-config (see stdioConfigKey /
+// httpConfigKey below). __flujoStdioKey covers stdio; __flujoHttpKey covers the
+// streamable/SSE (HTTP) auth material that the URL check alone cannot see.
+interface TransportWithConfigKey { __flujoStdioKey?: string; __flujoHttpKey?: string }
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -70,6 +72,48 @@ function stdioConfigKey(config: MCPStdioConfig): string {
     env: transformEnv(config.env),
     cwd: String(config.cwd ?? ''),
     rootPath: config.rootPath ?? '',
+  });
+}
+
+/**
+ * Identity key of everything in a streamable/SSE (HTTP) config that affects the live
+ * connection but is NOT the URL — chiefly the auth material (Authorization / custom
+ * headers, requestInit, OAuth client + tokens) and session / reconnection options.
+ *
+ * shouldRecreateClient otherwise compared ONLY the URL for HTTP transports, so updating
+ * a server's PAT / Bearer token (same URL) was not detected: connectServer short-circuited
+ * as "already connected" and kept talking to the stale-token client. That is exactly why a
+ * PAT update verified fine in the Tool Tester / a manual chat run (fresh client in the
+ * acting instance) yet the planned execution still failed with `unauthorized`. The
+ * transport is keyed with these fields at creation time and compared raw-to-raw here.
+ */
+function httpConfigKey(config: MCPServerConfig): string {
+  // MCPStreamableConfig & MCPSSEConfig intersects to `never` (their `transport` literals
+  // conflict), so read the shared HTTP fields off an explicit optional shape instead.
+  const c = config as unknown as {
+    serverUrl?: string;
+    headers?: Record<string, string>;
+    requestInit?: unknown;
+    eventSourceInit?: unknown;
+    reconnectionOptions?: unknown;
+    sessionId?: string;
+    oauthClientId?: string;
+    oauthClientInformation?: unknown;
+    oauthClientSecret?: string;
+    oauthTokens?: unknown;
+  };
+  return JSON.stringify({
+    transport: config.transport,
+    url: c.serverUrl ?? '',
+    headers: c.headers ?? {},
+    requestInit: c.requestInit ?? {},
+    eventSourceInit: c.eventSourceInit ?? {},
+    reconnectionOptions: c.reconnectionOptions ?? {},
+    sessionId: c.sessionId ?? '',
+    oauthClientId: c.oauthClientId ?? '',
+    oauthClientInformation: c.oauthClientInformation ?? {},
+    oauthClientSecret: c.oauthClientSecret ?? '',
+    oauthTokens: c.oauthTokens ?? {},
   });
 }
 
@@ -179,7 +223,11 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
       log.debug(`No OAuth configuration found for ${config.name}`);
     }
     
-    return new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions);
+    const transport = new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions);
+    // Key the transport with the RAW auth/session material so shouldRecreateClient can
+    // detect a PAT / Bearer token / header change even when the URL is unchanged.
+    (transport as unknown as TransportWithConfigKey).__flujoHttpKey = httpConfigKey(config);
+    return transport;
 
   } else if (config.transport === 'sse') {
     log.info(`Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`);
@@ -215,7 +263,11 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
       }
     }
 
-    return new SSEClientTransport(new URL(config.serverUrl), transportoptions);
+    const transport = new SSEClientTransport(new URL(config.serverUrl), transportoptions);
+    // Key the transport with the RAW auth/session material so shouldRecreateClient can
+    // detect a PAT / Bearer token / header change even when the URL is unchanged.
+    (transport as unknown as TransportWithConfigKey).__flujoHttpKey = httpConfigKey(config);
+    return transport;
 
   } else if (config.transport === 'websocket') {
     log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
@@ -396,6 +448,18 @@ export function shouldRecreateClient(
     if (currentUrl !== undefined && currentUrl !== new URL(config.serverUrl).toString()) {
       return { needsNewClient: true, reason: 'Streamable server URL changed' };
     }
+
+    // The URL alone cannot reveal a changed PAT / Bearer token or custom header (same URL,
+    // new auth). Compare the RAW auth/session key stashed at creation so a token update
+    // rebuilds the client instead of silently reusing the stale-token connection — the
+    // direct cause of the planned execution's `unauthorized` after a PAT update.
+    const existingHttpKey = (transport as unknown as TransportWithConfigKey).__flujoHttpKey;
+    if (!existingHttpKey) {
+      return { needsNewClient: true, reason: 'Existing streamable transport has no config key' };
+    }
+    if (existingHttpKey !== httpConfigKey(config)) {
+      return { needsNewClient: true, reason: 'Streamable auth/connection parameters changed' };
+    }
   } else if (config.transport === 'sse') {
     // For SSE transport, ensure the existing client uses the matching transport.
     if (!(client.transport instanceof SSEClientTransport)) {
@@ -411,6 +475,16 @@ export function shouldRecreateClient(
     const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
     if (currentUrl !== undefined && currentUrl !== new URL(sseConfig.serverUrl).toString()) {
       return { needsNewClient: true, reason: 'SSE server URL changed' };
+    }
+
+    // Same as streamable: detect a changed PAT / Bearer token or custom header behind an
+    // unchanged URL by comparing the RAW auth/session key stashed at creation time.
+    const existingHttpKey = (transport as unknown as TransportWithConfigKey).__flujoHttpKey;
+    if (!existingHttpKey) {
+      return { needsNewClient: true, reason: 'Existing sse transport has no config key' };
+    }
+    if (existingHttpKey !== httpConfigKey(config)) {
+      return { needsNewClient: true, reason: 'SSE auth/connection parameters changed' };
     }
   } else {
     // Default is stdio transport

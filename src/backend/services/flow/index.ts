@@ -13,12 +13,30 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/services/flow/index');
 
+// The flows snapshot is global-backed so every module instance shares ONE cache.
+// In production (`next start`) the module instance that runs the scheduler/startup
+// hook is NOT the one serving the Flow Builder / API routes; a plain per-instance
+// field let the scheduler read a stale snapshot that predated a newly-created flow,
+// so getFlow() returned null and the engine threw `Flow not found: <id>` on
+// scheduled runs even though manual chat runs (fresh cache in that instance)
+// worked. Same reasoning as SchedulerService's `global.__flujo_scheduler` and the
+// MCP service's global recovery maps.
+declare global {
+  // eslint-disable-next-line no-var
+  var __flujo_flowsCache: Flow[] | null | undefined;
+}
+
 /**
  * FlowService class provides a clean interface for flow-related operations
  * This is the core backend service that handles all flow operations
  */
 export class FlowService { // Add export keyword here
-  private flowsCache: Flow[] | null = null;
+  private get flowsCache(): Flow[] | null {
+    return global.__flujo_flowsCache ?? null;
+  }
+  private set flowsCache(value: Flow[] | null) {
+    global.__flujo_flowsCache = value;
+  }
 
   /**
    * Load all flows from storage
@@ -48,8 +66,21 @@ export class FlowService { // Add export keyword here
   async getFlow(flowId: string): Promise<Flow | null> {
     try {
       log.debug(`Getting flow by ID: ${flowId}`);
-      const flows = await this.loadFlows();
-      const flow = flows.find(flow => flow.id === flowId) || null;
+      let flows = await this.loadFlows();
+      let flow = flows.find(flow => flow.id === flowId) || null;
+
+      // Belt-and-braces: a cache populated before this flow was created (or in a
+      // different module instance) could miss a flow that DOES exist in storage.
+      // Never return a false "not found" — re-read from storage once and refresh
+      // the shared cache before giving up. This is the safety net behind the
+      // `Flow not found: <id>` failures on scheduled runs.
+      if (!flow) {
+        log.debug(`Flow ${flowId} not in cache; reloading from storage before giving up`);
+        flows = await loadItem<Flow[]>(StorageKey.FLOWS, []);
+        this.flowsCache = flows;
+        flow = flows.find(flow => flow.id === flowId) || null;
+      }
+
       log.debug(`Flow ${flowId} ${flow ? 'found' : 'not found'}`);
       return flow;
     } catch (error) {

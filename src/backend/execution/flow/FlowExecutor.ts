@@ -9,6 +9,17 @@ import { EmitFn } from '@/shared/types/execution/events';
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
 
+// The execution engine (and its compiled-flow cache) is global-backed so every
+// module instance shares ONE engine. `clearFlowCache()` runs on a flow edit via
+// flowService.saveFlow(); with a per-instance `static` engine that invalidation
+// never reached the scheduler/startup instance, so scheduled runs kept executing
+// a stale compiled flow until a process restart. Same cross-instance-coherence
+// reasoning as the global-backed scheduler and MCP recovery maps.
+declare global {
+  // eslint-disable-next-line no-var
+  var __flujo_flow_engine: FlowEngine | undefined;
+}
+
 // --- Debug snapshot slimming -------------------------------------------------
 // Each debug step records a before/after state snapshot plus prep/exec results.
 // Naively deep-cloning the whole SharedState made the trace grow quadratically:
@@ -60,8 +71,22 @@ export class FlowExecutor {
   // Store conversation states globally - accessible for step-by-step execution
   public static conversationStates = new Map<string, SharedState>();
 
-  // The active execution engine. Replace this single line to swap frameworks.
-  private static engine: FlowEngine = new PocketflowEngine();
+  // The active execution engine. Replace the constructed engine to swap
+  // frameworks. Global-backed (see the declare global above) so its compiled
+  // flow cache is shared across module instances and clearFlowCache() is
+  // coherent everywhere.
+  private static get engine(): FlowEngine {
+    if (!global.__flujo_flow_engine) {
+      global.__flujo_flow_engine = new PocketflowEngine();
+    }
+    return global.__flujo_flow_engine;
+  }
+  // Writable so the engine can be swapped for another framework, and so tests can
+  // stub it. The setter writes through to the shared global to keep every module
+  // instance pointing at the one engine.
+  private static set engine(value: FlowEngine) {
+    global.__flujo_flow_engine = value;
+  }
 
   /** Invalidate cached/compiled flow definitions (e.g. after a flow is edited). */
   static clearFlowCache(flowId?: string): void {
