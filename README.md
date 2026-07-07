@@ -224,18 +224,17 @@ Then open http://localhost:4200.
 
 ### Run via npx (npm package)
 
-> Packaging is prepared but the package is not published yet; publishing is a
-> separate, manually-approved release step. Once published:
-
 ```bash
-npx flujo
+npx flujo-ai
 ```
 
 This runs a prebuilt FLUJO with no git clone or local build. Your data lives in
 `~/.flujo` by default (override with `FLUJO_DATA_DIR`); the port defaults to 4200
 (`--port` / `FLUJO_PORT`), and the browser opens automatically unless you pass
 `--no-open`. MCP servers may still need `git`, `python`/`uv`, or Node on your
-`PATH`. To update, just rerun with `npx flujo@latest`.
+`PATH`. To update, just rerun with `npx flujo-ai@latest`. (The npm package is
+`flujo-ai` — the name `flujo` is blocked by npm's similarity rules — but the
+installed command is still `flujo`.)
 
 ### One-line install (Windows)
 

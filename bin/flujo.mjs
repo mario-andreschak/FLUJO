@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `flujo` / `npx flujo` entry point (issue #59).
+ * `flujo` / `npx flujo-ai` entry point (issue #59).
  *
  * Runs a *prebuilt* FLUJO out of the installed npm package — no git clone, no
  * local `next build`. It:

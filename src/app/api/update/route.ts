@@ -18,7 +18,7 @@ const NON_GIT_UPDATE_MESSAGE: Record<'container' | 'npm', string> = {
     'Your data lives in mounted volumes and is preserved.',
   npm:
     'FLUJO was installed as an npm package. To update, rerun it with the latest ' +
-    'version (`npx flujo@latest`) or reinstall a global install (`npm i -g flujo@latest`). ' +
+    'version (`npx flujo-ai@latest`) or reinstall a global install (`npm i -g flujo-ai@latest`). ' +
     'Your data in the data directory is preserved.',
 };
 
