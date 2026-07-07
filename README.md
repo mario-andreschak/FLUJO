@@ -3,14 +3,26 @@
 # DISCLAIMER
 FLUJO is still an early preview!
 
-## ⚡ Quick Install (Windows)
+## ⚡ Quick Install (recommended)
 
-Install everything (Git, Node.js, Python, uv), clone FLUJO, build it, and optionally start it with a single PowerShell command:
+One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and sets up a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
 
-Press start, type powershell, press Enter, copy & paste the command below and press Enter again.
+**Windows** — press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
 
 ```powershell
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
+```
+
+**Linux / macOS** — paste into a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash
+```
+
+**Already have Node.js?** You can also skip installation entirely and run a prebuilt FLUJO straight from npm — fastest start, but MCP servers may still need `git` / `python` / `uv` on your PATH (see [Run via npx](#run-via-npx-npm-package)):
+
+```bash
+npx flujo-ai
 ```
 
 Prefer to set it up manually? See [Getting Started](#-getting-started). To remove FLUJO later, see [Uninstalling](#uninstalling-windows).
@@ -253,6 +265,25 @@ $env:FLUJO_DIR = "D:\Apps\FLUJO"; $env:FLUJO_START = "1"; irm https://raw.github
 ```
 
 See [`scripts/install.ps1`](scripts/install.ps1) for all options.
+
+### One-line install (Linux / macOS)
+
+The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
+uv) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
+registers the `flujo` command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash
+```
+
+By default FLUJO is installed into `~/FLUJO`. To customise without the
+interactive prompts, set environment variables first, e.g.:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | FLUJO_DIR="$HOME/apps/FLUJO" FLUJO_START=1 bash
+```
+
+See [`scripts/install.sh`](scripts/install.sh) for all options.
 
 ### Uninstalling (Windows)
 
