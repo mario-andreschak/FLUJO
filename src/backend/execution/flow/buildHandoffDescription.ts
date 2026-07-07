@@ -26,6 +26,7 @@ import {
   HandoffNodeSummary,
   HandoffServerSummary,
   formatHandoffDescription,
+  formatFlowToolDescription,
 } from '@/shared/utils/handoffDescription';
 
 const log = createLogger('backend/execution/flow/buildHandoffDescription');
@@ -183,5 +184,32 @@ export async function buildHandoffDescription(targetNode: FlowNode): Promise<str
     const type = (targetNode.data?.type || targetNode.type || 'unknown') as string;
     log.warn('buildHandoffDescription failed; falling back to basic description', { label, type, err });
     return `Hand off execution to ${label} (${type})`;
+  }
+}
+
+/**
+ * Build the MCP-tool description for a whole Flow exposed by the built-in FLUJO
+ * MCP server (issue #38, Item D). The flow's Process/Subflow nodes are summarised
+ * with the same live synthesizer used for handoff tools (bounded model + prompt
+ * snippet + connected MCP servers/tools, recursing into subflows up to
+ * MAX_SUBFLOW_DEPTH). A user-authored *node* description still wins verbatim for
+ * that node (Flow has no top-level description field). Falls back to a minimal
+ * one-liner on any error so tool listing can never break.
+ */
+export async function buildFlowToolDescription(flow: Flow): Promise<string> {
+  try {
+    const caches = newCaches();
+    const visited = new Set<string>([flow.id]);
+    const childNodes = (flow.nodes || []).filter(
+      (n) => n.data?.type === 'process' || n.data?.type === 'subflow' || n.type === 'process' || n.type === 'subflow',
+    );
+    const children: HandoffNodeSummary[] = [];
+    for (const child of childNodes) {
+      children.push(await summariseNode(child, 1, caches, visited));
+    }
+    return formatFlowToolDescription(flow.name, children);
+  } catch (err) {
+    log.warn('buildFlowToolDescription failed; falling back to basic description', { flow: flow?.name, err });
+    return `Runs the FLUJO flow "${flow?.name ?? 'unknown'}".`;
   }
 }

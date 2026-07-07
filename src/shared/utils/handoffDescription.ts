@@ -163,3 +163,44 @@ export function formatHandoffDescription(summary: HandoffNodeSummary): string {
   if (room <= 0) return header;
   return `${header}\n${truncate(body, room)}`;
 }
+
+/**
+ * Render an MCP-tool description for a whole Flow exposed by the built-in FLUJO
+ * MCP server (issue #38, Item D). Reuses the exact same per-node renderer as the
+ * handoff descriptions, so a flow tool advertises the same structured summary of
+ * what it does. A user-authored flow description always wins verbatim (bounded).
+ *
+ * `children` are summaries of the flow's Process/Subflow nodes (assembled by the
+ * backend with live services, mirroring the handoff synthesizer).
+ */
+export function formatFlowToolDescription(
+  flowName: string,
+  children: HandoffNodeSummary[],
+  userDescription?: string,
+): string {
+  if (userDescription && userDescription.trim()) {
+    return truncate(userDescription, MAX_HANDOFF_DESCRIPTION_CHARS);
+  }
+
+  const header = `Runs the FLUJO flow "${flowName}".`;
+  const lines: string[] = [];
+  const shown = children.slice(0, MAX_SUBFLOW_CHILDREN_LISTED);
+  if (shown.length > 0) {
+    lines.push('Steps:');
+    for (const child of shown) {
+      lines.push(`  - ${child.label}:`);
+      renderLines(child, 2, lines);
+    }
+    if (children.length > MAX_SUBFLOW_CHILDREN_LISTED) {
+      lines.push(`  - …and ${children.length - MAX_SUBFLOW_CHILDREN_LISTED} more step(s)`);
+    }
+  }
+
+  const body = lines.join('\n').trim();
+  const full = body ? `${header}\n${body}` : header;
+
+  if (full.length <= MAX_HANDOFF_DESCRIPTION_CHARS) return full;
+  const room = MAX_HANDOFF_DESCRIPTION_CHARS - header.length - 2;
+  if (room <= 0) return header;
+  return `${header}\n${truncate(body, room)}`;
+}
