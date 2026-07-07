@@ -193,6 +193,50 @@ A searchable `/docs` page inside the app documents every REST endpoint FLUJO exp
    npm start
    ```
 
+### Run with Docker
+
+On any machine with Docker, start FLUJO with one command:
+
+```bash
+docker compose up
+```
+
+Then open http://localhost:4200.
+
+- **Your data persists** in the named volumes `flujo-db` (flows, encrypted keys,
+  MCP configs, chat history) and `flujo-mcp-servers` (installed MCP server clones),
+  so it survives `docker compose down` / `up`.
+- **Updating**: pull a newer image instead of the in-app updater —
+  `docker compose pull && docker compose up -d`. FLUJO detects it is running in a
+  container and shows this in the update settings.
+- **Private/corporate CA** for HTTPS MCP servers: mount your CA file and set
+  `FLUJO_EXTRA_CA_CERTS` to its path (see the commented `environment:` block in
+  `docker-compose.yml`).
+- **Claude Subscription** in-container: generate a token on your host with
+  `claude setup-token` and pass it as `CLAUDE_CODE_OAUTH_TOKEN`.
+- **fileWatch triggers**: bind-mount the host folder you want to watch into the
+  container (see the commented volume example in `docker-compose.yml`).
+
+> ⚠️ **Security:** FLUJO has no authentication layer and its git API runs
+> commands on the server, so the port is bound to **localhost only** by default.
+> Do **not** expose it on `0.0.0.0` / publish it publicly unless it sits behind
+> your own authenticating reverse proxy on a trusted network.
+
+### Run via npx (npm package)
+
+> Packaging is prepared but the package is not published yet; publishing is a
+> separate, manually-approved release step. Once published:
+
+```bash
+npx flujo
+```
+
+This runs a prebuilt FLUJO with no git clone or local build. Your data lives in
+`~/.flujo` by default (override with `FLUJO_DATA_DIR`); the port defaults to 4200
+(`--port` / `FLUJO_PORT`), and the browser opens automatically unless you pass
+`--no-open`. MCP servers may still need `git`, `python`/`uv`, or Node on your
+`PATH`. To update, just rerun with `npx flujo@latest`.
+
 ### One-line install (Windows)
 
 On a fresh Windows machine you can install everything (Git, Node.js, Python, uv),
