@@ -1,6 +1,6 @@
 {
   "name": "flujo",
-  "version": "0.3.3",
+  "version": "3.9.0",
   "bin": {
     "flujo": "bin/flujo.mjs"
   },

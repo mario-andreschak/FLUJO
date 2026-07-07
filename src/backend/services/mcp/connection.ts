@@ -142,7 +142,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '0.3.3',
+      version: '3.9.0',
     },
     {
       capabilities: {

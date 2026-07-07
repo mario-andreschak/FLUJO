@@ -31,7 +31,7 @@ import { createLogger } from '@/utils/logger';
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-proxy/[server]/route');
-const PROXY_VERSION = '0.3.3';
+const PROXY_VERSION = '3.9.0';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
