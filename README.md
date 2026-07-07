@@ -1,8 +1,5 @@
 [![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/3f62578d-605f-474c-9472-c5e40df60ee0)
 
-# DISCLAIMER
-FLUJO is still an early preview!
-
 ## ⚡ Quick Install (recommended)
 
 One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and sets up a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
