@@ -1,7 +1,3 @@
-[![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/3f62578d-605f-474c-9472-c5e40df60ee0)
-
-# DISCLAIMER
-FLUJO is still an early preview!
 
 ## ⚡ Quick Install (recommended)
 
@@ -401,3 +397,4 @@ FLUJO - Empowering your AI workflows with open-source orchestration.
 
 ## Ecosystem
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/mario-andreschak-flujo-badge.png)](https://mseep.ai/app/mario-andreschak-flujo)
+[![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/3f62578d-605f-474c-9472-c5e40df60ee0)
