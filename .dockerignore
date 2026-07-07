@@ -1,0 +1,25 @@
+# Keep the build context small and never bake user data or a local build into
+# the image. Excluding .git also (harmlessly) reinforces the container update
+# mode: even without FLUJO_CONTAINER, there'd be no git clone to self-update.
+node_modules
+.next
+.git
+.github
+
+# User data — must come from mounted volumes, never the image.
+db
+mcp-servers
+
+# Docs / site assets not needed at runtime.
+docs/images
+githubpages
+
+# Local/scratch artifacts.
+*.tsbuildinfo
+*.log
+npm-debug.log*
+.env
+.env.*
+Dockerfile
+.dockerignore
+docker-compose.yml

@@ -26,6 +26,11 @@ export default function UpdateSettings() {
   const [status, setStatus] = useState<
     { severity: 'success' | 'error' | 'info' | 'warning'; message: string } | null
   >(null);
+  // How this install updates itself: 'git' (in-app pull), or 'container'/'npm'/'none'
+  // (self-update unavailable — the user pulls a new image / reinstalls the package).
+  // Null until the first check; the in-app "Update now" action only applies to 'git'.
+  const [updateMode, setUpdateMode] = useState<string | null>(null);
+  const canSelfUpdate = updateMode === null || updateMode === 'git';
 
   const handleToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     updateSettings({
@@ -43,6 +48,9 @@ export default function UpdateSettings() {
     try {
       const res = await fetch('/api/update');
       const data = await res.json();
+      if (typeof data.updateMode === 'string') {
+        setUpdateMode(data.updateMode);
+      }
       if (!res.ok || data.success === false) {
         setStatus({ severity: 'error', message: data.error || 'Failed to check for updates.' });
       } else if (data.isGitRepo === false) {
@@ -124,6 +132,16 @@ export default function UpdateSettings() {
           a one-click update banner if one is available. Updates run <code>git pull</code> +
           rebuild in your install folder; your data is preserved.
         </Typography>
+        {!canSelfUpdate && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            This install can&apos;t update itself in place
+            {updateMode === 'container'
+              ? ' (running in Docker) — pull a newer image instead.'
+              : updateMode === 'npm'
+                ? ' (installed via npm) — rerun with the latest version instead.'
+                : ' — it is not running from a git clone.'}
+          </Typography>
+        )}
       </FormControl>
 
       <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
@@ -131,7 +149,7 @@ export default function UpdateSettings() {
           {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
           Check now
         </Button>
-        <Button variant="contained" onClick={handleApply} disabled={applying}>
+        <Button variant="contained" onClick={handleApply} disabled={applying || !canSelfUpdate}>
           {applying ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
           Update now
         </Button>

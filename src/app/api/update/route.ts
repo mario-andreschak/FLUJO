@@ -4,8 +4,23 @@ import path from 'path';
 import fs from 'fs/promises';
 import { execSync, ExecSyncOptionsWithStringEncoding, spawn } from 'child_process';
 import { createLogger } from '@/utils/logger';
+import { getInstallMode } from '@/utils/paths';
 
 const log = createLogger('app/api/update/route');
+
+// How a non-git install is told to update itself. The Settings UI switches on
+// `updateMode` so each distribution shows the right instructions instead of a
+// git-only update button (issues #57 Docker, #59 npm).
+const NON_GIT_UPDATE_MESSAGE: Record<'container' | 'npm', string> = {
+  container:
+    'FLUJO is running inside a Docker container. To update, pull a newer image ' +
+    'and recreate the container (e.g. `docker compose pull && docker compose up -d`). ' +
+    'Your data lives in mounted volumes and is preserved.',
+  npm:
+    'FLUJO was installed as an npm package. To update, rerun it with the latest ' +
+    'version (`npx flujo@latest`) or reinstall a global install (`npm i -g flujo@latest`). ' +
+    'Your data in the data directory is preserved.',
+};
 
 // Long-running build steps must not be cached or prematurely cut off.
 export const dynamic = 'force-dynamic';
@@ -27,6 +42,22 @@ async function getCurrentVersion(): Promise<string> {
  */
 export async function GET() {
   const currentVersion = await getCurrentVersion();
+
+  // Packaged installs (Docker/npm) can't git-pull themselves. Report the mode so
+  // the UI can show the right update instructions instead of a broken button.
+  const installMode = getInstallMode();
+  if (installMode !== 'git') {
+    log.info(`Update check: install mode is '${installMode}'; in-app git update is unavailable`);
+    return NextResponse.json({
+      success: true,
+      isGitRepo: false,
+      updateMode: installMode,
+      updateAvailable: false,
+      currentVersion,
+      message: NON_GIT_UPDATE_MESSAGE[installMode],
+    });
+  }
+
   try {
     const git = simpleGit(process.cwd());
 
@@ -35,6 +66,7 @@ export async function GET() {
       return NextResponse.json({
         success: true,
         isGitRepo: false,
+        updateMode: 'none',
         updateAvailable: false,
         currentVersion,
         message: 'FLUJO is not running from a git clone, so auto-update is unavailable.',
@@ -50,6 +82,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       isGitRepo: true,
+      updateMode: 'git',
       updateAvailable: behindBy > 0,
       behindBy,
       branch: status.current,
@@ -82,6 +115,19 @@ export async function POST(request: NextRequest) {
 
   if (action && action !== 'apply') {
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
+  }
+
+  // Packaged installs (Docker/npm) must never attempt an in-place git update:
+  // there is no git clone to pull, and the install is read-only. Refuse before
+  // touching git and tell the caller how to update this distribution instead.
+  const installMode = getInstallMode();
+  if (installMode !== 'git') {
+    log.info(`Update apply refused: install mode is '${installMode}'`);
+    return NextResponse.json({
+      success: false,
+      updateMode: installMode,
+      error: NON_GIT_UPDATE_MESSAGE[installMode],
+    }, { status: 501 });
   }
 
   const cwd = process.cwd();

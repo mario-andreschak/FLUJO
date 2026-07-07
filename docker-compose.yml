@@ -1,0 +1,32 @@
+# FLUJO via Docker (issue #57): `docker compose up`.
+#
+# SECURITY: FLUJO has no authentication layer, and its git API executes
+# frontend-supplied commands (RCE-equivalent). The port is therefore bound to
+# localhost ONLY by default. Do NOT change this to "4200:4200" (all interfaces)
+# unless FLUJO sits behind your own authenticating reverse proxy on a trusted
+# network.
+
+services:
+  flujo:
+    build: .
+    # Or use a published image instead of building locally:
+    # image: ghcr.io/mario-andreschak/flujo:latest
+    ports:
+      - "127.0.0.1:4200:4200"
+    volumes:
+      # User data persists across `down`/`up` in named volumes.
+      - flujo-db:/app/db
+      - flujo-mcp-servers:/app/mcp-servers
+      # To use the fileWatch trigger, bind-mount the watched host folder, e.g.:
+      # - /path/on/host/watched:/data/watched
+    # Uncomment to pass configuration into the container:
+    # environment:
+    #   # Trust a private/corporate CA for MCP servers over HTTPS (mount the file too):
+    #   - FLUJO_EXTRA_CA_CERTS=/certs/root-ca.crt
+    #   # Claude Subscription in-container (generate on the host with `claude setup-token`):
+    #   - CLAUDE_CODE_OAUTH_TOKEN=...
+    restart: unless-stopped
+
+volumes:
+  flujo-db:
+  flujo-mcp-servers:
