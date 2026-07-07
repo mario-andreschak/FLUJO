@@ -10,6 +10,7 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   FormHelperText,
   Stack,
   Tab,
@@ -17,6 +18,8 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { isPackageRunnerCommand } from '@/utils/mcp/resolveServerCwd';
+import { RUNNER_TEST_CONNECTION_TIMEOUT_MS } from '@/utils/mcp/testConnectionTimeout';
 
 interface RunToolsProps {
   command: string;
@@ -121,6 +124,17 @@ const RunTools: React.FC<RunToolsProps> = ({
 
   const showInsecureWebsocketWarning =
     transport === 'websocket' && isWebsocketUrlValid && isInsecureRemoteWebsocket(websocketUrl);
+
+  // Detect a package-runner command (npx/uvx/bunx/pnpm dlx). Its first run may need to
+  // download the package before the MCP handshake starts, so the Test Run allows a longer
+  // timeout (issue #43) — surface that up front so a slow first start isn't mistaken for
+  // a frozen modal.
+  const commandTokens = command.trim().split(/\s+/).filter(Boolean);
+  const isRunnerCommand =
+    transport === 'stdio' &&
+    commandTokens.length > 0 &&
+    isPackageRunnerCommand(commandTokens[0], commandTokens.slice(1));
+  const runnerTimeoutSeconds = Math.round(RUNNER_TEST_CONNECTION_TIMEOUT_MS / 1000);
 
   return (
     <Stack spacing={3}>
@@ -229,6 +243,11 @@ const RunTools: React.FC<RunToolsProps> = ({
             variant="outlined"
             required
           />
+          {isRunnerCommand && (
+            <FormHelperText>
+              npx/uvx may download the package on the first run — the Test Run waits up to {runnerTimeoutSeconds}s before timing out.
+            </FormHelperText>
+          )}
         </Box>
       )}
 
@@ -237,6 +256,7 @@ const RunTools: React.FC<RunToolsProps> = ({
           variant="contained"
           color={runCompleted ? "success" : "primary"}
           onClick={onRun}
+          startIcon={isRunning ? <CircularProgress size={16} color="inherit" /> : undefined}
           disabled={isRunning || 
                   (transport === 'stdio' && !command.trim()) || 
                   (transport === 'websocket' && !isWebsocketUrlValid) || 

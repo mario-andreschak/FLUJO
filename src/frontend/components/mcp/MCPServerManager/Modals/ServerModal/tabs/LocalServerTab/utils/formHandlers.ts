@@ -6,6 +6,7 @@ import { parseConfigFromClipboard, parseConfigFromReadme, parseEnvFromClipboard,
 import { installDependencies, buildServer } from '../../../utils/buildUtils';
 import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } from '../hooks/useLocalServerState';
 import { mcpService } from '@/frontend/services/mcp';
+import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 
 export const handleSubmit = (
   e: React.FormEvent,
@@ -693,6 +694,16 @@ export const handleRun = async (
       const argString = (localConfig.args || []).join(' ');
       setConsoleOutput((prev: string) => prev +
         `Launching (via FLUJO backend): ${localConfig.command}${argString ? ' ' + argString : ''}\n`);
+
+      // Package-runner commands (npx/uvx/bunx/pnpm dlx) may have to download the package
+      // on first run, so the backend allows a longer handshake window (issue #43). Tell
+      // the user up front so a slow first start doesn't look frozen.
+      if (isRunnerStdioConfig(localConfig)) {
+        const timeoutSeconds = Math.round(getTestConnectionTimeoutMs(localConfig) / 1000);
+        setConsoleOutput((prev: string) => prev +
+          `This looks like a package-runner command (npx/uvx). The first run may need to download the package, ` +
+          `so the test waits up to ${timeoutSeconds}s before timing out — please wait...\n`);
+      }
     }
 
     const testResult = await mcpService.testConnection(localConfig);

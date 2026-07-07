@@ -76,6 +76,7 @@ import {
 import { encryptApiKey } from '@/backend/services/model/encryption';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 import {
   createNewClient,
   createTransport,
@@ -820,11 +821,20 @@ export class MCPService {
         stderrLogs.push(`Transport error: ${formatErrorChain(err)}`);
       };
 
-      const timeoutMs = 15000;
+      // Runner-aware timeout: a cold `npx`/`uvx`/`bunx`/`pnpm dlx` may need to DOWNLOAD
+      // the package before the MCP handshake even starts, which routinely exceeds the 15s
+      // default (issue #43). Local commands and HTTP transports keep the 15s default.
+      const timeoutMs = getTestConnectionTimeoutMs(config);
+      const isRunner = isRunnerStdioConfig(config);
       let timeoutHandle: NodeJS.Timeout | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
-          () => reject(new Error(`Connection timeout after ${timeoutMs / 1000}s`)),
+          () => reject(new Error(
+            `Connection timeout after ${timeoutMs / 1000}s`
+            + (isRunner
+              ? ' — the package may still be downloading via npx/uvx. Try running the Test again (the package is cached after the first download), or verify the command and network access.'
+              : '')
+          )),
           timeoutMs
         );
       });
