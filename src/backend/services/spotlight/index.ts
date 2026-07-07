@@ -7,7 +7,7 @@
  * demand via POST /api/mcp-registry/spotlight — never when the Spotlight tab
  * opens; the tab only reads the cache.
  */
-import { SPOTLIGHT_SERVER_URLS } from '@/shared/config/spotlightServers';
+import { SPOTLIGHT_SERVERS, normalizeSpotlightSource } from '@/shared/config/spotlightServers';
 import { StorageKey } from '@/shared/types/storage';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import {
@@ -54,14 +54,18 @@ export function refreshSpotlightServers(): Promise<SpotlightCache> {
 }
 
 async function doRefresh(): Promise<SpotlightCache> {
-  log.info(`Refreshing spotlight servers (${SPOTLIGHT_SERVER_URLS.length} entries)`);
+  const sources = SPOTLIGHT_SERVERS.map(normalizeSpotlightSource);
+  log.info(`Refreshing spotlight servers (${sources.length} entries)`);
   const entries: SpotlightEntry[] = [];
 
-  for (const url of SPOTLIGHT_SERVER_URLS) {
+  for (const source of sources) {
+    // env defaults always come from the current shipped config — never from a
+    // previous cache — so stale defaults can't survive a code update.
+    const { url, env } = source;
     const requestPath = spotlightRequestPath(url);
     if (!requestPath) {
       log.warn(`Unrecognized spotlight URL format: ${url}`);
-      entries.push({ url, error: 'Unrecognized spotlight URL format' });
+      entries.push({ url, env, error: 'Unrecognized spotlight URL format' });
       continue;
     }
 
@@ -69,15 +73,15 @@ async function doRefresh(): Promise<SpotlightCache> {
       const body = await registryGetJson(new URL(REGISTRY_ORIGIN + requestPath), FETCH_TIMEOUT_MS);
       const result = firstServerFromResponse(body);
       if (result) {
-        entries.push({ url, result });
+        entries.push({ url, env, result });
       } else {
         log.warn(`Spotlight URL resolved to no server: ${url}`);
-        entries.push({ url, error: 'No matching server found in the registry' });
+        entries.push({ url, env, error: 'No matching server found in the registry' });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       log.warn(`Failed to resolve spotlight URL ${url}: ${message}`);
-      entries.push({ url, error: message });
+      entries.push({ url, env, error: message });
     }
 
     await new Promise(resolve => setTimeout(resolve, INTER_REQUEST_DELAY_MS));

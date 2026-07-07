@@ -8,6 +8,7 @@ import {
   InstallOption,
   getInstallOptions,
   buildConfigFromOption,
+  applySpotlightEnvDefaults,
   displayName
 } from '@/utils/mcp/registry';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
@@ -39,6 +40,12 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import CloudIcon from '@mui/icons-material/Cloud';
 import StarIcon from '@mui/icons-material/Star';
 
+/** A resolved curated server plus its shipped env-var defaults. */
+interface SpotlightCard {
+  server: RegistryServer;
+  env?: Record<string, string>;
+}
+
 /**
  * Spotlight: FLUJO's curated MCP servers. The list ships with FLUJO
  * (src/shared/config/spotlightServers.ts); the registry records are cached on
@@ -46,6 +53,8 @@ import StarIcon from '@mui/icons-material/Star';
  * open). Installation is one click: the config is built from the registry
  * record and added to the server list directly. Only when a server offers
  * both a local package and a remote endpoint is the user asked which to use.
+ * Curated env defaults from the spotlight list are merged into the generated
+ * config at install time.
  */
 const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
   const theme = useTheme();
@@ -53,8 +62,8 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
-  // Server whose Local/Remote choice is pending
-  const [choiceServer, setChoiceServer] = useState<RegistryServer | null>(null);
+  // Card whose Local/Remote choice is pending
+  const [choiceCard, setChoiceCard] = useState<SpotlightCard | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,20 +112,23 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
     }
   };
 
-  const install = (server: RegistryServer, option: InstallOption) => {
-    const config = buildConfigFromOption(server, option);
-    setChoiceServer(null);
+  const install = (card: SpotlightCard, option: InstallOption) => {
+    // Curated env defaults from the spotlight list are merged on top of the
+    // registry record (adding vars the record didn't declare, filling the
+    // default of ones it did) — still editable later via the Env editor.
+    const config = applySpotlightEnvDefaults(buildConfigFromOption(card.server, option), card.env);
+    setChoiceCard(null);
     // handleAddServer in the server manager saves the config and closes the
     // modal — the server appears as a card in the list immediately.
     onAdd(config as MCPServerConfig);
   };
 
-  const handleServerClick = (server: RegistryServer) => {
-    const options = getInstallOptions(server);
+  const handleServerClick = (card: SpotlightCard) => {
+    const options = getInstallOptions(card.server);
     if (options.length === 0) {
       setMessage({
         type: 'warning',
-        text: `${displayName(server)} does not offer an installation method FLUJO can set up automatically.`
+        text: `${displayName(card.server)} does not offer an installation method FLUJO can set up automatically.`
       });
       return;
     }
@@ -124,18 +136,18 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
     const remoteOptions = options.filter(o => o.kind === 'remote');
     if (packageOptions.length > 0 && remoteOptions.length > 0) {
       // The only decision Spotlight asks the user to make: local vs remote
-      setChoiceServer(server);
+      setChoiceCard(card);
       return;
     }
-    install(server, options[0]);
+    install(card, options[0]);
   };
 
-  const servers = (cache?.entries ?? [])
+  const cards: SpotlightCard[] = (cache?.entries ?? [])
     .filter(entry => entry.result)
-    .map(entry => entry.result!.server);
+    .map(entry => ({ server: entry.result!.server, env: entry.env }));
   const failures = (cache?.entries ?? []).filter(entry => !entry.result);
 
-  const choiceOptions = choiceServer ? getInstallOptions(choiceServer) : [];
+  const choiceOptions = choiceCard ? getInstallOptions(choiceCard.server) : [];
   const choicePackage = choiceOptions.find(o => o.kind === 'package');
   const choiceRemote = choiceOptions.find(o => o.kind === 'remote');
 
@@ -172,14 +184,15 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
           <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
             <CircularProgress />
           </Box>
-        ) : servers.length === 0 ? (
+        ) : cards.length === 0 ? (
           <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
             No spotlight servers cached yet. They are fetched when FLUJO starts —
             click Refresh to fetch them now.
           </Typography>
         ) : (
           <Grid container spacing={2}>
-            {servers.map(server => {
+            {cards.map(card => {
+              const { server } = card;
               const options = getInstallOptions(server);
               const hasLocal = options.some(o => o.kind === 'package');
               const hasRemote = options.some(o => o.kind === 'remote');
@@ -199,7 +212,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
                   >
                     <CardActionArea
                       sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
-                      onClick={() => handleServerClick(server)}
+                      onClick={() => handleServerClick(card)}
                     >
                       <Box
                         sx={{
@@ -280,17 +293,17 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
       </Stack>
 
       {/* Local-vs-remote chooser — the single decision Spotlight leaves to the user */}
-      <Dialog open={choiceServer !== null} onClose={() => setChoiceServer(null)} maxWidth="xs" fullWidth>
-        {choiceServer && (
+      <Dialog open={choiceCard !== null} onClose={() => setChoiceCard(null)} maxWidth="xs" fullWidth>
+        {choiceCard && (
           <>
-            <DialogTitle>{displayName(choiceServer)}</DialogTitle>
+            <DialogTitle>{displayName(choiceCard.server)}</DialogTitle>
             <DialogContent>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 This server can run locally on your machine or connect to a hosted endpoint.
               </Typography>
               <List>
                 {choicePackage && (
-                  <ListItemButton onClick={() => install(choiceServer, choicePackage)}>
+                  <ListItemButton onClick={() => install(choiceCard, choicePackage)}>
                     <ListItemIcon>
                       <TerminalIcon />
                     </ListItemIcon>
@@ -298,7 +311,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
                   </ListItemButton>
                 )}
                 {choiceRemote && (
-                  <ListItemButton onClick={() => install(choiceServer, choiceRemote)}>
+                  <ListItemButton onClick={() => install(choiceCard, choiceRemote)}>
                     <ListItemIcon>
                       <CloudIcon />
                     </ListItemIcon>
@@ -308,7 +321,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
               </List>
             </DialogContent>
             <DialogActions>
-              <Button onClick={() => setChoiceServer(null)}>Cancel</Button>
+              <Button onClick={() => setChoiceCard(null)}>Cancel</Button>
             </DialogActions>
           </>
         )}

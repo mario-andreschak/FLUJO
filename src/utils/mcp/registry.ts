@@ -366,6 +366,12 @@ export function buildConfigFromOption(
 export interface SpotlightEntry {
   /** The curated source URL (from the shipped spotlight list) */
   url: string;
+  /**
+   * Env-var defaults from the shipped spotlight list, merged into the
+   * generated config at install time. Always copied from the current shipped
+   * config on refresh — never carried forward from a previous cache.
+   */
+  env?: Record<string, string>;
   /** The resolved registry record; absent when resolution failed */
   result?: RegistryServerResult;
   /** Why resolution failed, when it did */
@@ -432,13 +438,44 @@ export function firstServerFromResponse(body: unknown): RegistryServerResult | n
 }
 
 /**
- * Env vars (or remote headers) the user still has to provide before the
- * server can run — used by the UI to warn before handing off.
+ * Merge curated spotlight env defaults into a generated server config.
+ *
+ * Overrides add vars the registry record didn't declare and fill/replace the
+ * default value of vars it did declare. When the registry declared a var as
+ * secret, the secret shape ({ value, metadata: { isSecret: true } }) is
+ * preserved so the value keeps flowing through the encrypted env handling.
  */
-export function missingRequiredInputs(option: InstallOption): string[] {
+export function applySpotlightEnvDefaults(
+  config: Partial<MCPServerConfig>,
+  overrides?: Record<string, string>
+): Partial<MCPServerConfig> {
+  if (!overrides || Object.keys(overrides).length === 0) return config;
+  const env: Record<string, EnvVarValue> = { ...(config.env ?? {}) };
+  for (const [name, value] of Object.entries(overrides)) {
+    const existing = env[name];
+    if (existing && typeof existing === 'object' && existing.metadata?.isSecret) {
+      env[name] = { value, metadata: { isSecret: true } };
+    } else {
+      env[name] = value;
+    }
+  }
+  // Same cast the config builders above use: MCPServerConfig types env as an
+  // intersection that a plain Record<string, EnvVarValue> can't satisfy.
+  return { ...config, env } as Partial<MCPServerConfig>;
+}
+
+/**
+ * Env vars (or remote headers) the user still has to provide before the
+ * server can run — used by the UI to warn before handing off. A curated
+ * spotlight env override counts as providing the value.
+ */
+export function missingRequiredInputs(
+  option: InstallOption,
+  envOverrides?: Record<string, string>
+): string[] {
   if (option.kind === 'package') {
     return (option.pkg.environmentVariables ?? [])
-      .filter(v => v.isRequired && !(v.value ?? v.default))
+      .filter(v => v.isRequired && !(v.value ?? v.default) && !envOverrides?.[v.name])
       .map(v => v.name);
   }
   return (option.remote.headers ?? [])

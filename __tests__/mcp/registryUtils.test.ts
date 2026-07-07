@@ -9,9 +9,11 @@ import {
   sanitizeServerName,
   displayName,
   missingRequiredInputs,
+  applySpotlightEnvDefaults,
   spotlightRequestPath,
   firstServerFromResponse
 } from '@/utils/mcp/registry';
+import { normalizeSpotlightSource } from '@/shared/config/spotlightServers';
 import { MCPStdioConfig, MCPStreamableConfig, MCPSSEConfig } from '@/shared/types/mcp/mcp';
 
 const baseServer = (overrides: Partial<RegistryServer>): RegistryServer => ({
@@ -311,6 +313,85 @@ describe('spotlightRequestPath', () => {
         'https://registry.modelcontextprotocol.io/v0.1/servers/ai.keenable%2Fweb-search/versions/1.2.3/extra'
       )
     ).toBeNull();
+  });
+});
+
+// Issue #60: curated spotlight entries can ship default env vars that are
+// merged into the generated config at install time.
+describe('applySpotlightEnvDefaults', () => {
+  it('adds env vars the registry record did not declare', () => {
+    const config = { env: { EXISTING: 'kept' } } as Partial<MCPStdioConfig>;
+    const merged = applySpotlightEnvDefaults(config, { PLAYWRIGHT_MCP_BROWSER: 'msedge' });
+    expect(merged.env).toEqual({
+      EXISTING: 'kept',
+      PLAYWRIGHT_MCP_BROWSER: 'msedge'
+    });
+    // The input config is not mutated
+    expect(config.env).toEqual({ EXISTING: 'kept' });
+  });
+
+  it('replaces the default value of declared plain env vars', () => {
+    const config = { env: { UNITS: 'metric' } } as Partial<MCPStdioConfig>;
+    const merged = applySpotlightEnvDefaults(config, { UNITS: 'imperial' });
+    expect(merged.env).toEqual({ UNITS: 'imperial' });
+  });
+
+  it('preserves the secret shape when the registry declared the var as secret', () => {
+    const config = {
+      env: { TOKEN: { value: '', metadata: { isSecret: true } } }
+    } as unknown as Partial<MCPStdioConfig>;
+    const merged = applySpotlightEnvDefaults(config, { TOKEN: 'default-token' });
+    expect(merged.env).toEqual({
+      TOKEN: { value: 'default-token', metadata: { isSecret: true } }
+    });
+  });
+
+  it('is a no-op when there are no overrides', () => {
+    const config = { env: { A: '1' } } as Partial<MCPStdioConfig>;
+    expect(applySpotlightEnvDefaults(config, undefined)).toBe(config);
+    expect(applySpotlightEnvDefaults(config, {})).toBe(config);
+  });
+
+  it('creates the env record when the config has none', () => {
+    const merged = applySpotlightEnvDefaults({}, { A: '1' });
+    expect(merged.env).toEqual({ A: '1' });
+  });
+});
+
+describe('missingRequiredInputs with spotlight env overrides', () => {
+  const server = baseServer({
+    packages: [{
+      registryType: 'npm',
+      identifier: '@example/weather-mcp',
+      environmentVariables: [
+        { name: 'WEATHER_API_KEY', isRequired: true, isSecret: true },
+        { name: 'WEATHER_REGION', isRequired: true }
+      ]
+    }]
+  });
+
+  it('counts a curated default as satisfying a required env var', () => {
+    const option = getInstallOptions(server)[0];
+    expect(missingRequiredInputs(option, { WEATHER_REGION: 'eu' })).toEqual(['WEATHER_API_KEY']);
+    expect(
+      missingRequiredInputs(option, { WEATHER_REGION: 'eu', WEATHER_API_KEY: 'k' })
+    ).toEqual([]);
+  });
+
+  it('changes nothing when no overrides are given', () => {
+    const option = getInstallOptions(server)[0];
+    expect(missingRequiredInputs(option)).toEqual(['WEATHER_API_KEY', 'WEATHER_REGION']);
+  });
+});
+
+describe('normalizeSpotlightSource', () => {
+  it('wraps bare-string entries into { url }', () => {
+    expect(normalizeSpotlightSource('https://example.com/x')).toEqual({ url: 'https://example.com/x' });
+  });
+
+  it('passes object entries through unchanged', () => {
+    const source = { url: 'https://example.com/x', env: { A: '1' } };
+    expect(normalizeSpotlightSource(source)).toBe(source);
   });
 });
 
