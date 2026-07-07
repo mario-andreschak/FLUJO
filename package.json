@@ -1,7 +1,6 @@
 {
   "name": "flujo",
   "version": "0.3.3",
-  "private": true,
   "bin": {
     "flujo": "bin/flujo.mjs"
   },
@@ -22,7 +21,9 @@
     "lint": "next lint",
     "test": "jest",
     "test:watch": "jest --watch",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "version": "node scripts/sync-version.mjs && git add -A src README.md",
+    "release": "npm version minor -m \"Bump version to %s\" && npm publish"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.186",
