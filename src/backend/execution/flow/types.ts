@@ -45,6 +45,9 @@ export interface StartNodeProperties {
 // ProcessNode specific properties
 export interface ProcessNodeProperties {
     name?: string;
+    /** True once the user edits the node's label by hand; suppresses auto-naming
+     *  the node after its bound model on (re)binding (issue #38, Item C). */
+    nameIsCustom?: boolean;
     promptTemplate?: string;
     excludeModelPrompt?: boolean;
     excludeStartNodePrompt?: boolean;
@@ -67,6 +70,9 @@ export interface FinishNodeProperties {
 // MCPNode specific properties
 export interface MCPNodeProperties {
     name?: string;
+    /** True once the user edits the node's label by hand; suppresses auto-naming
+     *  the node after its bound server on (re)binding (issue #38, Item C). */
+    nameIsCustom?: boolean;
     boundServer?: string;
     enabledTools?: string[];
     /**

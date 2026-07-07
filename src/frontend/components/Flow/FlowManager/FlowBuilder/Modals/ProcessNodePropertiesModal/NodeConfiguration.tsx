@@ -22,7 +22,15 @@ const NodeConfiguration: React.FC<NodeConfigurationProps> = ({ nodeData, setNode
         fullWidth
         label="Node Label"
         value={nodeData.label || ''}
-        onChange={(e) => setNodeData({ ...nodeData, label: e.target.value })}
+        onChange={(e) =>
+          // Editing the label by hand marks it custom so model (re)binding
+          // never auto-overwrites it (issue #38, Item C).
+          setNodeData((prev: any) => ({
+            ...prev,
+            label: e.target.value,
+            properties: { ...prev?.properties, nameIsCustom: true },
+          }))
+        }
         margin="normal"
       />
 

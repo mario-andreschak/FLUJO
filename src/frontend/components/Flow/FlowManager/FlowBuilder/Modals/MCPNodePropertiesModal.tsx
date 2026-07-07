@@ -35,6 +35,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import Tooltip from '@mui/material/Tooltip';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
+import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/RootsManager';
 import { createLogger } from '@/utils/logger/index';
 
@@ -134,13 +135,18 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
     });
   };
 
-  // Handle label change
+  // Handle label change. Editing the label by hand marks it custom so binding a
+  // server never auto-overwrites it (issue #38, Item C).
   const handleLabelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setNodeData((prev) => {
       if (!prev) return null;
       return {
         ...prev,
         label: event.target.value,
+        properties: {
+          ...prev.properties,
+          nameIsCustom: true,
+        },
       };
     });
   };
@@ -198,13 +204,20 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
 
     setNodeData((prev) => {
       if (!prev) return null;
-      // Remove automatic label update
-      // const server = servers.find(s => s.name === serverName);
-      // const newLabel = server ? server.name : prev.label;
+      // Auto-name the node after the bound server unless the user renamed it by
+      // hand. previousAutoLabel (the prior server name) lets a re-bind re-label a
+      // node still showing the old server's auto name (issue #38, Item C).
+      const newLabel = resolveAutoNodeLabel({
+        currentLabel: prev.label,
+        nameIsCustom: prev.properties?.nameIsCustom,
+        defaultLabel: 'MCP Node',
+        previousAutoLabel: prev.properties?.boundServer || undefined,
+        nextAutoLabel: serverName,
+      });
 
       return {
         ...prev,
-        // label: newLabel, // REMOVED: Label is now manually controlled
+        label: newLabel,
         properties: {
           ...prev.properties,
           boundServer: serverName,

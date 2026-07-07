@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { modelService } from '@/frontend/services/model';
 import { Model } from '@/shared/types/model';
+import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import { createLogger } from '@/utils/logger';
 
 // Create a logger instance for this file
@@ -67,8 +68,17 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
       setNodeData((prev: any) => {
         if (!prev) return null;
 
-        // Use the model's display name as the node label if it's not already set
-        const newLabel = prev.label === 'Process Node' ? (selectedModel.displayName || selectedModel.name) : prev.label;
+        // Auto-name the node after the bound model unless the user renamed it by
+        // hand. previousAutoLabel lets a re-bind re-label a node that was still
+        // showing the prior model's auto name (issue #38, Item C).
+        const prevModel = models.find((m) => m.id === prev.properties?.boundModel);
+        const newLabel = resolveAutoNodeLabel({
+          currentLabel: prev.label,
+          nameIsCustom: prev.properties?.nameIsCustom,
+          defaultLabel: 'Process Node',
+          previousAutoLabel: prevModel ? (prevModel.displayName || prevModel.name) : undefined,
+          nextAutoLabel: selectedModel.displayName || selectedModel.name,
+        });
 
         return {
           ...prev,
