@@ -162,6 +162,11 @@ const ServerModal: React.FC<ServerModalProps> = ({
             <SpotlightTab
               onAdd={onAdd}
               onClose={onClose}
+              setActiveTab={setActiveTab}
+              onUpdate={(config, options) => {
+                setParsedConfig(config);
+                setAutoTestRun(Boolean(options?.autoTestRun));
+              }}
             />
           ) : activeTab === 'marketplace' ? (
             <MarketplaceTab

@@ -50,13 +50,15 @@ interface SpotlightCard {
  * Spotlight: FLUJO's curated MCP servers. The list ships with FLUJO
  * (src/shared/config/spotlightServers.ts); the registry records are cached on
  * the backend (refreshed at startup or via the Refresh button — never on tab
- * open). Installation is one click: the config is built from the registry
- * record and added to the server list directly. Only when a server offers
- * both a local package and a remote endpoint is the user asked which to use.
+ * open). Clicking a server hands the generated config to the Local Server tab
+ * — the same flow as the Marketplace: the define/build sections arrive
+ * completed and a test run starts automatically, so the user can review env
+ * vars and console output before saving. Only when a server offers both a
+ * local package and a remote endpoint is the user asked which to use.
  * Curated env defaults from the spotlight list are merged into the generated
- * config at install time.
+ * config at handoff time.
  */
-const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
+const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) => {
   const theme = useTheme();
   const [cache, setCache] = useState<SpotlightCache | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -115,12 +117,18 @@ const SpotlightTab: React.FC<TabProps> = ({ onAdd, onClose }) => {
   const install = (card: SpotlightCard, option: InstallOption) => {
     // Curated env defaults from the spotlight list are merged on top of the
     // registry record (adding vars the record didn't declare, filling the
-    // default of ones it did) — still editable later via the Env editor.
+    // default of ones it did) — editable in the Local Server tab's Env editor
+    // before saving.
     const config = applySpotlightEnvDefaults(buildConfigFromOption(card.server, option), card.env);
     setChoiceCard(null);
-    // handleAddServer in the server manager saves the config and closes the
-    // modal — the server appears as a card in the list immediately.
-    onAdd(config as MCPServerConfig);
+    if (onUpdate) {
+      // autoTestRun: registry configs need no manual install/build step, so the
+      // local tab can start the test run (which performs the install) right away
+      onUpdate(config as MCPServerConfig, { autoTestRun: true });
+    }
+    if (setActiveTab) {
+      setActiveTab('local');
+    }
   };
 
   const handleServerClick = (card: SpotlightCard) => {
