@@ -1,7 +1,13 @@
-import type { NextConfig } from "next";
+// Plain-JS config on purpose: the npm package (`npx flujo-ai`) runs `next start`
+// on end-user machines without TypeScript installed, and a next.config.ts would
+// make Next try to npm-install typescript there at runtime (which fails).
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const nextConfig: NextConfig = {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   /* config options here */
   // Pin the workspace root to this project. Without this, a stray
   // package-lock.json in a parent dir (e.g. the user's home folder) makes
@@ -33,7 +39,7 @@ const nextConfig: NextConfig = {
         ...config.output,
         chunkLoadTimeout: 60000,
       };
-      
+
       // Optimize for development performance
       config.optimization = {
         ...config.optimization,
@@ -57,7 +63,7 @@ const nextConfig: NextConfig = {
           },
         },
       };
-      
+
       // Configure watchOptions for better file watching
       config.watchOptions = {
         ...config.watchOptions,
@@ -65,7 +71,7 @@ const nextConfig: NextConfig = {
         aggregateTimeout: 300, // Delay before rebuilding
       };
     }
-    
+
     // Exclude node binary files from being processed by webpack
     config.externals = [...(config.externals || []),
       {
@@ -73,7 +79,7 @@ const nextConfig: NextConfig = {
         'node-gyp-build': 'commonjs node-gyp-build'
       }
     ];
-    
+
     // Handle binary modules properly
     config.module = {
       ...config.module,
@@ -85,13 +91,13 @@ const nextConfig: NextConfig = {
         },
       ],
     };
-    
+
     // Enable WebAssembly
     config.experiments = {
       ...config.experiments,
       asyncWebAssembly: true,
     };
-    
+
     return config;
   },
 };

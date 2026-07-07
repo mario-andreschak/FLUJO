@@ -10,7 +10,6 @@
     "public/**/*",
     "scripts/launch-next.mjs",
     "bin/**/*",
-    "next.config.ts",
     "next.config.mjs"
   ],
   "scripts": {
