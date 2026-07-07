@@ -4,6 +4,7 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { saveItem } from '@/utils/storage/backend'; // Import saveItem directly
+import { getDataDir } from '@/utils/paths';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
@@ -30,7 +31,7 @@ export async function GET() {
   const requestId = `conv-list-${Date.now()}`;
   log.info('Handling GET request for conversation list', { requestId });
 
-  const conversationsDir = path.join(process.cwd(), 'db', 'conversations');
+  const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
   log.debug('Conversations directory path', { requestId, path: conversationsDir });
 
   try {
@@ -172,7 +173,7 @@ export async function POST(req: NextRequest) {
 
 
   const conversationId = payload.id;
-  const conversationsDir = path.join(process.cwd(), 'db', 'conversations');
+  const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
   const filePath = path.join(conversationsDir, `${conversationId}.json`);
 
   try {

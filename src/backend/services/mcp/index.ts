@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
+import { getDataDir } from '@/utils/paths';
 
 // Global recovery map to persist clients across hot reloads
 declare global {
@@ -1201,14 +1202,14 @@ export class MCPService {
    * Remote servers default to mcp-servers/<name> like stdio servers, but nothing else
    * ever creates that folder for them (no clone/install step). Only safe, scoped paths
    * are created: filesystem roots are skipped, and relative paths resolve against the
-   * app root. Best-effort — failures are logged, never thrown.
+   * data dir (where mcp-servers/ lives). Best-effort — failures are logged, never thrown.
    */
   private async ensureRemoteServerRootDir(config: MCPServerConfig): Promise<void> {
     try {
       if (!['streamable', 'sse', 'websocket'].includes(config.transport)) return;
       const rootPath = (config.rootPath || '').trim();
       if (!rootPath) return;
-      const resolved = path.resolve(process.cwd(), rootPath);
+      const resolved = path.resolve(getDataDir(), rootPath);
       // Never create (or touch) a filesystem root — a root is its own parent.
       if (path.dirname(resolved) === resolved) return;
       await fs.mkdir(resolved, { recursive: true });

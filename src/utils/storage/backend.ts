@@ -2,13 +2,16 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { getDataDir } from '@/utils/paths';
 
 const log = createLogger('utils/storage/backend');
 
-// Current storage directory
-const STORAGE_DIR = path.join(process.cwd(), 'db');
+// Current storage directory. Resolved from the data dir (see utils/paths) so a
+// packaged install (npm/Docker) can keep db/ outside the read-only app install;
+// defaults to the app dir, so a git checkout is unchanged (<repo>/db).
+const STORAGE_DIR = path.join(getDataDir(), 'db');
 // Old storage directory (for checking)
-const OLD_STORAGE_DIR = path.join(process.cwd(), '.next', 'storage');
+const OLD_STORAGE_DIR = path.join(getDataDir(), '.next', 'storage');
 const getFilePath = (key: StorageKey) => path.join(STORAGE_DIR, `${key}.json`);
 
 // Ensure storage directory exists

@@ -8,6 +8,7 @@ import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
+import { getAppDir, getDataDir } from '@/utils/paths';
 
 const log = createLogger('app/api/git/route');
 
@@ -20,9 +21,11 @@ type CommandExecutionOptions = {
   actionName: string;
   requestId: string;
 };
-// Define a base directory for storing cloned repositories
-// Using a directory inside .next to ensure it's writable in production
-const REPOS_BASE_DIR = path.join(process.cwd(), 'mcp-servers');
+// Define a base directory for storing cloned repositories. Resolved from the
+// data dir (see utils/paths) so a packaged install (npm/Docker) clones servers
+// into the writable data dir; defaults to the app dir, so a git checkout is
+// unchanged (<repo>/mcp-servers).
+const REPOS_BASE_DIR = path.join(getDataDir(), 'mcp-servers');
 log.debug(`Repository base directory: ${REPOS_BASE_DIR}`);
 
 // Ensure the base directory exists
@@ -83,7 +86,10 @@ async function resolveRepoRoot(savePath: string): Promise<string | null> {
 // on the whole repository.
 function isFlujoAppRepo(repoRoot: string): boolean {
   const norm = (p: string) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
-  return norm(repoRoot) === norm(process.cwd());
+  // Compares against the APP dir (where FLUJO's own .git lives), never the data
+  // dir: this guard exists to protect FLUJO's own repository from a server-clone
+  // hard reset, which is an app-install concern, not a data-location one.
+  return norm(repoRoot) === norm(getAppDir());
 }
 
 // Guard (issue 52): never treat a filesystem root ('/', 'C:\', ...) as a server

@@ -13,6 +13,7 @@ import { ChildProcess } from 'child_process';
 import { createOAuthClientProvider } from './oauth';
 import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
 import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
+import { getDataDir } from '@/utils/paths';
 import { registerRootsHandler } from './roots';
 import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
 
@@ -316,7 +317,7 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 
     // If it's just a filename (e.g., "run.bat"), check if it exists in the server directory
     if (isJustFilename) {
-      const fullPath = path.join(process.cwd(), serverDir, command);
+      const fullPath = path.join(getDataDir(), serverDir, command);
       log.debug(`Checking if file exists at: ${fullPath}`);
 
       const fileExists = fs.existsSync(fullPath);
@@ -362,7 +363,7 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   log.debug(`Final args: ${JSON.stringify(args)}`);
   // Use the original (pre-.bat-rewrite) command/args for runner detection so e.g.
   // `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
-  const cwd = resolveServerCwd({
+  const resolvedCwd = resolveServerCwd({
     command: config.command,
     args: config.args,
     rootPath: config.rootPath,
@@ -370,6 +371,14 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
     serverName: config.name,
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
   });
+  // resolveServerCwd may hand back a relative path (e.g. the default
+  // `mcp-servers/<name>`). A child process resolves a relative cwd against the
+  // FLUJO process's cwd (the app dir), but mcp-servers/ lives under the DATA dir
+  // for a packaged install — so anchor a relative cwd to the data dir. For a git
+  // checkout the data dir IS the app dir, so this is a no-op there.
+  const cwd = path.isAbsolute(resolvedCwd)
+    ? resolvedCwd
+    : path.join(getDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 

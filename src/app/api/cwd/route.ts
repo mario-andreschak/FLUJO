@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
+import { getDataDir } from '@/utils/paths';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
@@ -15,8 +16,10 @@ export async function GET() {
     const cwd = process.cwd();
     log.debug(`Retrieved current working directory [${requestId}]`, cwd);
     
-    // Get the mcp-servers directory path
-    const mcpServersDir = path.join(cwd, 'mcp-servers');
+    // Get the mcp-servers directory path. This lives under the DATA dir (see
+    // utils/paths), which equals cwd for a git checkout but is relocated for a
+    // packaged install (npm/Docker) so the UI reports where servers actually go.
+    const mcpServersDir = path.join(getDataDir(), 'mcp-servers');
     log.debug(`Generated mcp-servers directory path [${requestId}]`, mcpServersDir);
     
     log.info(`Returning successful response [${requestId}]`);

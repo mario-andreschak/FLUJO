@@ -2,6 +2,18 @@
   "name": "flujo",
   "version": "0.3.3",
   "private": true,
+  "bin": {
+    "flujo": "bin/flujo.mjs"
+  },
+  "files": [
+    ".next/**/*",
+    "!.next/cache/**",
+    "public/**/*",
+    "scripts/launch-next.mjs",
+    "bin/**/*",
+    "next.config.ts",
+    "next.config.mjs"
+  ],
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev -p 4200",
     "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
@@ -9,7 +21,8 @@
     "start": "node scripts/launch-next.mjs start -p 4200",
     "lint": "next lint",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.186",
@@ -21,8 +34,6 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mui/icons-material": "^6.4.5",
     "@mui/material": "^6.4.5",
-    "@types/crypto-js": "^4.2.2",
-    "@types/uuid": "^10.0.0",
     "@uiw/react-md-editor": "^4.0.5",
     "@xyflow/react": "^12.4.4",
     "axios": "^1.8.4",
@@ -53,11 +64,13 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@types/crypto-js": "^4.2.2",
     "@types/jest": "^29.5.14",
     "@types/lodash": "^4.17.16",
     "@types/node": "20.17.30",
     "@types/react": "19.1.0",
     "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/parser": "^8.26.1",
     "buffer": "^6.0.3",
     "eslint": "^9",

@@ -8,6 +8,7 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
 import { createLogger } from '@/utils/logger';
+import { getDataDir } from '@/utils/paths';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -56,7 +57,7 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
 // so a hostile id can never escape the log directory.
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
-let logDir = path.join(process.cwd(), 'db', 'conversation-logs');
+let logDir = path.join(getDataDir(), 'db', 'conversation-logs');
 
 /** Test seam: point the store at a temp directory. Returns the previous dir. */
 export function _setConversationLogDirForTests(dir: string): string {
