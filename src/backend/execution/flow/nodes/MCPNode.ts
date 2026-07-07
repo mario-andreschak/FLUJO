@@ -18,6 +18,9 @@ export class MCPNode extends BaseNode {
     const mcpServer = node_params?.properties?.boundServer;
     const enabledTools = node_params?.properties?.enabledTools || [];
     const mcpEnv = node_params?.properties?.env || {};
+    // Node-level workspace folders (MCP roots, issue 46) — additive overlay on the
+    // bound server's own roots. An empty list clears this node's previous overlay.
+    const nodeRoots = node_params?.properties?.roots || [];
     
     if (!mcpServer) {
       log.error('Missing bound server');
@@ -30,12 +33,14 @@ export class MCPNode extends BaseNode {
       nodeType: 'mcp',
       mcpServer,
       enabledTools,
-      mcpEnv
+      mcpEnv,
+      nodeRoots
     };
     
     log.info('prep() completed', { 
       mcpServer,
-      enabledToolsCount: enabledTools.length
+      enabledToolsCount: enabledTools.length,
+      nodeRootsCount: nodeRoots.length
     });
     
     return prepResult;
@@ -54,7 +59,9 @@ export class MCPNode extends BaseNode {
       const result = await MCPHandler.executeMCP({
         mcpServer: prepResult.mcpServer,
         enabledTools: prepResult.enabledTools,
-        mcpEnv: prepResult.mcpEnv
+        mcpEnv: prepResult.mcpEnv,
+        nodeId: prepResult.nodeId,
+        nodeRoots: prepResult.nodeRoots
       });
       
       if (!result.success) {

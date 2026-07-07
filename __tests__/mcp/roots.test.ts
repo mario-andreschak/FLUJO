@@ -1,5 +1,7 @@
 /**
- * Tests for MCP roots resolution (#15).
+ * Tests for MCP roots resolution (#15, revised by issue 46: the roots capability is
+ * always declared and roots/list falls back to the server's own rootPath when the user
+ * configured no roots anywhere).
  */
 
 // Resolve a sentinel so we can prove global-variable substitution runs before normalization.
@@ -11,29 +13,16 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 
 import { pathToFileURL } from 'url';
 import {
-  hasRoots,
-  rootsConfigKey,
   normalizeRootUri,
   resolveServerRoots,
+  _resetNodeRootsForTests,
 } from '@/backend/services/mcp/roots';
 
-const cfg = (roots?: unknown) => ({ name: 'srv', transport: 'stdio', roots }) as any;
+const cfg = (roots?: unknown, rootPath?: string) =>
+  ({ name: 'srv', transport: 'stdio', roots, rootPath }) as any;
 
-describe('hasRoots', () => {
-  it('is true only for a non-empty list of non-blank strings', () => {
-    expect(hasRoots(cfg(['/a']))).toBe(true);
-    expect(hasRoots(cfg([]))).toBe(false);
-    expect(hasRoots(cfg(['  ']))).toBe(false);
-    expect(hasRoots(cfg(undefined))).toBe(false);
-  });
-});
-
-describe('rootsConfigKey', () => {
-  it('changes when roots change and ignores blanks', () => {
-    expect(rootsConfigKey(cfg(['/a']))).toBe(rootsConfigKey(cfg(['/a', '   '])));
-    expect(rootsConfigKey(cfg(['/a']))).not.toBe(rootsConfigKey(cfg(['/b'])));
-    expect(rootsConfigKey(cfg(undefined))).toBe('[]');
-  });
+beforeEach(() => {
+  _resetNodeRootsForTests();
 });
 
 describe('normalizeRootUri', () => {
@@ -62,7 +51,25 @@ describe('resolveServerRoots', () => {
     ]);
   });
 
-  it('returns an empty list when no roots are configured', async () => {
+  it('falls back to the server rootPath when no roots are configured (issue 46)', async () => {
+    const roots = await resolveServerRoots(cfg(undefined, '/opt/mcp-servers/srv'));
+    expect(roots).toEqual([
+      { uri: pathToFileURL('/opt/mcp-servers/srv').href, name: 'srv' },
+    ]);
+  });
+
+  it('resolves ${global:VAR} in the rootPath fallback too', async () => {
+    const roots = await resolveServerRoots(cfg([], '${global:PROJ}'));
+    expect(roots).toEqual([{ uri: pathToFileURL('/home/me/proj').href, name: 'proj' }]);
+  });
+
+  it('does NOT fall back when server-level roots exist', async () => {
+    const roots = await resolveServerRoots(cfg(['/workspace'], '/opt/mcp-servers/srv'));
+    expect(roots).toEqual([{ uri: pathToFileURL('/workspace').href, name: 'workspace' }]);
+  });
+
+  it('returns an empty list when neither roots nor a usable rootPath exist', async () => {
     expect(await resolveServerRoots(cfg(undefined))).toEqual([]);
+    expect(await resolveServerRoots(cfg(undefined, '   '))).toEqual([]);
   });
 });

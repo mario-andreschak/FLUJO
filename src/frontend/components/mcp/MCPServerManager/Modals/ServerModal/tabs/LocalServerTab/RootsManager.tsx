@@ -16,8 +16,8 @@ interface RootsManagerProps {
 /**
  * Per-server "Workspace folders" (MCP roots). Each entry is a folder path or `file://`
  * URI (and may use `${global:VAR}` for automation). Advisory scoping the server can read
- * via roots/list — NOT a hard sandbox. Leaving this empty means FLUJO declares no roots
- * capability, so the server behaves exactly as before.
+ * via roots/list — NOT a hard sandbox. The roots capability is always declared; leaving
+ * this empty means the server's own root dir (rootPath) is its default workspace folder.
  */
 const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
   const list = Array.isArray(roots) ? roots : [];
@@ -38,8 +38,8 @@ const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
         Limit which folders this server may work in. Advisory only — the server is told these
-        paths via MCP roots; it is not a hard sandbox. Leave empty to impose no scope. Supports{' '}
-        <code>{'${global:VAR}'}</code>.
+        paths via MCP roots; it is not a hard sandbox. Leave empty to default to the
+        server&apos;s own root dir. Supports <code>{'${global:VAR}'}</code>.
       </Typography>
 
       <Stack spacing={1}>

@@ -73,6 +73,12 @@ export interface MCPNodeProperties {
     /** Per-tool-call timeout in seconds for this node's tools. -1 = no timeout;
      *  unset = DEFAULT_TOOL_CALL_TIMEOUT_SECONDS (5 minutes). */
     toolTimeout?: number;
+    /** Extra workspace folders (MCP roots, issue 46) this node contributes to its bound
+     *  server. Additive: the server sees the union of its own roots and these via
+     *  roots/list (connections are singletons keyed by server name); when neither is
+     *  set, the server's own rootPath is the default root. Advisory scoping, not a
+     *  sandbox. Supports `${global:VAR}`. */
+    roots?: string[];
 }
 
 // SubflowNode specific properties
@@ -123,6 +129,9 @@ export interface MCPNodeReference {
         env?: Record<string, string>;
         /** Per-tool-call timeout in seconds. -1 = no timeout; unset = 5-minute default. */
         toolTimeout?: number;
+        /** Extra workspace folders (MCP roots) this node adds to the bound server — see
+         *  MCPNodeProperties.roots (issue 46). */
+        roots?: string[];
     };
 }
 
@@ -321,6 +330,8 @@ export interface MCPNodePrepResult extends BasePrepResult {
     mcpServer: string;
     enabledTools: string[];
     mcpEnv?: Record<string, string>;
+    /** Node-level workspace folders (MCP roots) to overlay on the bound server (issue 46). */
+    nodeRoots?: string[];
 }
 
 // SubflowNode prep result

@@ -20,6 +20,7 @@ jest.mock('@/backend/services/mcp', () => ({
     connectServer: jest.fn(),
     listServerTools: jest.fn(),
     getServerStatus: jest.fn(),
+    setNodeRoots: jest.fn(),
   },
 }));
 

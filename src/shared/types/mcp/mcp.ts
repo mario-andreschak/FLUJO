@@ -38,10 +38,13 @@ export type MCPManagerConfig = {
    */
   exposeAsMcpServer?: boolean;
   /**
-   * MCP roots (#15): workspace folders this server is scoped to. Each entry is a
+   * MCP roots (#15/#46): workspace folders this server is scoped to. Each entry is a
    * filesystem path or a `file://` URI (and may contain `${global:VAR}` references,
-   * resolved at connection time). Opt-in: when empty/undefined, FLUJO declares NO roots
-   * capability so servers behave exactly as before. Advisory scoping, NOT a hard sandbox.
+   * resolved fresh on every roots/list request). The roots capability is ALWAYS
+   * declared; when this list is empty/undefined (and no FlowBuilder node contributes
+   * roots), the server's own `rootPath` is served as its single default root. Changes
+   * are announced via notifications/roots/list_changed — never a reconnect. Advisory
+   * scoping, NOT a hard sandbox.
    */
   roots?: string[];
   /**

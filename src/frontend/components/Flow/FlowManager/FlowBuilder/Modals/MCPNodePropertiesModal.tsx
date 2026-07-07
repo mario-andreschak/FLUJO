@@ -36,6 +36,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
 import  EnvEditor  from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
+import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/RootsManager';
 import { createLogger } from '@/utils/logger/index';
 
 const logger = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal');
@@ -534,6 +535,24 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
               initialEnv={nodeData.properties?.env || {}}
               onSave={handleSaveEnv}
             />
+          </Box>
+        )}
+
+        {/* Workspace folders (MCP roots) for this node — issue 46. Reuses the server
+            modal's RootsManager; these roots are ADDED to the server's own roots while
+            this node runs (connections are shared per server, so this is additive
+            advisory scoping, not an override). */}
+        {boundServer && (
+          <Box sx={{ mt: 4 }}>
+            <RootsManager
+              roots={nodeData.properties?.roots || []}
+              onChange={(roots) => handlePropertyChange('roots', roots)}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              These folders apply to this node only and are <strong>added to</strong> the
+              workspace folders configured on the &quot;{boundServer}&quot; server itself.
+              When neither is set, the server sees its own root dir as its workspace folder.
+            </Typography>
           </Box>
         )}
       </DialogContent>

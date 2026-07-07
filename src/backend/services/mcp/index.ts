@@ -81,6 +81,7 @@ import {
   shouldRecreateClient,
   safelyCloseClient
 } from './connection';
+import { setNodeRoots as setNodeRootsOverlay } from './roots';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -865,6 +866,44 @@ export class MCPService {
   }
 
   /**
+   * Register (or clear, when `roots` is empty) the workspace-folder overlay a FlowBuilder
+   * MCP node contributes to its bound server (issue 46). Connections are singletons keyed
+   * by server name, so node roots are additive: roots/list answers with the union of the
+   * server-level roots and all currently-registered node roots (falling back to the
+   * server's rootPath when there are none at all). The roots capability is always
+   * declared, so this NEVER rebuilds a connection — servers whose effective roots
+   * changed are told via notifications/roots/list_changed instead.
+   */
+  setNodeRoots(serverName: string, nodeId: string, roots?: string[]): void {
+    const changedServers = setNodeRootsOverlay(serverName, nodeId, roots);
+    for (const changed of changedServers) {
+      this.notifyRootsChanged(changed);
+    }
+  }
+
+  /**
+   * Announce a roots change to a CONNECTED server via notifications/roots/list_changed
+   * (the client always declares roots.listChanged). Fire-and-forget: when the server is
+   * not connected this is a no-op — the next connect serves fresh roots anyway — and
+   * failures are logged, never thrown (roots are advisory).
+   */
+  notifyRootsChanged(serverName: string): void {
+    const client = this.getClient(serverName);
+    if (!client) {
+      log.debug(`notifyRootsChanged: ${serverName} not connected, skipping notification`);
+      return;
+    }
+    try {
+      void client.sendRootsListChanged().catch((error: unknown) => {
+        log.warn(`notifyRootsChanged: failed to notify ${serverName}:`, error);
+      });
+      log.debug(`notifyRootsChanged: sent roots/list_changed to ${serverName}`);
+    } catch (error) {
+      log.warn(`notifyRootsChanged: failed to notify ${serverName}:`, error);
+    }
+  }
+
+  /**
    * Disconnect from an MCP server
    */
   async disconnectServer(serverName: string): Promise<MCPServiceResponse> {
@@ -1266,6 +1305,15 @@ export class MCPService {
       ...updates,
     } as MCPServerConfig;
 
+    // Did this update change the server's effective roots (configured roots list or the
+    // rootPath default that roots/list falls back to)? Roots never trigger a client
+    // rebuild (issue 46), so a connected server is told about the change via
+    // notifications/roots/list_changed after the update is applied below.
+    const effectiveRootsChanged =
+      JSON.stringify((config as { roots?: string[] }).roots ?? []) !==
+        JSON.stringify((updatedConfig as { roots?: string[] }).roots ?? []) ||
+      (config.rootPath ?? '') !== (updatedConfig.rootPath ?? '');
+
     // Find and update the config in the array
     const index = configs.findIndex(c => c.name === serverName);
     if (index !== -1) {
@@ -1310,6 +1358,10 @@ export class MCPService {
       await this.handleConnectionStateChange(serverName, updatedConfig);
     }
 
+    if (effectiveRootsChanged) {
+      this.notifyRootsChanged(updatedConfig.name);
+    }
+
     log.info(`updateServerConfig: Successfully updated config for ${serverName}${isRename ? ` (renamed to ${updatedConfig.name})` : ''}`);
     return updatedConfig;
   }
@@ -1350,12 +1402,11 @@ export class MCPService {
       log.info(`handleConnectionStateChange: Connecting previously disabled server ${serverName}`);
       await this.connectServer(config);
     } else if (isCurrentlyConnected && shouldBeConnected) {
-      // Server stays enabled, but its config may have changed (a new root/workspace
-      // folder, command, args, env, URL...). Re-run connectServer: shouldRecreateClient
-      // rebuilds the connection only when something meaningful actually changed (otherwise
-      // it's a cheap no-op). Without this, edits to a CONNECTED server — e.g. assigning a
-      // root to the filesystem server — silently did nothing until a manual restart,
-      // because the MCP capabilities (roots) are negotiated at connect time.
+      // Server stays enabled, but its config may have changed (command, args, env,
+      // URL, auth material...). Re-run connectServer: shouldRecreateClient rebuilds the
+      // connection only when something meaningful actually changed (otherwise it's a
+      // cheap no-op). Roots changes alone never rebuild (issue 46) — they are announced
+      // via notifications/roots/list_changed by updateServerConfig instead.
       log.info(`handleConnectionStateChange: Re-applying config to connected server ${serverName}`);
       await this.connectServer(config);
     } else if (!shouldBeConnected) {
