@@ -1,6 +1,6 @@
 {
   "name": "flujo-ai",
-  "version": "3.9.0",
+  "version": "3.9.1",
   "bin": {
     "flujo": "bin/flujo.mjs"
   },
