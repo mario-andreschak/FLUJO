@@ -23,13 +23,9 @@ import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
 import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
+import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 
 const log = createLogger('backend/execution/flow/runFlow');
-
-// Hard ceiling on subflow-call nesting (re-entrancy guard). A SubflowNode runs
-// its child at runDepth + 1; runFlow refuses to start a run past this depth so
-// a flow that (directly or indirectly) calls itself cannot recurse forever.
-const MAX_SUBFLOW_DEPTH = 8;
 
 // --- Add getFlowByName to flowService if it doesn't exist ---
 // (Moved here from chatCompletionService: flow-name resolution now lives in the

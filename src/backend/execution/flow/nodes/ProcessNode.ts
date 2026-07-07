@@ -5,6 +5,10 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { buildNodeContext } from '../buildNodeContext';
+import { buildHandoffDescription } from '../buildHandoffDescription';
+import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import { flowService } from '@/backend/services/flow/index';
+import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
 import {
   SharedState,
@@ -30,10 +34,8 @@ export class ProcessNode extends BaseNode {
   /**
    * Generate handoff tools for each connected non-MCP node
    */
-  private generateHandoffTools(): ToolDefinition[] {
+  private async generateHandoffTools(sharedState: SharedState): Promise<ToolDefinition[]> {
     log.info('Generating handoff tools');
-
-    const handoffTools: ToolDefinition[] = [];
 
     // Get all actions (edge IDs)
     const allActions = this.successors instanceof Map
@@ -52,54 +54,70 @@ export class ProcessNode extends BaseNode {
       actions
     });
 
-    // Create a handoff tool for each action. Tool names must be unique per
-    // request (providers reject duplicates), so two routes to the same node
-    // — e.g. a legacy forward edge plus a bidirectional back-edge — yield a
-    // single tool; either route hands off to the same target anyway.
-    const seenToolNames = new Set<string>();
-    actions.forEach(edgeId => {
-      // Get the target node
+    // Collect the UNIQUE handoff targets (id/label/type). Two routes to the same
+    // node — e.g. a legacy forward edge plus a bidirectional back-edge — must
+    // yield a single tool (providers reject duplicate tool names, and either
+    // route hands off to the same target anyway).
+    const targets: { id: string; label: string; type: string }[] = [];
+    const seenIds = new Set<string>();
+    for (const edgeId of actions) {
       const targetNode = this.successors instanceof Map
         ? this.successors.get(edgeId)
         : (this.successors as any)[edgeId];
-
       if (!targetNode) {
         log.warn(`Target node not found for edge ${edgeId}`);
-        return;
+        continue;
       }
+      const id = targetNode.node_params?.id || 'unknown';
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      targets.push({
+        id,
+        label: targetNode.node_params?.label || 'Unknown Node',
+        type: targetNode.node_params?.type || 'unknown',
+      });
+    }
 
-      const targetNodeId = targetNode.node_params?.id || 'unknown';
-      const targetNodeLabel = targetNode.node_params?.label || 'Unknown Node';
-      const targetNodeType = targetNode.node_params?.type || 'unknown';
+    // Human-readable, collision-free tool names (issue #38, Item A): the raw
+    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
+    // name -> node-id mapping so routing still works.
+    const nameMap = buildHandoffToolNameMap(targets);
+    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
 
-      const toolName = `handoff_to_${targetNodeId}`;
-      if (seenToolNames.has(toolName)) {
-        log.debug(`Skipping duplicate handoff tool for edge ${edgeId}`, { toolName });
-        return;
+    // Load the containing flow once so descriptions can read each target's
+    // user-authored description and full properties (and recurse into subflows).
+    let flowNodesById: Map<string, FlowNode> | null = null;
+    try {
+      const flow = await flowService.getFlow(sharedState.flowId);
+      if (flow) {
+        flowNodesById = new Map(flow.nodes.map(n => [n.id, n]));
       }
-      seenToolNames.add(toolName);
+    } catch (err) {
+      log.warn('Could not load flow for handoff descriptions; using basic descriptions', { err });
+    }
 
-      // Create a handoff tool for this edge
-      const handoffTool: ToolDefinition = {
+    const handoffTools: ToolDefinition[] = [];
+    for (const target of targets) {
+      const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
+      sharedState.handoffNameMap[toolName] = target.id;
+
+      const flowNode = flowNodesById?.get(target.id);
+      const description = flowNode
+        ? await buildHandoffDescription(flowNode)
+        : `Hand off execution to ${target.label} (${target.type})`;
+
+      handoffTools.push({
         name: toolName,
-        description: `Hand off execution to ${targetNodeLabel} (${targetNodeType})`,
+        description,
         inputSchema: {
           type: "object",
           properties: {}, // No parameters needed anymore
           required: []
         }
-      };
-
-      handoffTools.push(handoffTool);
-
-      log.debug(`Created handoff tool for edge ${edgeId}`, {
-        toolName: handoffTool.name,
-        targetNodeId,
-        targetNodeLabel
       });
-    });
 
-    // Removed the generic handoff tool creation block
+      log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
+    }
 
     log.info('Generated handoff tools', {
       toolsCount: handoffTools.length
@@ -185,7 +203,7 @@ export class ProcessNode extends BaseNode {
     }
 
     // Generate handoff tools for each connected non-MCP node
-    const handoffTools = this.generateHandoffTools();
+    const handoffTools = await this.generateHandoffTools(sharedState);
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
@@ -482,8 +500,11 @@ export class ProcessNode extends BaseNode {
 
       // Check for specific handoff tools
       if (name.startsWith('handoff_to_')) {
-        // Extract target node ID from tool name
-        const targetNodeId = name.replace('handoff_to_', '');
+        // Decode the target node id. Tool names no longer embed the node UUID
+        // (issue #38, Item A) — resolve through handoffNameMap first, then fall
+        // back to stripping the prefix for legacy `handoff_to_<uuid>` names
+        // (e.g. a conversation paused for tool approval before this change).
+        const targetNodeId = sharedState.handoffNameMap?.[name] || name.replace('handoff_to_', '');
 
         // Find the edge ID that leads to this node
         for (const edgeId of actions) {

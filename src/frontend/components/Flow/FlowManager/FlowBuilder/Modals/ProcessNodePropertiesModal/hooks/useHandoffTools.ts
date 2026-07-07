@@ -2,6 +2,12 @@ import { useState, useEffect, useMemo } from 'react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import {
+  formatHandoffDescription,
+  HandoffNodeSummary,
+  HandoffServerSummary,
+} from '@/shared/utils/handoffDescription';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useHandoffTools');
 
@@ -14,6 +20,55 @@ export interface HandoffTool {
     properties: Record<string, any>;
     required: string[];
   };
+}
+
+/**
+ * Build a shallow, in-memory summary for the FlowBuilder preview (issue #38,
+ * Item A). This runs client-side with only the current flow's nodes, so it
+ * cannot resolve a model's display name, a live MCP tool list, or another
+ * flow's contents — those are filled in by the runtime synthesizer
+ * (buildHandoffDescription) using backend services. The tool NAMES, however,
+ * are produced by the same shared helper as the runtime, so the preview and the
+ * real handoff tools never disagree on the name (the user-visible fix here).
+ */
+function buildPreviewSummary(node: FlowNode): HandoffNodeSummary {
+  const type = node.type || node.data.type || 'unknown';
+  const label = node.data.label || 'Unknown Node';
+  const userDescription = node.data.description;
+  const properties = (node.data.properties || {}) as Record<string, any>;
+
+  const summary: HandoffNodeSummary = { label, type, userDescription };
+  if (userDescription && userDescription.trim()) return summary;
+
+  if (type === 'subflow') {
+    // The referenced flow's contents live in another flow not loaded here;
+    // the runtime produces the full recursive summary.
+    summary.subflowDetailsUnavailable = true;
+    return summary;
+  }
+
+  if (typeof properties.boundModel === 'string' && properties.boundModel) {
+    summary.modelName = properties.boundModel;
+  }
+  if (typeof properties.promptTemplate === 'string' && properties.promptTemplate.trim()) {
+    summary.promptSummary = properties.promptTemplate;
+  }
+  const mcpNodes = Array.isArray(properties.mcpNodes) ? properties.mcpNodes : [];
+  const servers: HandoffServerSummary[] = [];
+  const seen = new Set<string>();
+  for (const mcpNode of mcpNodes) {
+    const boundServer: string | undefined = mcpNode?.properties?.boundServer;
+    if (!boundServer || seen.has(boundServer)) continue;
+    seen.add(boundServer);
+    const enabledTools: string[] = Array.isArray(mcpNode?.properties?.enabledTools)
+      ? mcpNode.properties.enabledTools
+      : [];
+    // Design-time preview: show the tools the node is configured to expose
+    // (connection state is only known at run time).
+    servers.push({ name: boundServer, connected: true, tools: enabledTools });
+  }
+  if (servers.length > 0) summary.servers = servers;
+  return summary;
 }
 
 /**
@@ -44,29 +99,25 @@ const useHandoffTools = (
       setIsLoadingHandoffTools(true);
 
       try {
-        const tools: HandoffTool[] = [];
+        // Resolve the target nodes, then name them with the SAME shared helper
+        // the runtime uses so the preview matches the real handoff tool names.
+        const targetNodes = connectedNodeIds
+          .map(id => flowNodes.find(n => n.id === id))
+          .filter((n): n is FlowNode => Boolean(n));
 
-        connectedNodeIds.forEach(targetNodeId => {
-          const targetNode = flowNodes.find(n => n.id === targetNodeId);
+        const nameMap = buildHandoffToolNameMap(
+          targetNodes.map(n => ({ id: n.id, label: n.data.label, type: n.type || n.data.type })),
+        );
 
-          if (!targetNode) {
-            log.warn(`Target node not found for ID ${targetNodeId}`);
-            return;
-          }
-
-          const targetNodeLabel = targetNode.data.label || 'Unknown Node';
-          const targetNodeType = targetNode.type || 'unknown';
-
-          tools.push({
-            name: `handoff_to_${targetNodeId}`,
-            description: `Hand off execution to ${targetNodeLabel} (${targetNodeType})`,
-            inputSchema: {
-              type: "object",
-              properties: {}, // No parameters needed anymore
-              required: []
-            }
-          });
-        });
+        const tools: HandoffTool[] = targetNodes.map(targetNode => ({
+          name: nameMap.get(targetNode.id) || `handoff_to_${targetNode.id}`,
+          description: formatHandoffDescription(buildPreviewSummary(targetNode)),
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            required: [],
+          },
+        }));
 
         setHandoffTools(tools);
         log.debug('Generated handoff tools', { toolsCount: tools.length });

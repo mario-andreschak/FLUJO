@@ -228,6 +228,18 @@ export interface SharedState {
      */
     toolNameMap?: Record<string, { server: string; tool: string; timeout?: number }>;
 
+    /**
+     * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
+     * handoffNaming.ts) back to its target node id. Handoff tool names no longer
+     * embed the node UUID (issue #38, Item A), so routing in
+     * ProcessNode.processHandoffToolCalls decodes the call through this map.
+     * Repopulated whenever a Process node generates its handoff tools; a
+     * tool-approval resume reads the persisted map. Legacy `handoff_to_<uuid>`
+     * names (from conversations paused before this change) still decode by
+     * stripping the prefix.
+     */
+    handoffNameMap?: Record<string, string>;
+
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
     usage?: UsageTotals;
