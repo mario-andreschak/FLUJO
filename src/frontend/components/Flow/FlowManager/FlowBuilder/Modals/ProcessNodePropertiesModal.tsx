@@ -42,6 +42,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [isModelBound, setIsModelBound] = useState(false);
   const [excludeModelPrompt, setExcludeModelPrompt] = useState(false);
   const [excludeStartNodePrompt, setExcludeStartNodePrompt] = useState(false);
+  const [excludeSystemPrompt, setExcludeSystemPrompt] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('server');
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
@@ -98,6 +99,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       // Load toggle states from node properties if they exist
       setExcludeModelPrompt(node.data.properties?.excludeModelPrompt || false);
       setExcludeStartNodePrompt(node.data.properties?.excludeStartNodePrompt || false);
+      setExcludeSystemPrompt(node.data.properties?.excludeSystemPrompt || false);
     }
   }, [node, open]);
 
@@ -168,6 +170,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           promptTemplate: promptTemplate,
           excludeModelPrompt: excludeModelPrompt,
           excludeStartNodePrompt: excludeStartNodePrompt,
+          excludeSystemPrompt: excludeSystemPrompt,
         }
       };
       onSave(node.id, updatedNodeData);
@@ -306,6 +309,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               setExcludeModelPrompt={setExcludeModelPrompt}
               excludeStartNodePrompt={excludeStartNodePrompt}
               setExcludeStartNodePrompt={setExcludeStartNodePrompt}
+              excludeSystemPrompt={excludeSystemPrompt}
+              setExcludeSystemPrompt={setExcludeSystemPrompt}
               isModelBound={isModelBound}
               models={models}
               nodeData={nodeData}

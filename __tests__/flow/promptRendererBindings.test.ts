@@ -105,3 +105,78 @@ describe('PromptRenderer binding resolution', () => {
     expect(result).toContain('not found');
   });
 });
+
+// A flow whose target node exposes configurable exclusion flags (issue #67).
+const flowWithFlags = (flags: {
+  excludeModelPrompt?: boolean;
+  excludeStartNodePrompt?: boolean;
+  excludeSystemPrompt?: boolean;
+}) => ({
+  id: 'flow-1',
+  nodes: [
+    { id: 'start', type: 'start', data: { properties: { promptTemplate: '' } } },
+    {
+      id: 'node-1',
+      type: 'process',
+      data: {
+        properties: {
+          promptTemplate: 'Node instruction body',
+          ...flags,
+        },
+      },
+    },
+  ],
+});
+
+const SYSTEM_BLOCK_MARKER = '# GENERAL INFORMATION:';
+
+describe('PromptRenderer excludeSystemPrompt (issue #67)', () => {
+  it('includes the hardcoded system block by default', async () => {
+    getFlowMock.mockResolvedValue(flowWithFlags({}));
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+
+    expect(result).toContain(SYSTEM_BLOCK_MARKER);
+  });
+
+  it('omits the hardcoded system block when excludeSystemPrompt is true', async () => {
+    getFlowMock.mockResolvedValue(flowWithFlags({ excludeSystemPrompt: true }));
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+
+    expect(result).not.toContain(SYSTEM_BLOCK_MARKER);
+    // The node's own prompt still renders.
+    expect(result).toContain('Node instruction body');
+  });
+
+  it('honours the excludeSystemPrompt option override over the node property', async () => {
+    getFlowMock.mockResolvedValue(flowWithFlags({ excludeSystemPrompt: false }));
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1', {
+      excludeSystemPrompt: true,
+    });
+
+    expect(result).not.toContain(SYSTEM_BLOCK_MARKER);
+  });
+
+  it('is independent of excludeModelPrompt: system block stays when only the model prompt is excluded', async () => {
+    getFlowMock.mockResolvedValue(
+      flowWithFlags({ excludeModelPrompt: true, excludeSystemPrompt: false })
+    );
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+
+    // Model prompt excluded but the system block is now independently controlled.
+    expect(result).toContain(SYSTEM_BLOCK_MARKER);
+  });
+
+  it('is independent of excludeModelPrompt: system block can be dropped while model prompt stays', async () => {
+    getFlowMock.mockResolvedValue(
+      flowWithFlags({ excludeModelPrompt: false, excludeSystemPrompt: true })
+    );
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+
+    expect(result).not.toContain(SYSTEM_BLOCK_MARKER);
+  });
+});

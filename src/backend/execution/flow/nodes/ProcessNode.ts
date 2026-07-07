@@ -135,13 +135,15 @@ export class ProcessNode extends BaseNode {
     const boundModel = node_params?.properties?.boundModel;
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
+    const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
 
     log.debug('Extracted properties', {
       nodeId,
       flowId,
       boundModel,
       excludeModelPrompt,
-      excludeStartNodePrompt
+      excludeStartNodePrompt,
+      excludeSystemPrompt
     });
 
     if (!nodeId || !flowId) {
@@ -160,7 +162,8 @@ export class ProcessNode extends BaseNode {
       renderMode: 'rendered',
       includeConversationHistory: false,
       excludeModelPrompt,
-      excludeStartNodePrompt
+      excludeStartNodePrompt,
+      excludeSystemPrompt
     });
 
     log.debug('Prompt rendered successfully', {

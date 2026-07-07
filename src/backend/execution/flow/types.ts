@@ -51,6 +51,10 @@ export interface ProcessNodeProperties {
     promptTemplate?: string;
     excludeModelPrompt?: boolean;
     excludeStartNodePrompt?: boolean;
+    /** When true, suppress the hardcoded `# GENERAL INFORMATION:` system block
+     *  (workflow/handoff guidance) from the rendered prompt. Independent of
+     *  excludeModelPrompt. Defaults to false (block shown). Issue #67. */
+    excludeSystemPrompt?: boolean;
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];

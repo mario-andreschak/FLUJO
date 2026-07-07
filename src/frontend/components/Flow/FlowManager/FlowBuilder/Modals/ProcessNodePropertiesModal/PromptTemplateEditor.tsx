@@ -12,6 +12,8 @@ interface PromptTemplateEditorProps {
   setExcludeModelPrompt: (value: boolean) => void;
   excludeStartNodePrompt: boolean;
   setExcludeStartNodePrompt: (value: boolean) => void;
+  excludeSystemPrompt: boolean;
+  setExcludeSystemPrompt: (value: boolean) => void;
   isModelBound: boolean;
   models: any[];
   nodeData: any;
@@ -26,6 +28,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     setExcludeModelPrompt,
     excludeStartNodePrompt,
     setExcludeStartNodePrompt,
+    excludeSystemPrompt,
+    setExcludeSystemPrompt,
     isModelBound,
     models,
     nodeData,
@@ -78,7 +82,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
             renderMode: 'rendered',
             includeConversationHistory: false,
             excludeModelPrompt,
-            excludeStartNodePrompt
+            excludeStartNodePrompt,
+            excludeSystemPrompt
           },
         }),
       });
@@ -113,7 +118,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     if (promptBuilderRef.current && promptBuilderRef.current.getMode() === 'preview') {
       fetchRenderedPrompt();
     }
-  }, [promptTemplate, excludeModelPrompt, excludeStartNodePrompt, flowId, nodeData?.id]);
+  }, [promptTemplate, excludeModelPrompt, excludeStartNodePrompt, excludeSystemPrompt, flowId, nodeData?.id]);
 
   // Custom renderer for preview mode that shows the complete rendered prompt
   const customPreviewRenderer = () => {
@@ -208,6 +213,17 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
               />
             }
             label="Exclude Start Node Prompt"
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={excludeSystemPrompt}
+                onChange={(e) => setExcludeSystemPrompt(e.target.checked)}
+                color="primary"
+                size="small"
+              />
+            }
+            label="Exclude System Prompt"
           />
         </Box>
       </Box>

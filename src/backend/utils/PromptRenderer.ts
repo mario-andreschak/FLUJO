@@ -11,6 +11,7 @@ export interface PromptRenderOptions {
   includeConversationHistory?: boolean;
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
+  excludeSystemPrompt?: boolean; // Override node's excludeSystemPrompt setting (hardcoded # GENERAL INFORMATION block)
 }
 
 export class PromptRenderer {
@@ -32,7 +33,8 @@ export class PromptRenderer {
     const {
       prompt: nodePrompt,
       excludeModelPrompt: nodeExcludeModelPrompt,
-      excludeStartNodePrompt: nodeExcludeStartNodePrompt
+      excludeStartNodePrompt: nodeExcludeStartNodePrompt,
+      excludeSystemPrompt: nodeExcludeSystemPrompt
     } = await this.findNodePrompt(nodeId, flowId);
 
     // Use options to override node settings if provided
@@ -44,12 +46,18 @@ export class PromptRenderer {
       ? options?.excludeStartNodePrompt
       : nodeExcludeStartNodePrompt;
 
+    const excludeSystemPrompt = options?.excludeSystemPrompt !== undefined
+      ? options?.excludeSystemPrompt
+      : nodeExcludeSystemPrompt;
+
     log.debug('Exclusion settings', {
       excludeModelPrompt,
       excludeStartNodePrompt,
+      excludeSystemPrompt,
       fromOptions: {
         excludeModelPrompt: options?.excludeModelPrompt !== undefined,
-        excludeStartNodePrompt: options?.excludeStartNodePrompt !== undefined
+        excludeStartNodePrompt: options?.excludeStartNodePrompt !== undefined,
+        excludeSystemPrompt: options?.excludeSystemPrompt !== undefined
       }
     });
 
@@ -87,6 +95,13 @@ export class PromptRenderer {
         completePrompt += `Please use the following pattern to use a tool: ${functionCallingSchema}\n\n`;
       }
 
+    }
+
+    // 2b. Hardcoded system information block (if not excluded). Gated
+    // independently of the model prompt (issue #67) so it can be toggled on its
+    // own via the "Exclude System Prompt" switch, while default output is
+    // unchanged when the flag is false.
+    if (!excludeSystemPrompt) {
       completePrompt += `# GENERAL INFORMATION:\n`
       completePrompt += `You are operating in a workflow with other agents, each with it's own responsibilities.\n`
       completePrompt += `You will receive a message from the user which may contain tasks that are outside of your scope.\n`
@@ -94,7 +109,6 @@ export class PromptRenderer {
       completePrompt += `You may do multiple tool calls.\n\n`
       completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff_to_xxxx' tool.\n\n`
       completePrompt += `The processing may be handed back to you as part of a loop. In this case repeat processing your instructions as if you were executing them for the first time. \n\n`
-
     }
 
     // 3. Node Prompt
@@ -117,6 +131,7 @@ export class PromptRenderer {
       totalLength: completePrompt.length,
       hasStartNodePrompt: !excludeStartNodePrompt,
       hasModelPrompt: !excludeModelPrompt,
+      hasSystemPrompt: !excludeSystemPrompt,
       hasNodePrompt: !!nodePrompt,
       includesConversationHistory: includeConversationHistory
     });
@@ -230,6 +245,7 @@ export class PromptRenderer {
     prompt: string;
     excludeModelPrompt: boolean;
     excludeStartNodePrompt: boolean;
+    excludeSystemPrompt: boolean;
   }> {
     log.debug(`Finding node prompt for node ${nodeId} in flow ${flowId}`);
 
@@ -237,31 +253,34 @@ export class PromptRenderer {
     const flow = await flowService.getFlow(flowId);
     if (!flow) {
       log.warn(`Flow not found: ${flowId}`);
-      return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false };
+      return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false, excludeSystemPrompt: false };
     }
 
     // Find the node
     const node = flow.nodes.find(n => n.id === nodeId);
     if (!node) {
       log.warn(`Node not found: ${nodeId} in flow: ${flowId}`);
-      return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false };
+      return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false, excludeSystemPrompt: false };
     }
 
     // Return the node's prompt template and exclusion settings
     const promptTemplate = node.data.properties?.promptTemplate || '';
     const excludeModelPrompt = node.data.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node.data.properties?.excludeStartNodePrompt || false;
+    const excludeSystemPrompt = node.data.properties?.excludeSystemPrompt || false;
 
     log.debug(`Found node prompt and settings`, {
       length: promptTemplate.length,
       excludeModelPrompt,
-      excludeStartNodePrompt
+      excludeStartNodePrompt,
+      excludeSystemPrompt
     });
 
     return {
       prompt: promptTemplate,
       excludeModelPrompt,
-      excludeStartNodePrompt
+      excludeStartNodePrompt,
+      excludeSystemPrompt
     };
   }
 
