@@ -4,7 +4,6 @@ import { ToolDefinition } from '../types';
 export interface MCPExecutionInput {
   mcpServer: string;
   enabledTools: string[];
-  mcpEnv?: Record<string, string>;
   /** Id of the FlowBuilder MCP node driving this execution — keys its node-roots
    *  registration (issue 46). */
   nodeId?: string;

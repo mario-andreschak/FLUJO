@@ -17,7 +17,6 @@ export class MCPNode extends BaseNode {
     const nodeId = node_params?.id || '';
     const mcpServer = node_params?.properties?.boundServer;
     const enabledTools = node_params?.properties?.enabledTools || [];
-    const mcpEnv = node_params?.properties?.env || {};
     // Node-level workspace folders (MCP roots, issue 46) — additive overlay on the
     // bound server's own roots. An empty list clears this node's previous overlay.
     const nodeRoots = node_params?.properties?.roots || [];
@@ -33,7 +32,6 @@ export class MCPNode extends BaseNode {
       nodeType: 'mcp',
       mcpServer,
       enabledTools,
-      mcpEnv,
       nodeRoots
     };
     
@@ -59,7 +57,6 @@ export class MCPNode extends BaseNode {
       const result = await MCPHandler.executeMCP({
         mcpServer: prepResult.mcpServer,
         enabledTools: prepResult.enabledTools,
-        mcpEnv: prepResult.mcpEnv,
         nodeId: prepResult.nodeId,
         nodeRoots: prepResult.nodeRoots
       });

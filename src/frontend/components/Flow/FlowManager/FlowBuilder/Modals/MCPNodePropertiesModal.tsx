@@ -35,7 +35,6 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import Tooltip from '@mui/material/Tooltip';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
-import  EnvEditor  from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/RootsManager';
 import { createLogger } from '@/utils/logger/index';
 
@@ -237,20 +236,6 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
         properties: {
           ...prev.properties,
           enabledTools: newEnabledTools,
-        },
-      };
-    });
-  };
-  
-  const handleSaveEnv = async (env: Record<string, string | { value: string; metadata: { isSecret: boolean } }>) => {
-    logger.debug('Environment variables saved');
-    setNodeData((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        properties: {
-          ...prev.properties,
-          env,
         },
       };
     });
@@ -523,20 +508,10 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
           </Box>
         )}
         
-        {/* Environment Variables section - new */}
-        {boundServer && (
-          <Box sx={{ mt: 4 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Environment Variables
-            </Typography>
-            
-            <EnvEditor
-              serverName={boundServer}
-              initialEnv={nodeData.properties?.env || {}}
-              onSave={handleSaveEnv}
-            />
-          </Box>
-        )}
+        {/* Per-node Environment Variables were removed (issue #63): MCP connections
+            are singletons keyed by server name and a stdio server's env is fixed at
+            spawn, so a per-node env overlay was never applied. Set env on the MCP
+            server config itself instead. */}
 
         {/* Workspace folders (MCP roots) for this node — issue 46. Reuses the server
             modal's RootsManager; these roots are ADDED to the server's own roots while

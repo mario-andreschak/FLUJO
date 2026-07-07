@@ -69,6 +69,14 @@ export interface MCPNodeProperties {
     name?: string;
     boundServer?: string;
     enabledTools?: string[];
+    /**
+     * @deprecated Never applied. MCP connections are singletons keyed by server
+     * name (shared across all nodes/flows) and a stdio server's process env is
+     * fixed at spawn, so a per-node env overlay cannot be honored by the current
+     * shared-connection model. The FlowBuilder UI that wrote this was removed
+     * (issue #63); set env on the MCP *server config* instead, which is the
+     * supported and effective place. Kept only so existing flows that persisted
+     * this key still load without error; do not read it. */
     env?: Record<string, string>;
     /** Per-tool-call timeout in seconds for this node's tools. -1 = no timeout;
      *  unset = DEFAULT_TOOL_CALL_TIMEOUT_SECONDS (5 minutes). */
@@ -126,6 +134,8 @@ export interface MCPNodeReference {
     properties: {
         boundServer?: string;
         enabledTools?: string[];
+        /** @deprecated Never applied — see MCPNodeProperties.env (issue #63). Set env
+         *  on the MCP server config instead. Retained only for back-compat loading. */
         env?: Record<string, string>;
         /** Per-tool-call timeout in seconds. -1 = no timeout; unset = 5-minute default. */
         toolTimeout?: number;
@@ -329,7 +339,6 @@ export interface MCPNodePrepResult extends BasePrepResult {
     nodeType: 'mcp';
     mcpServer: string;
     enabledTools: string[];
-    mcpEnv?: Record<string, string>;
     /** Node-level workspace folders (MCP roots) to overlay on the bound server (issue 46). */
     nodeRoots?: string[];
 }

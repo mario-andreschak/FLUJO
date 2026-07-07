@@ -16,7 +16,7 @@ export class MCPHandler {
   static async executeMCP(
     input: MCPExecutionInput
   ): Promise<Result<MCPExecutionResult>> {
-    const { mcpServer, enabledTools, mcpEnv, nodeId, nodeRoots } = input;
+    const { mcpServer, enabledTools, nodeId, nodeRoots } = input;
     
     // Add verbose logging of the input
     log.verbose('executeMCP input', JSON.stringify(input));
