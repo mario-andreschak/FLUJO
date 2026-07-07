@@ -7,6 +7,7 @@ import { createLogger } from '@/utils/logger';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
+import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 
 const log = createLogger('app/api/git/route');
 
@@ -411,6 +412,18 @@ export async function POST(request: NextRequest) {
         if (!savePath) {
           log.error(`Missing save path [${requestId}]`);
           return NextResponse.json({ error: 'Missing save path' }, { status: 400 });
+        }
+
+        if (!isSafeRepoUrl(repoUrl)) {
+          log.error(`Rejected unsafe repository URL [${requestId}]`, { repoUrl });
+          return NextResponse.json({
+            error: 'Invalid repository URL. Only http(s)://, git://, ssh:// or user@host:path remotes are supported.'
+          }, { status: 400 });
+        }
+
+        if (branch !== undefined && branch !== null && branch !== '' && !isSafeBranchName(branch)) {
+          log.error(`Rejected unsafe branch name [${requestId}]`, { branch });
+          return NextResponse.json({ error: 'Invalid branch name' }, { status: 400 });
         }
 
         // Get the forceClone parameter from the request

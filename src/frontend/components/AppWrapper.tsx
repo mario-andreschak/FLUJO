@@ -37,15 +37,6 @@ const TourOverlay = dynamic(() => import('./Tour/TourOverlay'), {
   loading: () => null
 });
 
-// Lazily load the TransformersPreloader only in the browser
-const TransformersPreloader = dynamic(
-  () => import('../services/transcription/client').then(mod => mod.TransformersPreloader),
-  {
-    ssr: false,
-    loading: () => null
-  }
-);
-
 // Error boundary component to catch chunk loading errors
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

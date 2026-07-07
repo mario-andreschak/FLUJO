@@ -103,6 +103,25 @@ const RunTools: React.FC<RunToolsProps> = ({
   const isWebsocketUrlValid = transport !== 'websocket' || isValidWebsocketUrl(websocketUrl);
   const isServerUrlValid = (transport !== 'sse' && transport !== 'streamable') || isValidHttpUrl(serverUrl);
 
+  // Non-blocking security hint: ws:// is fine for localhost, but remote
+  // servers should use wss:// so traffic is encrypted in transit.
+  const isLocalhostHost = (hostname: string): boolean => {
+    const host = hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.localhost');
+  };
+
+  const isInsecureRemoteWebsocket = (url: string): boolean => {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.protocol === 'ws:' && !isLocalhostHost(urlObj.hostname);
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const showInsecureWebsocketWarning =
+    transport === 'websocket' && isWebsocketUrlValid && isInsecureRemoteWebsocket(websocketUrl);
+
   return (
     <Stack spacing={3}>
       {/* Error message display */}
@@ -148,6 +167,11 @@ const RunTools: React.FC<RunToolsProps> = ({
             error={!isWebsocketUrlValid}
             helperText={!isWebsocketUrlValid && "Please enter a valid WebSocket URL (starting with ws:// or wss://)"}
           />
+          {showInsecureWebsocketWarning && (
+            <Alert severity="warning" sx={{ mt: 1 }}>
+              This URL uses unencrypted ws:// to a non-localhost host. Consider using wss:// for remote servers so credentials and data are encrypted in transit.
+            </Alert>
+          )}
         </Box>
       )}
 
