@@ -5,6 +5,22 @@ import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse
 
 const log = createLogger('backend/services/mcp/config');
 
+// Transports that connect to a hosted endpoint (no local process). Their rootPath is
+// only used by FLUJO's own file/git features (folder pickers, ServerCard actions,
+// git-update route), so a filesystem-root value is never a sensible scope.
+const REMOTE_TRANSPORTS = new Set(['streamable', 'sse', 'websocket']);
+
+/**
+ * Is this rootPath a bare filesystem root ('/', '\', or a drive root like 'C:\')?
+ * Remote server configs created before issue 52 defaulted to '/', which silently
+ * pointed folder pickers and git actions at the filesystem root.
+ */
+function isFilesystemRootPath(rootPath: unknown): boolean {
+  if (typeof rootPath !== 'string') return false;
+  const trimmed = rootPath.trim();
+  return trimmed === '/' || trimmed === '\\' || /^[A-Za-z]:[\\/]?$/.test(trimmed);
+}
+
 /**
  * Load MCP server configurations from storage
  */
@@ -16,6 +32,15 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
     return Object.entries(mcpServers).map(([name, serverConfig]) => {
       // Determine the transport type
       const transport = serverConfig.transport || 'stdio';
+
+      // Read-time normalization (issue 52): remote servers saved with a too-wide
+      // rootPath default ('/'/drive root) are re-pointed at their per-server folder,
+      // matching the stdio convention. Idempotent, not persisted back to storage;
+      // deliberately narrow so a user's custom rootPath is never touched.
+      if (REMOTE_TRANSPORTS.has(transport) && isFilesystemRootPath(serverConfig.rootPath)) {
+        log.info(`Normalizing filesystem-root rootPath "${serverConfig.rootPath}" of remote server ${name} to mcp-servers/${name}`);
+        serverConfig = { ...serverConfig, rootPath: `mcp-servers/${name}` };
+      }
       
       // Default values for any missing properties
       const defaults = {

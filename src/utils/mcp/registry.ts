@@ -334,12 +334,17 @@ function buildRemoteConfig(server: RegistryServer, remote: RegistryRemote): Part
     headers[header.name] = header.value ?? header.default ?? '';
   }
 
+  // Remote servers get a dedicated per-server folder as their root dir, matching the
+  // stdio convention (mcp-servers/<name>) — never '/' (issue 52): rootPath feeds the
+  // folder pickers, ServerCard actions and the git-update route, so a filesystem root
+  // would be an overly wide default scope.
+  const base = baseConfig(server);
   return {
-    ...baseConfig(server),
+    ...base,
     transport: remote.type === 'sse' ? 'sse' : 'streamable',
     serverUrl: remote.url,
     headers,
-    rootPath: '/'
+    rootPath: `mcp-servers/${base.name}`
   } as Partial<MCPServerConfig>;
 }
 

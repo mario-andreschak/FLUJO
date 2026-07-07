@@ -86,6 +86,15 @@ function isFlujoAppRepo(repoRoot: string): boolean {
   return norm(repoRoot) === norm(process.cwd());
 }
 
+// Guard (issue 52): never treat a filesystem root ('/', 'C:\', ...) as a server
+// repository. Remote server configs used to default rootPath to '/', and running
+// clone / update / hard-reset git operations against a filesystem root would be
+// catastrophic. A path is a root iff it is its own parent.
+function isFilesystemRoot(p: string): boolean {
+  const resolved = path.resolve(p);
+  return path.dirname(resolved) === resolved;
+}
+
 // Check whether a cloned repository is behind its origin. Uses `ls-remote` (a single
 // cheap network round-trip) instead of a fetch, so it is safe to run in batches on
 // page load. Never throws: failures are reported in the `error` field so a batch
@@ -97,6 +106,12 @@ async function checkRepoUpdateStatus(savePath: string, requestId: string): Promi
     hasLocalChanges: false,
     dirtyFiles: []
   };
+
+  if (isFilesystemRoot(savePath)) {
+    log.debug(`Path is a filesystem root, refusing update check: ${savePath} [${requestId}]`);
+    status.error = 'Path is a filesystem root';
+    return status;
+  }
 
   const repoRoot = await resolveRepoRoot(savePath);
   if (!repoRoot) {
@@ -414,6 +429,11 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: 'Missing save path' }, { status: 400 });
         }
 
+        if (isFilesystemRoot(savePath)) {
+          log.error(`Refusing to clone into a filesystem root: ${savePath} [${requestId}]`);
+          return NextResponse.json({ error: 'Refusing to clone into a filesystem root' }, { status: 400 });
+        }
+
         if (!isSafeRepoUrl(repoUrl)) {
           log.error(`Rejected unsafe repository URL [${requestId}]`, { repoUrl });
           return NextResponse.json({
@@ -680,6 +700,11 @@ export async function POST(request: NextRequest) {
         if (!savePath) {
           log.error(`Missing repository path [${requestId}]`);
           return NextResponse.json({ error: 'Missing repository path' }, { status: 400 });
+        }
+
+        if (isFilesystemRoot(savePath)) {
+          log.error(`Refusing to update a filesystem root: ${savePath} [${requestId}]`);
+          return NextResponse.json({ error: 'Refusing to run git operations on a filesystem root' }, { status: 400 });
         }
 
         const repoRoot = await resolveRepoRoot(savePath);

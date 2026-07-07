@@ -66,12 +66,15 @@ const RemoteTab: React.FC<TabProps> = ({
       // Extract server name from URL
       const serverName = extractServerName(url);
       
-      // Create a streamable config with the URL
+      // Create a streamable config with the URL. The server root dir defaults to a
+      // dedicated per-server folder (like stdio servers), NOT '/': rootPath feeds the
+      // folder pickers, ServerCard actions and the git-update route, so a filesystem
+      // root would be an overly wide default scope (issue 52).
       const remoteConfig: Partial<MCPServerConfig> = {
         name: serverName,
         transport: 'streamable',
         serverUrl: url,
-        rootPath: '/',
+        rootPath: `mcp-servers/${serverName}`,
         disabled: false,
         autoApprove: [],
         env: {},

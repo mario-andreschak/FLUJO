@@ -4,6 +4,8 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs/promises';
+import path from 'path';
 import { createLogger } from '@/utils/logger';
 
 // Global recovery map to persist clients across hot reloads
@@ -1155,6 +1157,28 @@ export class MCPService {
   /**
    * Update an MCP server configuration
    */
+  /**
+   * Eagerly create the root dir of a remote (streamable/SSE/websocket) server (issue 52).
+   * Remote servers default to mcp-servers/<name> like stdio servers, but nothing else
+   * ever creates that folder for them (no clone/install step). Only safe, scoped paths
+   * are created: filesystem roots are skipped, and relative paths resolve against the
+   * app root. Best-effort — failures are logged, never thrown.
+   */
+  private async ensureRemoteServerRootDir(config: MCPServerConfig): Promise<void> {
+    try {
+      if (!['streamable', 'sse', 'websocket'].includes(config.transport)) return;
+      const rootPath = (config.rootPath || '').trim();
+      if (!rootPath) return;
+      const resolved = path.resolve(process.cwd(), rootPath);
+      // Never create (or touch) a filesystem root — a root is its own parent.
+      if (path.dirname(resolved) === resolved) return;
+      await fs.mkdir(resolved, { recursive: true });
+      log.debug(`ensureRemoteServerRootDir: ensured ${resolved} for ${config.name}`);
+    } catch (error) {
+      log.warn(`ensureRemoteServerRootDir: could not create root dir for ${config.name}:`, error);
+    }
+  }
+
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
     
@@ -1257,6 +1281,12 @@ export class MCPService {
       log.warn(`updateServerConfig: Failed to save config for ${serverName}:`, saveResult.error);
       return saveResult;
     }
+
+    // Remote servers spawn no process, but their root dir (default mcp-servers/<name>,
+    // issue 52) is where folder pickers, per-node roots and future file work point.
+    // Eagerly create it so the server always has a folder to work in. Best-effort:
+    // a failure here must never block the config update.
+    await this.ensureRemoteServerRootDir(updatedConfig);
 
     // Handle connection state based on config changes.
     if (isRename) {
