@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
@@ -204,6 +206,54 @@ const Chat: React.FC = () => {
       document.body.style.cursor = previousCursor;
       setDebuggerWidth(w => {
         if (w > 0) window.localStorage.setItem('flujo-debugger-width', String(Math.round(w)));
+        return w;
+      });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
+  // User-resizable conversation-list sidebar width in px. Persisted so the
+  // preferred width survives reloads. Adjusted by dragging the divider between
+  // the sidebar and the main chat area (mirrors the debugger-resize pattern).
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 300; // SSR-safe default (= old hardcoded width)
+    const saved = Number(window.localStorage.getItem('flujo-chat-sidebar-width'));
+    return Number.isFinite(saved) && saved > 0 ? saved : 300;
+  });
+  // Whether the sidebar is collapsed (hidden). Persisted across reloads.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('flujo-chat-sidebar-collapsed') === '1';
+  });
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('flujo-chat-sidebar-collapsed', next ? '1' : '0');
+      }
+      return next;
+    });
+  }, []);
+  const startSidebarResize = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none'; // no text selection while dragging
+    document.body.style.cursor = 'col-resize';
+    const onMove = (ev: PointerEvent) => {
+      // The sidebar is flush left, so its width is the distance from the left
+      // window edge to the pointer (clamped to sane bounds).
+      const width = Math.min(Math.max(ev.clientX, 220), 560);
+      setSidebarWidth(width);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      setSidebarWidth(w => {
+        if (w > 0) window.localStorage.setItem('flujo-chat-sidebar-width', String(Math.round(w)));
         return w;
       });
     };
@@ -1705,32 +1755,75 @@ const Chat: React.FC = () => {
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
-      {/* Left sidebar with conversation history */}
-      <Box
-        sx={{
-          width: 300,
-          borderRight: 1,
-          borderColor: 'divider',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
-        {isLoadingHistory ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
-            <Spinner size="medium" color="primary" />
-          </Box>
-        ) : historyError ? (
-           <Alert severity="error" sx={{ m: 2 }}>{historyError}</Alert>
-        ) : (
-          <ChatHistory
-            conversations={conversationList} // Pass the list state (ConversationListItem[])
-            currentConversationId={currentConversationId}
-            onSelectConversation={setCurrentConversationId}
-            onDeleteConversation={deleteConversation}
-            onNewConversation={createNewConversation}
-          />
-        )}
-      </Box>
+      {/* Collapsed state: a slim always-visible affordance to bring the sidebar
+          back (so the conversation list is never permanently lost). */}
+      {sidebarCollapsed && (
+        <Box
+          sx={{
+            width: 40,
+            flexShrink: 0,
+            borderRight: 1,
+            borderColor: 'divider',
+            display: 'flex',
+            justifyContent: 'center',
+            pt: 1,
+          }}
+        >
+          <Tooltip title="Show conversation sidebar">
+            <IconButton size="small" onClick={toggleSidebarCollapsed} aria-label="Show conversation sidebar">
+              <ViewSidebarIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
+
+      {/* Left sidebar with conversation history (resizable + collapsible) */}
+      {!sidebarCollapsed && (
+        <Box
+          sx={{
+            width: sidebarWidth,
+            flexShrink: 0,
+            borderRight: 1,
+            borderColor: 'divider',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
+          {isLoadingHistory ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
+              <Spinner size="medium" color="primary" />
+            </Box>
+          ) : historyError ? (
+             <Alert severity="error" sx={{ m: 2 }}>{historyError}</Alert>
+          ) : (
+            <ChatHistory
+              conversations={conversationList} // Pass the list state (ConversationListItem[])
+              currentConversationId={currentConversationId}
+              onSelectConversation={setCurrentConversationId}
+              onDeleteConversation={deleteConversation}
+              onNewConversation={createNewConversation}
+              onCollapse={toggleSidebarCollapsed}
+            />
+          )}
+        </Box>
+      )}
+
+      {/* Draggable divider: resizes the sidebar. Hidden when collapsed. */}
+      {!sidebarCollapsed && (
+        <Box
+          onPointerDown={startSidebarResize}
+          sx={{
+            width: '6px',
+            flexShrink: 0,
+            cursor: 'col-resize',
+            bgcolor: 'divider',
+            transition: 'background-color 120ms',
+            '&:hover': { bgcolor: 'primary.main' },
+            touchAction: 'none',
+          }}
+          aria-label="Resize conversation sidebar"
+        />
+      )}
 
       {/* Main Content Area (Chat or Chat + Debugger). Flex, not Grid: the
           debugger panel has a user-resizable pixel width (drag the divider). */}

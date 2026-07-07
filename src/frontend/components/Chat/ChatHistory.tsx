@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 
 interface ChatHistoryProps {
@@ -23,6 +24,9 @@ interface ChatHistoryProps {
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onNewConversation: () => void;
+  /** Optional: collapse/hide the sidebar. When provided, a toggle button is
+   *  rendered next to the header. State is owned by the parent. */
+  onCollapse?: () => void;
 }
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
@@ -30,7 +34,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   currentConversationId,
   onSelectConversation,
   onDeleteConversation,
-  onNewConversation
+  onNewConversation,
+  onCollapse
 }) => {
   // Format date for display
   const formatDate = (timestamp: number) => {
@@ -69,8 +74,15 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   return (
     <>
-      <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="h6">Conversations</Typography>
+      <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+        {onCollapse && (
+          <Tooltip title="Hide sidebar">
+            <IconButton size="small" onClick={onCollapse} aria-label="Hide conversation sidebar">
+              <ChevronLeftIcon />
+            </IconButton>
+          </Tooltip>
+        )}
+        <Typography variant="h6" sx={{ flex: 1 }} noWrap>Conversations</Typography>
         <Button 
           variant="contained" 
           color="primary" 
