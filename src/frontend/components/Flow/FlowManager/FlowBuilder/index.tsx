@@ -111,6 +111,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [edges, setEdges] = useState<Edge[]>(initialFlow?.edges || []);
   const [flowName, setFlowName] = useState<string>(initialFlow?.name || 'NewFlow');
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
+  // Optional free-text description shown on the Flow Card (#70).
+  const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
   
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
@@ -160,6 +162,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       }
       setEdges(validEdges);
       setFlowName(initialFlow.name);
+      setFlowDescription(initialFlow.description || '');
       
       // Initialize history with initial state
       const initialState: HistoryEntry = {
@@ -175,6 +178,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setNodes([startNode]);
       setEdges([]);
       setFlowName('NewFlow');
+      setFlowDescription('');
       
       // Initialize history with the Start node
       const emptyState: HistoryEntry = {
@@ -281,6 +285,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setFlowNameError(validateFlowName(newName));
   };
 
+  // Handle flow description change. The history-tracking effect only watches
+  // nodes/edges, so a description edit must flag unsaved changes explicitly so
+  // the navigate-away guard still offers Save/Discard.
+  const handleFlowDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFlowDescription(e.target.value);
+    setHasUnsavedChanges(true);
+  };
+
   // Handle save flow
   const handleSave = useCallback((): SaveResult => {
     log.debug(`handleSave: Attempting to save flow "${flowName}"`);
@@ -316,6 +328,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     const flow: Flow = {
       id: initialFlow?.id || uuidv4(),
       name: flowName,
+      description: flowDescription,
       nodes: flowNodes,
       edges,
     };
@@ -324,7 +337,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     onSave(flow);
     setHasUnsavedChanges(false);
     return 'saved';
-  }, [flowName, nodes, edges, initialFlow, onSave, allFlows]);
+  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave, allFlows]);
 
   // Navigation guard: the parent must route "leave the builder" actions
   // (back to dashboard, switching flows) through here so unsaved changes get
@@ -359,6 +372,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     const newFlow: Flow = {
       id: uuidv4(), // Generate a new ID
       name: newName,
+      description: flowToCopy.description,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
     };
@@ -404,6 +418,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       const flow: Flow = {
         id: initialFlow?.id || uuidv4(),
         name: newFlowName,
+        description: flowDescription,
         nodes,
         edges,
       };
@@ -665,9 +680,20 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               label="Flow Name"
               value={flowName}
               onChange={handleFlowNameChange}
-              sx={{ minWidth: 500 }}
+              sx={{ minWidth: 300 }}
               error={!!flowNameError}
               helperText={flowNameError}
+            />
+
+            <TextField
+              size="small"
+              label="Description"
+              value={flowDescription}
+              onChange={handleFlowDescriptionChange}
+              multiline
+              maxRows={3}
+              sx={{ minWidth: 300, flex: 1 }}
+              placeholder="Optional — shown on the flow card"
             />
             
             <Button 

@@ -279,6 +279,7 @@ const FlowsPage = () => {
     const newFlow: Flow = {
       id: newId, // Generate a new ID
       name: newFlowName,
+      description: flowToCopy.description,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
     };

@@ -284,6 +284,24 @@ const FlowCard = ({
           <Typography variant="h6" component="div" noWrap>
             {flow.name}
           </Typography>
+
+          {flow.description && (
+            <Tooltip title={flow.description} placement="bottom-start">
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{
+                  mt: 0.5,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {flow.description}
+              </Typography>
+            </Tooltip>
+          )}
           
           <Box sx={{ display: 'flex', gap: 0.5, mt: 1, flexWrap: 'wrap' }}>
             <Chip 

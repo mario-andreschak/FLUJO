@@ -18,6 +18,8 @@ export interface FlowNode extends Node {
 export interface Flow {
   id: string;
   name: string;
+  /** Optional, user-authored free-text description shown on the Flow Card. */
+  description?: string;
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;
