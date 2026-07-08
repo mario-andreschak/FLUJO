@@ -12,9 +12,9 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import KeyIcon from '@mui/icons-material/Key';
 import ScienceIcon from '@mui/icons-material/Science';
 import { Model } from '@/shared/types';
+import { getProviderProfile } from '@/shared/types/model/provider';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getModelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
@@ -76,11 +76,20 @@ export const ModelCard = ({ model, onEdit, onDelete }: ModelCardProps) => {
         >
           {model.description}
         </Typography>
-        <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <KeyIcon fontSize="small" color="action" />
+        <Box sx={{ mb: 1 }}>
           <Typography variant="body2" color="text.secondary">
-            API Key: ••••••••
+            Provider: {getProviderProfile(model.provider, model.adapter).label}
           </Typography>
+          {model.displayName && (
+            <Typography variant="body2" color="text.secondary" noWrap>
+              Model: {model.name}
+            </Typography>
+          )}
+          {typeof model.contextWindow === 'number' && (
+            <Typography variant="body2" color="text.secondary">
+              Context: {model.contextWindow.toLocaleString()} tokens
+            </Typography>
+          )}
         </Box>
         {model.baseUrl && (
           <Tooltip title={model.baseUrl} arrow placement="top">

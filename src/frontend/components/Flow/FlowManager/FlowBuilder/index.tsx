@@ -108,7 +108,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
-  const [edges, setEdges] = useState<Edge[]>(initialFlow?.edges || []);
+  // Initialize with the *filtered* edges (same rule the init effect applies)
+  // so the very first render already matches what history is seeded with —
+  // otherwise an unfiltered→filtered diff could itself mark the flow dirty.
+  const [edges, setEdges] = useState<Edge[]>(
+    (initialFlow?.edges || []).filter(
+      edge => edge.source && edge.target && edge.sourceHandle && edge.targetHandle
+    )
+  );
   const [flowName, setFlowName] = useState<string>(initialFlow?.name || 'NewFlow');
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
@@ -139,6 +146,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // True while a node drag is in flight — history snapshots wait for the end
   // of the gesture.
   const isDraggingRef = useRef(false);
+  // True until the initial flow state has been seeded into history. Stops the
+  // history-tracking effect from treating that initial seed as a user edit,
+  // which otherwise marks a freshly-opened flow as "dirty" and forces the
+  // Save/Discard dialog on navigate-away even when nothing was changed (#69).
+  const isInitializingRef = useRef(true);
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
@@ -152,6 +164,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   // Initialize history with initial state
   useEffect(() => {
+    // Re-arm the initialization guard so the state updates this effect makes
+    // (nodes/edges/history) don't register as a user edit in the
+    // history-tracking effect below.
+    isInitializingRef.current = true;
     if (initialFlow) {
       setNodes(initialFlow.nodes || []);
       
@@ -207,6 +223,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   useEffect(() => {
     if (isHistoryAction) {
       setIsHistoryAction(false);
+      return;
+    }
+    // Initial seed of the history entry is done by the init effect above; don't
+    // let it count as an edit (that would spuriously mark the flow dirty). #69
+    if (isInitializingRef.current) {
+      isInitializingRef.current = false;
       return;
     }
     if (isDraggingRef.current) {
