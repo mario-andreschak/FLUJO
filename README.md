@@ -1,3 +1,5 @@
+<img width="720" height="405" alt="output" src="https://github.com/user-attachments/assets/87ff1b2c-fec2-4652-a049-98e5ee699e00" />
+
 
 ## ⚡ Quick Install (recommended)
 
