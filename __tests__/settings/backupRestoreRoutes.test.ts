@@ -14,10 +14,28 @@ import { StorageKey } from '@/shared/types/storage';
 
 const loadItemMock = jest.fn();
 const saveItemMock = jest.fn();
+const saveCollectionItemMock = jest.fn();
+// Flows now live one-file-per-flow (db/flows/<id>.json); model that collection
+// in memory. Backup aggregates it back into the single array the zip expects,
+// and restore imports each flow through flowService (upsert).
+const flowFiles = new Map<string, unknown>();
 
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => loadItemMock(...args),
   saveItem: (...args: unknown[]) => saveItemMock(...args),
+  saveCollectionItem: (...args: unknown[]) => saveCollectionItemMock(...args),
+  loadCollectionItem: jest.fn(async (_c: string, id: string, fallback: unknown) =>
+    flowFiles.has(id) ? flowFiles.get(id) : fallback),
+  listCollectionItems: jest.fn(async () => Array.from(flowFiles.values())),
+  deleteCollectionItem: jest.fn(async (_c: string, id: string) => { flowFiles.delete(id); }),
+  assertSafeCollectionId: jest.fn(),
+  migrateArrayFileToCollection: jest.fn(async () => 0),
+}));
+
+// restore imports flows via flowService.saveFlow, which invalidates the engine
+// cache through a lazy import; stub it so the test never loads the real engine.
+jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
+  FlowExecutor: { clearFlowCache: jest.fn() },
 }));
 
 import { POST as backupPost } from '@/app/api/backup/route';
@@ -51,11 +69,18 @@ const callRestore = (zipBuffer: ArrayBuffer, selections: string[]) => {
 
 beforeEach(() => {
   saveItemMock.mockReset().mockResolvedValue(undefined);
+  saveCollectionItemMock.mockReset().mockImplementation(async (_c: string, id: string, val: unknown) => {
+    flowFiles.set(id, val);
+  });
   loadItemMock.mockReset().mockImplementation(async (key: StorageKey) => {
     if (key === StorageKey.MODELS) return modelsData;
-    if (key === StorageKey.FLOWS) return flowsData;
-    return null;
+    return null; // flows are no longer read via loadItem
   });
+  // Seed the per-flow collection with the fixture flow(s).
+  flowFiles.clear();
+  for (const f of flowsData) flowFiles.set((f as { id: string }).id, f);
+  (global as unknown as { __flujo_flowsCache: unknown }).__flujo_flowsCache = null;
+  (global as unknown as { __flujo_flowsMigration: unknown }).__flujo_flowsMigration = undefined;
 });
 
 describe('backup route', () => {
@@ -64,9 +89,10 @@ describe('backup route', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toBe('application/zip');
 
-    // The route must go through loadItem (db/), never raw storage/ files.
+    // The route must go through the storage backend (db/), never raw storage/
+    // files. Non-flow keys go through loadItem; flows go through the per-flow
+    // collection (flowService.loadFlows -> listCollectionItems).
     expect(loadItemMock).toHaveBeenCalledWith(StorageKey.MODELS, null);
-    expect(loadItemMock).toHaveBeenCalledWith(StorageKey.FLOWS, null);
 
     const zip = await JSZip.loadAsync(await response.arrayBuffer());
     expect(zip.file('backup-info.json')).toBeTruthy();
@@ -83,6 +109,7 @@ describe('backup route', () => {
     loadItemMock.mockImplementation(async (key: StorageKey) =>
       key === StorageKey.MODELS ? modelsData : null
     );
+    flowFiles.clear(); // no flows stored
 
     const response = await callBackup(['models', 'flows']);
     expect(response.status).toBe(200);
@@ -124,7 +151,8 @@ describe('backup → restore round-trip', () => {
     expect(await restoreResponse.json()).toEqual({ success: true });
 
     expect(saveItemMock).toHaveBeenCalledWith(StorageKey.MODELS, modelsData);
-    expect(saveItemMock).toHaveBeenCalledWith(StorageKey.FLOWS, flowsData);
+    // Flows are restored one-file-per-flow via flowService.saveFlow.
+    expect(saveCollectionItemMock).toHaveBeenCalledWith(StorageKey.FLOWS, 'flow-1', flowsData[0]);
   });
 
   it('skips keys missing from the zip without failing the restore', async () => {

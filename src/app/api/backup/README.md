@@ -115,6 +115,11 @@ storage/global_env_vars.json
 storage/encryption_key.json
 ```
 
+> **Flows:** on disk flows are stored one-file-per-flow (`db/flows/<id>.json`),
+> but the backup route aggregates them back into a single `storage/flows.json`
+> array so the archive format stays stable across FLUJO versions (older versions
+> can still restore newer backups, and vice-versa).
+
 ### MCP Servers Folder
 
 If selected, the MCP servers folder is saved in the `mcp-servers/` directory, excluding:

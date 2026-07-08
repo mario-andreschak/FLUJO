@@ -197,3 +197,220 @@ export async function clearItem(key: StorageKey): Promise<void> {
     }
   }
 }
+
+// --- Per-item collections --------------------------------------------------
+// Some stores (flows, and already conversations) are better kept as one file
+// per item under db/<collection>/<id>.json than as one big array file: a write
+// touches only the changed item (no whole-file rewrite / write amplification),
+// and a single corrupt file can only take down that one item instead of the
+// whole collection. These helpers mirror saveItem/loadItem/clearItem but operate
+// on an individual item within a named collection directory, reusing the same
+// atomic-write + per-key serialization machinery as the single-file API.
+
+// Item ids become file names, and ids can originate from API callers (e.g. a
+// flow POSTed to the public API), so they MUST be validated before being used
+// to build a path — otherwise an id like `../../evil` would escape the
+// collection directory (path traversal).
+const SAFE_COLLECTION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export function assertSafeCollectionId(id: string): void {
+  if (typeof id !== 'string' || !SAFE_COLLECTION_ID.test(id)) {
+    throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);
+  }
+}
+
+const getCollectionDir = (collection: string) => path.join(STORAGE_DIR, collection);
+const getCollectionItemPath = (collection: string, id: string) =>
+  path.join(getCollectionDir(collection), `${id}.json`);
+
+// Run a task serialized behind any in-flight write for the same chain key, so
+// concurrent saves/deletes of the SAME item can't interleave their
+// temp-file/rename/unlink steps. Different keys still run concurrently.
+function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Promise<T> {
+  const previous = writeChains.get(chainKey) ?? Promise.resolve();
+  const run = previous
+    .catch(() => { /* prior task's error is surfaced to its own caller */ })
+    .then(task);
+  writeChains.set(chainKey, run);
+  // Drop the entry once it's the tail so the map doesn't grow forever.
+  void run.catch(() => { /* handled by the caller awaiting `run` */ }).finally(() => {
+    if (writeChains.get(chainKey) === run) {
+      writeChains.delete(chainKey);
+    }
+  });
+  return run;
+}
+
+export async function saveCollectionItem<T>(collection: string, id: string, value: T): Promise<void> {
+  assertSafeCollectionId(id);
+  const filePath = getCollectionItemPath(collection, id);
+  try {
+    await runInWriteChain(`${collection}/${id}`, () =>
+      writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
+    log.verbose(`Successfully saved collection item: ${filePath}`);
+  } catch (error) {
+    log.error(`Error saving collection item "${collection}/${id}" to ${filePath}:`, error);
+    throw error;
+  }
+}
+
+export async function loadCollectionItem<T>(collection: string, id: string, defaultValue: T): Promise<T> {
+  assertSafeCollectionId(id);
+  const filePath = getCollectionItemPath(collection, id);
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+
+    // An empty/whitespace-only file is almost always a botched write, not real
+    // corruption; treat as absent so the caller can re-create it cleanly.
+    if (content.trim().length === 0) {
+      log.warn(`Collection item "${collection}/${id}" at ${filePath} is empty; treating as missing.`);
+      return defaultValue;
+    }
+
+    try {
+      return JSON.parse(content) as T;
+    } catch (error) {
+      const parseError = error as Error;
+      log.error(`CRITICAL: Failed to parse JSON from ${filePath}:`, parseError);
+      // Back up ONLY this item (the blast-radius win over one big array file).
+      const backupPath = `${filePath}.corrupted.${Date.now()}.bak`;
+      try {
+        await fs.writeFile(backupPath, content);
+        log.info(`Created backup of corrupted file at: ${backupPath}`);
+      } catch (backupError) {
+        log.error(`Failed to create backup of corrupted file:`, backupError);
+      }
+      throw new Error(`Failed to parse JSON from ${filePath}. A backup has been created at ${backupPath}. Original error: ${parseError.message}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      log.verbose(`Collection item "${collection}/${id}" not found at ${filePath}, returning default.`);
+      return defaultValue;
+    }
+    log.error(`CRITICAL: Error loading collection item "${collection}/${id}" from ${filePath}:`, error);
+    throw error;
+  }
+}
+
+export async function deleteCollectionItem(collection: string, id: string): Promise<void> {
+  assertSafeCollectionId(id);
+  const filePath = getCollectionItemPath(collection, id);
+  // Delete through the same write chain so it can't race an in-flight save of
+  // the same item.
+  await runInWriteChain(`${collection}/${id}`, async () => {
+    try {
+      await fs.unlink(filePath);
+      log.verbose(`Successfully deleted collection item: ${filePath}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+      log.verbose(`Collection item "${collection}/${id}" not found at ${filePath}, nothing to delete.`);
+    }
+  });
+}
+
+export async function listCollectionItems<T>(collection: string): Promise<T[]> {
+  const dirPath = getCollectionDir(collection);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch (error) {
+    // A collection with no directory yet is simply empty.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+
+  const items: T[] = [];
+  for (const entry of entries) {
+    // Only real item files: skip temp writes, corruption backups and anything
+    // that isn't a .json (the .tmp.* files end in a counter, not .json).
+    if (!entry.endsWith('.json')) continue;
+    if (entry.includes('.tmp.') || entry.includes('.corrupted.') || entry.endsWith('.bak')) continue;
+    const filePath = path.join(dirPath, entry);
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      if (content.trim().length === 0) {
+        log.warn(`Collection item file ${filePath} is empty; skipping.`);
+        continue;
+      }
+      items.push(JSON.parse(content) as T);
+    } catch (error) {
+      // A single unreadable/corrupt file must not break the whole listing.
+      log.error(`Failed to read collection item ${filePath}; skipping.`, error);
+    }
+  }
+  return items;
+}
+
+/**
+ * One-time, idempotent migration from a single array file (db/<key>.json) to
+ * per-item files (db/<collection>/<id>.json). Safe to call on every startup:
+ *   - per-item files always WIN and are never overwritten (so a crash mid-run
+ *     re-runs safely, and manual edits made after migration are preserved);
+ *   - the legacy file is renamed to `<file>.migrated-<ts>.bak` (this IS the
+ *     backup) only AFTER every item has been written;
+ *   - items with an invalid/unsafe id are skipped with a loud error rather than
+ *     silently re-keyed.
+ * Returns the number of items found in the legacy file (0 when there was none).
+ */
+export async function migrateArrayFileToCollection<T>(
+  key: StorageKey,
+  collection: string,
+  getId: (item: T) => string,
+): Promise<number> {
+  const legacyPath = getFilePath(key);
+  let content: string;
+  try {
+    content = await fs.readFile(legacyPath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; // nothing to migrate
+    throw error;
+  }
+
+  if (content.trim().length === 0) {
+    // Empty legacy file: just archive it out of the way.
+    await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
+    return 0;
+  }
+
+  let items: unknown;
+  try {
+    items = JSON.parse(content);
+  } catch (error) {
+    log.error(`Migration: legacy ${key}.json is not valid JSON; leaving it in place.`, error);
+    return 0;
+  }
+  if (!Array.isArray(items)) {
+    log.error(`Migration: legacy ${key}.json is not an array; leaving it in place.`);
+    return 0;
+  }
+
+  await fs.mkdir(getCollectionDir(collection), { recursive: true });
+  for (const item of items as T[]) {
+    let id: string;
+    try {
+      id = getId(item);
+      assertSafeCollectionId(id);
+    } catch (error) {
+      log.error(`Migration: skipping ${collection} item with invalid/unsafe id`, error);
+      continue;
+    }
+    const itemPath = getCollectionItemPath(collection, id);
+    // Per-item files win: never clobber one that already exists.
+    try {
+      await fs.access(itemPath);
+      log.debug(`Migration: ${collection}/${id} already exists; keeping the existing file.`);
+      continue;
+    } catch {
+      // Doesn't exist yet — write it below.
+    }
+    await writeFileAtomic(itemPath, JSON.stringify(item, null, 2));
+  }
+
+  // Archive the legacy file only after every item has been (re)written.
+  await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
+  log.info(`Migration: moved ${items.length} ${collection} item(s) from ${key}.json to per-item storage.`);
+  return items.length;
+}

@@ -104,6 +104,12 @@ For each selected storage item, the API:
 2. Parses the JSON data
 3. Saves the data to the appropriate storage file using the `saveItem` utility
 
+> **Flows:** the archive stores flows as a single `storage/flows.json` array, but
+> flows are now persisted one-file-per-flow. On restore each flow is imported via
+> `flowService.saveFlow` (which validates the id and invalidates caches). This is
+> an **upsert** — flows already present are overwritten and others are added;
+> flows not present in the backup are left untouched.
+
 ### MCP Servers Folder
 
 If selected, the API restores the MCP servers folder by:

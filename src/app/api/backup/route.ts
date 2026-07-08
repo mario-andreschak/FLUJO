@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { loadItem } from '@/utils/storage/backend';
+import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
@@ -70,9 +71,14 @@ export async function POST(request: NextRequest) {
         try {
           log.debug(`Loading storage item for backup [${requestId}]:`, storageKey);
           
-          // Read through the storage backend (persists to db/), not raw files.
-          const data = await loadItem<unknown>(storageKey, null);
-          if (data === null) {
+          // Flows now live one-file-per-flow (db/flows/<id>.json); aggregate
+          // them back into the single array the zip format expects so old FLUJO
+          // versions can still restore new backups. Everything else reads its
+          // single storage file as before.
+          const data = storageKey === StorageKey.FLOWS
+            ? await flowService.loadFlows()
+            : await loadItem<unknown>(storageKey, null);
+          if (data === null || (storageKey === StorageKey.FLOWS && Array.isArray(data) && data.length === 0)) {
             log.warn(`No data stored for key [${requestId}]:`, storageKey);
             continue;
           }

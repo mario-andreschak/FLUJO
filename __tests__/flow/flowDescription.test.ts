@@ -11,9 +11,23 @@ import type { Flow } from '@/shared/types/flow';
 
 // In-memory storage so the backend service never touches disk.
 const store: Record<string, unknown> = {};
+// Flows are stored one-file-per-flow (db/flows/<id>.json); model the collection
+// API in memory so the real flowService round-trips without touching disk.
+const collections: Record<string, Record<string, unknown>> = {};
 jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(async (key: string, val: unknown) => { store[key] = val; }),
   loadItem: jest.fn(async (key: string, fallback: unknown) => (key in store ? store[key] : fallback)),
+  saveCollectionItem: jest.fn(async (c: string, id: string, val: unknown) => { (collections[c] ??= {})[id] = val; }),
+  loadCollectionItem: jest.fn(async (c: string, id: string, fallback: unknown) =>
+    (collections[c] && id in collections[c]) ? collections[c][id] : fallback),
+  deleteCollectionItem: jest.fn(async (c: string, id: string) => { if (collections[c]) delete collections[c][id]; }),
+  listCollectionItems: jest.fn(async (c: string) => Object.values(collections[c] ?? {})),
+  assertSafeCollectionId: jest.fn((id: string) => {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+      throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);
+    }
+  }),
+  migrateArrayFileToCollection: jest.fn(async () => 0),
 }));
 
 // saveFlow/deleteFlow lazily import the execution engine to invalidate its
@@ -39,7 +53,9 @@ const flowFixture = (over: Partial<Flow> = {}): Flow => ({
 
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
+  for (const k of Object.keys(collections)) delete collections[k];
   (flowService as unknown as { flowsCache: Flow[] | null }).flowsCache = null;
+  (global as unknown as { __flujo_flowsMigration: unknown }).__flujo_flowsMigration = undefined;
 });
 
 describe('Flow description (#70)', () => {

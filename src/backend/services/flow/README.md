@@ -51,6 +51,26 @@ The backend service is responsible for:
 - `deleteFlow(flowId)`: Delete a flow by ID
 - `listFlows()`: List all flows with standardized response format
 
+### Storage layout & migration
+
+Flows are persisted **one file per flow** at `db/flows/<id>.json` (mirroring
+`db/conversations/`), not as a single `db/flows.json` array. A mutation therefore
+rewrites only the changed flow's file (no whole-file write amplification), and a
+single corrupt file can only affect that one flow instead of the entire set.
+`FlowService` sits on the generic per-item collection helpers in
+`src/utils/storage/backend.ts` (`saveCollectionItem` / `loadCollectionItem` /
+`deleteCollectionItem` / `listCollectionItems`).
+
+Flow ids become file names, so they are validated (`assertSafeCollectionId`,
+`^[A-Za-z0-9_-]{1,64}$`) before any path is built — flows can arrive from the
+public `POST /api/flow`, so this guards against path traversal.
+
+On first access `FlowService` runs a one-time, idempotent migration
+(`migrateArrayFileToCollection`) from the old `db/flows.json` array to per-flow
+files: existing per-flow files are never overwritten (crash-resume safe), and the
+legacy file is renamed to `db/flows.json.migrated-<timestamp>.bak` only after
+every flow has been written. Re-running with no legacy file is a no-op.
+
 ### Node and Edge Management
 
 - `createNode(type, position)`: Create a new node of the specified type at the given position

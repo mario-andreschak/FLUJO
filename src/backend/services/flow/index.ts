@@ -6,7 +6,14 @@ import {
   FlowOperationResponse, 
   FlowListResponse
 } from '@/shared/types/flow';
-import { saveItem, loadItem } from '@/utils/storage/backend';
+import {
+  saveCollectionItem,
+  loadCollectionItem,
+  deleteCollectionItem,
+  listCollectionItems,
+  assertSafeCollectionId,
+  migrateArrayFileToCollection,
+} from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
@@ -24,6 +31,33 @@ const log = createLogger('backend/services/flow/index');
 declare global {
   // eslint-disable-next-line no-var
   var __flujo_flowsCache: Flow[] | null | undefined;
+  // One-shot promise guarding the legacy-file -> per-flow-file migration so it
+  // runs at most once per process (idempotent even if it somehow ran twice).
+  // eslint-disable-next-line no-var
+  var __flujo_flowsMigration: Promise<void> | undefined;
+}
+
+// Flows are stored one file per flow under db/flows/<id>.json (the legacy layout
+// was a single db/flows.json array, migrated on first access). StorageKey.FLOWS
+// ('flows') doubles as the collection directory name and the legacy file's key.
+const FLOWS_COLLECTION: string = StorageKey.FLOWS;
+
+// Run the one-time migration from the legacy single-file array to per-flow
+// files. Guarded by a global promise so concurrent callers share one run; on
+// failure the guard is cleared so a later call can retry (the migration is
+// idempotent, so retrying is safe).
+async function ensureFlowsMigrated(): Promise<void> {
+  if (!global.__flujo_flowsMigration) {
+    global.__flujo_flowsMigration = (async () => {
+      try {
+        await migrateArrayFileToCollection<Flow>(StorageKey.FLOWS, FLOWS_COLLECTION, (f) => f.id);
+      } catch (error) {
+        log.error('Flow storage migration failed', error);
+        global.__flujo_flowsMigration = undefined;
+      }
+    })();
+  }
+  return global.__flujo_flowsMigration;
 }
 
 /**
@@ -50,7 +84,8 @@ export class FlowService { // Add export keyword here
       }
 
       log.debug('Loading flows from storage');
-      const flows = await loadItem<Flow[]>(StorageKey.FLOWS, []);
+      await ensureFlowsMigrated();
+      const flows = await listCollectionItems<Flow>(FLOWS_COLLECTION);
       this.flowsCache = flows;
       log.info('Loaded flows from storage', { count: flows.length });
       return flows;
@@ -66,19 +101,36 @@ export class FlowService { // Add export keyword here
   async getFlow(flowId: string): Promise<Flow | null> {
     try {
       log.debug(`Getting flow by ID: ${flowId}`);
-      let flows = await this.loadFlows();
-      let flow = flows.find(flow => flow.id === flowId) || null;
 
-      // Belt-and-braces: a cache populated before this flow was created (or in a
-      // different module instance) could miss a flow that DOES exist in storage.
-      // Never return a false "not found" — re-read from storage once and refresh
-      // the shared cache before giving up. This is the safety net behind the
-      // `Flow not found: <id>` failures on scheduled runs.
-      if (!flow) {
-        log.debug(`Flow ${flowId} not in cache; reloading from storage before giving up`);
-        flows = await loadItem<Flow[]>(StorageKey.FLOWS, []);
-        this.flowsCache = flows;
-        flow = flows.find(flow => flow.id === flowId) || null;
+      // Cache hit first.
+      const cached = this.flowsCache?.find(f => f.id === flowId) || null;
+      if (cached) {
+        log.debug(`Flow ${flowId} found in cache`);
+        return cached;
+      }
+
+      // Cache miss (or empty cache): read just this one file instead of the
+      // whole collection. This is both cheaper than the old full re-read and
+      // the safety net for the multi-instance case where another module
+      // instance created the flow after this instance's cache was built (the
+      // `Flow not found: <id>` scheduled-run failures).
+      await ensureFlowsMigrated();
+      let flow: Flow | null = null;
+      try {
+        flow = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+      } catch (error) {
+        // Unsafe id or an unreadable file: treat as not found rather than throw.
+        log.debug(`getFlow: could not load flow ${flowId}`, error);
+        flow = null;
+      }
+
+      // Refresh the shared cache entry, but only when a cache already exists —
+      // never build a partial one-item cache that loadFlows would then trust.
+      if (flow && this.flowsCache) {
+        const cache = this.flowsCache;
+        const idx = cache.findIndex(f => f.id === flow!.id);
+        if (idx >= 0) cache[idx] = flow; else cache.push(flow);
+        this.flowsCache = cache;
       }
 
       log.debug(`Flow ${flowId} ${flow ? 'found' : 'not found'}`);
@@ -110,28 +162,22 @@ export class FlowService { // Add export keyword here
   async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
     try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
-      // Load current flows
-      const flows = await this.loadFlows();
-      
-      // Check if flow exists
-      const existingFlowIndex = flows.findIndex(f => f.id === flow.id);
-      
-      let updatedFlows: Flow[];
-      if (existingFlowIndex >= 0) {
-        // Update existing flow
-        log.debug(`Updating existing flow: ${flow.id}`);
-        updatedFlows = [...flows];
-        updatedFlows[existingFlowIndex] = flow;
-      } else {
-        // Add new flow
-        log.debug(`Adding new flow: ${flow.id}`);
-        updatedFlows = [...flows, flow];
-      }
-      
-      await saveItem(StorageKey.FLOWS, updatedFlows);
+      // Validate the id before it is used as a file name (path-traversal guard).
+      assertSafeCollectionId(flow.id);
+      await ensureFlowsMigrated();
 
-      // Update cache
-      this.flowsCache = updatedFlows;
+      // Write only this flow's file (no whole-collection rewrite).
+      await saveCollectionItem(FLOWS_COLLECTION, flow.id, flow);
+
+      // Patch the shared cache in place when it exists; leave it null otherwise
+      // so the next loadFlows reads the full set from disk (never build a
+      // partial cache here).
+      const cache = this.flowsCache;
+      if (cache) {
+        const idx = cache.findIndex(f => f.id === flow.id);
+        if (idx >= 0) cache[idx] = flow; else cache.push(flow);
+        this.flowsCache = cache;
+      }
 
       // Invalidate the execution engine's compiled-flow cache for this flow so
       // a subsequent run picks up the edit (renamed nodes/models, new edges,
@@ -157,15 +203,16 @@ export class FlowService { // Add export keyword here
   async deleteFlow(flowId: string): Promise<FlowServiceResponse> {
     try {
       log.debug(`Deleting flow: ${flowId}`);
-      // Load current flows
-      const flows = await this.loadFlows();
-      
-      // Remove the flow
-      const updatedFlows = flows.filter(flow => flow.id !== flowId);
-      await saveItem(StorageKey.FLOWS, updatedFlows);
+      await ensureFlowsMigrated();
 
-      // Update cache
-      this.flowsCache = updatedFlows;
+      // Remove only this flow's file.
+      await deleteCollectionItem(FLOWS_COLLECTION, flowId);
+
+      // Drop it from the shared cache when one exists.
+      const cache = this.flowsCache;
+      if (cache) {
+        this.flowsCache = cache.filter(flow => flow.id !== flowId);
+      }
 
       // Drop any compiled copy of the deleted flow from the execution engine.
       await this.invalidateExecutionCache(flowId);

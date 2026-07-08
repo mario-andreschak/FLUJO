@@ -3,7 +3,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { saveItem } from '@/utils/storage/backend';
+import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/storage';
+import type { Flow } from '@/shared/types/flow';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 // eslint-disable-next-line import/named
@@ -94,8 +96,22 @@ export async function POST(request: NextRequest) {
           const content = await zipFile.async('string');
           const data = JSON.parse(content);
           
-          // Save the data
-          await saveItem(storageKey, data);
+          if (storageKey === StorageKey.FLOWS) {
+            // The backup stores flows as a single array (frozen zip format), but
+            // flows are now persisted one file per flow. Import each via the
+            // service (which validates the id and invalidates caches). This is an
+            // upsert; flows already present are overwritten, others are added.
+            const flows: Flow[] = Array.isArray(data) ? data : [];
+            for (const flow of flows) {
+              const result = await flowService.saveFlow(flow);
+              if (!result.success) {
+                log.warn(`Skipped restoring a flow [${requestId}]:`, result.error);
+              }
+            }
+          } else {
+            // Save the data
+            await saveItem(storageKey, data);
+          }
           log.debug(`Restored file [${requestId}]:`, `storage/${storageKey}.json`);
         } catch (error) {
           log.error(`Error restoring file [${requestId}]:`, error);
