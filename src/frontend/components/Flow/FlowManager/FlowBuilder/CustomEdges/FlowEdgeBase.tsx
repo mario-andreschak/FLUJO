@@ -16,6 +16,7 @@ import {
   buildOrthogonalPath,
   nearestGap,
 } from './orthogonalPath';
+import { BASE_ANIMATION_MS, BASE_ANIMATION_BOTH_MS, edgeSpeedFactor } from './edgeSpeed';
 
 // Fired when the user finishes a re-route gesture (bend drag, waypoint move,
 // or waypoint removal). The Canvas listens and commits the change through
@@ -68,12 +69,12 @@ const EdgeButton = styled('button')(({ theme }) => ({
 const EdgePath = styled(BaseEdge)({
   '&&.animated': {
     strokeDasharray: 5,
-    animation: 'flowPathAnimation 0.5s infinite linear',
+    animation: `flowPathAnimation ${BASE_ANIMATION_MS}ms infinite linear`,
   },
   // Bidirectional: the dashes swing back and forth instead of flowing one way.
   '&&.animated-both': {
     strokeDasharray: 5,
-    animation: 'flowPathAnimation 0.75s infinite linear alternate',
+    animation: `flowPathAnimation ${BASE_ANIMATION_BOTH_MS}ms infinite linear alternate`,
   },
   '@keyframes flowPathAnimation': {
     '0%': {
@@ -186,14 +187,6 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     controlsPoint = { x: labelX, y: labelY };
   }
 
-  const edgeStyle = {
-    ...style,
-    strokeWidth: selected ? 3 : 2,
-    stroke: variant === 'mcp'
-      ? (selected ? theme.palette.info.light : theme.palette.info.main)
-      : (selected ? theme.palette.primary.main : theme.palette.text.secondary),
-  };
-
   const animationClass = variant === 'mcp'
     ? ''
     : bidirectional
@@ -201,6 +194,25 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
       : edgeData?.animated !== false
         ? 'animated'
         : '';
+
+  const edgeStyle = {
+    ...style,
+    strokeWidth: selected ? 3 : 2,
+    stroke: variant === 'mcp'
+      ? (selected ? theme.palette.info.light : theme.palette.info.main)
+      : (selected ? theme.palette.primary.main : theme.palette.text.secondary),
+    // Give each animated edge a slightly different (deterministic) speed so
+    // overlapping siblings on the same handle drift out of phase. Inline
+    // animation-duration (a longhand) overrides the `animation` shorthand from
+    // the styled class, leaving keyframes/dash/direction untouched.
+    ...(animationClass
+      ? {
+          animationDuration: `${Math.round(
+            (bidirectional ? BASE_ANIMATION_BOTH_MS : BASE_ANIMATION_MS) * edgeSpeedFactor(id)
+          )}ms`,
+        }
+      : {}),
+  };
 
   const commitWaypoints = (value: Point[] | null) => {
     document.dispatchEvent(
