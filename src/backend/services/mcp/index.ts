@@ -51,6 +51,7 @@ if (typeof global.__mcp_active_transports === 'undefined') {
 
 // Import from backend modules
 import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
+import { TestConnectionEvent } from '@/shared/types/streaming';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction, ToolCallProgress } from './tools';
 import {
@@ -799,8 +800,21 @@ export class MCPService {
    * server process (not the browser), it can reach servers behind custom CAs and send
    * the configured Authorization/X-SAP-* headers, which a browser fetch cannot.
    */
-  async testConnection(config: MCPServerConfig): Promise<MCPServiceResponse> {
+  async testConnection(
+    config: MCPServerConfig,
+    onOutput?: (event: TestConnectionEvent) => void
+  ): Promise<MCPServiceResponse> {
     log.info(`testConnection: Testing connection to ${config.name || '(unnamed)'} via ${config.transport} transport`);
+
+    // Optional live-output sink (issue #64). When omitted, behaviour is byte-for-byte
+    // identical to the original one-shot request/response probe.
+    const emit = (event: TestConnectionEvent): void => {
+      try {
+        onOutput?.(event);
+      } catch {
+        // A misbehaving sink must never break the probe itself.
+      }
+    };
 
     const stderrLogs: string[] = [];
     let client: Client | null = null;
@@ -811,15 +825,25 @@ export class MCPService {
       transport = createTransport(config);
 
       // Capture stdio stderr (for stdio servers) and transport errors so we can build a
-      // meaningful message if the handshake fails.
+      // meaningful message if the handshake fails. When a live-output sink is attached
+      // (issue #64), also forward each chunk AS IT ARRIVES so a slow cold `npx`/`uvx`
+      // start fills the console instead of looking frozen. (The child's stdout is the
+      // MCP JSON-RPC channel owned by the SDK transport, so only stderr + lifecycle
+      // markers are reliably streamable for stdio.)
       if (transport instanceof StdioClientTransport && transport.stderr) {
         transport.stderr.on('data', (data: Buffer) => {
-          stderrLogs.push(data.toString());
+          const chunk = data.toString();
+          stderrLogs.push(chunk);
+          emit({ type: 'stderr', data: chunk });
         });
       }
       transport.onerror = (err: Error) => {
-        stderrLogs.push(`Transport error: ${formatErrorChain(err)}`);
+        const line = `Transport error: ${formatErrorChain(err)}`;
+        stderrLogs.push(line);
+        emit({ type: 'stderr', data: line + '\n' });
       };
+
+      emit({ type: 'status', phase: 'spawning', message: 'Starting server / opening transport...' });
 
       // Runner-aware timeout: a cold `npx`/`uvx`/`bunx`/`pnpm dlx` may need to DOWNLOAD
       // the package before the MCP handshake even starts, which routinely exceeds the 15s
@@ -839,6 +863,7 @@ export class MCPService {
         );
       });
 
+      emit({ type: 'status', phase: 'handshaking', message: 'Performing MCP handshake...' });
       try {
         await Promise.race([client.connect(transport), timeoutPromise]);
       } finally {
@@ -846,6 +871,7 @@ export class MCPService {
       }
 
       // Handshake succeeded — try to list tools to confirm full protocol compatibility.
+      emit({ type: 'status', phase: 'listing-tools', message: 'Handshake OK — listing tools...' });
       let toolCount = 0;
       try {
         const result = await client.listTools();
@@ -855,6 +881,7 @@ export class MCPService {
       }
 
       log.info(`testConnection: Successfully connected to ${config.name} (${toolCount} tools)`);
+      emit({ type: 'result', success: true, data: { toolCount } });
       return { success: true, data: { toolCount } };
     } catch (error) {
       log.warn(`testConnection: Failed to connect to ${config.name}:`, error);
@@ -862,6 +889,7 @@ export class MCPService {
       const requiresAuthentication = isAuthRequiredError(error);
 
       const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
+      emit({ type: 'result', success: false, error: enhancedErrorMessage, requiresAuthentication });
       return { success: false, error: enhancedErrorMessage, requiresAuthentication };
     } finally {
       if (client) {

@@ -2,6 +2,8 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { MCPServerConfig } from '@/shared/types/mcp';
+import { TestConnectionEvent } from '@/shared/types/streaming';
+import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import { createLogger } from '@/utils/logger';
 import { FEATURES } from '@/config/features'; // Import the feature flags
 
@@ -311,6 +313,77 @@ class MCPService {
         success: false,
         error: `Failed to reach the FLUJO backend to run the connection test: ${error instanceof Error ? error.message : 'Unknown error'}`,
       };
+    }
+  }
+
+  /**
+   * Streaming variant of {@link testConnection} (issue #64).
+   *
+   * Runs the same real MCP handshake through the backend, but consumes an NDJSON stream
+   * so the caller can render the server's stderr and lifecycle markers in the console AS
+   * THEY ARRIVE (a slow cold `npx`/`uvx` start no longer looks frozen). Each parsed event
+   * is passed to `onEvent`; the promise resolves with the final `result` payload.
+   *
+   * Gracefully degrades: on a network error, a non-OK response, or a body that cannot be
+   * streamed (e.g. a proxy that buffered it into a plain JSON blob), it falls back to the
+   * non-streaming {@link testConnection} so the test still works.
+   */
+  async testConnectionStreaming(
+    config: MCPServerConfig,
+    onEvent: (event: TestConnectionEvent) => void
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    requiresAuthentication?: boolean;
+    data?: { toolCount?: number };
+  }> {
+    try {
+      const response = await fetch('/api/mcp/test-connection/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(config),
+      });
+
+      if (!response.ok || !response.body) {
+        log.warn(`Streaming test-connection unavailable (status ${response.status}); falling back`);
+        return this.testConnection(config);
+      }
+
+      let result: {
+        success: boolean;
+        error?: string;
+        requiresAuthentication?: boolean;
+        data?: { toolCount?: number };
+      } | null = null;
+
+      await readNdjsonStream(response, (event) => {
+        onEvent(event);
+        if (event.type === 'result') {
+          result = {
+            success: event.success,
+            error: event.error,
+            requiresAuthentication: event.requiresAuthentication,
+            data: event.data,
+          };
+        }
+      });
+
+      if (result) {
+        return result;
+      }
+
+      // Stream ended without a terminal result event — treat as a failure so the caller
+      // does not hang waiting for a success it will never get.
+      log.warn('Streaming test-connection ended without a result event');
+      return {
+        success: false,
+        error: 'The connection test stream ended unexpectedly without a result.',
+      };
+    } catch (error) {
+      log.warn(`Streaming test connection failed for ${config.name}; falling back to non-streaming:`, error);
+      return this.testConnection(config);
     }
   }
 

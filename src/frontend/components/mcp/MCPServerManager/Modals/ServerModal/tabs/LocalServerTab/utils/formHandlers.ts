@@ -6,6 +6,7 @@ import { parseConfigFromClipboard, parseConfigFromReadme, parseEnvFromClipboard,
 import { installDependencies, buildServer } from '../../../utils/buildUtils';
 import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } from '../hooks/useLocalServerState';
 import { mcpService } from '@/frontend/services/mcp';
+import { TestConnectionEvent } from '@/shared/types/streaming';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 
 export const handleSubmit = (
@@ -565,6 +566,17 @@ export const handleRun = async (
     type: 'success',
     text: 'Testing server connection...'
   });
+
+  // Forward live probe output (server stderr + lifecycle markers) to the console as it
+  // arrives (#64), so a slow cold npx/uvx start no longer looks frozen. The final
+  // success/auth/failure messaging is still driven off the returned result below.
+  const onStreamEvent = (event: TestConnectionEvent) => {
+    if (event.type === 'stderr' || event.type === 'stdout') {
+      setConsoleOutput((prev: string) => prev + event.data);
+    } else if (event.type === 'status' && event.message) {
+      setConsoleOutput((prev: string) => prev + event.message + '\n');
+    }
+  };
   
   // For HTTP streaming transports (SSE and Streamable), test the connection through the
   // FLUJO backend rather than a browser fetch. The browser runs in a different process
@@ -582,7 +594,7 @@ export const handleRun = async (
         setConsoleOutput((prev: string) => prev + `Sending ${headerCount} custom header(s).\n`);
       }
 
-      const testResult = await mcpService.testConnection(testConfig);
+      const testResult = await mcpService.testConnectionStreaming(testConfig, onStreamEvent);
 
       if (testResult.success) {
         setRunCompleted(true);
@@ -638,7 +650,7 @@ export const handleRun = async (
 
       // websocketUrl from form state may be newer than what's on localConfig.
       const testConfig = { ...localConfig, websocketUrl } as MCPServerConfig;
-      const testResult = await mcpService.testConnection(testConfig);
+      const testResult = await mcpService.testConnectionStreaming(testConfig, onStreamEvent);
 
       if (testResult.success) {
         setRunCompleted(true);
@@ -706,7 +718,7 @@ export const handleRun = async (
       }
     }
 
-    const testResult = await mcpService.testConnection(localConfig);
+    const testResult = await mcpService.testConnectionStreaming(localConfig, onStreamEvent);
 
     if (testResult.success) {
       setRunCompleted(true);
