@@ -235,6 +235,29 @@ const FlowsPage = () => {
     }
   };
   
+  const handleSetFlowFolder = useCallback(async (flowId: string, folder: string | undefined) => {
+    log.info('Setting flow folder', { flowId, folder });
+    const flow = flows.find(f => f.id === flowId);
+    if (!flow) {
+      log.warn('Flow to move not found', { flowId });
+      return;
+    }
+    // Empty/undefined folder means "Ungrouped".
+    const updated: Flow = { ...flow, folder: folder && folder.trim() ? folder.trim() : undefined };
+    try {
+      const result = await flowService.updateFlow(updated);
+      if (!result.success) {
+        showSnackbar(result.error || 'Failed to move flow to folder', 'error');
+        return;
+      }
+      setFlows(prev => prev.map(f => (f.id === flowId ? updated : f)));
+      showSnackbar(updated.folder ? `Moved to "${updated.folder}"` : 'Removed from folder', 'success');
+    } catch (error) {
+      log.error('Error setting flow folder', error);
+      showSnackbar('Failed to move flow to folder', 'error');
+    }
+  }, [flows, showSnackbar]);
+
   const handleCopyFlow = (flowId: string) => {
     log.info('Copying flow', { flowId });
     const flowToCopy = flows.find(f => f.id === flowId);
@@ -374,6 +397,7 @@ const FlowsPage = () => {
             onDeleteFlow={handleDeleteFlow}
             onCopyFlow={handleCopyFlow}
             onCreateFlow={createNewFlow}
+            onSetFolder={handleSetFlowFolder}
             isLoading={isLoading}
           />
         </Box>

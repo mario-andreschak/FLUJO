@@ -404,6 +404,30 @@ export function useServerStatus() {
   }, [loadServers]);
 
   /**
+   * Assign (or clear) a server's organizing folder (#71). This is a cosmetic,
+   * frontend-only field, so it goes through a lightweight partial config update
+   * and patches local state in place rather than re-fetching status.
+   */
+  const setServerFolder = useCallback(async (serverName: string, folder?: string) => {
+    const normalized = folder && folder.trim() ? folder.trim() : '';
+    log.debug(`Setting folder for server ${serverName} to ${normalized || '(none)'}`);
+    try {
+      const result = await mcpService.updateServerConfig(serverName, { folder: normalized });
+      if ('error' in result && result.error) {
+        log.warn('Failed to update server folder:', result.error);
+        return false;
+      }
+      setServers((prev) =>
+        prev.map((s) => (s.name === serverName ? { ...s, folder: normalized || undefined } : s))
+      );
+      return true;
+    } catch (error) {
+      log.warn('Failed to set server folder:', error);
+      return false;
+    }
+  }, []);
+
+  /**
    * Save environment variables for a server
    */
   const saveEnv = useCallback(async (
@@ -483,6 +507,7 @@ export function useServerStatus() {
     deleteServer,
     addServer,
     updateServer,
+    setServerFolder,
     saveEnv
   };
 }

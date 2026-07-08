@@ -15,6 +15,11 @@ export interface Flow {
   name: string;
   /** Optional, user-authored free-text description shown on the Flow Card. */
   description?: string;
+  /**
+   * Optional, user-assigned folder for organizing flows on the dashboard (#71).
+   * Absent/empty means "Ungrouped". Frontend-only organization.
+   */
+  folder?: string;
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

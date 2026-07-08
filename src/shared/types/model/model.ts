@@ -40,4 +40,9 @@ export interface Model {
      * per-node. Unset = the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
      */
     maxTurns?: number;
+    /**
+     * Optional, user-assigned folder for organizing model cards (#71). Absent/empty
+     * means "Ungrouped". Frontend-only organization — has no effect on the model.
+     */
+    folder?: string;
   }

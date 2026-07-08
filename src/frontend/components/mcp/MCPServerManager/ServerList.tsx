@@ -24,6 +24,10 @@ interface ServerListProps {
   updates?: Record<string, ServerUpdateInfo>;
   /** Called after a server was successfully updated from git. */
   onServerUpdated?: (serverName: string, rootPath: string) => void;
+  /** Existing folders on the surface, for the "Move to folder" picker (#71). */
+  folders?: string[];
+  /** Assign/clear a server's organizing folder (#71). */
+  onServerSetFolder?: (serverName: string, folder: string | undefined) => void;
 }
 
 const ServerList: React.FC<ServerListProps> = ({
@@ -40,6 +44,8 @@ const ServerList: React.FC<ServerListProps> = ({
   onServerSelectionChange,
   updates,
   onServerUpdated,
+  folders = [],
+  onServerSetFolder,
 }) => {
   log.debug('Rendering ServerList', { 
     serverCount: servers.length, 
@@ -115,6 +121,9 @@ const ServerList: React.FC<ServerListProps> = ({
               installCommand={server._installCommand}
               buildCommand={server._buildCommand}
               onUpdated={onServerUpdated ? () => onServerUpdated(server.name, server.rootPath) : undefined}
+              folder={server.folder}
+              folders={folders}
+              onSetFolder={onServerSetFolder ? (f) => onServerSetFolder(server.name, f) : undefined}
             />
           </Grid>
         );

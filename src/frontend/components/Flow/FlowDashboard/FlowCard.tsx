@@ -1,6 +1,6 @@
 "use client";
 
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Card, 
   CardActionArea, 
@@ -19,11 +19,13 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditIcon from '@mui/icons-material/Edit';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Flow } from '@/frontend/types/flow/flow';
 import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { FlowValidationResult } from '@/utils/shared/flowValidation';
+import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
@@ -35,6 +37,10 @@ interface FlowCardProps {
   onDelete: (flowId: string) => void;
   onCopy?: (flowId: string) => void;
   onEdit?: (flowId: string) => void;
+  /** Assign/clear this flow's organizing folder (#71). */
+  onSetFolder?: (flowId: string, folder: string | undefined) => void;
+  /** Existing folders on the dashboard, for the "Move to folder" picker. */
+  folders?: string[];
   /** Consistency-check result; drives the problem badge. */
   validation?: FlowValidationResult;
 }
@@ -85,10 +91,13 @@ const FlowCard = ({
   onDelete,
   onCopy,
   onEdit,
+  onSetFolder,
+  folders = [],
   validation
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
   const theme = useTheme();
+  const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
 
   // Surface flow problems at a glance: red when it won't run (errors), amber for
   // advisory warnings. The tooltip lists the first few issues.
@@ -129,6 +138,11 @@ const FlowCard = ({
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onEdit) onEdit(flow.id);
+  };
+
+  const handleFolderClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFolderAnchorEl(e.currentTarget as HTMLElement);
   };
   
   // Render a faithful mini-map of the flow: real node positions/edges scaled to
@@ -345,6 +359,18 @@ const FlowCard = ({
             </IconButton>
           </Tooltip>
         )}
+
+        {onSetFolder && (
+          <Tooltip title={flow.folder ? `Folder: ${flow.folder}` : 'Move to folder'}>
+            <IconButton
+              size="small"
+              onClick={handleFolderClick}
+              color={flow.folder ? 'primary' : 'default'}
+            >
+              <DriveFileMoveOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         
         <Tooltip title="Delete flow">
           <IconButton size="small" onClick={handleDeleteClick} color="error">
@@ -352,6 +378,17 @@ const FlowCard = ({
           </IconButton>
         </Tooltip>
       </CardActions>
+
+      {onSetFolder && (
+        <FolderAssignMenu
+          anchorEl={folderAnchorEl}
+          open={Boolean(folderAnchorEl)}
+          currentFolder={flow.folder}
+          folders={folders}
+          onClose={() => setFolderAnchorEl(null)}
+          onAssign={(folder) => onSetFolder(flow.id, folder)}
+        />
+      )}
     </StyledCard>
   );
 };

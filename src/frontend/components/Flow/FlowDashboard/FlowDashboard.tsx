@@ -29,7 +29,12 @@ import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import UpdateIcon from '@mui/icons-material/Update';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import AddIcon from '@mui/icons-material/Add';
+import LayersIcon from '@mui/icons-material/Layers';
+import LayersClearIcon from '@mui/icons-material/LayersClear';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
+import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
+import { groupByFolder, groupItems, alphaBucket, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
 
@@ -43,10 +48,39 @@ interface FlowDashboardProps {
   onCopyFlow?: (flowId: string) => void;
   onEditFlow?: (flowId: string) => void;
   onCreateFlow?: () => void;
+  /** Assign/clear a flow's organizing folder (#71). */
+  onSetFolder?: (flowId: string, folder: string | undefined) => void;
   isLoading?: boolean;
 }
 
 type SortOption = 'name-asc' | 'name-desc' | 'newest' | 'oldest' | 'most-nodes' | 'least-nodes';
+/** How cards are grouped into collapsible sections: not at all, by user folder (#71), or by the active sort key (#73). */
+type GroupMode = 'none' | 'folder' | 'sort';
+
+// Node-count bucket for the "most/least nodes" sort (#73).
+function bucketNodeCount(count: number): { key: string; label: string } {
+  if (count === 0) return { key: 'nodes:0', label: '0 nodes' };
+  if (count <= 2) return { key: 'nodes:1-2', label: '1–2 nodes' };
+  if (count <= 5) return { key: 'nodes:3-5', label: '3–5 nodes' };
+  if (count <= 10) return { key: 'nodes:6-10', label: '6–10 nodes' };
+  return { key: 'nodes:11+', label: '11+ nodes' };
+}
+
+// Map the active sort key to a group bucket for a flow. Alphabetical sorts fold by
+// first letter; node-count sorts fold by size band; date sorts (which lack a real
+// timestamp on the Flow type) fall back to a single bucket.
+function deriveFlowSortGroup(flow: Flow, sortOption: SortOption): { key: string; label: string } {
+  switch (sortOption) {
+    case 'name-asc':
+    case 'name-desc':
+      return alphaBucket(flow.name);
+    case 'most-nodes':
+    case 'least-nodes':
+      return bucketNodeCount(flow.nodes.length);
+    default:
+      return { key: 'all', label: 'All flows' };
+  }
+}
 
 const FlowDashboard = ({
   flows,
@@ -56,12 +90,17 @@ const FlowDashboard = ({
   onCopyFlow,
   onEditFlow,
   onCreateFlow,
+  onSetFolder,
   isLoading = false,
 }: FlowDashboardProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState<SortOption>('name-asc');
   const [viewMode, setViewMode] = useState<'grid' | 'compact'>('grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [groupMode, setGroupMode] = useState<GroupMode>('none');
+  const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
+  // Keys of the sections the user has collapsed; everything defaults to expanded.
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
 
   // Context for the per-card consistency badge. Loaded once; flows are revalidated
   // whenever the list or the context changes. A failed load leaves a family undefined
@@ -144,6 +183,23 @@ const FlowDashboard = ({
   const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(event.target.value);
   };
+
+  const handleGroupChange = (mode: GroupMode) => {
+    setGroupMode(mode);
+    setGroupAnchorEl(null);
+  };
+
+  const toggleCollapsed = (key: string) => {
+    setCollapsedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
   
   // Filter and sort flows
   const filteredFlows = useMemo(() => {
@@ -181,6 +237,20 @@ const FlowDashboard = ({
       }
     });
   }, [flows, searchTerm, sortOption]);
+
+  // Distinct folders currently in use, for the "Move to folder" picker.
+  const folders = useMemo(() => collectFolders(flows, (f) => f.folder), [flows]);
+
+  // Grouped view of the filtered/sorted flows, driven by the active group mode.
+  const groups = useMemo<CardGroup<Flow>[]>(() => {
+    if (groupMode === 'folder') {
+      return groupByFolder(filteredFlows, (f) => f.folder);
+    }
+    if (groupMode === 'sort') {
+      return groupItems(filteredFlows, (f) => deriveFlowSortGroup(f, sortOption));
+    }
+    return [];
+  }, [groupMode, filteredFlows, sortOption]);
   
   // Generate loading skeletons
   const renderSkeletons = () => {
@@ -190,6 +260,33 @@ const FlowDashboard = ({
       </Grid>
     ));
   };
+
+  // Render a grid of flow cards for a given subset (whole list or one group).
+  const renderFlowGrid = (items: Flow[]) => (
+    <Grid container spacing={2}>
+      {items.map(flow => (
+        <Grid 
+          item 
+          xs={12} 
+          sm={viewMode === 'compact' ? 12 : 6} 
+          md={viewMode === 'compact' ? 12 : getGridColumns() === 3 ? 4 : 6} 
+          key={flow.id}
+        >
+          <FlowCard
+            flow={flow}
+            selected={selectedFlow === flow.id}
+            onSelect={onSelectFlow}
+            onDelete={onDeleteFlow}
+            onCopy={onCopyFlow}
+            onEdit={onEditFlow}
+            onSetFolder={onSetFolder}
+            folders={folders}
+            validation={validationByFlow[flow.id]}
+          />
+        </Grid>
+      ))}
+    </Grid>
+  );
 
   return (
     <Box sx={{ 
@@ -259,6 +356,20 @@ const FlowDashboard = ({
                 <ViewListIcon fontSize="small" />
               </IconButton>
             </Box>
+
+            {/* Group-by button (#71 folders / #73 sort-fold) */}
+            <IconButton
+              size="small"
+              onClick={(e) => setGroupAnchorEl(e.currentTarget)}
+              color={groupMode !== 'none' ? 'primary' : 'default'}
+              sx={{
+                border: `1px solid ${theme.palette.divider}`,
+                backgroundColor: theme.palette.background.default
+              }}
+              title="Group cards"
+            >
+              <LayersIcon fontSize="small" />
+            </IconButton>
             
             {/* Sort button */}
             <IconButton
@@ -313,27 +424,22 @@ const FlowDashboard = ({
             {renderSkeletons()}
           </Grid>
         ) : filteredFlows.length > 0 ? (
-          <Grid container spacing={2}>
-            {filteredFlows.map(flow => (
-              <Grid 
-                item 
-                xs={12} 
-                sm={viewMode === 'compact' ? 12 : 6} 
-                md={viewMode === 'compact' ? 12 : getGridColumns() === 3 ? 4 : 6} 
-                key={flow.id}
+          groupMode === 'none' ? (
+            renderFlowGrid(filteredFlows)
+          ) : (
+            groups.map((group) => (
+              <CollapsibleCardSection
+                key={group.key}
+                label={group.label}
+                count={group.items.length}
+                expanded={!collapsedKeys.has(group.key)}
+                onToggle={() => toggleCollapsed(group.key)}
+                showFolderIcon={groupMode === 'folder'}
               >
-                <FlowCard
-                  flow={flow}
-                  selected={selectedFlow === flow.id}
-                  onSelect={onSelectFlow}
-                  onDelete={onDeleteFlow}
-                  onCopy={onCopyFlow}
-                  onEdit={onEditFlow}
-                  validation={validationByFlow[flow.id]}
-                />
-              </Grid>
-            ))}
-          </Grid>
+                {renderFlowGrid(group.items)}
+              </CollapsibleCardSection>
+            ))
+          )
         ) : (
           <Box sx={{ 
             display: 'flex', 
@@ -377,6 +483,34 @@ const FlowDashboard = ({
           </Box>
         )}
       </Box>
+
+      {/* Group-by menu */}
+      <Menu
+        anchorEl={groupAnchorEl}
+        open={Boolean(groupAnchorEl)}
+        onClose={() => setGroupAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem selected={groupMode === 'none'} onClick={() => handleGroupChange('none')}>
+          <ListItemIcon>
+            <LayersClearIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="No grouping" />
+        </MenuItem>
+        <MenuItem selected={groupMode === 'folder'} onClick={() => handleGroupChange('folder')}>
+          <ListItemIcon>
+            <FolderOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="By folder" />
+        </MenuItem>
+        <MenuItem selected={groupMode === 'sort'} onClick={() => handleGroupChange('sort')}>
+          <ListItemIcon>
+            <LayersIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="By sort setting" />
+        </MenuItem>
+      </Menu>
       
       {/* Sort menu */}
       <Menu

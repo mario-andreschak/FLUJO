@@ -38,6 +38,12 @@ export type MCPManagerConfig = {
    */
   exposeAsMcpServer?: boolean;
   /**
+   * Optional, user-assigned folder for organizing server cards in the MCP
+   * manager (#71). Absent/empty means "Ungrouped". Frontend-only organization —
+   * has no effect on the server connection.
+   */
+  folder?: string;
+  /**
    * MCP roots (#15/#46): workspace folders this server is scoped to. Each entry is a
    * filesystem path or a `file://` URI (and may contain `${global:VAR}` references,
    * resolved fresh on every roots/list request). The roots capability is ALWAYS

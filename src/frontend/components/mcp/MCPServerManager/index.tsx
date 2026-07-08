@@ -42,11 +42,42 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import SelectAllIcon from '@mui/icons-material/SelectAll';
+import LayersIcon from '@mui/icons-material/Layers';
+import LayersClearIcon from '@mui/icons-material/LayersClear';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
+import { groupByFolder, groupItems, alphaBucket, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
 type SortOption = 'name-asc' | 'name-desc' | 'status-connected' | 'status-disconnected' | 'transport';
 type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'sse' | 'streamable';
+/** How server cards are folded into collapsible sections: off, by user folder (#71), or by the active sort key (#73). */
+type GroupMode = 'none' | 'folder' | 'sort';
+
+// Map the active sort key to a group bucket for a server (#73).
+function deriveServerSortGroup(server: any, sortOption: SortOption): { key: string; label: string } {
+  switch (sortOption) {
+    case 'name-asc':
+    case 'name-desc':
+      return alphaBucket(server.name);
+    case 'status-connected':
+    case 'status-disconnected': {
+      const s = server.status;
+      if (s === 'connected') return { key: 'status:connected', label: 'Connected' };
+      if (s === 'error') return { key: 'status:error', label: 'Error' };
+      if (s === 'requires_authentication') return { key: 'status:auth', label: 'Requires authentication' };
+      return { key: 'status:disconnected', label: 'Disconnected' };
+    }
+    case 'transport': {
+      const t = server.transport || 'unknown';
+      const labelMap: Record<string, string> = { stdio: 'Stdio', websocket: 'WebSocket', sse: 'SSE', streamable: 'Streamable HTTP' };
+      return { key: `transport:${t}`, label: labelMap[t] || t };
+    }
+    default:
+      return { key: 'all', label: 'All servers' };
+  }
+}
 
 interface ServerManagerProps {
   // Optional: notified when the add/edit modal opens/closes (kept for callers that care).
@@ -64,6 +95,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     deleteServer,
     addServer,
     updateServer,
+    setServerFolder,
     saveEnv
   } = useServerStatus();
 
@@ -158,6 +190,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [sortOption, setSortOption] = useState<SortOption>('name-asc');
   const [filterOption, setFilterOption] = useState<FilterOption>('all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
+  const [groupMode, setGroupMode] = useState<GroupMode>('none');
+  const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
   const [bulkActionDialog, setBulkActionDialog] = useState<{open: boolean; action: 'enable' | 'disable' | null}>({open: false, action: null});
@@ -374,6 +409,30 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     });
   }, [servers, searchTerm, sortOption, filterOption]);
 
+  // Distinct folders currently in use, for the "Move to folder" picker (#71).
+  const folders = useMemo(() => collectFolders(servers, (s: any) => s.folder), [servers]);
+
+  // Grouped view of the filtered/sorted servers, driven by the active group mode.
+  const serverGroups = useMemo<CardGroup<any>[]>(() => {
+    if (groupMode === 'folder') return groupByFolder(filteredAndSortedServers, (s: any) => s.folder);
+    if (groupMode === 'sort') return groupItems(filteredAndSortedServers, (s: any) => deriveServerSortGroup(s, sortOption));
+    return [];
+  }, [groupMode, filteredAndSortedServers, sortOption]);
+
+  const toggleCollapsed = (key: string) => {
+    setCollapsedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const handleGroupChange = (mode: GroupMode) => {
+    setGroupMode(mode);
+    setGroupAnchorEl(null);
+  };
+
   // Bulk action handlers
   const handleBulkEnable = async () => {
     log.debug('Bulk enabling servers', { selectedServers: Array.from(selectedServers) });
@@ -426,6 +485,30 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setSortOption(option);
     handleSortMenuClose();
   };
+
+  // Render the server list for a subset (whole list or one collapsible group).
+  const renderServers = (items: any[]) => (
+    <ServerList
+      servers={items.map((server: any) => ({
+        ...server,
+        tools: [] // Add empty tools array to match the ServerList interface
+      }))}
+      isLoading={isLoading}
+      loadError={loadError}
+      onServerSelect={handleOpenDetails}
+      onServerToggle={handleServerToggle}
+      onServerRetry={handleServerRetry}
+      onServerDelete={handleServerDelete}
+      onServerEdit={handleEditServer}
+      selectionMode={selectionMode}
+      selectedServers={selectedServers}
+      onServerSelectionChange={handleServerSelect}
+      updates={updates}
+      onServerUpdated={handleServerUpdated}
+      folders={folders}
+      onServerSetFolder={setServerFolder}
+    />
+  );
 
   return (
     <Box sx={{ color: 'text.primary' }}>
@@ -591,6 +674,20 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               </>
             )}
             
+            {/* Group-by button (#71 folders / #73 sort-fold) */}
+            <IconButton
+              size="small"
+              onClick={(e) => setGroupAnchorEl(e.currentTarget)}
+              color={groupMode !== 'none' ? 'primary' : 'default'}
+              sx={{
+                border: `1px solid ${theme.palette.divider}`,
+                backgroundColor: theme.palette.background.default
+              }}
+              title="Group cards"
+            >
+              <LayersIcon fontSize="small" />
+            </IconButton>
+
             {/* Sort button */}
             <IconButton 
               size="small" 
@@ -631,25 +728,45 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       </Box>
 
       <Box sx={{ px: 2, flex: 1, overflow: 'auto' }}>
-        <ServerList
-          servers={filteredAndSortedServers.map((server: any) => ({
-            ...server,
-            tools: [] // Add empty tools array to match the ServerList interface
-          }))}
-          isLoading={isLoading}
-          loadError={loadError}
-          onServerSelect={handleOpenDetails}
-          onServerToggle={handleServerToggle}
-          onServerRetry={handleServerRetry}
-          onServerDelete={handleServerDelete}
-          onServerEdit={handleEditServer}
-          selectionMode={selectionMode}
-          selectedServers={selectedServers}
-          onServerSelectionChange={handleServerSelect}
-          updates={updates}
-          onServerUpdated={handleServerUpdated}
-        />
+        {groupMode === 'none' || isLoading || loadError || filteredAndSortedServers.length === 0 ? (
+          renderServers(filteredAndSortedServers)
+        ) : (
+          serverGroups.map((group) => (
+            <CollapsibleCardSection
+              key={group.key}
+              label={group.label}
+              count={group.items.length}
+              expanded={!collapsedKeys.has(group.key)}
+              onToggle={() => toggleCollapsed(group.key)}
+              showFolderIcon={groupMode === 'folder'}
+            >
+              {renderServers(group.items)}
+            </CollapsibleCardSection>
+          ))
+        )}
       </Box>
+
+      {/* Group-by menu */}
+      <Menu
+        anchorEl={groupAnchorEl}
+        open={Boolean(groupAnchorEl)}
+        onClose={() => setGroupAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem selected={groupMode === 'none'} onClick={() => handleGroupChange('none')}>
+          <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="No grouping" />
+        </MenuItem>
+        <MenuItem selected={groupMode === 'folder'} onClick={() => handleGroupChange('folder')}>
+          <ListItemIcon><FolderOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="By folder" />
+        </MenuItem>
+        <MenuItem selected={groupMode === 'sort'} onClick={() => handleGroupChange('sort')}>
+          <ListItemIcon><LayersIcon fontSize="small" /></ListItemIcon>
+          <ListItemText primary="By sort setting" />
+        </MenuItem>
+      </Menu>
 
       {/* Sort menu */}
       <Menu

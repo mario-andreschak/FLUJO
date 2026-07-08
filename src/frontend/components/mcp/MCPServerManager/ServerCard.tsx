@@ -16,8 +16,10 @@ import LoginIcon from '@mui/icons-material/Login';
 import KeyOffIcon from '@mui/icons-material/KeyOff';
 import PublicIcon from '@mui/icons-material/Public';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 import Spinner from '@/frontend/components/shared/Spinner';
+import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { mcpService } from '@/frontend/services/mcp';
 import TransportBadge from './TransportBadge';
 import ServerUpdateDialog from './ServerUpdateDialog';
@@ -67,6 +69,9 @@ interface ServerCardProps {
   installCommand?: string; // Stored install command, re-run after a git update
   buildCommand?: string; // Stored build command, re-run after a git update
   onUpdated?: () => void; // Called after a successful git update
+  folder?: string; // Organizing folder (#71)
+  folders?: string[]; // Existing folders on the surface, for the picker
+  onSetFolder?: (folder: string | undefined) => void; // Assign/clear folder
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -93,8 +98,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
   installCommand,
   buildCommand,
   onUpdated,
+  folder,
+  folders = [],
+  onSetFolder,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
+  const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -549,6 +558,21 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </Tooltip>
           )}
           
+          {onSetFolder && (
+            <Tooltip title={folder ? `Folder: ${folder}` : 'Move to folder'}>
+              <IconButton
+                color={folder ? 'primary' : 'default'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFolderAnchorEl(e.currentTarget);
+                }}
+                size="small"
+              >
+                <DriveFileMoveOutlinedIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+
           <Tooltip title="Edit server">
             <IconButton 
               color="primary" 
@@ -577,6 +601,17 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </Box>
       </CardActions>
       
+      {onSetFolder && (
+        <FolderAssignMenu
+          anchorEl={folderAnchorEl}
+          open={Boolean(folderAnchorEl)}
+          currentFolder={folder}
+          folders={folders}
+          onClose={() => setFolderAnchorEl(null)}
+          onAssign={(f) => onSetFolder(f)}
+        />
+      )}
+
       {/* Error Modal */}
       <Dialog 
         open={showErrorModal} 
