@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import simpleGit from 'simple-git';
 import path from 'path';
 import fs from 'fs/promises';
-import { execSync, ExecSyncOptionsWithStringEncoding } from 'child_process';
+import { execSync, spawn, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 import { getAppDir, getDataDir } from '@/utils/paths';
+import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 
 const log = createLogger('app/api/git/route');
 
@@ -334,6 +335,103 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
   }
 }
 
+// Streaming variant of executeCommandInRepo for the Install / Build steps (issue #65).
+//
+// The blocking `execSync` path above only returns the entire buffered output when the
+// command exits, so a long `npm install` leaves the console empty and looks frozen. This
+// runner spawns the command asynchronously and forwards stdout/stderr to the browser as
+// NDJSON events AS THEY ARRIVE (reusing the shared streaming plumbing from #64), while
+// still accumulating a buffer so the terminal `result` event carries the same
+// `commandOutput` the non-streaming path would have returned. `shell: true` is kept so
+// compound user commands (e.g. `npm install && npm run build`) behave exactly as under
+// execSync. There is deliberately NO timeout: a heavy install is exactly the long case
+// this feature is about (the `Run` action's 10s timeout stays in executeCommandInRepo).
+function streamCommandInRepo(
+  { savePath, command, args, actionName, requestId, env }: CommandExecutionOptions,
+  request: NextRequest
+): Response {
+  return createNdjsonStreamResponse(async (emit, signal) => {
+    if (!savePath) {
+      log.error(`Missing repository path [${requestId}]`);
+      emit({ type: 'result', success: false, error: 'Missing repository path', commandOutput: 'Missing repository path' });
+      return;
+    }
+
+    try {
+      await fs.access(savePath);
+    } catch {
+      const message = `Directory does not exist: ${savePath}`;
+      log.error(`${message} [${requestId}]`);
+      emit({ type: 'result', success: false, error: message, commandOutput: message });
+      return;
+    }
+
+    // Build the final command exactly as executeCommandInRepo does.
+    let finalCommand = command || '';
+    if (args && args.length > 0) {
+      const validArgs = args.filter(arg => arg.trim() !== '');
+      if (validArgs.length > 0) {
+        const argsString = validArgs.map(arg => (arg.includes(' ') ? `"${arg}"` : arg)).join(' ');
+        finalCommand = `${finalCommand} ${argsString}`;
+      }
+    }
+
+    log.info(`Streaming ${actionName} command: ${finalCommand} in ${savePath} [${requestId}]`);
+    emit({ type: 'status', phase: 'running', message: `Executing: ${finalCommand}\n` });
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let buffer = '';
+
+      const child = spawn(finalCommand, {
+        cwd: savePath,
+        shell: true,
+        env: { ...process.env, ...env },
+      });
+
+      const onAbort = () => {
+        log.debug(`Client aborted ${actionName} stream, killing child [${requestId}]`);
+        try { child.kill(); } catch { /* already gone */ }
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      const finish = (result: { success: boolean; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        emit({ type: 'result', success: result.success, error: result.error, commandOutput: buffer });
+        resolve();
+      };
+
+      child.stdout?.on('data', (d: Buffer) => {
+        const chunk = d.toString();
+        buffer += chunk;
+        emit({ type: 'stdout', data: chunk });
+      });
+      child.stderr?.on('data', (d: Buffer) => {
+        const chunk = d.toString();
+        buffer += chunk;
+        emit({ type: 'stderr', data: chunk });
+      });
+
+      child.on('error', (err: Error) => {
+        log.error(`${actionName} command failed to start [${requestId}]`, err);
+        buffer += `\n${err.message}`;
+        finish({ success: false, error: `Failed to ${actionName.toLowerCase()}: ${err.message}` });
+      });
+
+      child.on('close', (code: number | null) => {
+        const success = code === 0;
+        log.info(`${actionName} command exited with code ${code} [${requestId}]`);
+        finish({
+          success,
+          error: success ? undefined : `Command failed: ${finalCommand} (exit code ${code})`,
+        });
+      });
+    });
+  }, { signal: request.signal });
+}
+
 export async function POST(request: NextRequest) {
   const requestId = uuidv4();
   log.info(`Received new request [RequestID: ${requestId}]`);
@@ -422,6 +520,17 @@ export async function POST(request: NextRequest) {
           actionName: 'Install',
           requestId
         });
+      }
+      case 'installStream': {
+        // Streaming Install (#65): live stdout/stderr via NDJSON. The non-streaming
+        // 'install' action above is kept unchanged for backward compatibility.
+        log.info(`Starting installStream action [${requestId}]`);
+        return streamCommandInRepo({
+          savePath,
+          command: installCommand,
+          actionName: 'Install',
+          requestId
+        }, request);
       }
       case 'clone': {
         log.info(`Starting clone action [${requestId}]`);
@@ -572,6 +681,18 @@ export async function POST(request: NextRequest) {
           actionName: 'Build',
           requestId
         });
+      }
+
+      case 'buildStream': {
+        // Streaming Build (#65): live stdout/stderr via NDJSON. The non-streaming
+        // 'build' action above is kept unchanged for backward compatibility.
+        log.info(`Starting buildStream action [${requestId}]`);
+        return streamCommandInRepo({
+          savePath,
+          command: buildCommand || '',
+          actionName: 'Build',
+          requestId
+        }, request);
       }
       
       case 'readFile': {

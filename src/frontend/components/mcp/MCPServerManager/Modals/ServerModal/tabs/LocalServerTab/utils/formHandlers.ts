@@ -422,21 +422,26 @@ export const handleInstall = async (
     type: 'success',
     text: 'Installing dependencies...'
   });
-  
+
+  // Show the console up front and stream output into it as it arrives (#65).
+  setConsoleTitle('Install Dependencies Output');
+  setIsConsoleVisible(true);
+  setConsoleOutput(`Executing: ${installCommand}\n\n`);
+
   console.log('DEBUG - Installing dependencies for server:', localConfig.name);
   // Use rootPath if available, otherwise fall back to name
   const serverPath = localConfig.rootPath || `mcp-servers/${localConfig.name}`;
-  const result = await installDependencies(serverPath, installCommand);
-  
-  // Set console title and make it visible
-  setConsoleTitle('Install Dependencies Output');
-  setIsConsoleVisible(true);
-  
-  // Update console output with the command result
-  if (result.output) {
-    setConsoleOutput(result.output);
-  } else {
-    setConsoleOutput(`Executing: ${installCommand}\n\nCommand completed successfully, but no output was returned.`);
+  let streamedAny = false;
+  const result = await installDependencies(serverPath, installCommand, (chunk) => {
+    streamedAny = true;
+    setConsoleOutput((prev: string) => prev + chunk);
+  });
+
+  // If nothing streamed (e.g. the non-streaming fallback ran), append the final blob so
+  // the console is never left with only the "Executing:" header.
+  if (!streamedAny) {
+    setConsoleOutput((prev: string) => prev +
+      (result.output || 'Command completed successfully, but no output was returned.'));
   }
   
   // Set a brief message with instructions to check the console
@@ -479,22 +484,27 @@ export const handleBuild = async (
     type: 'success',
     text: 'Building server...'
   });
-  
+
+  // Show the console up front and stream output into it as it arrives (#65).
+  setConsoleTitle('Build Server Output');
+  setIsConsoleVisible(true);
+  setConsoleOutput(`Executing: ${buildCommand}\n\n`);
+
   console.log('DEBUG - Building server:', localConfig.name);
   // Use rootPath if available, otherwise fall back to name with mcp-servers prefix
   const serverPath = localConfig.rootPath || `mcp-servers/${localConfig.name}`;
   // CRITICAL FIX: Use savePath parameter name for consistency with API
-  const result = await buildServer(serverPath, buildCommand);
-  
-  // Set console title and make it visible
-  setConsoleTitle('Build Server Output');
-  setIsConsoleVisible(true);
-  
-  // Update console output with the command result
-  if (result.output) {
-    setConsoleOutput(result.output);
-  } else {
-    setConsoleOutput(`Executing: ${buildCommand}\n\nCommand completed successfully, but no output was returned.`);
+  let streamedAny = false;
+  const result = await buildServer(serverPath, buildCommand, (chunk) => {
+    streamedAny = true;
+    setConsoleOutput((prev: string) => prev + chunk);
+  });
+
+  // If nothing streamed (e.g. the non-streaming fallback ran), append the final blob so
+  // the console is never left with only the "Executing:" header.
+  if (!streamedAny) {
+    setConsoleOutput((prev: string) => prev +
+      (result.output || 'Command completed successfully, but no output was returned.'));
   }
   
   // Set a brief message with instructions to check the console
