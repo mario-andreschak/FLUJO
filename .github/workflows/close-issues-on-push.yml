@@ -1,0 +1,85 @@
+name: Mark Issues Live on Push
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  mark-live:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close referenced LOCAL COMMIT issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const LOCAL_COMMIT = 'status: LOCAL COMMIT';
+            const LIVE = 'status: LIVE';
+
+            // Collect issue numbers from the heading (first line) of each pushed commit.
+            const nums = new Set();
+            for (const c of context.payload.commits || []) {
+              const heading = (c.message || '').split('\n')[0];
+              for (const m of heading.matchAll(/#(\d+)/g)) {
+                nums.add(Number(m[1]));
+              }
+            }
+
+            if (nums.size === 0) {
+              core.info('No #N references in pushed commit headings; nothing to do.');
+              return;
+            }
+            core.info(`Referenced numbers: ${[...nums].join(', ')}`);
+
+            for (const number of nums) {
+              let issue;
+              try {
+                const res = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                });
+                issue = res.data;
+              } catch (e) {
+                core.info(`#${number}: not found (${e.status}); skipping.`);
+                continue;
+              }
+
+              // Skip pull requests — #N is shared between issues and PRs.
+              if (issue.pull_request) {
+                core.info(`#${number}: is a PR; skipping.`);
+                continue;
+              }
+              if (issue.state !== 'open') {
+                core.info(`#${number}: already closed; skipping.`);
+                continue;
+              }
+
+              const labels = issue.labels.map(l => (typeof l === 'string' ? l : l.name));
+              if (!labels.includes(LOCAL_COMMIT)) {
+                core.info(`#${number}: no "${LOCAL_COMMIT}" label; leaving untouched.`);
+                continue;
+              }
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                labels: [LIVE],
+              });
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                name: LOCAL_COMMIT,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              core.info(`#${number}: marked LIVE and closed.`);
+            }
