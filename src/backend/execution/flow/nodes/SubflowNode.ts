@@ -14,10 +14,6 @@ import { EmitFn } from '@/shared/types/execution/events';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
-// The synthetic user message the run loop appends after a handoff. It must not
-// leak into a subflow as "the task", so it is stripped from the passed history.
-const HANDOFF_CONTINUE_MESSAGE = 'The handoff was successful. Continue';
-
 /** True when a message carries real (non-empty) content. */
 function hasContent(content: unknown): boolean {
   if (typeof content === 'string') return content.trim().length > 0;
@@ -38,7 +34,6 @@ function hasContent(content: unknown): boolean {
  *     prose would dangle. In the router case this drops the "I'll hand this off"
  *     turn, leaving the history ending on the user's task so the child model
  *     responds to it naturally rather than prefilling an assistant turn,
- *   - drop the synthetic "...Continue" handoff nudge,
  *   - drop processNodeId (parent node ids don't exist in the child flow),
  *   - keep user messages and prose-only assistant messages with real content.
  */
@@ -46,9 +41,6 @@ function sanitizeForSubflow(messages: FlujoChatMessage[]): FlujoChatMessage[] {
   const out: FlujoChatMessage[] = [];
   for (const msg of messages) {
     if (msg.role === 'system' || msg.role === 'tool') continue;
-    if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.trim() === HANDOFF_CONTINUE_MESSAGE) {
-      continue;
-    }
     if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0) {
       continue;
     }
@@ -57,6 +49,24 @@ function sanitizeForSubflow(messages: FlujoChatMessage[]): FlujoChatMessage[] {
     out.push({ ...rest });
   }
   return out;
+}
+
+/**
+ * Narrow a sanitized transcript to just the most recent user instruction
+ * ('latest-message' inputMode, issue #74). An orchestrator that hands off to a
+ * worker subflow on every loop iteration would otherwise re-send the entire
+ * accumulated history — including already-finished tasks — causing the worker
+ * to re-anchor on the earliest/loudest task. Scoping to the last user message
+ * pins each invocation to the current task. Falls back to the full sanitized
+ * list when there is no user message (unusual, but keeps the subflow fed).
+ */
+function latestUserMessage(sanitized: FlujoChatMessage[]): FlujoChatMessage[] {
+  for (let i = sanitized.length - 1; i >= 0; i--) {
+    if (sanitized[i].role === 'user') {
+      return [sanitized[i]];
+    }
+  }
+  return sanitized;
 }
 
 /**
@@ -78,11 +88,14 @@ export class SubflowNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
+    const inputMode = node_params?.properties?.inputMode ?? 'full-history';
     const showSteps = node_params?.properties?.outputMode !== 'final-only';
 
     // An explicit promptTemplate is an override: send exactly that as the
-    // subflow's single user prompt. Otherwise, pass the sanitized parent
-    // conversation so the subflow continues with genuine context.
+    // subflow's single user prompt. Otherwise, pass the parent conversation so
+    // the subflow continues with genuine context — either the full sanitized
+    // history (default) or, in 'latest-message' mode, just the most recent user
+    // instruction so each invocation is scoped to the current task (issue #74).
     const prepResult: SubflowNodePrepResult = {
       nodeId: node_params?.id || '',
       nodeType: 'subflow',
@@ -99,7 +112,8 @@ export class SubflowNode extends BaseNode {
     if (promptTemplate) {
       prepResult.inputText = promptTemplate;
     } else {
-      prepResult.messages = sanitizeForSubflow(sharedState.messages);
+      const sanitized = sanitizeForSubflow(sharedState.messages);
+      prepResult.messages = inputMode === 'latest-message' ? latestUserMessage(sanitized) : sanitized;
     }
 
     // Child-flow display name for subflow:start attribution (best-effort).
@@ -116,7 +130,7 @@ export class SubflowNode extends BaseNode {
     log.info('prep() completed', {
       subflowId,
       depth: prepResult.depth,
-      mode: promptTemplate ? 'promptTemplate' : 'history',
+      mode: promptTemplate ? 'promptTemplate' : inputMode,
       historyCount: prepResult.messages?.length,
       showSteps,
     });

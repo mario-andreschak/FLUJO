@@ -21,6 +21,8 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import HistoryIcon from '@mui/icons-material/History';
+import ShortTextIcon from '@mui/icons-material/ShortText';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -236,8 +238,31 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           margin="normal"
           multiline
           rows={3}
-          helperText="What to send to the subflow. Leave empty to pass this conversation's latest message."
+          helperText="What to send to the subflow. Leave empty to pass this conversation (see below)."
         />
+
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          Which messages does the subflow receive?
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Only applies when the input above is left empty.
+        </Typography>
+        <Box role="radiogroup" aria-label="Subflow input" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <OptionCard
+            selected={(nodeData.properties?.inputMode || 'full-history') !== 'latest-message'}
+            onClick={() => handlePropertyChange('inputMode', 'full-history')}
+            icon={<HistoryIcon />}
+            title="Full conversation"
+            description="The subflow sees the whole conversation so far. Best for a helper that should continue with all the context."
+          />
+          <OptionCard
+            selected={nodeData.properties?.inputMode === 'latest-message'}
+            onClick={() => handlePropertyChange('inputMode', 'latest-message')}
+            icon={<ShortTextIcon />}
+            title="Latest message only"
+            description="The subflow sees only the most recent message. Best for an orchestrator that hands off one task at a time, so old tasks don't leak in."
+          />
+        </Box>
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           What do you see in the chat while the subflow runs?

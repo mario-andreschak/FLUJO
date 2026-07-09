@@ -105,9 +105,18 @@ export interface SubflowNodeProperties {
     /** The id of the flow this node runs as a subflow (flow-as-callable). */
     subflowId?: string;
     /** Optional explicit input passed to the subflow as its user prompt. When
-     *  empty, the subflow receives the parent conversation's latest message
-     *  text. (Named-variable templating is a later enhancement.) */
+     *  empty, the subflow receives the parent conversation (governed by
+     *  `inputMode`). (Named-variable templating is a later enhancement.) */
     promptTemplate?: string;
+    /** How the parent conversation is mapped into the subflow when there is no
+     *  `promptTemplate` override (issue #74):
+     *    - 'full-history' (default): the whole sanitized parent transcript is
+     *      passed, so the subflow continues with genuine context. This can make
+     *      an orchestrator-driven worker re-anchor on an earlier task, so
+     *    - 'latest-message': only the most recent user instruction is passed,
+     *      scoping each subflow invocation to the current task.
+     *  Default stays 'full-history' so existing flows are unaffected. */
+    inputMode?: 'full-history' | 'latest-message';
     /** Output visibility: 'steps' (default) folds the child run's events into
      *  the parent conversation's live stream + log, nested by depth;
      *  'final-only' shows only the folded final output message. */
@@ -372,11 +381,11 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     /** Explicit prompt passed into the subflow (set only when the node has a
      *  promptTemplate override). Mutually exclusive with `messages`. */
     inputText?: string;
-    /** Sanitized parent conversation history passed into the subflow (the
-     *  default when there is no promptTemplate override). FLUJO plumbing —
-     *  system prompt, tool calls/results, and the synthetic handoff "Continue"
-     *  message — is stripped so the child runs with genuine context and injects
-     *  its own system prompt. */
+    /** Sanitized parent conversation passed into the subflow (the default when
+     *  there is no promptTemplate override). FLUJO plumbing — system prompt and
+     *  tool calls/results — is stripped so the child runs with genuine context
+     *  and injects its own system prompt. In 'latest-message' inputMode this is
+     *  narrowed to just the most recent user instruction (issue #74). */
     messages?: FlujoChatMessage[];
     /** This run's depth in the subflow-call tree (parent depth + 1). */
     depth: number;

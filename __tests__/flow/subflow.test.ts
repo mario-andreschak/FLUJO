@@ -118,19 +118,59 @@ describe('SubflowNode', () => {
         { role: 'assistant', content: "I'll hand this off", id: 'a1', timestamp: 3, processNodeId: 'parent-proc',
           tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'handoff_to_x', arguments: '{}' } }] } as any,
         { role: 'tool', tool_call_id: 'tc1', content: 'Handoff processed', id: 't1', timestamp: 4 } as any,
-        { role: 'user', content: 'The handoff was successful. Continue', id: 'u2', timestamp: 5 } as any,
       ],
     });
 
     await node.run(state);
 
     const call = runFlowMock.mock.calls[0][0];
-    // system, tool, the synthetic "Continue", and the handoff assistant turn are
-    // all gone; processNodeId stripped. Left ending on the user's actual task.
+    // system, tool, and the handoff assistant turn are all gone; processNodeId
+    // stripped. Left ending on the user's actual task.
     expect(call.messages).toEqual([
       expect.objectContaining({ role: 'user', content: 'I want to research about cats' }),
     ]);
     expect(call.messages.every((m: any) => m.processNodeId === undefined)).toBe(true);
+  });
+
+  it("inputMode 'full-history' (the default) passes the whole sanitized transcript", async () => {
+    // An orchestrator loop: an already-finished task, then the current task.
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'full-history' }, 'edge-next');
+    const state = makeState({
+      messages: [
+        { role: 'user', content: 'Plan issue #69', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'Done with #69', id: 'a1', timestamp: 2 } as any,
+        { role: 'user', content: 'Plan issue #70', id: 'u2', timestamp: 3 } as any,
+      ],
+    });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.messages.map((m: any) => m.content)).toEqual([
+      'Plan issue #69',
+      'Done with #69',
+      'Plan issue #70',
+    ]);
+  });
+
+  it("inputMode 'latest-message' scopes the subflow to only the most recent user instruction (#74)", async () => {
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'latest-message' }, 'edge-next');
+    const state = makeState({
+      messages: [
+        { role: 'user', content: 'Plan issue #69', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'Done with #69', id: 'a1', timestamp: 2 } as any,
+        { role: 'user', content: 'Plan issue #70', id: 'u2', timestamp: 3 } as any,
+      ],
+    });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    // Only the current task survives — the finished #69 task can't re-anchor it.
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Plan issue #70' }),
+    ]);
+    expect(call.prompt).toBeUndefined();
   });
 
   it('an explicit promptTemplate overrides the history and is sent as a prompt', async () => {
