@@ -353,9 +353,19 @@ export async function migrateToUserEncryption(password: string): Promise<boolean
     // Generate a random IV for DEK encryption
     const iv = CryptoJS.lib.WordArray.random(IV_SIZE);
     
-    // Re-encrypt the DEK with the user's key
+    // Re-encrypt the DEK with the user's key.
+    //
+    // Store the DEK plaintext in the SAME representation that default-mode init
+    // used (`.toString(Utf8)`), NOT the default hex `.toString()`. getDefaultDEK
+    // returns a WordArray whose bytes are the UTF-8 of the originally-stored DEK
+    // string, and getUserDEK reconstructs the key as `Hex.parse(decrypted)` —
+    // i.e. the key that actually encrypts data is `WordArray(utf8(storedPlaintext))`.
+    // Storing the hex of `defaultDEK` here would change that stored plaintext, so
+    // getUserDEK would recover a DIFFERENT key and every secret written before
+    // migration would fail to decrypt. Using `.toString(Utf8)` preserves the DEK
+    // value, so no data re-encryption is needed (see closed issue #79).
     const encryptedDEK = CryptoJS.AES.encrypt(
-      defaultDEK.toString(),
+      defaultDEK.toString(CryptoJS.enc.Utf8),
       derivedKey,
       {
         iv: iv,
@@ -375,10 +385,10 @@ export async function migrateToUserEncryption(password: string): Promise<boolean
     
     // Save the updated metadata
     await saveItem(StorageKey.ENCRYPTION_KEY, newMetadata);
-    
+
     // In a real implementation, we would need to re-encrypt all sensitive data
     // For now, we'll just return success
-    
+
     return true;
   } catch (error) {
     log.error('migrateToUserEncryption: Failed to migrate to user encryption:', error);
@@ -453,9 +463,13 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
     // Generate a new IV for DEK encryption
     const newIv = CryptoJS.lib.WordArray.random(IV_SIZE);
     
-    // Re-encrypt the DEK with the new key
+    // Re-encrypt the DEK with the new key. Preserve the DEK value by storing its
+    // UTF-8 representation (see the detailed note in migrateToUserEncryption):
+    // the effective key is `WordArray(utf8(storedPlaintext))`, so re-wrapping via
+    // hex `.toString()` would silently change it and break every stored secret on
+    // a password change. `.toString(Utf8)` keeps the key stable.
     const newEncryptedDEK = CryptoJS.AES.encrypt(
-      decryptedDEK.toString(),
+      decryptedDEK.toString(CryptoJS.enc.Utf8),
       newDerivedKey,
       {
         iv: newIv,
