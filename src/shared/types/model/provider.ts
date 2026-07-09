@@ -9,6 +9,7 @@ export type ModelProvider =
   | 'mistral'
   | 'xai'
   | 'ollama'
+  | 'litellm'
   | 'claude-subscription';
 
 /**
@@ -68,6 +69,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
   ollama: {
     label: 'Ollama',
     baseUrl: 'http://localhost:11434/v1'
+  },
+  litellm: {
+    label: 'LiteLLM',
+    baseUrl: 'http://localhost:4000/v1'
   },
   'claude-subscription': {
     label: 'Claude Subscription',
@@ -154,6 +159,15 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     adapter: 'openai',
     sdkLabel: 'OpenAI SDK',
     baseUrl: 'http://localhost:11434/v1',
+    showBaseUrl: true,
+  },
+  {
+    id: 'litellm',
+    label: 'LiteLLM',
+    provider: 'litellm',
+    adapter: 'openai',
+    sdkLabel: 'OpenAI SDK (via LiteLLM Proxy)',
+    baseUrl: 'http://localhost:4000/v1',
     showBaseUrl: true,
   },
   {

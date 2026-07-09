@@ -12,6 +12,7 @@ describe('provider profiles', () => {
       'openrouter',
       'xai',
       'ollama',
+      'litellm',
       'gemini-openai',
       'gemini-native',
       'anthropic-openai',
