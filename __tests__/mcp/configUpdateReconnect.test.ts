@@ -30,6 +30,7 @@ const safelyCloseClientMock = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
   createNewClient: (...a: unknown[]) => createNewClientMock(...a),
   createTransport: jest.fn(() => ({})),
+  resolveConfigHeaders: jest.fn(async (config: unknown) => config),
   shouldRecreateClient: (...a: unknown[]) => shouldRecreateClientMock(...a),
   safelyCloseClient: (...a: unknown[]) => safelyCloseClientMock(...a),
 }));

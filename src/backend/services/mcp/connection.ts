@@ -17,6 +17,9 @@ import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
 import { getDataDir } from '@/utils/paths';
 import { registerRootsHandler } from './roots';
 import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
+import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
+import { normalizeHeaderValue } from '@/utils/mcp/headers';
+import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
@@ -40,10 +43,61 @@ interface TransportWithConfigKey { __flujoStdioKey?: string; __flujoHttpKey?: st
 const log = createLogger('backend/services/mcp/connection');
 
 /**
+ * Flatten + resolve a remote server's custom headers to plain string values for the live
+ * connection (#84). Header values may be stored as plain strings (legacy/non-secret),
+ * `{ value, metadata }` objects, `encrypted:` secrets, or `${global:VAR}` bindings.
+ * `resolveAndDecryptApiKey` handles decryption and global-var resolution for every case
+ * (plain values pass through unchanged); values that fail to resolve are dropped.
+ *
+ * Returns a shallow clone of the config whose `headers` are the resolved plain-string map.
+ * The SAME resolved config must feed both createTransport() and shouldRecreateClient() so
+ * the httpConfigKey they compute matches (otherwise a bound-global header would force a
+ * rebuild on every connect). A changed bound-global therefore still rebuilds the client,
+ * because the resolved header material — and thus the key — changes.
+ */
+export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCPServerConfig> {
+  if (config.transport !== 'streamable' && config.transport !== 'sse') {
+    return config;
+  }
+  const c = config as unknown as { headers?: Record<string, MCPHeaderValue> };
+  if (!c.headers || typeof c.headers !== 'object') {
+    return config;
+  }
+  const resolved: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(c.headers)) {
+    if (!key) continue;
+    const { value } = normalizeHeaderValue(raw, key);
+    if (!value) continue;
+    const out = await resolveAndDecryptApiKey(value);
+    if (out) {
+      resolved[key] = out;
+    }
+  }
+  return { ...config, headers: resolved } as MCPServerConfig;
+}
+
+/**
  * Flatten stored env vars to plain string values. Env vars may be persisted either as
  * plain strings or as { value, metadata } objects (secrets); spawning and config
  * comparison both need the flat form.
  */
+/**
+ * Flatten a header map to `Record<string,string>` for the SDK's requestInit, skipping empty
+ * keys/values. Values are normally already resolved plain strings (see resolveConfigHeaders);
+ * this stays defensive against a residual `{ value, metadata }` object by reading `.value`.
+ */
+function flattenCustomHeaders(headers: Record<string, MCPHeaderValue>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(headers)) {
+    if (!key) continue;
+    const { value } = normalizeHeaderValue(raw, key);
+    if (typeof value === 'string' && value.length > 0) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 function transformEnv(env?: Record<string, unknown>): Record<string, string> {
   const transformed: Record<string, string> = {};
   if (env) {
@@ -190,11 +244,11 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     }
 
     // Merge user-defined custom headers (e.g. Authorization, X-SAP-System-Id, X-SAP-Client)
-    // into requestInit so they are sent on every request the SDK makes.
+    // into requestInit so they are sent on every request the SDK makes. Headers are expected
+    // to have been resolved to plain strings by resolveConfigHeaders() before this point;
+    // flattenCustomHeaders is defensive against any residual { value, metadata } shape.
     if (streamableConfig.headers && typeof streamableConfig.headers === 'object') {
-      const customHeaders = Object.fromEntries(
-        Object.entries(streamableConfig.headers).filter(([key, value]) => key && typeof value === 'string')
-      );
+      const customHeaders = flattenCustomHeaders(streamableConfig.headers);
       if (Object.keys(customHeaders).length > 0) {
         transportoptions.requestInit = {
           ...(transportoptions.requestInit || {}),
@@ -250,11 +304,11 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     }
 
     // Merge user-defined custom headers (e.g. Authorization, X-SAP-System-Id, X-SAP-Client)
-    // into requestInit so they are sent on every request the SDK makes.
+    // into requestInit so they are sent on every request the SDK makes. Headers are expected
+    // to have been resolved to plain strings by resolveConfigHeaders() before this point;
+    // flattenCustomHeaders is defensive against any residual { value, metadata } shape.
     if (sseConfig.headers && typeof sseConfig.headers === 'object') {
-      const customHeaders = Object.fromEntries(
-        Object.entries(sseConfig.headers).filter(([key, value]) => key && typeof value === 'string')
-      );
+      const customHeaders = flattenCustomHeaders(sseConfig.headers);
       if (Object.keys(customHeaders).length > 0) {
         transportoptions.requestInit = {
           ...(transportoptions.requestInit || {}),

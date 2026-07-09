@@ -24,6 +24,14 @@ export type EnvVarValue = string | {
   } 
 };
 
+/**
+ * A custom HTTP header value on a remote (SSE / Streamable-HTTP) MCP server. Reuses the
+ * env-var shape (#84): a plain string is the legacy/non-secret form; the object form carries
+ * a per-header `isSecret` flag. Secret values are masked to the browser and encrypted at
+ * rest, and any value may be a `${global:VAR}` binding resolved fresh at connect time.
+ */
+export type MCPHeaderValue = EnvVarValue;
+
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
@@ -83,14 +91,16 @@ export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   transport: 'sse';
   serverUrl: string;
   // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
-  headers?: Record<string, string>;
+  // Values may be secret (masked/encrypted) or bound to a global variable (#84).
+  headers?: Record<string, MCPHeaderValue>;
 };
 
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
   transport: 'streamable';
   serverUrl: string;
   // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
-  headers?: Record<string, string>;
+  // Values may be secret (masked/encrypted) or bound to a global variable (#84).
+  headers?: Record<string, MCPHeaderValue>;
   // OAuth configuration fields
   oauthClientId?: string;
   oauthClientSecret?: string;

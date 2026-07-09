@@ -35,6 +35,7 @@ const createTransportMock = jest.fn((..._args: unknown[]) => ({}));
 jest.mock('@/backend/services/mcp/connection', () => ({
   createNewClient: (...args: unknown[]) => createNewClientMock(...args),
   createTransport: (...args: unknown[]) => createTransportMock(...args),
+  resolveConfigHeaders: jest.fn(async (config: unknown) => config),
   shouldRecreateClient: jest.fn(() => ({ needsNewClient: false })),
   safelyCloseClient: jest.fn(async () => undefined),
 }));

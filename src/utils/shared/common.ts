@@ -11,6 +11,16 @@ export const SECRET_ENV_KEYWORDS = ['key', 'secret', 'token', 'password'];
 export const isSecretEnvVar = (key: string): boolean => 
   SECRET_ENV_KEYWORDS.some(keyword => key.toLowerCase().includes(keyword));
 
+/**
+ * Check if a custom HTTP header key should be treated as secret (#84). Reuses the same
+ * keyword logic as environment variables, plus the explicit rule that a header named
+ * `Authorization` is always secret even though "authorization" contains none of the keywords.
+ * @param key The header name to check
+ * @returns True if the header should be masked/encrypted by default
+ */
+export const isSecretHeaderKey = (key: string): boolean =>
+  isSecretEnvVar(key) || key.trim().toLowerCase() === 'authorization';
+
 
 /**
  * Friendly display name for a model-facing tool function name, for both the

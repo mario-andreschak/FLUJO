@@ -43,6 +43,7 @@ jest.mock('@/backend/services/mcp/connection', () => {
   return {
     createNewClient: jest.fn(),
     createTransport: jest.fn(() => new StdioClientTransport()),
+    resolveConfigHeaders: jest.fn(async (config: unknown) => config),
     safelyCloseClient: jest.fn(async () => undefined),
     shouldRecreateClient: jest.fn(() => ({ needsNewClient: false })),
   };

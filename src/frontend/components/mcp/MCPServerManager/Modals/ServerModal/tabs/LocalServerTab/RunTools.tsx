@@ -5,7 +5,7 @@ import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import HeadersEditor from './HeadersEditor';
 import OAuthCredentialsEditor from './OAuthCredentialsEditor';
 import { MessageState } from '../../types';
-import { EnvVarValue } from '@/shared/types/mcp/mcp';
+import { EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp/mcp';
 import {
   Alert,
   Box,
@@ -35,8 +35,8 @@ interface RunToolsProps {
   runCompleted: boolean;
   env: Record<string, EnvVarValue>;
   onEnvChange: (env: Record<string, EnvVarValue>) => void;
-  headers?: Record<string, string>;
-  onHeadersChange?: (headers: Record<string, string>) => void;
+  headers?: Record<string, MCPHeaderValue>;
+  onHeadersChange?: (headers: Record<string, MCPHeaderValue>) => void;
   oauthClientId?: string;
   oauthClientSecret?: string;
   onOAuthClientIdChange?: (clientId: string) => void;

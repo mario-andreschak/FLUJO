@@ -61,7 +61,7 @@ if (typeof global.__mcp_active_transports === 'undefined') {
 }
 
 // Import from backend modules
-import { MCPServerConfig, MCPStreamableConfig, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPStreamableConfig, MCPSSEConfig, MCPHeaderValue, MCPServiceResponse, MCPToolResponse as ToolResponse } from '@/shared/types/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { loadServerConfigs, saveConfig } from './config';
 import { listServerTools as listTools, callTool as callToolFunction, ToolCallProgress } from './tools';
@@ -88,11 +88,13 @@ import {
 } from '@/utils/mcp/utils';
 import { encryptApiKey } from '@/backend/services/model/encryption';
 import { MASKED_API_KEY } from '@/shared/types/constants';
+import { normalizeHeaderValue, isMaskedHeaderValue, isGlobalBinding } from '@/utils/mcp/headers';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 import {
   createNewClient,
   createTransport,
+  resolveConfigHeaders,
   shouldRecreateClient,
   safelyCloseClient
 } from './connection';
@@ -468,6 +470,13 @@ export class MCPService {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
 
+      // Resolve + decrypt any custom headers (#84) BEFORE anything reads them. The SAME
+      // resolved config must drive both shouldRecreateClient() and createTransport(), so the
+      // httpConfigKey they compute agrees (a bound-global header would otherwise force a
+      // rebuild on every connect). A rotated bound-global still rebuilds, since the resolved
+      // header material — and thus the key — changes.
+      config = await resolveConfigHeaders(config);
+
       // Check if we already have a client for this server
       let client = this.clients.get(config.name);
 
@@ -794,8 +803,12 @@ export class MCPService {
     let transport: ReturnType<typeof createTransport> | null = null;
 
     try {
-      client = createNewClient(config);
-      transport = createTransport(config);
+      // Resolve + decrypt custom headers (#84) so the probe uses the same real header values
+      // the live connection would (shares createTransport). Global bindings / encrypted
+      // secrets are resolved here; plain values pass through unchanged.
+      const connectConfig = await resolveConfigHeaders(config);
+      client = createNewClient(connectConfig);
+      transport = createTransport(connectConfig);
 
       // Capture stdio stderr (for stdio servers) and transport errors so we can build a
       // meaningful message if the handshake fails. When a live-output sink is attached
@@ -1203,6 +1216,51 @@ export class MCPService {
   }
 
   /**
+   * Decide what to persist for a remote server's custom HTTP headers (#84), given the header
+   * map the browser sent and the currently-stored map. Non-secret headers are stored verbatim.
+   * Secret headers follow the same contract as the OAuth client secret / model API keys so
+   * they behave identically:
+   *   - MASKED_API_KEY / MASKED_STRING -> keep the existing stored value (UI never saw the real one)
+   *   - "${global:VAR}"                -> a global-variable binding; store the reference verbatim
+   *   - "encrypted[_failed]:"           -> already encrypted; store as-is (no double-encrypt)
+   *   - "" (empty)                     -> cleared; drop the header
+   *   - anything else                  -> a freshly typed plaintext secret; encrypt it at rest
+   */
+  private async resolveHeadersForSave(
+    incoming: Record<string, MCPHeaderValue>,
+    existing: Record<string, MCPHeaderValue> | undefined,
+  ): Promise<Record<string, MCPHeaderValue>> {
+    const result: Record<string, MCPHeaderValue> = {};
+    for (const [key, raw] of Object.entries(incoming || {})) {
+      if (!key) continue;
+      const { value, isSecret } = normalizeHeaderValue(raw, key);
+
+      if (!isSecret) {
+        // Non-secret header: store verbatim (drop empties). Keep the object shape so the
+        // per-header secret flag round-trips.
+        if (value !== '') {
+          result[key] = { value, metadata: { isSecret: false } };
+        }
+        continue;
+      }
+
+      // Secret header handling, mirroring resolveOAuthSecretForSave.
+      if (isMaskedHeaderValue(value)) {
+        const prev = existing?.[key];
+        if (prev !== undefined) result[key] = prev; // keep the stored (encrypted/bound) value
+        continue;
+      }
+      if (!value) continue; // cleared
+      if (isGlobalBinding(value) || value.startsWith('encrypted:') || value.startsWith('encrypted_failed:')) {
+        result[key] = { value, metadata: { isSecret: true } };
+        continue;
+      }
+      result[key] = { value: await encryptApiKey(value), metadata: { isSecret: true } };
+    }
+    return result;
+  }
+
+  /**
    * Update an MCP server configuration
    */
   /**
@@ -1305,6 +1363,17 @@ export class MCPService {
       const existingSecret = (config as MCPStreamableConfig).oauthClientSecret;
       (updates as Partial<MCPStreamableConfig>).oauthClientSecret =
         await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
+    }
+
+    // Custom-header secret handling (#84), mirroring the OAuth secret contract above. Unlike
+    // env vars (resolved/baked in at save above), header ${global:} bindings are stored
+    // verbatim and resolved fresh at connect time (resolveConfigHeaders) so rotating the bound
+    // global takes effect without re-saving the server.
+    const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
+    if (incomingHeaders !== undefined) {
+      const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
+      (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
+        await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
     }
 
     // Update the config with the new values (including resolved env variables)

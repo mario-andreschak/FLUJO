@@ -73,7 +73,7 @@ export function toClineFormat(
         entry.type = 'streamableHttp';
         entry.url = server.serverUrl;
         if (server.headers && Object.keys(server.headers).length > 0) {
-          entry.headers = server.headers;
+          entry.headers = flattenEnv(server.headers);
         }
         break;
       }
@@ -81,7 +81,7 @@ export function toClineFormat(
         entry.type = 'sse';
         entry.url = server.serverUrl;
         if (server.headers && Object.keys(server.headers).length > 0) {
-          entry.headers = server.headers;
+          entry.headers = flattenEnv(server.headers);
         }
         break;
       }

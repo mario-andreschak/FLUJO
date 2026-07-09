@@ -5,6 +5,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { MCPServerConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 import { formatErrorResponse } from '@/utils/mcp/utils';
 import { MASKED_API_KEY } from '@/shared/types/constants';
+import { maskServerHeaders } from '@/utils/mcp/headers';
 import { json, validateServerName } from '../_helpers';
 
 const log = createLogger('app/api/mcp/servers/route');
@@ -20,11 +21,14 @@ function redactServerConfig(config: MCPServerConfig): MCPServerConfig {
     return config;
   }
   const streamable = config as MCPStreamableConfig;
-  const secret = streamable.oauthClientSecret;
-  if (!secret || secret.startsWith('${global:')) {
-    return config;
+  // Mask any secret custom headers (#84) — a saved secret header value never reaches the
+  // browser; global-variable bindings are left intact so the editor can show "bound".
+  const redacted = { ...streamable, headers: maskServerHeaders(streamable.headers) } as MCPStreamableConfig;
+  const secret = redacted.oauthClientSecret;
+  if (secret && !secret.startsWith('${global:')) {
+    redacted.oauthClientSecret = MASKED_API_KEY;
   }
-  return { ...streamable, oauthClientSecret: MASKED_API_KEY } as MCPServerConfig;
+  return redacted as MCPServerConfig;
 }
 
 /**
