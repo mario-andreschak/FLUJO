@@ -8,17 +8,21 @@ import {
   Typography,
   IconButton,
   Box,
+  Chip,
   Tooltip,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import { Model } from '@/shared/types';
 import { getProviderProfile } from '@/shared/types/model/provider';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getModelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 import ModelTestDialog from './ModelTestDialog';
+import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 
 const log = createLogger('frontend/components/models/list/ModelCard');
 
@@ -26,13 +30,20 @@ export interface ModelCardProps {
   model: Model;
   onEdit: () => void;
   onDelete: () => void;
+  /** The model's current organizing folder (#80 / shared with #71). */
+  folder?: string;
+  /** Existing folders on the Models surface, offered for reuse in the picker. */
+  folders?: string[];
+  /** Assign/clear this model's folder. When omitted, the folder action is hidden. */
+  onSetFolder?: (folder: string | undefined) => void;
 }
 
-export const ModelCard = ({ model, onEdit, onDelete }: ModelCardProps) => {
+export const ModelCard = ({ model, onEdit, onDelete, folder, folders = [], onSetFolder }: ModelCardProps) => {
   const [testOpen, setTestOpen] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
 
   const runTest = async () => {
     setTestLoading(true);
@@ -98,6 +109,15 @@ export const ModelCard = ({ model, onEdit, onDelete }: ModelCardProps) => {
             </Typography>
           </Tooltip>
         )}
+        {folder && (
+          <Chip
+            icon={<FolderOutlinedIcon />}
+            label={folder}
+            size="small"
+            variant="outlined"
+            sx={{ mt: 1, maxWidth: '100%' }}
+          />
+        )}
       </CardContent>
       <CardActions disableSpacing>
         <Tooltip title="Test model (direct SDK call, no flow)" arrow>
@@ -111,7 +131,29 @@ export const ModelCard = ({ model, onEdit, onDelete }: ModelCardProps) => {
         <IconButton aria-label="delete" onClick={onDelete}>
           <DeleteIcon />
         </IconButton>
+        {onSetFolder && (
+          <Tooltip title="Move to folder…" arrow>
+            <IconButton
+              aria-label="move to folder"
+              onClick={(e) => setFolderAnchorEl(e.currentTarget)}
+              sx={{ ml: 'auto' }}
+            >
+              <MoreVertIcon />
+            </IconButton>
+          </Tooltip>
+        )}
       </CardActions>
+
+      {onSetFolder && (
+        <FolderAssignMenu
+          anchorEl={folderAnchorEl}
+          open={Boolean(folderAnchorEl)}
+          currentFolder={folder}
+          folders={folders}
+          onClose={() => setFolderAnchorEl(null)}
+          onAssign={onSetFolder}
+        />
+      )}
 
       <ModelTestDialog
         open={testOpen}
