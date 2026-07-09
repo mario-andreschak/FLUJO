@@ -1,11 +1,12 @@
 import { Cron } from 'croner';
 import {
   PlannedExecutionState,
+  RunRecordStatus,
   UrlWatchTriggerConfig,
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './types';
-import { hashResult } from './pollEvaluators';
+import { commitPendingAfterOutcome, hashResult } from './pollEvaluators';
 
 const log = createLogger('backend/services/scheduler/triggers/urlWatch');
 
@@ -17,7 +18,12 @@ const MAX_CONTEXT_CHARS = 8192;
 export interface UrlWatchDeps {
   loadState: () => Promise<PlannedExecutionState>;
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
-  onFire: (payload: { summary: string; context: unknown }) => void;
+  /**
+   * Dispatch the run and RESOLVE with its outcome (issue #75), so the baseline
+   * hash is advanced only once the run actually processed the change — a
+   * skipped/failed run leaves it un-consumed for the next check to retry.
+   */
+  onFire: (payload: { summary: string; context: unknown }) => Promise<{ status: RunRecordStatus }>;
   onError: (message: string) => void;
   /** Called after every successful check (fired or not) — clears stale errors. */
   onSuccess?: () => void;
@@ -72,8 +78,9 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
         deps.onSuccess?.();
         return;
       }
-      await deps.saveState({ lastHash: hash });
-      deps.onFire({
+      // Content changed → fire, but advance the baseline only once the run
+      // actually processes the change (commit-after-success, issue #75).
+      const { status } = await deps.onFire({
         summary: 'Online content changed',
         context: {
           url: config.url,
@@ -85,6 +92,18 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
               : body,
         },
       });
+      if (disposed) {
+        return; // disarmed while the run was in flight
+      }
+      const { giveUpError } = await commitPendingAfterOutcome({
+        status,
+        pendingState: { lastHash: hash },
+        priorFailures: state.pendingFailures ?? 0,
+        saveState: deps.saveState,
+      });
+      if (giveUpError) {
+        deps.onError(giveUpError);
+      }
     } catch (error) {
       const message =
         error instanceof Error && error.name === 'TimeoutError'

@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { PlannedExecutionState } from '@/shared/types/plannedExecution';
+import { PlannedExecutionState, RunRecordStatus } from '@/shared/types/plannedExecution';
 
 /**
  * Pure evaluation logic for MCP polling triggers: given a tool result and the
@@ -15,14 +15,34 @@ const MAX_NEW_ITEMS = 50;
 /** Cap the serialized result embedded into a fire's context. */
 const MAX_CONTEXT_CHARS = 8192;
 
+/**
+ * Commit-after-success (issue #75): after this many consecutive fired-but-not
+ * -completed deliveries of the SAME detected change, give up and advance the
+ * baseline anyway (surfacing a trigger error) so a change that reliably breaks
+ * the flow can't re-fire forever.
+ */
+export const MAX_PENDING_DELIVERY_FAILURES = 3;
+
 export interface PollEvaluation {
   fire: boolean;
   /** Context for the run prompt when firing. */
   context?: unknown;
   /** Sticky summary for the RunRecord when firing. */
   summary?: string;
-  /** State fields to persist (merged over the existing state). */
+  /**
+   * State fields to persist IMMEDIATELY (merged over the existing state),
+   * regardless of any fired run's outcome: priming baselines, no-change
+   * bookkeeping, and gate budget counters.
+   */
   newState: Partial<PlannedExecutionState>;
+  /**
+   * Baseline advance to persist ONLY after a fired run COMPLETES successfully
+   * (issue #75). Present only when `fire` is true and the change should be
+   * retried until it's actually processed (on-change hash / new-items ids).
+   * The caller holds this pending and commits it on success — or, after
+   * MAX_PENDING_DELIVERY_FAILURES failures, commits it to stop a re-fire loop.
+   */
+  pendingState?: Partial<PlannedExecutionState>;
   /** Configuration-level problem (e.g. itemsPath doesn't resolve to a list). */
   error?: string;
 }
@@ -51,6 +71,48 @@ function sortKeys(value: unknown): unknown {
 
 export function hashResult(value: unknown): string {
   return createHash('sha256').update(stableStringify(value) ?? 'undefined').digest('hex');
+}
+
+/**
+ * Commit-after-success baseline transition, shared by mcp-poll and url-watch
+ * (issue #75). Given a fired run's outcome and the baseline advance that was
+ * held pending, decide what to persist:
+ *   - completed  → advance the baseline and clear the failure counter.
+ *   - skipped    → overlap (the run was never attempted): change nothing, so
+ *                  the next poll re-fires the still-unprocessed change. Does
+ *                  NOT count toward the retry cap.
+ *   - error/etc. → leave the baseline unadvanced and bump the failure counter
+ *                  so the change is retried; after MAX_PENDING_DELIVERY_FAILURES
+ *                  consecutive failures, advance the baseline anyway (dropping
+ *                  the change) and surface a trigger error, so a change that
+ *                  reliably breaks the flow can't re-fire forever.
+ * Returns a human-readable trigger error when the retry cap is hit, else null.
+ */
+export async function commitPendingAfterOutcome(params: {
+  status: RunRecordStatus;
+  pendingState: Partial<PlannedExecutionState>;
+  priorFailures: number;
+  saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
+}): Promise<{ giveUpError: string | null }> {
+  const { status, pendingState, priorFailures, saveState } = params;
+  if (status === 'completed') {
+    await saveState({ ...pendingState, ...(priorFailures > 0 ? { pendingFailures: 0 } : {}) });
+    return { giveUpError: null };
+  }
+  if (status === 'skipped') {
+    // Overlap: nothing consumed, nothing failed. Retry on the next poll.
+    return { giveUpError: null };
+  }
+  // A genuine processing failure (error/crash): retry, but bounded.
+  const failures = priorFailures + 1;
+  if (failures >= MAX_PENDING_DELIVERY_FAILURES) {
+    await saveState({ ...pendingState, pendingFailures: 0 });
+    return {
+      giveUpError: `Detected a change but the flow failed to process it ${MAX_PENDING_DELIVERY_FAILURES}× — skipping it to avoid a loop`,
+    };
+  }
+  await saveState({ pendingFailures: failures });
+  return { giveUpError: null };
 }
 
 /** Resolve a dot path ('a.b.0.c'; '' = the value itself) into a value. */
@@ -98,7 +160,10 @@ export function evaluateOnChange(
     fire: true,
     summary: 'Tool result changed',
     context: { result: capForContext(result) },
-    newState: { lastHash: hash },
+    // Hold the new hash pending: advance the baseline only once a fired run
+    // actually processes this change (commit-after-success, issue #75).
+    newState: {},
+    pendingState: { lastHash: hash },
   };
 }
 
@@ -161,6 +226,9 @@ export function evaluateNewItems(
       newItems: capForContext(fresh.slice(0, MAX_NEW_ITEMS).map(({ item }) => item)),
       ...(fresh.length > MAX_NEW_ITEMS ? { omitted: fresh.length - MAX_NEW_ITEMS } : {}),
     },
-    newState: { seenIds: mergeSeen(seen) },
+    // Hold the freshly-seen ids pending: only remember them once a fired run
+    // actually processes them, so a skipped/failed run retries them (#75).
+    newState: {},
+    pendingState: { seenIds: mergeSeen(seen) },
   };
 }

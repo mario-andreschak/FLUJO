@@ -51,7 +51,11 @@ describe('evaluateOnChange', () => {
 
     const changed = evaluateOnChange({ v: 2 }, state);
     expect(changed.fire).toBe(true);
-    expect(changed.newState.lastHash).not.toBe(state.lastHash);
+    // The new hash is held PENDING (committed only after a successful run, #75),
+    // not advanced immediately.
+    expect(changed.newState.lastHash).toBeUndefined();
+    expect(changed.pendingState?.lastHash).toBeTruthy();
+    expect(changed.pendingState?.lastHash).not.toBe(state.lastHash);
     expect(changed.summary).toBe('Tool result changed');
   });
 });
@@ -71,8 +75,10 @@ describe('evaluateNewItems', () => {
     expect(withNew.fire).toBe(true);
     expect(withNew.summary).toBe('2 new items');
     expect((withNew.context as { newItems: Array<{ id: number }> }).newItems.map(i => i.id)).toEqual([3, 4]);
-    // Old ids stay remembered — a rotating feed can't re-trigger on item 1.
-    expect(withNew.newState.seenIds).toEqual(['1', '2', '3', '4']);
+    // The merged ids are held PENDING (committed only after a successful run,
+    // #75); old ids stay remembered so a rotating feed can't re-trigger item 1.
+    expect(withNew.newState.seenIds).toBeUndefined();
+    expect(withNew.pendingState?.seenIds).toEqual(['1', '2', '3', '4']);
   });
 
   it('dedups across restarts via the persisted seen-set', () => {
@@ -141,7 +147,7 @@ describe('armMcpPoll', () => {
       callTool: jest.fn(async () => ({ success: true, data: { v: 1 } })),
       loadState: jest.fn(async () => state),
       saveState: jest.fn(async patch => { state = { ...state, ...patch }; }),
-      onFire: jest.fn(),
+      onFire: jest.fn(async () => ({ status: 'completed' as const })),
       onError: jest.fn(),
       onSuccess: jest.fn(),
     };
@@ -151,7 +157,9 @@ describe('armMcpPoll', () => {
   // The tick body is async; advancing fake timers only queues it. Flush by
   // letting the microtask/promise chain settle.
   const flush = async () => {
-    for (let i = 0; i < 10; i++) {
+    // Generous drain: the fire path now awaits onFire → commit → saveState, a
+    // deeper microtask chain than a bare poll (#75).
+    for (let i = 0; i < 30; i++) {
       await Promise.resolve();
     }
   };
@@ -261,6 +269,77 @@ describe('armMcpPoll', () => {
     await flush();
     expect(deps.onSuccess).toHaveBeenCalled();
     expect(deps.onFire).not.toHaveBeenCalled();
+    trigger.dispose();
+  });
+
+  it('re-fires a detected change until the run completes (commit-after-success, #75)', async () => {
+    const { deps, getState } = makeDeps();
+    (deps.onFire as jest.Mock)
+      .mockResolvedValueOnce({ status: 'error' }) // run errored
+      .mockResolvedValue({ status: 'completed' }); // then succeeds
+    const trigger = armMcpPoll(config(), deps);
+    await flush(); // prime on { v: 1 }
+
+    // Change: fires, but the run errors → baseline NOT advanced, failure counted.
+    (deps.callTool as jest.Mock).mockResolvedValue({ success: true, data: { v: 2 } });
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(getState().lastHash).toBe(hashResult({ v: 1 })); // still the primed baseline
+    expect(getState().pendingFailures).toBe(1);
+
+    // Same still-unprocessed change next poll → re-fires; now completes.
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(2);
+    expect(getState().lastHash).toBe(hashResult({ v: 2 })); // committed after success
+    expect(getState().pendingFailures).toBe(0);
+
+    // Same result now: quiet, because the baseline finally advanced.
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(2);
+    trigger.dispose();
+  });
+
+  it('treats an overlap skip as "not yet done": no baseline advance, no failure counted (#75)', async () => {
+    const { deps, getState } = makeDeps();
+    (deps.onFire as jest.Mock).mockResolvedValue({ status: 'skipped' });
+    const trigger = armMcpPoll(config(), deps);
+    await flush(); // prime on { v: 1 }
+
+    (deps.callTool as jest.Mock).mockResolvedValue({ success: true, data: { v: 2 } });
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    // Overlap window: nothing consumed, and it doesn't burn the retry budget.
+    expect(getState().lastHash).toBe(hashResult({ v: 1 }));
+    expect(getState().pendingFailures ?? 0).toBe(0);
+    trigger.dispose();
+  });
+
+  it('gives up after 3 consecutive failed deliveries and drops the change (#75)', async () => {
+    const { deps, getState } = makeDeps();
+    (deps.onFire as jest.Mock).mockResolvedValue({ status: 'error' });
+    const trigger = armMcpPoll(config(), deps);
+    await flush(); // prime on { v: 1 }
+
+    (deps.callTool as jest.Mock).mockResolvedValue({ success: true, data: { v: 2 } });
+    for (let i = 0; i < 3; i++) {
+      jest.advanceTimersByTime(TICK_MS);
+      await flush();
+    }
+    expect(deps.onFire).toHaveBeenCalledTimes(3);
+    // On the 3rd failure the baseline is committed anyway to stop the loop.
+    expect(getState().lastHash).toBe(hashResult({ v: 2 }));
+    expect(getState().pendingFailures).toBe(0);
+    expect(deps.onError).toHaveBeenCalledWith(expect.stringContaining('failed to process it 3'));
+
+    // The dropped change no longer re-fires.
+    const firedSoFar = (deps.onFire as jest.Mock).mock.calls.length;
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(firedSoFar);
     trigger.dispose();
   });
 

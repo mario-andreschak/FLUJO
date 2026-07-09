@@ -16,7 +16,8 @@ const makeDeps = () => {
     saveState: jest.fn(async (patch: Partial<PlannedExecutionState>) => {
       state = { ...state, ...patch };
     }),
-    onFire: jest.fn(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFire: jest.fn(async (_payload: any) => ({ status: 'completed' as const })),
     onError: jest.fn(),
   };
   return { deps, fetchImpl, getState: () => state };
@@ -29,7 +30,9 @@ const config = { type: 'url-watch' as const, url: 'https://example.com/status', 
 
 // The check body is async; advancing fake timers only queues it.
 const flush = async () => {
-  for (let i = 0; i < 10; i++) {
+  // Generous drain: the fire path now awaits onFire → commit → saveState, a
+  // deeper microtask chain than a bare check (#75).
+  for (let i = 0; i < 30; i++) {
     await Promise.resolve();
   }
 };
@@ -100,6 +103,58 @@ describe('armUrlWatch', () => {
     expect(deps.onError).toHaveBeenCalledWith('getaddrinfo ENOTFOUND');
     expect(deps.onFire).not.toHaveBeenCalled();
 
+    trigger.dispose();
+  });
+
+  it('advances the baseline only after the run completes; retries a skipped/failed change (#75)', async () => {
+    const { deps, fetchImpl, getState } = makeDeps();
+    fetchImpl.mockResolvedValueOnce(htmlResponse('v1'));
+    const trigger = armUrlWatch(config, deps);
+    await flush(); // prime on 'v1'
+    const primedHash = getState().lastHash;
+    expect(primedHash).toBeTruthy();
+
+    // Content changes; the fired run errors → baseline must NOT advance.
+    // (Fresh Response per call — a Response body can only be read once.)
+    (deps.onFire as jest.Mock).mockResolvedValueOnce({ status: 'error' });
+    fetchImpl.mockImplementation(async () => htmlResponse('v2'));
+    jest.advanceTimersByTime(1100);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(getState().lastHash).toBe(primedHash); // unchanged
+    expect(getState().pendingFailures).toBe(1);
+
+    // Next check re-fires the same change; this time it completes.
+    jest.advanceTimersByTime(1100);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(2);
+    expect(getState().lastHash).not.toBe(primedHash); // committed after success
+    expect(getState().pendingFailures).toBe(0);
+
+    // Same content now: quiet.
+    jest.advanceTimersByTime(1100);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(2);
+    trigger.dispose();
+  });
+
+  it('gives up after 3 consecutive failed deliveries and drops the change (#75)', async () => {
+    const { deps, fetchImpl, getState } = makeDeps();
+    fetchImpl.mockResolvedValueOnce(htmlResponse('v1'));
+    (deps.onFire as jest.Mock).mockResolvedValue({ status: 'error' });
+    const trigger = armUrlWatch(config, deps);
+    await flush(); // prime on 'v1'
+    const primedHash = getState().lastHash;
+
+    fetchImpl.mockImplementation(async () => htmlResponse('v2'));
+    for (let i = 0; i < 3; i++) {
+      jest.advanceTimersByTime(1100);
+      await flush();
+    }
+    expect(deps.onFire).toHaveBeenCalledTimes(3);
+    expect(getState().lastHash).not.toBe(primedHash); // committed anyway to stop the loop
+    expect(getState().pendingFailures).toBe(0);
+    expect(deps.onError).toHaveBeenCalledWith(expect.stringContaining('failed to process it 3'));
     trigger.dispose();
   });
 

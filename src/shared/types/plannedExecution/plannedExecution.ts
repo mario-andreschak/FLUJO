@@ -162,6 +162,16 @@ export interface PlannedExecutionState {
   /** llm-gate: day stamp (YYYY-MM-DD) + count for the daily call cap. */
   llmCallsDay?: string;
   llmCallsCount?: number;
+  /**
+   * Commit-after-success (issue #75): number of consecutive times a DETECTED
+   * change (on-change / new-items / url-watch) fired a run that did NOT
+   * complete (crashed/errored). The baseline (lastHash/seenIds) is only
+   * advanced once a fired run completes, so the change is retried; this
+   * counter bounds that retry so a change that reliably breaks the flow can't
+   * re-fire forever. Reset to 0 on the first successful delivery. Overlap
+   * skips do NOT count (the run was never attempted).
+   */
+  pendingFailures?: number;
 }
 
 /** What a trigger hands to the scheduler when it fires. */

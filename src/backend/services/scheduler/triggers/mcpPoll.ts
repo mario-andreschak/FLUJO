@@ -2,11 +2,17 @@ import { Cron } from 'croner';
 import {
   McpPollTriggerConfig,
   PlannedExecutionState,
+  RunRecordStatus,
 } from '@/shared/types/plannedExecution';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './types';
-import { evaluateNewItems, evaluateOnChange, PollEvaluation } from './pollEvaluators';
+import {
+  commitPendingAfterOutcome,
+  evaluateNewItems,
+  evaluateOnChange,
+  PollEvaluation,
+} from './pollEvaluators';
 
 const log = createLogger('backend/services/scheduler/triggers/mcpPoll');
 
@@ -26,7 +32,13 @@ export interface McpPollDeps {
   ) => Promise<{ success: boolean; data?: unknown; error?: string }>;
   loadState: () => Promise<PlannedExecutionState>;
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
-  onFire: (payload: { summary: string; context: unknown }) => void;
+  /**
+   * Dispatch the run and RESOLVE with its outcome (issue #75). The trigger
+   * awaits this so it can advance the change baseline only once the run
+   * actually completed — otherwise a skipped/failed run leaves the change
+   * un-consumed for the next poll to retry.
+   */
+  onFire: (payload: { summary: string; context: unknown }) => Promise<{ status: RunRecordStatus }>;
   onError: (message: string) => void;
   /**
    * Called after every successful poll+evaluation (fired or not), so a stale
@@ -102,7 +114,7 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
       } else if (!evaluation.fire) {
         deps.onSuccess?.();
       } else {
-        deps.onFire({
+        const { status } = await deps.onFire({
           summary: `Watched tool: ${evaluation.summary ?? 'condition met'}`,
           context: {
             server: config.serverName,
@@ -112,6 +124,24 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
               : { result: evaluation.context }),
           },
         });
+        if (disposed) {
+          return; // disarmed while the run was in flight
+        }
+        // Commit-after-success (issue #75): advance the change baseline only
+        // once the fired run actually processed it. Gate modes (llm/flow)
+        // carry no pendingState — they commit their hash immediately above and
+        // keep their budget-driven semantics.
+        if (evaluation.pendingState) {
+          const { giveUpError } = await commitPendingAfterOutcome({
+            status,
+            pendingState: evaluation.pendingState,
+            priorFailures: state.pendingFailures ?? 0,
+            saveState: deps.saveState,
+          });
+          if (giveUpError) {
+            deps.onError(giveUpError);
+          }
+        }
       }
     } catch (error) {
       consecutiveFailures++;

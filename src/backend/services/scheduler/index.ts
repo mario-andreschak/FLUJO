@@ -219,9 +219,14 @@ export class SchedulerService {
               const current = await loadExecutionState(execution.id);
               await saveExecutionState(execution.id, { ...current, ...patch });
             },
-            onFire: ({ summary, context }) => {
+            // Await the run and report its outcome so the poll can advance its
+            // change baseline only after a successful run (commit-after-success,
+            // issue #75). Keeping the trigger busy for the run's duration also
+            // naturally prevents an overlapping poll of the same trigger.
+            onFire: async ({ summary, context }) => {
               this.lastTriggerErrors.delete(execution.id);
-              void this.fire(execution, { kind: 'mcp-poll', summary, context });
+              const record = await this.fire(execution, { kind: 'mcp-poll', summary, context });
+              return { status: record.status };
             },
             onError: message => this.lastTriggerErrors.set(execution.id, message),
             onSuccess: () => this.lastTriggerErrors.delete(execution.id),
@@ -243,9 +248,12 @@ export class SchedulerService {
               const current = await loadExecutionState(execution.id);
               await saveExecutionState(execution.id, { ...current, ...patch });
             },
-            onFire: ({ summary, context }) => {
+            // Await + report outcome so the baseline hash advances only after a
+            // successful run (commit-after-success, issue #75).
+            onFire: async ({ summary, context }) => {
               this.lastTriggerErrors.delete(execution.id);
-              void this.fire(execution, { kind: 'url-watch', summary, context });
+              const record = await this.fire(execution, { kind: 'url-watch', summary, context });
+              return { status: record.status };
             },
             onError: message => this.lastTriggerErrors.set(execution.id, message),
             onSuccess: () => this.lastTriggerErrors.delete(execution.id),
