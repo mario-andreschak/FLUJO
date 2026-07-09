@@ -10,6 +10,7 @@ import {
   TriggerFirePayload,
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
+import { isEncryptionLocked } from '@/utils/encryption/secure';
 import { ArmedTrigger } from './triggers/types';
 import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
@@ -524,6 +525,31 @@ export class SchedulerService {
     runId: string = uuidv4()
   ): Promise<RunRecord> {
     const firedAt = new Date().toISOString();
+
+    // Locked USER encryption: the flow would resolve ${global:...} bindings and
+    // decrypt model API keys against a DEK that isn't in memory. Never run it —
+    // record a `skipped` run with a stable, human-readable reason (mirroring the
+    // overlap-skip precedent, which reuses the `error` field). This guards EVERY
+    // fire path (schedule, poll, watch, catch-up, and manual runNow), since they
+    // all decrypt the same secrets. Crucially, no trigger baseline is touched:
+    // poll/watch onFire only advance their cursor/hash after a `completed` run,
+    // so returning `skipped` here re-observes the work naturally after unlock —
+    // without queueing or bursting.
+    if (await isEncryptionLocked()) {
+      const record: RunRecord = {
+        runId,
+        conversationId: '',
+        firedAt,
+        finishedAt: firedAt,
+        status: 'skipped',
+        triggerSummary: payload.summary,
+        error: 'encryption locked',
+      };
+      await appendRunRecord(execution.id, record);
+      log.info(`Skipped fire for "${execution.name}" — encryption locked`);
+      return record;
+    }
+
     if (this.running.has(execution.id)) {
       const record: RunRecord = {
         runId,

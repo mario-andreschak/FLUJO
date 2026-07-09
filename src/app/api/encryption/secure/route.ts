@@ -12,6 +12,7 @@ import {
   authenticate,
   logout
 } from '@/utils/encryption/secure';
+import { onUnlocked } from '@/backend/init';
 import { createLogger } from '@/utils/logger';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
@@ -98,6 +99,13 @@ export async function POST(req: NextRequest) {
         }
         
         log.info(`Authentication successful`, { requestId });
+        // Stage 3 (#78): the process just gained the unlock DEK, so start the
+        // MCP servers + scheduler that were deferred at boot while locked. Fire
+        // and forget — the unlock response must not wait on server startup;
+        // onUnlocked is idempotent and a no-op in DEFAULT mode.
+        onUnlocked().catch(error =>
+          log.error(`Post-unlock service startup failed`, { requestId, error })
+        );
         return NextResponse.json({ success: true, token: authToken });
         
       case 'logout':
@@ -144,6 +152,13 @@ export async function POST(req: NextRequest) {
         }
         
         const verifyResult = await verifyPassword(password);
+        if (verifyResult.valid) {
+          // Same unlock transition as `authenticate` (verifyPassword set the
+          // server unlock DEK): start the deferred MCP/scheduler services.
+          onUnlocked().catch(error =>
+            log.error(`Post-unlock service startup failed`, { requestId, error })
+          );
+        }
         log.debug(`Password verification completed`, { requestId, valid: verifyResult.valid }); // Changed to debug
         return NextResponse.json({ 
           valid: verifyResult.valid,

@@ -2,7 +2,7 @@ import CryptoJS from 'crypto-js';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek } from './session';
+import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked } from './session';
 
 // Create a logger instance for this file
 const log = createLogger('utils/encryption/secure');
@@ -730,6 +730,19 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
   // calls this on every request, so it must never throw on a missing metadata
   // value (e.g. an undefined store entry) before reading ENCRYPTION_TYPE.
   return metadata != null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
+}
+
+/**
+ * Whether secret operations are currently locked: USER encryption is enabled
+ * AND the server has no in-memory unlock DEK. DEFAULT mode (or
+ * encryption-not-initialized) is never locked. This is the single source of
+ * truth for the "locked" concept — the route lock gate (#77), backend startup
+ * gating and the scheduler's locked-fire guard (#78) all defer to it so they
+ * can never drift. Cheap: touches only the mode metadata + the lock flag,
+ * never the DEK or any secret.
+ */
+export async function isEncryptionLocked(): Promise<boolean> {
+  return (await isUserEncryptionEnabled()) && isServerLocked();
 }
 
 /**

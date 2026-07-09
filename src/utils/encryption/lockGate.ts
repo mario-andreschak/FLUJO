@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isUserEncryptionEnabled } from '@/utils/encryption/secure';
-import { isServerLocked } from '@/utils/encryption/session';
+import { isEncryptionLocked } from '@/utils/encryption/secure';
 
 /**
  * Stage 2/4 of the #16 custom-encryption fix (issue #77): full API lockdown.
@@ -48,7 +47,7 @@ export function openAiLockedResponse(): NextResponse {
  * mode + lock flag, never the DEK or any secret.
  */
 export async function isLocked(): Promise<boolean> {
-  return (await isUserEncryptionEnabled()) && isServerLocked();
+  return isEncryptionLocked();
 }
 
 /**
