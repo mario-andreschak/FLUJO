@@ -22,9 +22,32 @@ export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
     return 'mistral';
   } else if (baseUrl.includes('api.openai.com')) {
     return 'openai';
+  } else if (isLitellmUrl(baseUrl)) {
+    return 'litellm';
   } else {
     return 'ollama';
   }
+}
+
+/**
+ * Detect whether a base URL points at a LiteLLM proxy.
+ *
+ * The default LiteLLM proxy listens on port 4000. We match any URL whose
+ * host:port resolves to :4000 (localhost, 127.0.0.1, 0.0.0.0) as well as
+ * any URL that includes "/litellm" in its path (common when the proxy sits
+ * behind a reverse-proxy or is deployed to a cloud host).
+ */
+export function isLitellmUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    if (url.port === '4000') return true;
+    if (url.pathname.toLowerCase().includes('/litellm')) return true;
+  } catch {
+    // Tolerate malformed URLs -- fall through to simple string checks.
+    if (baseUrl.includes(':4000')) return true;
+    if (baseUrl.toLowerCase().includes('/litellm')) return true;
+  }
+  return false;
 }
 
 /**
