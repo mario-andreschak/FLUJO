@@ -15,10 +15,25 @@ interface EncryptionSession {
 // Session expiration time (2 hours)
 const SESSION_EXPIRATION_MS = 2 * 60 * 60 * 1000;
 
-// In-memory session store
+declare global {
+  // The 2-hour token sessions used by the UI unlock dialog. Global-backed so
+  // that Next.js dev-mode HMR (which can duplicate this module) does not create
+  // a split-brain where different routes see different session stores.
+  // eslint-disable-next-line no-var
+  var __flujo_encryption_sessions: Map<string, EncryptionSession> | undefined;
+  // The process-wide server unlock state: the plaintext DEK (hex string) that
+  // was recovered when the user authenticated. Non-expiring — cleared only when
+  // the process exits. Also global-backed to survive HMR module duplication so
+  // routes never see a locked/unlocked split-brain.
+  // eslint-disable-next-line no-var
+  var __flujo_server_dek: string | null | undefined;
+}
+
+// In-memory session store, backed by `global` to survive dev-mode HMR.
 // In a production environment, this could be replaced with a more robust solution
-// like Redis or a database, especially for multi-server deployments
-const sessions: Map<string, EncryptionSession> = new Map();
+// like Redis or a database, especially for multi-server deployments.
+const sessions: Map<string, EncryptionSession> =
+  global.__flujo_encryption_sessions ?? (global.__flujo_encryption_sessions = new Map());
 
 /**
  * Create a new encryption session
@@ -87,6 +102,47 @@ export function invalidateSession(token: string): void {
 }
 
 /**
+ * Server unlock state
+ * -------------------
+ * Once the user authenticates, the plaintext DEK is held process-wide (with no
+ * expiry) so that background/tokenless secret operations (env vars, model API
+ * keys, global-var resolution) can use the correct USER DEK. This is the
+ * authoritative backend-decryption source; the 2-hour token sessions above
+ * remain only for the UI dialog flow.
+ */
+
+/**
+ * Record the server unlock state.
+ * @param dek The plaintext Data Encryption Key (hex string).
+ */
+export function unlockServer(dek: string): void {
+  global.__flujo_server_dek = dek;
+  log.info('Server encryption unlocked');
+}
+
+/**
+ * Clear the server unlock state (re-lock the server).
+ */
+export function lockServer(): void {
+  global.__flujo_server_dek = null;
+  log.info('Server encryption locked');
+}
+
+/**
+ * Whether the server is currently locked (no unlock DEK present).
+ */
+export function isServerLocked(): boolean {
+  return !global.__flujo_server_dek;
+}
+
+/**
+ * Get the server unlock DEK, or null if the server is locked.
+ */
+export function getServerDek(): string | null {
+  return global.__flujo_server_dek ?? null;
+}
+
+/**
  * Clean up expired sessions
  */
 function cleanupExpiredSessions(): void {
@@ -120,4 +176,3 @@ function scheduleCleanup(): void {
     }
   }
 }
-

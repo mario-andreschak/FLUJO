@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
@@ -12,6 +13,9 @@ type RouteContext = { params: Promise<{ id: string }> };
  * Get a single model by ID.
  */
 export async function GET(request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
 
@@ -41,6 +45,9 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
  * Update an existing model. The path ID is authoritative and overrides any ID in the body.
  */
 export async function PUT(request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
     const body = (await request.json()) as Model;
@@ -82,6 +89,9 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
  * Delete a model by ID.
  */
 export async function DELETE(request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
 

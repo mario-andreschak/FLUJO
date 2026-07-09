@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
@@ -239,6 +240,9 @@ export async function OPTIONS(request: NextRequest) {
 
 // Handle GET requests
 export async function GET(request: NextRequest) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const requestId = `get-${Date.now()}`;
   log.info('GET request received', {
     requestId,
@@ -261,6 +265,9 @@ export async function GET(request: NextRequest) {
 
 // Handle POST requests
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const requestId = `post-${Date.now()}`;
   log.info('POST request received', {
     requestId,

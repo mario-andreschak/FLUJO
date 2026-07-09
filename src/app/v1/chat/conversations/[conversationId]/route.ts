@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs'; // Import fs promises
 import path from 'path'; // Import path
@@ -80,6 +81,9 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> } // Reverted to using params destructuring
 ) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const awaitedParams = await params; // Await the params object
   const conversationId = awaitedParams.conversationId; // Access conversationId from awaited params
   const requestId = `conv-get-${Date.now()}`;
@@ -206,6 +210,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const conversationId = (await params).conversationId;
   const requestId = `conv-patch-${Date.now()}`;
   log.info('Handling PATCH request for conversation', { requestId, conversationId });
@@ -316,6 +323,9 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const conversationId = (await params).conversationId; // Direct access instead of destructuring
   const requestId = `conv-delete-${Date.now()}`;
   log.info('Handling DELETE request for conversation', { requestId, conversationId });

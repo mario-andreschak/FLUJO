@@ -2,10 +2,27 @@ import CryptoJS from 'crypto-js';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-import { createSession, getDekFromSession, invalidateSession } from './session';
+import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked } from './session';
 
 // Create a logger instance for this file
 const log = createLogger('utils/encryption/secure');
+
+/**
+ * Thrown when a secret operation is attempted in USER encryption mode while the
+ * server is locked (no unlock DEK in memory and no valid session token).
+ *
+ * This is a distinct, catchable error so callers never fall back to the DEFAULT
+ * DEK (which would silently mis-encrypt/mis-decrypt user secrets). Stage 2's
+ * route gate translates this into an HTTP 423 response.
+ */
+export class EncryptionLockedError extends Error {
+  constructor(message: string = 'Encryption is locked: user password required to access secrets') {
+    super(message);
+    this.name = 'EncryptionLockedError';
+    // Restore prototype chain for instanceof to work across transpilation.
+    Object.setPrototypeOf(this, EncryptionLockedError.prototype);
+  }
+}
 
 // Constants for encryption
 const PBKDF2_ITERATIONS = 100000;
@@ -336,9 +353,19 @@ export async function migrateToUserEncryption(password: string): Promise<boolean
     // Generate a random IV for DEK encryption
     const iv = CryptoJS.lib.WordArray.random(IV_SIZE);
     
-    // Re-encrypt the DEK with the user's key
+    // Re-encrypt the DEK with the user's key.
+    //
+    // Store the DEK plaintext in the SAME representation that default-mode init
+    // used (`.toString(Utf8)`), NOT the default hex `.toString()`. getDefaultDEK
+    // returns a WordArray whose bytes are the UTF-8 of the originally-stored DEK
+    // string, and getUserDEK reconstructs the key as `Hex.parse(decrypted)` —
+    // i.e. the key that actually encrypts data is `WordArray(utf8(storedPlaintext))`.
+    // Storing the hex of `defaultDEK` here would change that stored plaintext, so
+    // getUserDEK would recover a DIFFERENT key and every secret written before
+    // migration would fail to decrypt. Using `.toString(Utf8)` preserves the DEK
+    // value, so no data re-encryption is needed (see closed issue #79).
     const encryptedDEK = CryptoJS.AES.encrypt(
-      defaultDEK.toString(),
+      defaultDEK.toString(CryptoJS.enc.Utf8),
       derivedKey,
       {
         iv: iv,
@@ -358,10 +385,15 @@ export async function migrateToUserEncryption(password: string): Promise<boolean
     
     // Save the updated metadata
     await saveItem(StorageKey.ENCRYPTION_KEY, newMetadata);
-    
-    // In a real implementation, we would need to re-encrypt all sensitive data
-    // For now, we'll just return success
-    
+
+    // No re-encryption of stored secrets is needed here: the DEK value itself is
+    // unchanged — this migration only re-wraps the SAME DEK under a new
+    // (password-derived) wrapping key (see the .toString(Utf8) note above and
+    // the single-DEK invariant in issue #81). Every secret already written under
+    // the DEFAULT-mode DEK stays valid and decryptable under USER mode. Do NOT
+    // "fix" this into a real re-encrypt pass — that is unnecessary and risky
+    // (see closed issue #79 for why).
+
     return true;
   } catch (error) {
     log.error('migrateToUserEncryption: Failed to migrate to user encryption:', error);
@@ -436,9 +468,13 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
     // Generate a new IV for DEK encryption
     const newIv = CryptoJS.lib.WordArray.random(IV_SIZE);
     
-    // Re-encrypt the DEK with the new key
+    // Re-encrypt the DEK with the new key. Preserve the DEK value by storing its
+    // UTF-8 representation (see the detailed note in migrateToUserEncryption):
+    // the effective key is `WordArray(utf8(storedPlaintext))`, so re-wrapping via
+    // hex `.toString()` would silently change it and break every stored secret on
+    // a password change. `.toString(Utf8)` keeps the key stable.
     const newEncryptedDEK = CryptoJS.AES.encrypt(
-      decryptedDEK.toString(),
+      decryptedDEK.toString(CryptoJS.enc.Utf8),
       newDerivedKey,
       {
         iv: newIv,
@@ -500,43 +536,41 @@ async function getDEK(passwordOrToken?: string, isToken: boolean = false): Promi
     
     // Check the encryption type
     if (metadata[ENCRYPTION_TYPE] === EncryptionType.USER) {
-      // User encryption requires a password
-      if (!passwordOrToken || isToken) {
-        log.warn('getDEK: Password required for user encryption but not provided, falling back to default encryption');
-        // Instead of failing, try to initialize default encryption and use that
-        const defaultDEK = await getDefaultDEK();
-        if (defaultDEK) {
-          return defaultDEK;
-        }
-        
-        // If default DEK fails, try to initialize it
-        const initialized = await initializeDefaultEncryption();
-        if (!initialized) {
-          log.error('getDEK: Failed to initialize default encryption as fallback');
-          return null;
-        }
-        
-        // Try to get the default DEK again
-        return await getDefaultDEK();
+      // 1. Use the server unlock state if present (the authoritative backend
+      //    decryption source once the user has authenticated this process).
+      const serverDek = getServerDek();
+      if (serverDek) {
+        log.debug('getDEK: Using server unlock state for user encryption');
+        return CryptoJS.enc.Hex.parse(serverDek);
       }
-      
-      // Try to get the user DEK
-      const userDEK = await getUserDEK(passwordOrToken);
-      if (userDEK) {
-        return userDEK;
+
+      // 2. Honour an explicit password (non-token) if supplied. A valid session
+      //    token was already handled at the top of this method.
+      if (passwordOrToken && !isToken) {
+        const userDEK = await getUserDEK(passwordOrToken);
+        if (userDEK) {
+          return userDEK;
+        }
+        log.warn('getDEK: Provided password did not yield a valid user DEK');
       }
-      
-      // If user DEK fails, fall back to default encryption
-      log.warn('getDEK: Failed to get user DEK, falling back to default encryption');
-      return await getDefaultDEK();
+
+      // 3. Locked: never silently fall back to the DEFAULT DEK (that would
+      //    mis-encrypt/mis-decrypt user secrets). Throw a distinct error.
+      log.warn('getDEK: User encryption is locked (no unlock state or valid credential)');
+      throw new EncryptionLockedError();
     } else {
       // Default encryption
       return await getDefaultDEK();
     }
   } catch (error) {
+    // Never swallow the locked signal into the default-DEK error recovery below.
+    if (error instanceof EncryptionLockedError) {
+      throw error;
+    }
+
     log.error('getDEK: Failed to get DEK:', error);
     
-    // Try to initialize default encryption as a last resort
+    // Try to initialize default encryption as a last resort (DEFAULT mode only).
     try {
       log.warn('getDEK: Attempting to initialize default encryption as error recovery');
       const initialized = await initializeDefaultEncryption();
@@ -582,6 +616,11 @@ export async function encryptWithPassword(text: string, passwordOrToken?: string
     // Format: iv:ciphertext
     return iv.toString() + ':' + encrypted.toString();
   } catch (error) {
+    // Surface the locked signal to callers instead of turning it into a silent
+    // null (which they would treat as a generic encryption failure).
+    if (error instanceof EncryptionLockedError) {
+      throw error;
+    }
     log.error('encryptWithPassword: Failed to encrypt data:', error);
     return null;
   }
@@ -623,6 +662,11 @@ export async function decryptWithPassword(ciphertext: string, passwordOrToken?: 
     // log.verbose('decrypted', decrypted);
     return decrypted.toString(CryptoJS.enc.Utf8);
   } catch (error) {
+    // Surface the locked signal to callers instead of turning it into a silent
+    // null (which they would treat as garbage/failed decryption).
+    if (error instanceof EncryptionLockedError) {
+      throw error;
+    }
     log.error('decryptWithPassword: Failed to decrypt data:', error);
     return null;
   }
@@ -645,7 +689,11 @@ export async function verifyPassword(password: string): Promise<{ valid: boolean
     // For user encryption, verify the password
     const dek = await getUserDEK(password);
     if (dek !== null) {
-      // Password is valid, create a session
+      // Password is valid: record the process-wide server unlock state so that
+      // tokenless backend secret operations use the correct USER DEK, and also
+      // create a 2-hour session token for the UI dialog flow. Reuse the DEK we
+      // just derived — never re-derive or log the password.
+      unlockServer(dek.toString());
       const token = createSession(dek.toString());
       return { valid: true, token };
     }
@@ -697,7 +745,23 @@ export async function isEncryptionInitialized(): Promise<boolean> {
 export async function isUserEncryptionEnabled(): Promise<boolean> {
   log.debug('isUserEncryptionEnabled: Entering method');
   const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-  return metadata !== null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
+  // `!= null` guards both null and undefined: the route lock gate (issue #77)
+  // calls this on every request, so it must never throw on a missing metadata
+  // value (e.g. an undefined store entry) before reading ENCRYPTION_TYPE.
+  return metadata != null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
+}
+
+/**
+ * Whether secret operations are currently locked: USER encryption is enabled
+ * AND the server has no in-memory unlock DEK. DEFAULT mode (or
+ * encryption-not-initialized) is never locked. This is the single source of
+ * truth for the "locked" concept — the route lock gate (#77), backend startup
+ * gating and the scheduler's locked-fire guard (#78) all defer to it so they
+ * can never drift. Cheap: touches only the mode metadata + the lock flag,
+ * never the DEK or any secret.
+ */
+export async function isEncryptionLocked(): Promise<boolean> {
+  return (await isUserEncryptionEnabled()) && isServerLocked();
 }
 
 /**

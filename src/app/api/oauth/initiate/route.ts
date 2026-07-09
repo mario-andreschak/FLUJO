@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
@@ -16,6 +17,9 @@ const log = createLogger('api/oauth/initiate');
  * rolling each step - so this stays correct as the SDK's auth implementation evolves.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { serverName } = await request.json();
 

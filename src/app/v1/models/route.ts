@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -8,6 +9,9 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('app/v1/models/route');
 
 export async function GET() {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   try {
     log.info('Fetching flows and models for models endpoint');
 

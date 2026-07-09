@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
@@ -10,6 +11,9 @@ const log = createLogger('app/api/model/route');
  * List all models.
  */
 export async function GET() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const result = await modelAdapter.loadModels();
     if (!result.success) {
@@ -36,6 +40,9 @@ export async function GET() {
  * Create a new model. The request body is the model object itself.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const model = (await request.json()) as Model;
 

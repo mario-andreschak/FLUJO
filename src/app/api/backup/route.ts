@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -15,6 +16,9 @@ const log = createLogger('app/api/backup/route');
 const MCP_SERVERS_DIR = path.join(getDataDir(), 'mcp-servers');
 
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   log.info(`Handling backup request [RequestID: ${requestId}]`);
   

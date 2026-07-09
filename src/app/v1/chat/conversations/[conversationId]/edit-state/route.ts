@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -25,6 +26,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const { conversationId } = await params;
   if (!conversationId) {
     return NextResponse.json({ error: 'Missing conversationId parameter' }, { status: 400 });

@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -67,6 +68,9 @@ function migrateToNewFormat(oldData: Record<string, string>): Record<string, Env
 
 // GET handler for retrieving environment variables
 export async function GET(req: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   log.debug(`Handling GET request [${requestId}]`);
   
@@ -194,6 +198,9 @@ export async function GET(req: NextRequest) {
 
 // POST handler for setting environment variables
 export async function POST(req: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   log.debug(`Handling POST request [${requestId}]`);
   

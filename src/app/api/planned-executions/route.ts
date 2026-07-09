@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -12,6 +13,9 @@ const log = createLogger('app/api/planned-executions/route');
  * Response: { paused, executions: [{ execution, status, lastRun }] }
  */
 export async function GET() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     // Make sure the scheduler singleton is booted (idempotent) so the status
     // fields reflect reality even if this route is hit right after startup.
@@ -34,6 +38,9 @@ export async function GET() {
  * The bound flow is validated advisorily — the result is returned, not enforced.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const body = await request.json();
     const result = await getSchedulerService().create(body);
@@ -53,6 +60,9 @@ export async function POST(request: NextRequest) {
  * Global scheduler controls. Body: { paused: boolean }.
  */
 export async function PATCH(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const body = await request.json();
     if (typeof body?.paused !== 'boolean') {

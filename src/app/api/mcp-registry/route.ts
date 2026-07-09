@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
@@ -52,6 +53,9 @@ function setCached(key: string, body: unknown): void {
  *   limit  — page size (clamped to 1..100, default 30)
  */
 export async function GET(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   const { searchParams } = new URL(request.url);
 

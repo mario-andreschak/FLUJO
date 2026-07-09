@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
@@ -13,6 +14,9 @@ type RouteContext = { params: Promise<{ id: string }> };
  * Get a single flow by ID.
  */
 export async function GET(_request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
 
@@ -34,6 +38,9 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
  * body. Returns 404 when the flow does not exist (use POST /api/flow to create).
  */
 export async function PUT(request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
     const body = (await request.json()) as Flow;
@@ -67,6 +74,9 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
  * Delete a flow by ID.
  */
 export async function DELETE(_request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
 

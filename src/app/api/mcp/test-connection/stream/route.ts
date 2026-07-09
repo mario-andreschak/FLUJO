@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -26,6 +27,9 @@ export const runtime = 'nodejs';
  * terminated by a single `{ type: 'result', ... }` event.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   log.debug('Entering POST method');
 
   let config: MCPServerConfig;

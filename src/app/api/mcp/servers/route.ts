@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -31,6 +32,9 @@ function redactServerConfig(config: MCPServerConfig): MCPServerConfig {
  * List all MCP server configurations (with secrets redacted for the browser).
  */
 export async function GET() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   log.debug('Entering GET method');
   try {
     const configs = await mcpService.loadServerConfigs();
@@ -49,6 +53,9 @@ export async function GET() {
  * Create a new MCP server configuration. The request body is the server config.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   log.debug('Entering POST method');
   try {
     const config = (await request.json()) as MCPServerConfig;

@@ -3,12 +3,12 @@
 import React, { createContext, useContext, useCallback, useState, useEffect } from 'react';
 import {
   saveItem,
-  loadItem,
   StorageKey,
 } from '@/utils/storage';
 import { isSecretEnvVar } from '@/utils/shared/common';
 import { createLogger } from '@/utils/logger';
 import { Settings } from '@/shared/types/storage/storage';
+import { ENCRYPTION_UNLOCKED_EVENT } from '@/frontend/utils/encryptionLock';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/contexts/StorageContext');
@@ -26,6 +26,14 @@ interface StorageContextType {
   isUserEncryptionEnabled: () => Promise<boolean>;
   isLoading: boolean; // Loading state
   settings: Settings; // Application settings
+  /**
+   * True only once settings were genuinely read from persistent storage. While
+   * USER encryption is locked the settings route returns 423 and we fall back
+   * to defaults; in that case this stays false so consumers (e.g. the guided
+   * tour) don't act on fallback data. It flips to true after a successful
+   * (post-unlock) read.
+   */
+  settingsHydrated: boolean;
   updateSettings: (newSettings: Settings) => Promise<void>; // Update settings
 }
 
@@ -49,6 +57,7 @@ const StorageContext = createContext<StorageContextType>({
       checkOnStartup: false
     }
   },
+  settingsHydrated: false,
   updateSettings: async () => {},
 });
 
@@ -57,6 +66,9 @@ export const useStorage = () => useContext(StorageContext);
 export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Track hydration status
   const [isHydrated, setIsHydrated] = useState(false);
+  // Track whether settings were genuinely read from storage (vs. the locked
+  // 423 fallback to defaults). See StorageContextType.settingsHydrated.
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [globalEnvVars, setGlobalEnvVarsState] = useState<Record<string, { value: string, metadata: { isSecret: boolean } }>>({});
   const [settings, setSettings] = useState<Settings>({
     speech: {
@@ -208,6 +220,49 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, []);
 
+  // Load application settings (speech + update + onboarding) directly so we can
+  // tell a genuine persisted read from the locked (423) fallback. On success we
+  // mark settingsHydrated true; on a non-ok response (e.g. 423 while encryption
+  // is locked) we keep the defaults and leave settingsHydrated false so the
+  // guided tour won't auto-start on fallback data.
+  const loadSettings = useCallback(async () => {
+    const defaultSettings: Settings = {
+      speech: { enabled: true },
+      update: { checkOnStartup: false }
+    };
+    try {
+      const response = await fetch(
+        `/api/storage?key=${encodeURIComponent(StorageKey.SPEECH_SETTINGS)}&defaultValue=${encodeURIComponent(JSON.stringify(defaultSettings))}`
+      );
+      if (!response.ok) {
+        log.debug('loadSettings: settings read not ok, keeping defaults', { status: response.status });
+        return;
+      }
+      const data = await response.json();
+      log.debug('Loaded settings from storage', { settings: data.value });
+      setSettings(data.value ?? defaultSettings);
+      setSettingsHydrated(true);
+    } catch (error) {
+      log.warn('loadSettings: failed to load settings:', error);
+    }
+  }, []);
+
+  // Re-read settings after the user unlocks USER-mode encryption: the initial
+  // (locked) boot fell back to defaults with settingsHydrated=false, so this
+  // pulls in the real persisted values (incl. onboarding.completed) once the
+  // gated storage route succeeds.
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const onUnlocked = () => {
+      log.info('Encryption unlocked signal received; reloading settings');
+      loadSettings();
+    };
+    window.addEventListener(ENCRYPTION_UNLOCKED_EVENT, onUnlocked);
+    return () => window.removeEventListener(ENCRYPTION_UNLOCKED_EVENT, onUnlocked);
+  }, [loadSettings]);
+
   // Load initial models and global env vars after hydration
   useEffect(() => {
     const loadData = async () => {
@@ -250,17 +305,9 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setGlobalEnvVarsState({});
         }
         
-        // Load application settings (speech + update)
-        const loadedSettings = await loadItem<Settings>(StorageKey.SPEECH_SETTINGS, {
-          speech: {
-            enabled: true
-          },
-          update: {
-            checkOnStartup: false
-          }
-        });
-        log.debug('Loaded settings from storage', { settings: loadedSettings });
-        setSettings(loadedSettings);
+        // Load application settings (speech + update). Uses a dedicated helper
+        // that distinguishes a real read from the locked 423 fallback.
+        await loadSettings();
         
         setIsHydrated(true);
       } catch (error) {
@@ -270,7 +317,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     
     loadData();
-  }, [isEncryptionInitialized]);
+  }, [isEncryptionInitialized, loadSettings]);
 
   const encryptValue = useCallback(async (value: string, password?: string): Promise<string | null> => {
     log.debug('encryptValue: Entering method');
@@ -471,6 +518,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         isUserEncryptionEnabled,
         isLoading: !isHydrated,
         settings,
+        settingsHydrated,
         updateSettings,
       }}
     >
