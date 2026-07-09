@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
@@ -8,6 +9,9 @@ const log = createLogger('app/api/mcp/cancel/route');
  * API endpoint to cancel a tool execution in progress
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const searchParams = request.nextUrl.searchParams;
   const token = searchParams.get('token');
   const serverName = searchParams.get('serverName');

@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -14,6 +15,9 @@ type RouteContext = { params: Promise<{ name: string }> };
  * Get a single MCP server configuration by name.
  */
 export async function GET(_request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { name } = await params;
     const { config, error } = await getServerConfigByName(name);
@@ -42,6 +46,9 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
  * A body `name` that differs from the path triggers a rename and is validated.
  */
 export async function PUT(request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { name } = await params;
     const updates = (await request.json()) as Partial<MCPServerConfig>;
@@ -85,6 +92,9 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
  * Delete an MCP server configuration by name (disconnecting it first if connected).
  */
 export async function DELETE(_request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { name } = await params;
     const result = await mcpService.deleteServerConfig(name);

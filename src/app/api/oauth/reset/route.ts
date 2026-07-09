@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
@@ -11,6 +12,9 @@ const log = createLogger('api/oauth/reset');
  * This endpoint clears stored OAuth tokens and forces re-authentication
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { serverName } = await request.json();
 

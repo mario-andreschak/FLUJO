@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -8,6 +9,9 @@ import { v4 as uuidv4 } from 'uuid';
 const log = createLogger('app/api/storage/route');
 
 export async function GET(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   log.info(`Handling GET request [RequestID: ${requestId}]`);
   
@@ -34,6 +38,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   log.info(`Handling POST request [RequestID: ${requestId}]`);
   
@@ -57,6 +64,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const requestId = uuidv4();
   log.info(`Handling DELETE request [RequestID: ${requestId}]`);
   

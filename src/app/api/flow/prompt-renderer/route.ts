@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { createLogger } from '@/utils/logger';
 
@@ -11,6 +12,9 @@ const log = createLogger('api/flow/prompt-renderer');
  * @returns The rendered prompt
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     // Parse the request body
     const body = await request.json();

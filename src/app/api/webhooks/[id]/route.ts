@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createHash, timingSafeEqual } from 'crypto';
 // eslint-disable-next-line import/named
@@ -38,6 +39,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
     await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });

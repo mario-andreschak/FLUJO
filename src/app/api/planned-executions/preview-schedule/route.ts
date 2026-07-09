@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { validateSchedule, scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule';
@@ -12,6 +13,9 @@ const log = createLogger('app/api/planned-executions/preview-schedule/route');
  * Response: { valid: boolean, error?: string, nextRuns: string[] }
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const body = await request.json();
     const cron = typeof body?.cron === 'string' ? body.cron : '';

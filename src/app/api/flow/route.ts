@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
@@ -11,6 +12,9 @@ const log = createLogger('app/api/flow/route');
  * List all flows.
  */
 export async function GET() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const flows = await flowService.loadFlows();
     return json(flows, 200);
@@ -28,6 +32,9 @@ export async function GET() {
  * PUT /api/flow/{id} to update an existing flow).
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const flow = (await request.json()) as Flow;
 

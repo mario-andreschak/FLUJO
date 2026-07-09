@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { loadSpotlightCache, refreshSpotlightServers } from '@/backend/services/spotlight';
@@ -10,6 +11,9 @@ const log = createLogger('app/api/mcp-registry/spotlight/route');
  * POST below. `cache` is null when no refresh has completed yet.
  */
 export async function GET() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const cache = await loadSpotlightCache();
     return NextResponse.json({ success: true, cache });
@@ -27,6 +31,9 @@ export async function GET() {
  * the registry (the UI's Refresh button) and return the updated cache.
  */
 export async function POST() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const cache = await refreshSpotlightServers();
     return NextResponse.json({ success: true, cache });

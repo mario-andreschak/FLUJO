@@ -726,7 +726,10 @@ export async function isEncryptionInitialized(): Promise<boolean> {
 export async function isUserEncryptionEnabled(): Promise<boolean> {
   log.debug('isUserEncryptionEnabled: Entering method');
   const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-  return metadata !== null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
+  // `!= null` guards both null and undefined: the route lock gate (issue #77)
+  // calls this on every request, so it must never throw on a missing metadata
+  // value (e.g. an undefined store entry) before reading ENCRYPTION_TYPE.
+  return metadata != null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
 }
 
 /**

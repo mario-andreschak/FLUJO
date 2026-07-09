@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import simpleGit from 'simple-git';
 import path from 'path';
@@ -41,6 +42,9 @@ async function getCurrentVersion(): Promise<string> {
  * Fetches from origin and reports whether the local clone is behind its tracking branch.
  */
 export async function GET() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   const currentVersion = await getCurrentVersion();
 
   // Packaged installs (Docker/npm) can't git-pull themselves. Report the mode so
@@ -105,6 +109,9 @@ export async function GET() {
  * spawns a detached relauncher that restarts the server once this process exits.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   let action: string | undefined;
   try {
     const body = await request.json();

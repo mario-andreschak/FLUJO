@@ -90,6 +90,10 @@ export async function POST(req: NextRequest) {
         const authToken = await authenticate(password);
         if (!authToken) {
           log.error(`Authentication failed`, { requestId });
+          // Brute-force hardening: a small fixed delay on failed unlock attempts.
+          // PBKDF2 already makes each guess expensive; this adds a floor without
+          // leaking timing about the password. The password itself is never logged.
+          await new Promise((resolve) => setTimeout(resolve, 500));
           return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
         }
         

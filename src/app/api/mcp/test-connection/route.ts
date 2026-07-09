@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -16,6 +17,9 @@ const log = createLogger('app/api/mcp/test-connection/route');
  * send the configured custom headers (Authorization, X-SAP-*), which a browser fetch cannot.
  */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   log.debug('Entering POST method');
   try {
     const config = (await request.json()) as MCPServerConfig;

@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server'; // Import NextRequest
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -27,6 +28,9 @@ interface CreateConversationPayload {
 
 // --- GET Handler (Existing) ---
 export async function GET() {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const startTime = Date.now();
   const requestId = `conv-list-${Date.now()}`;
   log.info('Handling GET request for conversation list', { requestId });
@@ -136,6 +140,9 @@ export async function GET() {
 
 // --- POST Handler (New) ---
 export async function POST(req: NextRequest) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const startTime = Date.now();
   const requestId = `conv-create-${Date.now()}`;
   log.info('Handling POST request to create conversation', { requestId });

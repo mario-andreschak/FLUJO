@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { fetchProviderModels } from '../backend-provider-adapter';
@@ -5,6 +6,9 @@ import { fetchProviderModels } from '../backend-provider-adapter';
 const log = createLogger('app/api/model/provider/route');
 
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { baseUrl, modelId, searchTerm, apiKey } = await request.json();
 

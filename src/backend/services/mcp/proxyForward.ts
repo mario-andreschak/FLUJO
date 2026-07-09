@@ -14,9 +14,17 @@
  */
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { isLocked } from '@/utils/encryption/lockGate';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('backend/services/mcp/proxyForward');
+
+/**
+ * Message surfaced downstream when FLUJO is locked (issue #77, Stage 2). Kept in
+ * sync with the `encryption_locked` sentinel used by the HTTP route gate so an
+ * external MCP client can detect the locked state.
+ */
+const LOCKED_MESSAGE = 'FLUJO encryption is locked (encryption_locked). Unlock FLUJO to continue.';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -74,6 +82,9 @@ export async function isServerExposed(serverName: string): Promise<boolean> {
  * a genuine failure so the MCP SDK surfaces a proper JSON-RPC error.
  */
 export async function proxyListTools(serverName: string): Promise<{ tools: Tool[] }> {
+  if (await isLocked()) {
+    throw new Error(LOCKED_MESSAGE);
+  }
   const connect = await mcpService.connectServer(serverName);
   if (!connect.success) {
     throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
@@ -95,6 +106,12 @@ export async function proxyCallTool(
   toolName: string,
   args: Record<string, unknown>
 ): Promise<CallToolResult> {
+  if (await isLocked()) {
+    return {
+      content: [{ type: 'text', text: LOCKED_MESSAGE }],
+      isError: true,
+    };
+  }
   const connect = await mcpService.connectServer(serverName);
   if (!connect.success) {
     return {

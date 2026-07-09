@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -17,6 +18,9 @@ type RouteContext = { params: Promise<{ name: string }> };
  * surfaces "server not connected yet".
  */
 export async function GET(_request: NextRequest, { params }: RouteContext) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { name } = await params;
     const result = await mcpService.listServerTools(name);

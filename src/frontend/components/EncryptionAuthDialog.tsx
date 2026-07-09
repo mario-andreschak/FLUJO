@@ -20,6 +20,10 @@ import {
 } from '@mui/material';
 import { Visibility, VisibilityOff, LockOutlined } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import {
+  installEncryptionLockInterceptor,
+  ENCRYPTION_LOCKED_EVENT,
+} from '@/frontend/utils/encryptionLock';
 
 export default function EncryptionAuthDialog() {
   const { verifyKey, isEncryptionInitialized, isUserEncryptionEnabled } = useStorage();
@@ -88,6 +92,21 @@ export default function EncryptionAuthDialog() {
     
     checkEncryptionStatus();
   }, [isEncryptionInitialized, isUserEncryptionEnabled]);
+
+  // Global lockdown handling (issue #77): install the 423 interceptor once and
+  // re-open the lock screen whenever any request reports the server is locked
+  // (e.g. the process was restarted and lost its in-memory unlock state).
+  useEffect(() => {
+    installEncryptionLockInterceptor();
+    const onLocked = () => {
+      log.info('Encryption locked signal received; showing lock screen');
+      setIsAuthenticated(false);
+      setIsCheckingStatus(false);
+      setIsOpen(true);
+    };
+    window.addEventListener(ENCRYPTION_LOCKED_EVENT, onLocked);
+    return () => window.removeEventListener(ENCRYPTION_LOCKED_EVENT, onLocked);
+  }, []);
 
   const handleVerify = async () => {
     if (!password.trim()) {

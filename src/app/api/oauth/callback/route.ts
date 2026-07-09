@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
@@ -105,6 +106,9 @@ async function handleCallback(request: NextRequest, params: CallbackParams): Pro
 
 /** GET callback - the form most authorization servers use. */
 export async function GET(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { searchParams } = new URL(request.url);
     return await handleCallback(request, {
@@ -121,6 +125,9 @@ export async function GET(request: NextRequest) {
 
 /** POST callback - some authorization servers submit the result as form data instead. */
 export async function POST(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const formData = await request.formData();
     return await handleCallback(request, {

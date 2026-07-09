@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -13,6 +14,9 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
     const execution = await getSchedulerService().get(id);
@@ -34,6 +38,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
     const patch = await request.json();
@@ -57,6 +64,9 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
+
   try {
     const { id } = await params;
     const result = await getSchedulerService().delete(id);

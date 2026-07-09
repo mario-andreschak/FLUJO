@@ -1,3 +1,4 @@
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -20,6 +21,9 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+
   const { conversationId } = await params;
   if (!conversationId) {
     return new Response('Missing conversationId', { status: 400 });
