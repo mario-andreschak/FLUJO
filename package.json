@@ -21,7 +21,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "prepublishOnly": "npm run build",
-    "version": "node scripts/sync-version.mjs && git add -A src README.md",
+    "version": "node scripts/sync-version.mjs && git add -A src README.md githubpages/index.html",
     "release": "npm version minor -m \"Bump version to %s\" && npm publish"
   },
   "dependencies": {

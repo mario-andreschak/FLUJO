@@ -25,6 +25,10 @@ const targets = [
     file: 'README.md',
     pattern: /(badge\/version-)\d+\.\d+\.\d+(-green)/,
   },
+  {
+    file: 'githubpages/index.html',
+    pattern: /(<span id="app-version">v)\d+\.\d+\.\d+(<\/span>)/,
+  },
 ];
 
 let failed = false;
