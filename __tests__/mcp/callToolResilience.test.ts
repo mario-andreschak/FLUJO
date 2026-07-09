@@ -48,7 +48,7 @@ const makeClient = () => ({
 beforeEach(() => {
   createNewClientMock.mockReset();
   callToolMock.mockReset();
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
 });
 
 describe('MCPService.callTool', () => {

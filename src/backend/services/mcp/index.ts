@@ -9,13 +9,24 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 
-// Global recovery map to persist clients across hot reloads
+// MCP connection state must be PROCESS-global, never per module instance: Next.js
+// evaluates this module once per module graph (route bundles, the instrumentation/
+// scheduler graph, every dev hot reload), so `export const mcpService = new MCPService()`
+// yields several coexisting instances. A live client wraps process-wide state (an OS
+// child process or an HTTP session), so all instances must share ONE map of them.
 declare global {
+  // THE client map, keyed by server name — the single source of truth every MCPService
+  // instance reads and writes through its `clients` getter. Historically each instance
+  // had a private map seeded once from a global "recovery" map; that private copy is
+  // exactly what caused the poisoned-client bug: one instance tearing down a client
+  // (e.g. after an OAuth token refresh changed the transport's config key) left every
+  // other instance holding the closed client, whose aborted transport made each tool
+  // call fail instantly with "This operation was aborted" until FLUJO was restarted.
   // eslint-disable-next-line no-var
-  var __mcp_recovery: Map<string, Client> | undefined;
+  var __mcp_clients: Map<string, Client> | undefined;
   // Names of servers whose connection attempt is currently in flight (initial
   // startup sweep or a reconnect). Global-backed for the same reason as
-  // __mcp_recovery: the module instance that starts the servers may not be the
+  // __mcp_clients: the module instance that starts the servers may not be the
   // one that later serves getServerStatus(), and the status route must still be
   // able to see that a startup is in progress so it can report "connecting"
   // instead of a misleading "configured but not connected" error.
@@ -30,14 +41,14 @@ declare global {
   // A handler may only clean up / schedule reconnection when its transport IS the one
   // registered here; FLUJO-initiated closes deregister BEFORE closing, so their close
   // events are ignored. Global-backed for the same cross-module-instance reason as
-  // __mcp_recovery.
+  // __mcp_clients.
   // eslint-disable-next-line no-var
   var __mcp_active_transports: Map<string, Transport> | undefined;
 }
 
-// Initialize the global recovery map if it doesn't exist
-if (typeof global.__mcp_recovery === 'undefined') {
-  global.__mcp_recovery = new Map<string, Client>();
+// Initialize the global client map if it doesn't exist
+if (typeof global.__mcp_clients === 'undefined') {
+  global.__mcp_clients = new Map<string, Client>();
 }
 if (typeof global.__mcp_connecting === 'undefined') {
   global.__mcp_connecting = new Set<string>();
@@ -72,6 +83,7 @@ import {
   formatErrorChain,
   formatErrorResponse,
   isAuthRequiredError,
+  isClientConnectionClosed,
   isTransientStreamError
 } from '@/utils/mcp/utils';
 import { encryptApiKey } from '@/backend/services/model/encryption';
@@ -99,7 +111,6 @@ const log = createLogger('backend/services/mcp/index');
  * while maintaining compatibility with the MCP SDK.
  */
 export class MCPService {
-  private clients: Map<string, Client> = new Map();
   private stderrLogs: Map<string, string[]> = new Map(); // Store stderr logs for each server
   // Last connection failure per server. Unlike stderrLogs (which is reset at the start of
   // every connection attempt to capture a fresh run), this persists until the server next
@@ -108,9 +119,18 @@ export class MCPService {
   private lastConnectionError: Map<string, string> = new Map();
   // De-dupes concurrent connectServer() calls for the same server (see connectServer below).
   private inFlightConnects: Map<string, Promise<MCPServiceResponse>> = new Map();
-  private recover_attempted: boolean = false; // Flag to track if recovery has been attempted
   private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
   private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
+
+  // Connected clients per server name. Global-backed (see __mcp_clients) so EVERY
+  // MCPService instance shares the one map: a client registered or deregistered by any
+  // instance is immediately visible to all others. There is deliberately no per-instance
+  // copy — N caches with one invalidation path is what poisoned the scheduler with
+  // closed clients ("This operation was aborted") after another instance rebuilt a
+  // connection.
+  private get clients(): Map<string, Client> {
+    return global.__mcp_clients!;
+  }
 
   // Servers with an in-flight connection attempt. Global-backed (see __mcp_connecting)
   // so the set is shared across module instances / hot reloads.
@@ -149,59 +169,7 @@ export class MCPService {
    */
   private deregisterClient(serverName: string): void {
     this.clients.delete(serverName);
-    this.removeFromGlobalRecovery(serverName);
     this.activeTransports.delete(serverName);
-  }
-
-  /**
-   * Constructor - attempt to recover clients from global recovery map
-   */
-  constructor() {
-    this.attemptRecovery();
-  }
-  
-  /**
-   * Attempt to recover clients from global recovery map
-   */
-  private attemptRecovery(): void {
-    if (!this.recover_attempted && global.__mcp_recovery && global.__mcp_recovery.size > 0) {
-      log.info(`Attempting to recover ${global.__mcp_recovery.size} clients from global recovery map`);
-      
-      // Copy clients from global recovery map
-      global.__mcp_recovery.forEach((client, serverName) => {
-        this.clients.set(serverName, client);
-        log.info(`Recovered client for server: ${serverName}`);
-      });
-    }
-    
-    // Mark recovery as attempted
-    this.recover_attempted = true;
-  }
-  
-  /**
-   * Add a client to the global recovery map
-   */
-  private addToGlobalRecovery(serverName: string, client: Client): void {
-    if (!global.__mcp_recovery) {
-      global.__mcp_recovery = new Map<string, Client>();
-    }
-    
-    global.__mcp_recovery.set(serverName, client);
-    log.debug(`Added client for server ${serverName} to global recovery map`);
-  }
-
-  /**
-   * Remove a client from the global recovery map
-   */
-  private removeFromGlobalRecovery(serverName: string): void {
-    if (!global.__mcp_recovery) {
-      return;
-    }
-    
-    if (global.__mcp_recovery.has(serverName)) {
-      global.__mcp_recovery.delete(serverName);
-      log.debug(`Removed client for server ${serverName} from global recovery map`);
-    }
   }
 
   /**
@@ -327,24 +295,20 @@ export class MCPService {
    * Get a client by server name
    */
   getClient(serverName: string): Client | undefined {
-    let client = this.clients.get(serverName);
+    const client = this.clients.get(serverName);
 
-    // Cross-instance bridge. In production (`next start`) the module instance that ran
-    // startup and CONNECTED the servers is usually NOT the one serving this request, so
-    // this.clients is empty here even though the server is connected and healthy — which
-    // is why every server showed a misleading "configured but not connected" error right
-    // after startup while clicking a card (which force-connects in THIS instance) fixed
-    // it. The live client lives in the shared global recovery map (the same mechanism
-    // that already bridges the "connecting" status across instances), so adopt it.
-    // onclose/onerror delete dead clients from that map, so we never adopt a known-dead
-    // one; a stale-but-present client self-heals on use via listServerTools/callTool.
-    if (!client) {
-      const recovered = global.__mcp_recovery?.get(serverName);
-      if (recovered) {
-        this.clients.set(serverName, recovered);
-        client = recovered;
-        log.debug(`getClient: adopted ${serverName} from the global recovery map`);
-      }
+    // A client whose connection is already closed (transport detached, or its abort
+    // signal fired — e.g. torn down elsewhere between polls) can never serve another
+    // request: HTTP transports would reject every call instantly with AbortError
+    // "This operation was aborted". Evict it and report "no client" so every caller's
+    // existing missing-client path (callTool's pre-call reconnect, listWithReconnect,
+    // scheduleConnectionRetry) rebuilds a fresh connection instead of reusing a corpse.
+    // The map is shared across instances, so if another instance already replaced the
+    // entry with a fresh client, we naturally see the fresh one here — never evict it.
+    if (client && isClientConnectionClosed(client)) {
+      log.warn(`getClient: client for ${serverName} has a closed/aborted connection — evicting it`);
+      this.clients.delete(serverName);
+      return undefined;
     }
 
     log.debug(`getClient: Looking for client: ${serverName}`, client ? 'Found' : 'Not found');
@@ -508,14 +472,16 @@ export class MCPService {
       let client = this.clients.get(config.name);
 
       // If we already have a client, reuse it - but only if it is still valid for the
-      // current config. shouldRecreateClient catches transport-type / URL / command changes
-      // that would otherwise leave us talking to a client built for a stale config.
+      // current config. shouldRecreateClient catches a locally-CLOSED connection (whose
+      // aborted transport would fail every call instantly) plus transport-type / URL /
+      // command / auth-material changes that would otherwise leave us talking to a
+      // client built for a stale config.
       //
-      // Note: this does NOT detect a dead transport (e.g. an expired streamable-HTTP
-      // session) - the presence of a client object in the map says nothing about whether
-      // the underlying connection is alive. Liveness is verified at the point of use in
-      // listServerTools()/callTool(), which reconnect-and-retry on failure. Keeping this
-      // check cheap (no network round-trip) preserves the fast path for the common case.
+      // Note: this still cannot detect a REMOTELY-dead connection (e.g. an expired
+      // streamable-HTTP session the server dropped) - that is only observable by using
+      // it, so it is healed at the point of use in listServerTools()/callTool(). All
+      // checks here are cheap and local (no network round-trip), preserving the fast
+      // path for the common case.
       if (client) {
         const { needsNewClient, reason } = shouldRecreateClient(client, config);
         if (!needsNewClient) {
@@ -556,9 +522,13 @@ export class MCPService {
         });
       }
 
-      // Connect and register event handlers
-      await client.connect(transport);
-
+      // Register FLUJO's transport event handlers BEFORE client.connect(): the SDK's
+      // Protocol.connect() wraps whatever handlers are already present and CHAINS them
+      // ahead of its own (_onclose/_onerror). Assigning after connect() — as this code
+      // once did — silently REPLACED the SDK's wrapper, so the Client never learned its
+      // transport had closed: pending requests were never rejected with "Connection
+      // closed", client.transport stayed attached, and later calls surfaced as the
+      // cryptic AbortError "This operation was aborted" from the aborted fetch signal.
       transport.onclose = () => {
         // Only act if THIS transport is still the registered one for the server.
         // Two cases must be ignored: (a) a zombie process from a replaced connection
@@ -686,13 +656,16 @@ export class MCPService {
         });
       };
 
-      // Store the new client and register its transport as the CURRENT one for this
-      // server — the reference the onclose/onerror stale guards compare against.
+      // Handshake. Both handlers above are inert until the transport is registered as
+      // the CURRENT one below (their stale guard sees activeTransports unset), so a
+      // failure during connect surfaces only through this call's catch.
+      await client.connect(transport);
+
+      // Store the new client (in the shared cross-instance map) and register its
+      // transport as the CURRENT one for this server — the reference the
+      // onclose/onerror stale guards compare against.
       this.clients.set(config.name, client);
       this.activeTransports.set(config.name, transport);
-
-      // Add to global recovery map
-      this.addToGlobalRecovery(config.name, client);
 
       // Connected successfully - clear any persisted failure from previous attempts,
       // and cancel any pending retry so an old timer can't fire against the fresh
@@ -952,18 +925,15 @@ export class MCPService {
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
     
-    // Resolve via getClient (not the local this.clients map): in production the
-    // live client is often owned by a DIFFERENT module instance and only survives
-    // in the shared global recovery map. Looking it up locally made a config/PAT
-    // update's teardown a no-op, leaving the stale-token client alive in the
-    // recovery map for the scheduler to adopt (-> `unauthorized`).
+    // Resolve via getClient: the shared map is cross-instance, and getClient also
+    // evicts a client whose connection is already closed — there is nothing left to
+    // "disconnect" for one of those, only references to purge.
     const client = this.getClient(serverName);
     if (!client) {
       log.warn(`disconnectServer: Server ${serverName} not found in clients map`);
-      // Even without a live client, purge any lingering global references so a
-      // stale entry can never be adopted by another instance after this call.
-      this.removeFromGlobalRecovery(serverName);
-      this.activeTransports.delete(serverName);
+      // Even without a live client, purge any lingering references so a stale entry
+      // can never be observed by another instance after this call.
+      this.deregisterClient(serverName);
       return { success: false, error: `Server ${serverName} not found` };
     }
 
@@ -1135,7 +1105,7 @@ export class MCPService {
       return { ...emptyResult, error };
     }
 
-    let client = this.clients.get(serverName);
+    let client = this.getClient(serverName);
     if (!client) {
       log.warn(`listWithReconnect: Client not found for ${serverName}`);
     }
@@ -1183,7 +1153,7 @@ export class MCPService {
    */
   async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
     log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
-    const client = this.clients.get(serverName);
+    const client = this.getClient(serverName);
     if (!client) {
       log.warn(`readResource: Client not found for ${serverName}`);
     }
@@ -1205,7 +1175,7 @@ export class MCPService {
    */
   async getPrompt(serverName: string, promptName: string, args?: Record<string, string>): Promise<MCPServiceResponse<MCPGetPromptResult>> {
     log.debug(`getPrompt: Entering method for server ${serverName}, prompt ${promptName}`);
-    const client = this.clients.get(serverName);
+    const client = this.getClient(serverName);
     if (!client) {
       log.warn(`getPrompt: Client not found for ${serverName}`);
     }
@@ -1378,17 +1348,16 @@ export class MCPService {
     // Handle connection state based on config changes.
     if (isRename) {
       // The server now lives under a new name. Tear down everything still keyed by the
-      // OLD name — the live client (and its child process), the recovery entry, retry
-      // timers, captured stderr and the last connection error — so the rename doesn't
-      // leak a dangling process or surface stale status under the old name. Then drive
-      // the connection under the NEW name.
+      // OLD name — the live client (and its child process), retry timers, captured
+      // stderr and the last connection error — so the rename doesn't leak a dangling
+      // process or surface stale status under the old name. Then drive the connection
+      // under the NEW name.
       if (this.clients.has(serverName)) {
         await this.disconnectServer(serverName);
       } else {
         this.clearRetryTimer(serverName);
         this.connectionRetryAttempts.delete(serverName);
       }
-      this.removeFromGlobalRecovery(serverName);
       this.stderrLogs.delete(serverName);
       this.lastConnectionError.delete(serverName);
 
@@ -1535,9 +1504,6 @@ export class MCPService {
    * Get the connection status of an MCP server
    */
   async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
-    // force recovery
-    this.getClient(serverName);
-
     // Get the config directly from storage
     const config = await this.getServerConfig(serverName);
     if (!config) {
@@ -1597,10 +1563,10 @@ export class MCPService {
     // The last persisted connection failure (survives the per-attempt stderr buffer reset).
     const persistedError = this.lastConnectionError.get(serverName);
 
-    // Check if the client exists — via getClient so we adopt a client connected by the
-    // startup module instance (the global recovery map), not just one in THIS instance's
-    // local map. Without this, a freshly started server shows "not connected" on the page
-    // even though startup connected it in a different instance.
+    // Check if the client exists — via getClient so a closed/aborted connection reads
+    // as "not connected" instead of lying "connected" until something trips over it.
+    // The map itself is shared across module instances, so a client connected by the
+    // startup instance is visible here without any adoption step.
     const clientExists = !!this.getClient(serverName);
 
     if (clientExists) {

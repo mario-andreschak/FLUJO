@@ -37,8 +37,8 @@ const log = createLogger('backend/services/mcp/roots');
 //
 // Registrations are keyed by node id (last write wins) and survive until the
 // node next runs with different — or no — roots. Like server-level roots this
-// is advisory scoping, not a sandbox. Global-backed for the same hot-reload
-// reason as __mcp_recovery in ./index.ts.
+// is advisory scoping, not a sandbox. Global-backed for the same cross-module-
+// instance/hot-reload reason as __mcp_clients in ./index.ts.
 // ---------------------------------------------------------------------------
 declare global {
   // eslint-disable-next-line no-var

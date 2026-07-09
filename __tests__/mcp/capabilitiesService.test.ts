@@ -62,7 +62,7 @@ beforeEach(() => {
   readResourceMock.mockReset();
   listPromptsMock.mockReset();
   getPromptMock.mockReset();
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
 });
 
 describe('MCPService.listServerResources', () => {

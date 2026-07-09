@@ -67,7 +67,7 @@ function streamableServer(name: string, oauthTokens: Record<string, unknown> | u
 
 beforeEach(() => {
   serverConfigs.length = 0;
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
   global.__mcp_connecting?.clear();
   global.__mcp_starting_up = false;
   jest.clearAllMocks();

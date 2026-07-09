@@ -46,7 +46,7 @@ import { MCPService } from '@/backend/services/mcp';
 
 beforeEach(() => {
   // Reset the cross-instance globals the service reads, so each test starts clean.
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
   global.__mcp_connecting?.clear();
   global.__mcp_starting_up = false;
 });

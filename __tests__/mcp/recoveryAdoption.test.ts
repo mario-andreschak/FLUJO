@@ -1,15 +1,16 @@
 /**
- * Regression test for the "all servers show 'configured but not connected' right after
- * startup" bug.
+ * Cross-instance client visibility.
  *
- * In production (`next start`) the module instance that runs startup and CONNECTS the MCP
- * servers is usually NOT the instance that serves the status API. Connected clients live in
- * the shared `global.__mcp_recovery` map, but the serving instance only bulk-copied it ONCE
- * at construction (when it was still empty), so it never saw the servers the startup
- * instance connected afterwards — and reported a misleading error for healthy servers.
+ * In production (`next start`) — and in dev after hot reloads — Next.js evaluates the MCP
+ * service module once per module graph, so several MCPService instances coexist. The
+ * instance that runs startup and CONNECTS the servers is usually NOT the one serving a
+ * given request.
  *
- * getClient now adopts a client from the global recovery map on demand, so any instance
- * sees a server connected by any other instance.
+ * Historically each instance kept a private client map seeded ("recovered") from a shared
+ * global map once at construction, then bridged on demand in getClient. Both variants left
+ * stale views behind. The client map is now global-backed (`global.__mcp_clients`): every
+ * instance reads and writes the SAME map, so a client connected by any instance is
+ * immediately visible to all others — including instances constructed before the connect.
  */
 
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
@@ -40,28 +41,28 @@ import { MCPService } from '@/backend/services/mcp';
 const fakeClient = { transport: {}, close: jest.fn() } as any;
 
 beforeEach(() => {
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
   global.__mcp_connecting?.clear();
   global.__mcp_starting_up = false; // startup finished
 });
 
-describe('cross-instance client adoption', () => {
-  it('getClient adopts a client added to the global recovery map AFTER construction', () => {
-    // Instance B is constructed while the global map is still empty (mirrors a route
+describe('cross-instance client visibility', () => {
+  it('getClient sees a client another instance registered AFTER this instance was constructed', () => {
+    // Instance B is constructed while the shared map is still empty (mirrors a route
     // instance created before/around startup).
     const instanceB = new MCPService();
     expect(instanceB.getClient('srv')).toBeUndefined();
 
-    // The startup instance later connects 'srv' and registers it globally.
-    global.__mcp_recovery!.set('srv', fakeClient);
+    // The startup instance later connects 'srv' and registers it in the shared map.
+    global.__mcp_clients!.set('srv', fakeClient);
 
-    // Instance B must now see it (the bug: old code returned undefined forever).
+    // Instance B must see it live (the bug: a private per-instance copy stayed empty).
     expect(instanceB.getClient('srv')).toBe(fakeClient);
   });
 
   it('getServerStatus reports "connected" for a server connected by another instance', async () => {
     const instanceB = new MCPService();
-    global.__mcp_recovery!.set('srv', fakeClient);
+    global.__mcp_clients!.set('srv', fakeClient);
 
     const status = await instanceB.getServerStatus('srv');
     expect(status.status).toBe('connected');

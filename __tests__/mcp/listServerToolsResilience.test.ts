@@ -55,7 +55,7 @@ beforeEach(() => {
   // so a client seeded in one test does not get recovered into the next MCPService.
   createNewClientMock.mockReset();
   listToolsMock.mockReset();
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
 });
 
 describe('MCPService.listServerTools', () => {

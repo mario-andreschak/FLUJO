@@ -2,11 +2,36 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { getDataDir } from '@/utils/paths';
 
 const log = createLogger('app/api/mcp/utils');
+
+/**
+ * Whether a client's underlying connection has already been torn down.
+ *
+ * The signal is the transport's internal AbortController: every SDK transport
+ * (streamable HTTP, SSE, stdio) creates it in start() and aborts it in close(). For
+ * HTTP transports every subsequent send() passes this signal to fetch, which then
+ * rejects INSTANTLY with AbortError "This operation was aborted" — the poisoned-client
+ * failure mode. The controller is never aborted while healthy, so `aborted` is a
+ * definitive "this connection can never work again". Cheap and local — no network.
+ *
+ * Deliberately answers false when there is nothing to inspect: a MISSING transport is
+ * ambiguous (a never-connected client looks the same as one the SDK detached on close),
+ * and the detach paths all run the deregistering onclose handler anyway.
+ *
+ * Reaches into the SDK-private `_abortController` (same pattern as the `_url` /
+ * `_process` / `_serverParams` peeks elsewhere in the MCP service); an absent field
+ * (not-yet-started transport, future SDK change) safely reads as "open".
+ */
+export function isClientConnectionClosed(client: Client): boolean {
+  const controller = (client.transport as { _abortController?: AbortController } | undefined)
+    ?._abortController;
+  return controller?.signal.aborted === true;
+}
 
 /**
  * Check if a string is likely a filepath

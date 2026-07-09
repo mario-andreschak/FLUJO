@@ -45,7 +45,7 @@ beforeEach(() => {
   loadServerConfigsMock.mockReset().mockResolvedValue([
     { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
   ]);
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
 });
 
 describe('updateServerConfig on a connected, still-enabled server', () => {

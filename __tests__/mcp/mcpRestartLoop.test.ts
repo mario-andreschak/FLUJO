@@ -86,7 +86,7 @@ describe('MCPService restart-loop protection', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
-    global.__mcp_recovery?.clear();
+    global.__mcp_clients?.clear();
     global.__mcp_connecting?.clear();
     global.__mcp_active_transports?.clear();
     global.__mcp_starting_up = false;

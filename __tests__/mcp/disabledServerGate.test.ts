@@ -60,7 +60,7 @@ beforeEach(() => {
   listToolsMock.mockReset();
   callToolMock.mockReset();
   listResourcesMock.mockReset();
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
 });
 
 describe('disabled-server hard gate (issue #54)', () => {

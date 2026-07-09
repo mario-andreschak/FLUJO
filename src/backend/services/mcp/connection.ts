@@ -11,6 +11,7 @@ import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPStdioConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { ChildProcess } from 'child_process';
 import { createOAuthClientProvider } from './oauth';
+import { isClientConnectionClosed } from '@/utils/mcp/utils';
 import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
 import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
 import { getDataDir } from '@/utils/paths';
@@ -421,6 +422,17 @@ export function shouldRecreateClient(
   config: MCPServerConfig
 ): { needsNewClient: boolean; reason?: string } {
   log.debug('Entering shouldRecreateClient method');
+
+  // A closed connection can never serve another request — for HTTP transports the
+  // aborted internal signal makes every send() reject instantly with AbortError
+  // ("This operation was aborted"). connectServer would otherwise short-circuit on
+  // the map entry as "already connected" and hand the corpse back to the caller.
+  // This is a LIVENESS fact, not a config change, so it cannot re-trigger the
+  // restart death-spiral this function's raw-key comparisons guard against: a
+  // healthy connection never reads as closed.
+  if (isClientConnectionClosed(client)) {
+    return { needsNewClient: true, reason: 'Existing connection is closed' };
+  }
 
   // A change to a connect-time-negotiated client capability (sampling) must rebuild the
   // client: it alters both the declared capability (none<->some) and the config the

@@ -52,7 +52,7 @@ const makeClient = () => ({
 beforeEach(() => {
   createNewClientMock.mockReset();
   createTransportMock.mockClear();
-  global.__mcp_recovery?.clear();
+  global.__mcp_clients?.clear();
   _resetNodeRootsForTests();
 });
 
