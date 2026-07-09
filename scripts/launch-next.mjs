@@ -21,6 +21,9 @@
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 /**
  * Return a copy of `baseEnv` with FLUJO's TLS/CA settings applied:
@@ -68,11 +71,22 @@ function launchNext(passthroughArgs) {
   ].filter(Boolean).join(', ');
   console.log(`[FLUJO] Starting next ${passthroughArgs.join(' ')}${tlsSummary ? ` (${tlsSummary})` : ''}`);
 
-  // On Windows the resolved binary is next.cmd, which requires a shell to execute.
-  const child = spawn('next', passthroughArgs, {
+  // Resolve Next's own CLI from node_modules and run it with the current Node binary.
+  // Never rely on a `next` on PATH: npm injects node_modules/.bin into PATH for `npm run`
+  // scripts, but this launcher is also invoked directly (e.g. the Docker CMD), where that
+  // PATH entry is absent and `spawn('next')` fails with ENOENT. Resolving the JS entry and
+  // spawning `node <entry>` works identically on every platform and needs no shell.
+  let nextBin;
+  try {
+    nextBin = require.resolve('next/dist/bin/next');
+  } catch (error) {
+    console.error('[FLUJO] Could not locate the Next.js binary in node_modules. Run `npm install` first.', error);
+    process.exit(1);
+  }
+
+  const child = spawn(process.execPath, [nextBin, ...passthroughArgs], {
     stdio: 'inherit',
     env,
-    shell: process.platform === 'win32',
   });
 
   child.on('error', error => {
