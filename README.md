@@ -208,17 +208,24 @@ A searchable `/docs` page inside the app documents every REST endpoint FLUJO exp
 On any machine with Docker, start FLUJO with one command:
 
 ```bash
-docker compose up
+docker compose up --build
 ```
 
 Then open http://localhost:4200.
 
+> Use `--build` (not a bare `docker compose up`). The default compose file
+> **builds the image locally** from this repo. A plain `docker compose up`
+> only builds when no image exists yet — after you update the code it silently
+> reuses the previously built image and runs the *old* version. `--build`
+> rebuilds when the source changed and is a fast no-op when it hasn't.
+
 - **Your data persists** in the named volumes `flujo-db` (flows, encrypted keys,
   MCP configs, chat history) and `flujo-mcp-servers` (installed MCP server clones),
   so it survives `docker compose down` / `up`.
-- **Updating**: pull a newer image instead of the in-app updater —
-  `docker compose pull && docker compose up -d`. FLUJO detects it is running in a
-  container and shows this in the update settings.
+- **Updating**: use `git pull && docker compose up --build` instead of the
+  in-app updater. FLUJO detects it is running in a container and shows this in
+  the update settings. (`docker compose pull` only helps if you switched the
+  service to a published `image:` — the default builds locally.)
 - **Private/corporate CA** for HTTPS MCP servers: mount your CA file and set
   `FLUJO_EXTRA_CA_CERTS` to its path (see the commented `environment:` block in
   `docker-compose.yml`).

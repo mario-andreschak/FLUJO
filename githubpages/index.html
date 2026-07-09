@@ -750,10 +750,10 @@ footer {
       <div class="tab-panel" data-panel="docker">
         <div class="codebox">
           <span class="prompt mono">$</span>
-          <code>git clone https://github.com/mario-andreschak/FLUJO.git &amp;&amp; cd FLUJO &amp;&amp; docker compose up</code>
-          <button class="copy-btn" data-copy="git clone https://github.com/mario-andreschak/FLUJO.git && cd FLUJO && docker compose up">Copy</button>
+          <code>git clone https://github.com/mario-andreschak/FLUJO.git &amp;&amp; cd FLUJO &amp;&amp; docker compose up --build</code>
+          <button class="copy-btn" data-copy="git clone https://github.com/mario-andreschak/FLUJO.git && cd FLUJO && docker compose up --build">Copy</button>
         </div>
-        <p class="note">Your flows, keys, and MCP servers persist in named volumes across restarts. The port is bound to localhost only — FLUJO has no auth layer, so don't publish it without a reverse proxy.</p>
+        <p class="note">Your flows, keys, and MCP servers persist in named volumes across restarts. The port is bound to localhost only — FLUJO has no auth layer, so don't publish it without a reverse proxy. To update later, <code>git pull</code> then re-run the same command — <code>--build</code> rebuilds the image with the new code (plain <code>docker compose up</code> would reuse the cached image and silently run the old version).</p>
       </div>
     </div>
     <p style="margin-top: 18px; color: var(--text-dim); font-size: 0.9rem;">
