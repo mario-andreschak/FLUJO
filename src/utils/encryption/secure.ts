@@ -386,8 +386,13 @@ export async function migrateToUserEncryption(password: string): Promise<boolean
     // Save the updated metadata
     await saveItem(StorageKey.ENCRYPTION_KEY, newMetadata);
 
-    // In a real implementation, we would need to re-encrypt all sensitive data
-    // For now, we'll just return success
+    // No re-encryption of stored secrets is needed here: the DEK value itself is
+    // unchanged — this migration only re-wraps the SAME DEK under a new
+    // (password-derived) wrapping key (see the .toString(Utf8) note above and
+    // the single-DEK invariant in issue #81). Every secret already written under
+    // the DEFAULT-mode DEK stays valid and decryptable under USER mode. Do NOT
+    // "fix" this into a real re-encrypt pass — that is unnecessary and risky
+    // (see closed issue #79 for why).
 
     return true;
   } catch (error) {
