@@ -36,6 +36,15 @@ export default function EncryptionSettings() {
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // After setting or changing the custom password the encryption state changes
+  // app-wide (lock screen, status chip, session flags). Reload the page once so
+  // every consumer re-evaluates from a clean load instead of leaving stale UI.
+  const scheduleReload = () => {
+    if (typeof window !== 'undefined') {
+      setTimeout(() => window.location.reload(), 800);
+    }
+  };
+
   useEffect(() => {
     const checkEncryption = async () => {
       const initialized = await isEncryptionInitialized();
@@ -84,6 +93,7 @@ export default function EncryptionSettings() {
       setNewKey('');
       setConfirmKey('');
       setIsInitialized(true);
+      scheduleReload();
     } catch (error) {
       setMessage({
         type: 'error',
@@ -131,6 +141,7 @@ export default function EncryptionSettings() {
         });
         setCurrentKey('');
         setChangeNewKey('');
+        scheduleReload();
       } else {
         setMessage({
           type: 'error',

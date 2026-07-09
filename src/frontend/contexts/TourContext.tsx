@@ -34,7 +34,7 @@ const TourContext = createContext<TourContextType>({
 export const useTour = () => useContext(TourContext);
 
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { settings, updateSettings, isLoading } = useStorage();
+  const { settings, updateSettings, isLoading, settingsHydrated } = useStorage();
   const [isActive, setIsActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   // Guard so the first-run auto-start only fires once per app load.
@@ -76,10 +76,18 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setStepIndex((idx) => Math.max(0, idx - 1));
   }, []);
 
-  // First-run auto-start: once settings have hydrated, launch the tour if the
-  // user has never completed it.
+  // First-run auto-start: once settings have been genuinely read from storage,
+  // launch the tour if the user has never completed it.
+  //
+  // We gate on `settingsHydrated` (a real persisted read), NOT just `!isLoading`:
+  // when USER-mode encryption is locked on boot, the settings route returns 423
+  // and StorageContext falls back to defaults (onboarding.completed undefined).
+  // Auto-starting there would pop the tour underneath the unlock dialog and,
+  // because the one-shot latch would be consumed, it would re-appear on every
+  // restart (issue #83). Keeping the latch armed until a genuine hydration means
+  // a locked boot is ignored and the true flag is read after unlock.
   useEffect(() => {
-    if (isLoading || autoStartChecked.current) {
+    if (isLoading || !settingsHydrated || autoStartChecked.current) {
       return;
     }
     autoStartChecked.current = true;
@@ -87,7 +95,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       log.info('First run detected — auto-starting guided tour');
       startTour();
     }
-  }, [isLoading, settings.onboarding?.completed, startTour]);
+  }, [isLoading, settingsHydrated, settings.onboarding?.completed, startTour]);
 
   return (
     <TourContext.Provider value={{ isActive, stepIndex, startTour, next, back, endTour }}>

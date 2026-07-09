@@ -12,6 +12,13 @@
  */
 
 export const ENCRYPTION_LOCKED_EVENT = 'flujo:encryption-locked';
+/**
+ * Dispatched (by `EncryptionAuthDialog`) after the user successfully unlocks
+ * USER-mode encryption. Consumers that fell back to defaults while the backend
+ * was locked (returning 423) — e.g. `StorageContext` settings hydration — can
+ * listen for this to re-read their data now that gated routes will succeed.
+ */
+export const ENCRYPTION_UNLOCKED_EVENT = 'flujo:encryption-unlocked';
 export const LOCKED_ERROR_CODE = 'encryption_locked';
 
 let installed = false;

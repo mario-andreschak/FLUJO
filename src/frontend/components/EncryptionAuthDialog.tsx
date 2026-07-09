@@ -23,6 +23,7 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import {
   installEncryptionLockInterceptor,
   ENCRYPTION_LOCKED_EVENT,
+  ENCRYPTION_UNLOCKED_EVENT,
 } from '@/frontend/utils/encryptionLock';
 
 export default function EncryptionAuthDialog() {
@@ -129,6 +130,12 @@ export default function EncryptionAuthDialog() {
         log.info('Authentication successful');
         setIsAuthenticated(true);
         setIsOpen(false);
+        // Signal consumers that fell back to defaults while locked (e.g. the
+        // StorageContext settings hydration behind the 423 gate) to re-read
+        // their data now that gated routes will succeed.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent(ENCRYPTION_UNLOCKED_EVENT));
+        }
       } else {
         log.warn('Invalid password provided');
         setError('Invalid password');
