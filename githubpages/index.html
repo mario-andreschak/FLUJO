@@ -213,7 +213,7 @@ section { padding: 90px 0; }
 .hero-install {
   margin-top: 42px;
   width: 100%;
-  max-width: 660px;
+  max-width: 780px;
 }
 .hero-install .label {
   font-size: 0.78rem;
@@ -714,13 +714,52 @@ footer {
       Discord
     </a>
   </div>
-  <div class="hero-install">
-    <div class="label">Quick start — no Node.js project setup needed</div>
-    <div class="codebox">
-      <span class="prompt mono">$</span>
-      <code>npx flujo-ai</code>
-      <button class="copy-btn" data-copy="npx flujo-ai">Copy</button>
+  <div class="hero-install" id="install">
+    <div class="label">Get started in one command</div>
+    <div class="install-box">
+      <div class="tab-row" role="tablist">
+        <button class="tab-btn active" data-tab="win" role="tab">Windows</button>
+        <button class="tab-btn" data-tab="nix" role="tab">Linux / macOS</button>
+        <button class="tab-btn" data-tab="npx" role="tab">npx</button>
+        <button class="tab-btn" data-tab="docker" role="tab">Docker</button>
+      </div>
+      <div class="tab-panel active" data-panel="win">
+        <div class="codebox">
+          <span class="prompt mono">PS&gt;</span>
+          <code>irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex</code>
+          <button class="copy-btn" data-copy="irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex">Copy</button>
+        </div>
+        <p class="note">Press Start, type <code>powershell</code>, press Enter, then paste the command. Installs to <code>%LOCALAPPDATA%\FLUJO</code> by default; an uninstaller is included.</p>
+      </div>
+      <div class="tab-panel" data-panel="nix">
+        <div class="codebox">
+          <span class="prompt mono">$</span>
+          <code>curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash</code>
+          <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash">Copy</button>
+        </div>
+        <p class="note">Installs prerequisites via your package manager (Homebrew on macOS), clones and builds FLUJO into <code>~/FLUJO</code>, and registers the <code>flujo</code> command.</p>
+      </div>
+      <div class="tab-panel" data-panel="npx">
+        <div class="codebox">
+          <span class="prompt mono">$</span>
+          <code>npx flujo-ai</code>
+          <button class="copy-btn" data-copy="npx flujo-ai">Copy</button>
+        </div>
+        <p class="note">Fastest start if you already have Node.js — runs a prebuilt FLUJO with no clone or build. Data lives in <code>~/.flujo</code>; some MCP servers may still need <code>git</code> / <code>python</code> / <code>uv</code> on your PATH.</p>
+      </div>
+      <div class="tab-panel" data-panel="docker">
+        <div class="codebox">
+          <span class="prompt mono">$</span>
+          <code>git clone https://github.com/mario-andreschak/FLUJO.git &amp;&amp; cd FLUJO &amp;&amp; docker compose up</code>
+          <button class="copy-btn" data-copy="git clone https://github.com/mario-andreschak/FLUJO.git && cd FLUJO && docker compose up">Copy</button>
+        </div>
+        <p class="note">Your flows, keys, and MCP servers persist in named volumes across restarts. The port is bound to localhost only — FLUJO has no auth layer, so don't publish it without a reverse proxy.</p>
+      </div>
     </div>
+    <p style="margin-top: 18px; color: var(--text-dim); font-size: 0.9rem;">
+      The Windows / Linux / macOS installers also set up everything FLUJO needs — Git, Node.js, Python &amp; uv. Then open
+      <code style="color:#a5f3fc">http://localhost:4200</code>.
+    </p>
   </div>
   <div class="scroll-hint" aria-hidden="true">▾</div>
 </header>
@@ -811,57 +850,6 @@ footer {
       <figure class="shot reveal" data-full="img/chat-handoff.png" data-caption="Chat with live multi-agent handoff view"><img src="img/chat-handoff.png" alt="Chat interface" loading="lazy"><figcaption class="caption">Chat Interface</figcaption></figure>
       <figure class="shot reveal" data-full="img/settings.png" data-caption="Encrypted global environment variables"><img src="img/settings.png" alt="Settings and env vars" loading="lazy"><figcaption class="caption">Encrypted Key Vault</figcaption></figure>
     </div>
-  </div>
-</section>
-
-<!-- ============ INSTALL ============ -->
-<section id="install">
-  <div class="container">
-    <h2 class="section-title reveal">Get started in one command</h2>
-    <p class="section-sub reveal">The installer sets up everything FLUJO and its MCP servers need — Git, Node.js, Python, uv — and registers a global <code style="color:#a5f3fc">flujo</code> command.</p>
-    <div class="install-box reveal">
-      <div class="tab-row" role="tablist">
-        <button class="tab-btn active" data-tab="win" role="tab">Windows</button>
-        <button class="tab-btn" data-tab="nix" role="tab">Linux / macOS</button>
-        <button class="tab-btn" data-tab="npx" role="tab">npx</button>
-        <button class="tab-btn" data-tab="docker" role="tab">Docker</button>
-      </div>
-      <div class="tab-panel active" data-panel="win">
-        <div class="codebox">
-          <span class="prompt mono">PS&gt;</span>
-          <code>irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex</code>
-          <button class="copy-btn" data-copy="irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex">Copy</button>
-        </div>
-        <p class="note">Press Start, type <code>powershell</code>, press Enter, then paste the command. Installs to <code>%LOCALAPPDATA%\FLUJO</code> by default; an uninstaller is included.</p>
-      </div>
-      <div class="tab-panel" data-panel="nix">
-        <div class="codebox">
-          <span class="prompt mono">$</span>
-          <code>curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash</code>
-          <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash">Copy</button>
-        </div>
-        <p class="note">Installs prerequisites via your package manager (Homebrew on macOS), clones and builds FLUJO into <code>~/FLUJO</code>, and registers the <code>flujo</code> command.</p>
-      </div>
-      <div class="tab-panel" data-panel="npx">
-        <div class="codebox">
-          <span class="prompt mono">$</span>
-          <code>npx flujo-ai</code>
-          <button class="copy-btn" data-copy="npx flujo-ai">Copy</button>
-        </div>
-        <p class="note">Fastest start if you already have Node.js — runs a prebuilt FLUJO with no clone or build. Data lives in <code>~/.flujo</code>; some MCP servers may still need <code>git</code> / <code>python</code> / <code>uv</code> on your PATH.</p>
-      </div>
-      <div class="tab-panel" data-panel="docker">
-        <div class="codebox">
-          <span class="prompt mono">$</span>
-          <code>git clone https://github.com/mario-andreschak/FLUJO.git &amp;&amp; cd FLUJO &amp;&amp; docker compose up</code>
-          <button class="copy-btn" data-copy="git clone https://github.com/mario-andreschak/FLUJO.git && cd FLUJO && docker compose up">Copy</button>
-        </div>
-        <p class="note">Your flows, keys, and MCP servers persist in named volumes across restarts. The port is bound to localhost only — FLUJO has no auth layer, so don't publish it without a reverse proxy.</p>
-      </div>
-    </div>
-    <p style="text-align:center; margin-top: 22px; color: var(--text-dim); font-size: 0.92rem;">
-      Then open <code style="color:#a5f3fc">http://localhost:4200</code> — that's it.
-    </p>
   </div>
 </section>
 
