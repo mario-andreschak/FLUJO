@@ -4,7 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
 import { Model } from '@/shared/types/model';
 import { ModelAdapter } from '@/shared/types/model/provider';
-import { createOpenAIClient } from './openaiClient';
+import { createOpenAIClient, getProviderDefaultHeaders } from './openaiClient';
 import { getCompletionAdapter } from './adapters';
 
 const log = createLogger('backend/services/model/testConnection');
@@ -47,12 +47,17 @@ function pickHeaders(headers: Record<string, unknown> | undefined): Record<strin
  * Attempt the test request via the OpenAI SDK (the same hardened client the
  * flow engine uses). This is the authoritative "will my flows work" check.
  */
-async function attemptViaSdk(modelName: string, baseUrl: string | undefined, apiKey: string): Promise<ModelTestAttempt> {
+async function attemptViaSdk(modelName: string, baseUrl: string | undefined, apiKey: string, provider?: string): Promise<ModelTestAttempt> {
   const started = Date.now();
   try {
     // maxRetries: 0 here so the user sees the raw first-attempt outcome rather
     // than a silently-retried result; flows still use the default retries.
-    const client = createOpenAIClient({ apiKey, baseURL: baseUrl, maxRetries: 0 });
+    const client = createOpenAIClient({
+      apiKey,
+      baseURL: baseUrl,
+      maxRetries: 0,
+      defaultHeaders: getProviderDefaultHeaders(provider),
+    });
     const completion = await client.chat.completions.create({
       model: modelName,
       messages: TEST_MESSAGES,
@@ -125,7 +130,7 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
  * error but axios succeeds, the failure is the keep-alive/transport bug, not
  * the provider or the key.
  */
-async function attemptViaAxios(modelName: string, baseUrl: string | undefined, apiKey: string): Promise<ModelTestAttempt> {
+async function attemptViaAxios(modelName: string, baseUrl: string | undefined, apiKey: string, provider?: string): Promise<ModelTestAttempt> {
   const started = Date.now();
   const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
   const url = `${base}/chat/completions`;
@@ -137,6 +142,9 @@ async function attemptViaAxios(modelName: string, baseUrl: string | undefined, a
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
+          // Same attribution headers as the SDK path, so the cross-check
+          // exercises the identical wire request.
+          ...(getProviderDefaultHeaders(provider) ?? {}),
         },
         timeout: 10 * 60 * 1000,
         // Don't throw on non-2xx; we inspect the status ourselves below.
@@ -307,8 +315,8 @@ export async function testModelConnection(params: {
   // Run both transports in parallel — they are independent and this halves the
   // wait. Each fully captures its own outcome, so neither can fail the other.
   const [sdk, axiosAttempt] = await Promise.all([
-    attemptViaSdk(modelName, baseUrl, apiKey),
-    attemptViaAxios(modelName, baseUrl, apiKey),
+    attemptViaSdk(modelName, baseUrl, apiKey, provider),
+    attemptViaAxios(modelName, baseUrl, apiKey, provider),
   ]);
 
   const result: ModelTestResult = {

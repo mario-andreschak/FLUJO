@@ -12,6 +12,7 @@
 // Mock the hardened client factory so we can drive the SDK attempt's outcome.
 const sdkCreate = jest.fn();
 jest.mock('@/backend/services/model/openaiClient', () => ({
+  ...jest.requireActual('@/backend/services/model/openaiClient'),
   createOpenAIClient: jest.fn(() => ({
     chat: { completions: { create: sdkCreate } },
   })),

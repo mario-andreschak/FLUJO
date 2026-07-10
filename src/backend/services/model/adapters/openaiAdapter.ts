@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
-import { createOpenAIClient } from '../openaiClient';
+import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
@@ -19,7 +19,12 @@ export class OpenAiAdapter implements CompletionAdapter {
     tools,
     temperature,
   }: CompletionInput): Promise<CompletionResult> {
-    const openai = createOpenAIClient({ apiKey, baseURL: model.baseUrl });
+    const openai = createOpenAIClient({
+      apiKey,
+      baseURL: model.baseUrl,
+      // Provider attribution (Requesty: HTTP-Referer / X-Title, issue 88).
+      defaultHeaders: getProviderDefaultHeaders(model.provider),
+    });
 
     const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
       model: model.name,

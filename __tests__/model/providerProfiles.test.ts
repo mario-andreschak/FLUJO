@@ -10,6 +10,7 @@ describe('provider profiles', () => {
     expect(ids).toEqual([
       'openai',
       'openrouter',
+      'requesty',
       'xai',
       'ollama',
       'litellm',
@@ -30,6 +31,7 @@ describe('provider profiles', () => {
     expect(getProviderProfile('anthropic', 'openai').id).toBe('anthropic-openai');
     expect(getProviderProfile('claude-subscription', 'claude-cli').id).toBe('claude-subscription');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
+    expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
   });
 
   it('defaults legacy models (no adapter) to the OpenAI-compatible profile', () => {

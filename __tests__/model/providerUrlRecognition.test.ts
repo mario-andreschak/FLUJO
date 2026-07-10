@@ -14,6 +14,7 @@ describe('getProviderFromBaseUrl', () => {
   it.each([
     ['https://api.openai.com/v1', 'openai'],
     ['https://openrouter.ai/api/v1', 'openrouter'],
+    ['https://router.requesty.ai/v1', 'requesty'],
     ['https://api.x.ai/v1', 'xai'],
     ['https://generativelanguage.googleapis.com/v1beta/openai/', 'gemini'],
     ['https://api.anthropic.com/v1/', 'anthropic'],

@@ -4,6 +4,7 @@
 export type ModelProvider =
   | 'openai'
   | 'openrouter'
+  | 'requesty'
   | 'anthropic'
   | 'gemini'
   | 'mistral'
@@ -49,6 +50,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1'
+  },
+  requesty: {
+    label: 'Requesty',
+    baseUrl: 'https://router.requesty.ai/v1'
   },
   xai: {
     label: 'X.ai',
@@ -142,6 +147,19 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'OpenAI SDK',
     baseUrl: 'https://openrouter.ai/api/v1',
     showBaseUrl: true,
+  },
+  {
+    id: 'requesty',
+    label: 'Requesty',
+    provider: 'requesty',
+    adapter: 'openai',
+    sdkLabel: 'OpenAI SDK',
+    baseUrl: 'https://router.requesty.ai/v1',
+    showBaseUrl: true,
+    // Requesty routing policies are addressed like models: set the technical
+    // name to `policy/<policy-name>` and the router applies that policy's
+    // fallback chain. Policies also appear in Requesty's /v1/models listing,
+    // so the autocomplete surfaces them automatically.
   },
   {
     id: 'xai',

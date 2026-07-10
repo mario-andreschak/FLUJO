@@ -13,6 +13,26 @@ export interface CreateOpenAIClientOptions {
   maxRetries?: number;
   /** Per-request timeout in milliseconds. */
   timeout?: number;
+  /** Extra headers sent with every request (e.g. provider attribution headers). */
+  defaultHeaders?: Record<string, string>;
+}
+
+/**
+ * App-attribution headers some routers accept/expect so requests are
+ * identifiable as coming from FLUJO. Requesty asks for these two headers
+ * (issue 88); OpenRouter honours the same pair, but is left unchanged here
+ * to keep its existing wire behaviour untouched.
+ */
+export function getProviderDefaultHeaders(
+  provider?: string
+): Record<string, string> | undefined {
+  if (provider === 'requesty') {
+    return {
+      'HTTP-Referer': 'https://flujo.com.co',
+      'X-Title': 'FLUJO',
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -37,7 +57,7 @@ export interface CreateOpenAIClientOptions {
  * SDK retries on so transient 429/5xx still get a second chance.
  */
 export function createOpenAIClient(opts: CreateOpenAIClientOptions): OpenAI {
-  const { apiKey, baseURL, maxRetries = 2, timeout = LLM_REQUEST_TIMEOUT_MS } = opts;
+  const { apiKey, baseURL, maxRetries = 2, timeout = LLM_REQUEST_TIMEOUT_MS, defaultHeaders } = opts;
 
   const useHttps = !baseURL || baseURL.trim().toLowerCase().startsWith('https');
   const httpAgent = useHttps
@@ -50,5 +70,6 @@ export function createOpenAIClient(opts: CreateOpenAIClientOptions): OpenAI {
     httpAgent,
     maxRetries,
     timeout,
+    ...(defaultHeaders ? { defaultHeaders } : {}),
   });
 }

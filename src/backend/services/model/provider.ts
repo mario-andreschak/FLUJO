@@ -12,6 +12,8 @@ const log = createLogger('backend/services/model/provider');
 export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
   if (baseUrl.includes('openrouter.ai')) {
     return 'openrouter';
+  } else if (baseUrl.includes('requesty.ai')) {
+    return 'requesty';
   } else if (baseUrl.includes('api.x.ai')) {
     return 'xai';
   } else if (baseUrl.includes('generativelanguage.googleapis.com')) {
