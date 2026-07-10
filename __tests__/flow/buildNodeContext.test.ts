@@ -7,8 +7,13 @@
  *  - stripHandoffPlumbing is the WIRE filter (what the model sees): it removes
  *    handoff plumbing so a node handed off to sees a clean conversation, while
  *    leaving real tool pairs and agent-loop history intact.
+ *  - toApiMessages is the full provider-boundary mapping: stripHandoffPlumbing
+ *    plus removal of every FLUJO-internal field. Strict OpenAI-compatible
+ *    backends reject requests whose messages carry unknown fields with a
+ *    generic "400 Bad Request" (seen via Requesty), so nothing beyond the
+ *    OpenAI spec may survive this mapping.
  */
-import { buildNodeContext, stripHandoffPlumbing } from '@/backend/execution/flow/buildNodeContext';
+import { buildNodeContext, stripHandoffPlumbing, toApiMessages } from '@/backend/execution/flow/buildNodeContext';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
 const sys = (content: string, id = content): FlujoChatMessage =>
@@ -143,5 +148,78 @@ describe('stripHandoffPlumbing (wire view — clean for the model)', () => {
   it('leaves a plain conversation untouched', () => {
     const messages = [sys('NODE', 'node-sys'), user('hi', 'u1'), assistant('hello', 'a1'), user('more', 'u2')];
     expect(stripHandoffPlumbing(messages).map((m) => m.id)).toEqual(['node-sys', 'u1', 'a1', 'u2']);
+  });
+});
+
+describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => {
+  it('strips every FLUJO-internal field (id, timestamp, disabled, processNodeId, depth, usage)', () => {
+    // Mirrors what a real threaded history carries after an agentic run:
+    // ModelHandler attaches usage/processNodeId to assistant turns, every
+    // message has id/timestamp.
+    const assistantWithBookkeeping: FlujoChatMessage = {
+      role: 'assistant',
+      content: 'summary',
+      id: 'a1',
+      timestamp: 1,
+      processNodeId: 'node-1',
+      depth: 0,
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+      tool_calls: [{ id: 'call-x', type: 'function', function: { name: 'mcp_search_abc', arguments: '{}' } }],
+    } as FlujoChatMessage;
+    const toolWithBookkeeping: FlujoChatMessage = {
+      role: 'tool',
+      tool_call_id: 'call-x',
+      content: 'results',
+      id: 't1',
+      timestamp: 2,
+      processNodeId: 'node-1',
+      disabled: false,
+    } as FlujoChatMessage;
+    const messages = [sys('NODE', 'node-sys'), user('q', 'u1'), assistantWithBookkeeping, toolWithBookkeeping];
+
+    const out = toApiMessages(messages);
+
+    // Exactly the OpenAI-spec fields survive — nothing internal.
+    expect(out).toEqual([
+      { role: 'system', content: 'NODE' },
+      { role: 'user', content: 'q' },
+      {
+        role: 'assistant',
+        content: 'summary',
+        tool_calls: [{ id: 'call-x', type: 'function', function: { name: 'mcp_search_abc', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'call-x', content: 'results' },
+    ]);
+  });
+
+  it('composes with stripHandoffPlumbing (handoff mechanics gone AND fields clean)', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      handoffAssistant('a-handoff', 'call-1'),
+      toolResult('t-handoff', 'call-1', '{"status":"Handoff processed"}'),
+    ];
+
+    const out = toApiMessages(messages);
+
+    expect(out).toEqual([
+      { role: 'system', content: 'NODE' },
+      { role: 'user', content: 'q' },
+    ]);
+  });
+
+  it('does not mutate the threaded history', () => {
+    const m: FlujoChatMessage = {
+      role: 'assistant',
+      content: 'x',
+      id: 'a1',
+      timestamp: 1,
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    } as FlujoChatMessage;
+
+    toApiMessages([m]);
+
+    expect(m.id).toBe('a1');
+    expect(m.usage).toEqual({ promptTokens: 1, completionTokens: 1, totalTokens: 2 });
   });
 });

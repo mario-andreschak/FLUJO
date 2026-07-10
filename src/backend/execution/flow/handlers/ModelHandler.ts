@@ -10,7 +10,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName } from './toolNamespace';
-import { stripHandoffPlumbing } from '../buildNodeContext';
+import { toApiMessages } from '../buildNodeContext';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
@@ -37,7 +37,10 @@ export class ModelHandler {
    * call this so the extraction stays consistent. OpenRouter in particular
    * nests the real upstream reason under `metadata` — `raw` is usually a plain
    * human-readable string (occasionally a JSON string), and `provider_name` /
-   * `retry_after_seconds` are the actionable bits.
+   * `retry_after_seconds` are the actionable bits. Requesty tags every error
+   * body with `origin` ("router" = its own validation, "provider" = a relayed
+   * upstream error) — surfaced in the message because it decides whether the
+   * request was actually malformed or the upstream backend just rejected it.
    *
    * @param body       The provider error object (chatCompletion.error or APIError.error).
    * @param baseMessage Optional prefix (e.g. the SDK's "429 ..." message) to build on.
@@ -86,6 +89,11 @@ export class ModelHandler {
       if (upstreamParts.length > 0) {
         message = `${message} (upstream: ${upstreamParts.join(': ')})`;
       }
+    }
+
+    // Requesty's origin tag: "router" vs "provider" (see doc comment above).
+    if (typeof body?.origin === 'string' && body.origin) {
+      message = `${message} (origin: ${body.origin})`;
     }
 
     return {
@@ -392,13 +400,13 @@ export class ModelHandler {
       log.verbose(` baseurl ${model.baseUrl}`)
 
       // Create the request parameters - the adapters expect ChatCompletionMessageParam,
-      // not FlujoChatMessage, so strip the FLUJO-internal timestamp before sending.
-      // Also strip handoff plumbing (the handoff tool-call turn, its result, the
-      // synthetic "Continue") from the WIRE view only — the threaded history kept
-      // in SharedState is untouched. So a node handed off to sees a clean
-      // conversation. See ~/.claude/plans/execution-core-v2.md.
-      const wireMessages = stripHandoffPlumbing(messages);
-      const apiMessages: OpenAI.ChatCompletionMessageParam[] = wireMessages.map(({ timestamp, ...rest }) => rest);
+      // not FlujoChatMessage, so strip ALL FLUJO-internal fields (id, timestamp,
+      // processNodeId, usage, ...) before sending — strict providers 400 on unknown
+      // message fields. Also strips handoff plumbing (the handoff tool-call turn,
+      // its result, the synthetic "Continue") from the WIRE view only — the threaded
+      // history kept in SharedState is untouched. So a node handed off to sees a
+      // clean conversation. See ~/.claude/plans/execution-core-v2.md.
+      const apiMessages: OpenAI.ChatCompletionMessageParam[] = toApiMessages(messages);
 
       // Sanitize tool schemas for broad provider compatibility (handles string
       // properties with unsupported `format` values, etc.). Done once here so

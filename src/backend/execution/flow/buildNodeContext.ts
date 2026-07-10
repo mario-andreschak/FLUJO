@@ -1,3 +1,4 @@
+import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 
 // The synthetic user message the run loop used to append after a handoff to
@@ -94,4 +95,23 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
     out.push(m);
   }
   return out;
+}
+
+/**
+ * Convert FLUJO's threaded messages into clean OpenAI-spec wire messages:
+ * stripHandoffPlumbing (see above) plus removal of every FLUJO-internal
+ * bookkeeping field (id, timestamp, disabled, processNodeId, depth, usage).
+ *
+ * Only `timestamp` used to be stripped here, so the internal fields went to
+ * providers on every request. Most OpenAI-compatible endpoints ignore unknown
+ * message fields, but strict backends (e.g. some upstreams behind router
+ * services like Requesty) reject the whole request with a generic
+ * "400 Bad Request". The wire payload must contain only what the OpenAI chat
+ * spec defines.
+ */
+export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
+  return stripHandoffPlumbing(messages).map(
+    ({ id, timestamp, disabled, processNodeId, depth, usage, ...rest }) =>
+      rest as OpenAI.ChatCompletionMessageParam
+  );
 }
