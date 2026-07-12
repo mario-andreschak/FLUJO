@@ -14,6 +14,20 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
+  // Allow browser apps on other origins (e.g. the `brain` visualizer) to read
+  // the data APIs. Matches the '*' CORS already sent by /v1/chat/completions.
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: '*' },
+        ],
+      },
+    ];
+  },
   typescript: {
     // Ignore all TypeScript errors during build
     ignoreBuildErrors: true,
