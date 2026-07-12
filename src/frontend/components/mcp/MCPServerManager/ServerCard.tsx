@@ -72,6 +72,7 @@ interface ServerCardProps {
   folder?: string; // Organizing folder (#71)
   folders?: string[]; // Existing folders on the surface, for the picker
   onSetFolder?: (folder: string | undefined) => void; // Assign/clear folder
+  builtIn?: boolean; // FLUJO's built-in internal server: not editable/deletable, always on
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -101,6 +102,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   folder,
   folders = [],
   onSetFolder,
+  builtIn = false,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
@@ -322,7 +324,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   />
                 </Tooltip>
               )}
-              <TransportBadge transport={transport} size="small" />
+              {builtIn ? (
+                <Tooltip title="FLUJO's built-in server — always available, cannot be edited or removed.">
+                  <Chip label="Built-in" color="primary" size="small" />
+                </Tooltip>
+              ) : (
+                <TransportBadge transport={transport} size="small" />
+              )}
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
               {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
@@ -337,11 +345,46 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </Box>
         </Box>
         
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '0.875rem' }} noWrap title={path}>
-          {path}
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mb: 1, fontSize: '0.875rem' }}
+          noWrap
+          title={builtIn ? undefined : path}
+        >
+          {builtIn ? "FLUJO's own backend API — flow authoring, execution and server management as MCP tools." : path}
         </Typography>
 
+        {/* Built-in server: always exposed at its proxy endpoint — read-only URL, no toggle */}
+        {builtIn && (
+          <Box sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+              <PublicIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
+              <Tooltip title="External MCP clients (Claude Code, Claude Desktop, Cursor, …) can drive FLUJO through this local endpoint.">
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  Exposed to external apps
+                </Typography>
+              </Tooltip>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ flex: 1, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={proxyUrl}
+              >
+                {proxyUrl}
+              </Typography>
+              <Tooltip title="Copy endpoint URL">
+                <IconButton size="small" onClick={handleCopyProxyUrl}>
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          </Box>
+        )}
+
         {/* Expose to external apps (#17A) */}
+        {!builtIn && (
         <Box
           sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
           onClick={(e) => e.stopPropagation()}
@@ -376,6 +419,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </Box>
           )}
         </Box>
+        )}
 
         {status === 'error' && (
           <Box sx={{ mt: 1, mb: 1 }}>
@@ -492,6 +536,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         )}
       </CardContent>
       
+      {!builtIn && (
       <CardActions sx={{ justifyContent: 'space-between', px: 2, py: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <Switch
@@ -587,8 +632,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </Tooltip>
           
           <Tooltip title="Delete server">
-            <IconButton 
-              color="error" 
+            <IconButton
+              color="error"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete();
@@ -600,7 +645,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </Tooltip>
         </Box>
       </CardActions>
-      
+      )}
+
       {onSetFolder && (
         <FolderAssignMenu
           anchorEl={folderAnchorEl}

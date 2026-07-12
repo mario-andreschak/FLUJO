@@ -455,10 +455,12 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   const handleSelectAll = () => {
-    if (selectedServers.size === filteredAndSortedServers.length) {
+    // The built-in server is excluded: bulk enable/disable can't apply to it.
+    const selectable = filteredAndSortedServers.filter(s => !s.builtIn);
+    if (selectedServers.size === selectable.length) {
       setSelectedServers(new Set());
     } else {
-      setSelectedServers(new Set(filteredAndSortedServers.map(s => s.name)));
+      setSelectedServers(new Set(selectable.map(s => s.name)));
     }
   };
 
@@ -644,9 +646,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
                 <Button
                   size="small"
                   onClick={handleSelectAll}
-                  disabled={filteredAndSortedServers.length === 0}
+                  disabled={filteredAndSortedServers.filter(s => !s.builtIn).length === 0}
                 >
-                  {selectedServers.size === filteredAndSortedServers.length ? 'Deselect All' : 'Select All'}
+                  {selectedServers.size === filteredAndSortedServers.filter(s => !s.builtIn).length && selectedServers.size > 0 ? 'Deselect All' : 'Select All'}
                 </Button>
                 
                 {selectedServers.size > 0 && (

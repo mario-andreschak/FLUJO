@@ -115,7 +115,7 @@ const ServerList: React.FC<ServerListProps> = ({
               exposeAsMcpServer={server.exposeAsMcpServer}
               selectionMode={selectionMode}
               selected={selectedServers.has(server.name)}
-              onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
+              onSelect={onServerSelectionChange && !server.builtIn ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
               hasOAuthTokens={hasOAuthTokens}
               updateInfo={server.rootPath ? updates?.[server.rootPath] : undefined}
               installCommand={server._installCommand}
@@ -123,7 +123,8 @@ const ServerList: React.FC<ServerListProps> = ({
               onUpdated={onServerUpdated ? () => onServerUpdated(server.name, server.rootPath) : undefined}
               folder={server.folder}
               folders={folders}
-              onSetFolder={onServerSetFolder ? (f) => onServerSetFolder(server.name, f) : undefined}
+              onSetFolder={onServerSetFolder && !server.builtIn ? (f) => onServerSetFolder(server.name, f) : undefined}
+              builtIn={server.builtIn}
             />
           </Grid>
         );

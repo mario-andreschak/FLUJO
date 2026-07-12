@@ -99,6 +99,7 @@ import {
   safelyCloseClient
 } from './connection';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
+import { INTERNAL_SERVER_NAME, internalServerConfig } from './internalServerConfig';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -322,15 +323,26 @@ export class MCPService {
    */
   async loadServerConfigs(): Promise<MCPServerConfig[] | MCPServiceResponse> {
     log.debug('loadServerConfigs: Entering method');
-    
+
     try {
       const serverConfigs = await loadServerConfigs();
-      
+
       if (!Array.isArray(serverConfigs)) {
         log.warn('loadServerConfigs: Received non-array response', serverConfigs);
         return serverConfigs;
       }
-      
+
+      // The built-in internal server (FLUJO's own backend API as MCP tools) is
+      // synthesized here rather than stored, so it is always present and always
+      // up to date. A stored config that claims the name wins (legacy user server)
+      // and simply shadows the built-in one. Never persisted: saveConfig() drops
+      // builtIn entries.
+      if (!serverConfigs.some(c => c.name === INTERNAL_SERVER_NAME)) {
+        serverConfigs.push(internalServerConfig());
+      } else {
+        log.warn(`loadServerConfigs: A stored server is named "${INTERNAL_SERVER_NAME}" — it shadows FLUJO's built-in server`);
+      }
+
       log.debug(`loadServerConfigs: Loaded ${serverConfigs.length} server configs`);
       return serverConfigs;
     } catch (error) {
@@ -377,6 +389,20 @@ export class MCPService {
   }
 
   /**
+   * Is this name the built-in internal server (and not shadowed by a stored
+   * config)? The storage check keeps a pre-existing user server that happens to
+   * be named like the built-in one fully functional: for such a name every
+   * short-circuit below steps aside and the normal client/transport path runs.
+   * Names other than the reserved one return false at a string compare — the
+   * storage read only ever happens for the reserved name itself.
+   */
+  private async isInternalServer(serverName: string): Promise<boolean> {
+    if (serverName !== INTERNAL_SERVER_NAME) return false;
+    const stored = await loadServerConfigs();
+    return !Array.isArray(stored) || !stored.some(c => c.name === INTERNAL_SERVER_NAME);
+  }
+
+  /**
    * Connect to an MCP server by name
    */
   async connectServer(serverName: string): Promise<MCPServiceResponse>;
@@ -399,6 +425,21 @@ export class MCPService {
    */
   async connectServer(configOrName: MCPServerConfig | string): Promise<MCPServiceResponse> {
     const serverName = typeof configOrName === 'string' ? configOrName : configOrName.name;
+
+    // The built-in internal server has no client or transport to establish — it is
+    // "connected" by definition. Short-circuit BEFORE the in-flight machinery so the
+    // startup sweep (which includes the synthetic config) and flow handlers get an
+    // instant success, and clear any "connecting" marker the sweep set for it.
+    if (serverName === INTERNAL_SERVER_NAME) {
+      const isBuiltIn =
+        typeof configOrName !== 'string'
+          ? configOrName.builtIn === true
+          : await this.isInternalServer(serverName);
+      if (isBuiltIn) {
+        this.connectingServers.delete(serverName);
+        return { success: true };
+      }
+    }
 
     const inFlight = this.inFlightConnects.get(serverName);
     if (inFlight) {
@@ -933,7 +974,12 @@ export class MCPService {
    */
   async disconnectServer(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`disconnectServer: Entering method for server ${serverName}`);
-    
+
+    // The built-in internal server has no connection to tear down.
+    if (await this.isInternalServer(serverName)) {
+      return { success: true };
+    }
+
     // Clear any retry timers for this server
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
@@ -980,8 +1026,13 @@ export class MCPService {
    * before reconnecting, so connectServer() is guaranteed to build a brand-new client and
    * transport rather than short-circuiting on the stale one still sitting in the map.
    */
-  private async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
+  async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
     log.info(`forceReconnect: Forcing fresh connection for server ${serverName}`);
+
+    // Nothing to rebuild for the built-in internal server.
+    if (await this.isInternalServer(serverName)) {
+      return { success: true };
+    }
 
     const existing = this.clients.get(serverName);
     if (existing) {
@@ -1011,6 +1062,14 @@ export class MCPService {
    */
   async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
     log.debug(`listServerTools: Entering method for server ${serverName}`);
+
+    // The built-in internal server answers in-process — no client, no reconnect
+    // machinery. Dynamic import on purpose: internalTools transitively imports
+    // modules that import mcpService back (see internalServerConfig.ts).
+    if (await this.isInternalServer(serverName)) {
+      const { internalToolDefinitions } = await import('./internalTools');
+      return { tools: internalToolDefinitions() };
+    }
 
     // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
     // loudly instead of attempting a pointless reconnect against a disabled server.
@@ -1058,6 +1117,16 @@ export class MCPService {
    */
   async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
+
+    // The built-in internal server dispatches in-process. The dispatcher always
+    // resolves to a CallToolResult (tool-level failures come back as isError
+    // results), matching how a real server's tool errors flow through `data`.
+    if (await this.isInternalServer(serverName)) {
+      const { internalCallTool } = await import('./internalTools');
+      const result = await internalCallTool(this, toolName, args);
+      log.info(`callTool: Dispatched internal tool ${toolName}`);
+      return { success: true, data: result };
+    }
 
     // Disabled servers must never be invoked — even if a live client somehow
     // lingers after disabling (issue #54). This point-of-use guard sits on top of
@@ -1111,6 +1180,11 @@ export class MCPService {
     lister: (client: Client | undefined, serverName: string) => Promise<T>,
     emptyResult: T
   ): Promise<T> {
+    // The built-in internal server publishes tools only — no resources, no prompts.
+    if (await this.isInternalServer(serverName)) {
+      return emptyResult;
+    }
+
     // Point-of-use guard on top of the connect-time hard gate (issue #54).
     if (await this.isServerDisabled(serverName)) {
       const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
@@ -1287,7 +1361,19 @@ export class MCPService {
 
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
-    
+
+    // The built-in internal server is synthesized, not stored — there is nothing to
+    // update, and this also blocks CREATING a server under the reserved name (the
+    // POST route funnels through here). Renaming another server onto the reserved
+    // name is caught by the duplicate check below, since loadServerConfigs()
+    // always contains the synthetic entry.
+    if (await this.isInternalServer(serverName)) {
+      return {
+        success: false,
+        error: `"${INTERNAL_SERVER_NAME}" is FLUJO's built-in server and cannot be created or edited.`,
+      };
+    }
+
     // Load all configs from storage
     const configsResult = await this.loadServerConfigs();
     if (!Array.isArray(configsResult)) {
@@ -1530,7 +1616,15 @@ export class MCPService {
    */
   async deleteServerConfig(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`deleteServerConfig: Entering method for server ${serverName}`);
-    
+
+    // The built-in internal server is synthesized, not stored — it cannot be deleted.
+    if (await this.isInternalServer(serverName)) {
+      return {
+        success: false,
+        error: `"${INTERNAL_SERVER_NAME}" is FLUJO's built-in server and cannot be deleted.`,
+      };
+    }
+
     // First disconnect if connected
     if (this.clients.has(serverName)) {
       log.info(`deleteServerConfig: Disconnecting server ${serverName} before deletion`);
@@ -1573,6 +1667,11 @@ export class MCPService {
    * Get the connection status of an MCP server
    */
   async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
+    // The built-in internal server runs in-process: it is connected by definition.
+    if (await this.isInternalServer(serverName)) {
+      return { status: 'connected' };
+    }
+
     // Get the config directly from storage
     const config = await this.getServerConfig(serverName);
     if (!config) {
