@@ -22,6 +22,11 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { toReqRes, toFetchResponse } from 'fetch-to-node';
 import { isLocalRequest } from '@/backend/services/mcp/proxyForward';
 import { flowToolsListTools, flowToolsCallTool } from '@/backend/services/mcp/flowTools';
+import {
+  authoringToolDefinitions,
+  authoringCallTool,
+  isAuthoringTool,
+} from '@/backend/services/mcp/flowAuthoringTools';
 import { createLogger } from '@/utils/logger';
 
 // The SDK transport + fetch-to-node need Node APIs — never the edge runtime.
@@ -42,10 +47,28 @@ function buildFlowsServer(): Server {
     { name: 'flujo-flows', version: SERVER_VERSION },
     { capabilities: { tools: {} } },
   );
-  server.setRequestHandler(ListToolsRequestSchema, () => flowToolsListTools());
-  server.setRequestHandler(CallToolRequestSchema, (req) =>
-    flowToolsCallTool(req.params.name, (req.params.arguments ?? {}) as Record<string, unknown>),
-  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    // Authoring tools (create_flow / validate_flow_spec / list_flow_building_blocks)
+    // are listed alongside flows-as-tools. Their names are reserved: a flow whose
+    // slug collides is shadowed (with a warning) rather than breaking dispatch.
+    const authoring = authoringToolDefinitions();
+    const { tools } = await flowToolsListTools();
+    const flowTools = tools.filter((t) => {
+      if (isAuthoringTool(t.name)) {
+        log.warn(`Flow tool '${t.name}' collides with a reserved authoring tool name; shadowed`, {});
+        return false;
+      }
+      return true;
+    });
+    return { tools: [...authoring, ...flowTools] };
+  });
+  server.setRequestHandler(CallToolRequestSchema, (req) => {
+    const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+    if (isAuthoringTool(req.params.name)) {
+      return authoringCallTool(req.params.name, args);
+    }
+    return flowToolsCallTool(req.params.name, args);
+  });
   return server;
 }
 

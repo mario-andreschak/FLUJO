@@ -7,6 +7,7 @@
  * (API keys, encryption passwords, OAuth tokens). Endpoints that handle secrets
  * carry an explicit note instead.
  */
+import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
 
@@ -30,6 +31,11 @@ export interface ApiEndpoint {
   response?: string;
   /** Caveats — especially secret-handling notes. */
   notes?: string[];
+  /**
+   * Long-form reference text (e.g. a request-format specification), rendered as a
+   * preformatted monospace block below the endpoint.
+   */
+  details?: string;
 }
 
 export interface ApiGroup {
@@ -203,13 +209,40 @@ export const API_GROUPS: ApiGroup[] = [
   {
     id: 'flow',
     name: 'Flows',
-    description: 'CRUD for flow definitions plus prompt rendering for individual nodes.',
+    description:
+      'CRUD for flow definitions, programmatic flow authoring (FlowSpec), LLM flow generation, and prompt rendering for individual nodes. For creating flows programmatically, prefer POST /api/flow/compile with a FlowSpec — the raw Flow format (ReactFlow JSON) is the internal canvas representation and easy to get subtly wrong.',
     endpoints: [
+      {
+        method: 'POST',
+        path: '/api/flow/compile',
+        summary:
+          'Compile a FlowSpec (the semantic authoring format — see below) into a complete flow, validate it, and optionally save it. Deterministic, no LLM: layout, ids, handles, and MCP wiring are generated for you. THE recommended way for external apps and agents to create flows. Also exposed as MCP tools (create_flow / validate_flow_spec) on /mcp-flows.',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'spec', type: 'FlowSpec', required: true, description: 'The flow specification (format below).' },
+          { name: 'save', type: 'boolean', description: 'Persist the flow — only happens when validation finds ZERO errors.' },
+        ],
+        response: '{ flow, validation: { issues, errorCount, warningCount, isRunnable }, saved } — 201 when saved, 200 otherwise. Iterate on the issues until clean.',
+        details: FLOWSPEC_DOC,
+      },
+      {
+        method: 'POST',
+        path: '/api/flow/generate',
+        summary:
+          'Generate a draft flow from a natural-language description using one of your configured models. The model authors a FlowSpec, FLUJO compiles + validates it and feeds problems back for a bounded number of repair rounds. Returns an UNSAVED draft (the UI opens it in the builder for review); persist via the normal save path or /api/flow/compile.',
+        paramsLabel: 'Body',
+        params: [
+          { name: 'description', type: 'string', required: true, description: 'What the flow should do, in plain language.' },
+          { name: 'modelId', type: 'string', required: true, description: 'Configured model that does the generating.' },
+          { name: 'maxRepairs', type: 'number', description: 'Repair rounds after the first attempt (default 1, max 2).' },
+        ],
+        response: '{ flow, validation, attempts } — the flow is a draft; nothing is persisted by this endpoint.',
+      },
       {
         method: 'GET',
         alsoMethods: ['POST'],
         path: '/api/flow',
-        summary: 'GET lists all flow definitions; POST creates a flow (create-only; 409 if the id exists).',
+        summary: 'GET lists all flow definitions; POST creates a flow (create-only; 409 if the id exists). POST takes the raw internal Flow format — prefer /api/flow/compile for programmatic creation.',
         paramsLabel: 'Body',
         params: [{ name: 'flow', type: 'Flow', required: true, description: 'Flow object including id (POST).' }],
       },
@@ -366,6 +399,22 @@ export const API_GROUPS: ApiGroup[] = [
         path: '/mcp-proxy/{server}',
         summary:
           'A Streamable-HTTP MCP endpoint that forwards tools/list and tools/call to the named downstream MCP server. {server} is the configured server name; it must have "Expose to external apps" enabled (otherwise 404). Rejects non-localhost requests.',
+        response: 'MCP JSON-RPC over Streamable HTTP (handled by your MCP client, not called directly).',
+      },
+    ],
+  },
+  {
+    id: 'mcp-flows',
+    name: 'FLUJO as an MCP server (flows + authoring)',
+    description:
+      'A Streamable-HTTP MCP endpoint that exposes FLUJO itself to external MCP clients. Every saved flow is a callable tool (running it ephemerally and returning its output), and three authoring tools let an external agent CREATE flows by sending a semantic FlowSpec — no raw ReactFlow JSON required. Localhost-only (same posture as the proxy).',
+    endpoints: [
+      {
+        method: 'POST',
+        alsoMethods: ['GET', 'DELETE'],
+        path: '/mcp-flows',
+        summary:
+          'MCP server with two tool families. Flow tools: one per saved flow (name = slug of the flow name; input = a single "input" string sent as the user turn; runs are ephemeral and never appear in the chat sidebar). Authoring tools: list_flow_building_blocks (models, MCP servers + tools, and existing flows a spec may reference — call first), validate_flow_spec (compile + validate without saving; iterate on the returned issues), and create_flow (compile + validate + save; only saves when validation finds zero errors). The FlowSpec format is documented on POST /api/flow/compile above and inside the tools\' own descriptions.',
         response: 'MCP JSON-RPC over Streamable HTTP (handled by your MCP client, not called directly).',
       },
     ],
