@@ -52,6 +52,13 @@ export type MCPManagerConfig = {
    */
   folder?: string;
   /**
+   * Marks FLUJO's own built-in in-process server (the synthetic "flujo" entry
+   * that exposes FLUJO's backend API as MCP tools to its own flows). Built-in
+   * configs are synthesized at load time, never persisted (saveConfig drops
+   * them), and cannot be edited, renamed, disabled, or deleted.
+   */
+  builtIn?: boolean;
+  /**
    * MCP roots (#15/#46): workspace folders this server is scoped to. Each entry is a
    * filesystem path or a `file://` URI (and may contain `${global:VAR}` references,
    * resolved fresh on every roots/list request). The roots capability is ALWAYS
