@@ -130,6 +130,54 @@ class FlowService {
   }
 
   /**
+   * Generate a draft flow from a natural-language description (POST /api/flow/generate).
+   *
+   * The returned flow is an UNSAVED draft — it is NOT added to the cache; the caller
+   * opens it in the FlowBuilder and persisting happens through addFlow when the user
+   * saves. `validation` carries the shared-validator issues (a draft may have errors —
+   * they block running, not reviewing).
+   */
+  async generateFlow(
+    description: string,
+    modelId: string
+  ): Promise<
+    | { success: true; flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean }; attempts: number }
+    | { success: false; error: string }
+  > {
+    log.debug('generateFlow: Entering method', { modelId });
+    try {
+      const response = await fetch('/api/flow/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ description, modelId })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data?.error || 'Failed to generate flow'
+        };
+      }
+
+      log.debug('generateFlow: Draft generated', {
+        flowId: data.flow?.id,
+        attempts: data.attempts,
+        errorCount: data.validation?.errorCount
+      });
+      return { success: true, flow: data.flow as Flow, validation: data.validation, attempts: data.attempts };
+    } catch (error) {
+      log.warn('generateFlow: Failed to generate flow:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to generate flow'
+      };
+    }
+  }
+
+  /**
    * Update an existing flow (PUT /api/flow/{id}). Use addFlow to create a new flow.
    */
   async updateFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {

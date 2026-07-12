@@ -11,6 +11,13 @@ export interface ModelCallInput {
   modelId: string;
   prompt: string;
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
+  /**
+   * Optional scoped view to send to the provider instead of `messages`. Lets a
+   * node (ProcessNode's latest-message / isolated inputMode) narrow what the
+   * MODEL sees while `messages` remains the lossless history used to build the
+   * returned/persisted transcript. Unset ⇒ the provider sees `messages`.
+   */
+  wireMessages?: FlujoChatMessage[];
   tools?: OpenAI.ChatCompletionTool[];
   iteration: number;
   maxIterations: number;

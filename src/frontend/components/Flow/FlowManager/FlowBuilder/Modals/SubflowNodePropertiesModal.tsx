@@ -23,9 +23,10 @@ import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+import OptionCard from '@/frontend/components/shared/OptionCard';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
@@ -38,65 +39,6 @@ interface SubflowNodePropertiesModalProps {
   /** The id of the flow being edited, so it can be excluded from the picker. */
   flowId?: string;
 }
-
-/** A big selectable card for a mutually exclusive choice (radio-style). */
-const OptionCard = ({
-  selected,
-  icon,
-  title,
-  description,
-  onClick,
-}: {
-  selected: boolean;
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  onClick: () => void;
-}) => (
-  <Box
-    role="radio"
-    aria-checked={selected}
-    tabIndex={0}
-    onClick={onClick}
-    onKeyDown={(e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onClick();
-      }
-    }}
-    sx={{
-      flex: 1,
-      position: 'relative',
-      p: 2,
-      borderRadius: 2,
-      border: 2,
-      borderColor: selected ? 'primary.main' : 'divider',
-      bgcolor: selected ? 'action.selected' : 'background.paper',
-      cursor: 'pointer',
-      transition: 'border-color 120ms, background-color 120ms',
-      '&:hover': { borderColor: selected ? 'primary.main' : 'text.disabled' },
-      outline: 'none',
-      '&:focus-visible': { boxShadow: (theme: any) => `0 0 0 3px ${theme.palette.primary.light}` },
-    }}
-  >
-    {selected && (
-      <CheckCircleIcon
-        color="primary"
-        fontSize="small"
-        sx={{ position: 'absolute', top: 8, right: 8 }}
-      />
-    )}
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, color: selected ? 'primary.main' : 'text.secondary' }}>
-      {icon}
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'text.primary' }}>
-        {title}
-      </Typography>
-    </Box>
-    <Typography variant="body2" color="text.secondary">
-      {description}
-    </Typography>
-  </Box>
-);
 
 export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId }: SubflowNodePropertiesModalProps) => {
   const [nodeData, setNodeData] = useState<{
@@ -158,6 +100,13 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   const selectableFlows = flows.filter((f) => f.id !== flowId);
   const selectedSubflowId = nodeData.properties?.subflowId || '';
   const selectedMissing = !!selectedSubflowId && !flows.some((f) => f.id === selectedSubflowId);
+
+  // Back-compat: a flow saved before the explicit 'isolated' mode existed just
+  // has a promptTemplate and no inputMode — surface it as Isolated so the same
+  // prompt keeps being sent (this mirrors SubflowNode.prep's runtime fallback).
+  const promptTemplate = nodeData.properties?.promptTemplate || '';
+  const inputMode: 'full-history' | 'latest-message' | 'isolated' =
+    nodeData.properties?.inputMode || (promptTemplate.trim() ? 'isolated' : 'full-history');
 
   return (
     <Dialog
@@ -230,39 +179,45 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           </Alert>
         )}
 
-        <TextField
-          fullWidth
-          label="Input (optional)"
-          value={nodeData.properties?.promptTemplate || ''}
-          onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
-          margin="normal"
-          multiline
-          rows={3}
-          helperText="What to send to the subflow. Leave empty to pass this conversation (see below)."
-        />
-
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          Which messages does the subflow receive?
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Only applies when the input above is left empty.
+          What does the subflow receive?
         </Typography>
         <Box role="radiogroup" aria-label="Subflow input" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <OptionCard
-            selected={(nodeData.properties?.inputMode || 'full-history') !== 'latest-message'}
+            selected={inputMode === 'full-history'}
             onClick={() => handlePropertyChange('inputMode', 'full-history')}
             icon={<HistoryIcon />}
             title="Full conversation"
             description="The subflow sees the whole conversation so far. Best for a helper that should continue with all the context."
           />
           <OptionCard
-            selected={nodeData.properties?.inputMode === 'latest-message'}
+            selected={inputMode === 'latest-message'}
             onClick={() => handlePropertyChange('inputMode', 'latest-message')}
             icon={<ShortTextIcon />}
             title="Latest message only"
             description="The subflow sees only the most recent message. Best for an orchestrator that hands off one task at a time, so old tasks don't leak in."
           />
+          <OptionCard
+            selected={inputMode === 'isolated'}
+            onClick={() => handlePropertyChange('inputMode', 'isolated')}
+            icon={<EditNoteIcon />}
+            title="Isolated"
+            description="The conversation is ignored. The subflow receives only the prompt you write below, as its first message."
+          />
         </Box>
+
+        {inputMode === 'isolated' && (
+          <TextField
+            fullWidth
+            label="Isolated prompt"
+            value={promptTemplate}
+            onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
+            margin="normal"
+            multiline
+            rows={3}
+            helperText="Sent to the subflow as its single user message. The parent conversation is not passed."
+          />
+        )}
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           What do you see in the chat while the subflow runs?

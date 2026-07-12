@@ -1,7 +1,13 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState, useEffect } from 'react';
-import { Box, Typography, FormControlLabel, Switch, CircularProgress, Alert, Paper, Button } from '@mui/material';
+import { Box, Typography, FormControlLabel, Switch, CircularProgress, Alert, Paper, Button, TextField } from '@mui/material';
+import HistoryIcon from '@mui/icons-material/History';
+import ShortTextIcon from '@mui/icons-material/ShortText';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
+import OptionCard from '@/frontend/components/shared/OptionCard';
 import { createLogger } from '@/utils/logger';
+
+type InputMode = 'full-history' | 'latest-message' | 'isolated';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/PromptTemplateEditor');
 
@@ -14,6 +20,10 @@ interface PromptTemplateEditorProps {
   setExcludeStartNodePrompt: (value: boolean) => void;
   excludeSystemPrompt: boolean;
   setExcludeSystemPrompt: (value: boolean) => void;
+  inputMode: InputMode;
+  setInputMode: (value: InputMode) => void;
+  isolatedPrompt: string;
+  setIsolatedPrompt: (value: string) => void;
   isModelBound: boolean;
   models: any[];
   nodeData: any;
@@ -30,6 +40,10 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     setExcludeStartNodePrompt,
     excludeSystemPrompt,
     setExcludeSystemPrompt,
+    inputMode,
+    setInputMode,
+    isolatedPrompt,
+    setIsolatedPrompt,
     isModelBound,
     models,
     nodeData,
@@ -274,13 +288,65 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <Typography variant="caption" sx={{ fontWeight: 'medium' }}>
               {(!excludeStartNodePrompt && !excludeModelPrompt && isModelBound) ? '4.' :
-                (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '3.' : '2.'} Conversation History
+                (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '3.' : '2.'}{' '}
+              {inputMode === 'isolated'
+                ? 'Isolated prompt'
+                : inputMode === 'latest-message'
+                  ? 'Latest message only'
+                  : 'Conversation History'}
             </Typography>
             <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-              (coming from ChatCompletion endpoint)
+              {inputMode === 'isolated'
+                ? '(the prompt below, as the user message)'
+                : inputMode === 'latest-message'
+                  ? '(only the most recent user message)'
+                  : '(coming from ChatCompletion endpoint)'}
             </Typography>
           </Box>
         </Box>
+      </Box>
+
+      {/* Which conversation the model sees — mirrors the subflow node's input modes. */}
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+          What does the model receive?
+        </Typography>
+        <Box role="radiogroup" aria-label="Model input" sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <OptionCard
+            selected={inputMode === 'full-history'}
+            onClick={() => setInputMode('full-history')}
+            icon={<HistoryIcon fontSize="small" />}
+            title="Full conversation"
+            description="The model sees this node's prompt plus the whole conversation so far. The default."
+          />
+          <OptionCard
+            selected={inputMode === 'latest-message'}
+            onClick={() => setInputMode('latest-message')}
+            icon={<ShortTextIcon fontSize="small" />}
+            title="Latest message only"
+            description="The model sees this node's prompt plus only the most recent user message."
+          />
+          <OptionCard
+            selected={inputMode === 'isolated'}
+            onClick={() => setInputMode('isolated')}
+            icon={<EditNoteIcon fontSize="small" />}
+            title="Isolated"
+            description="The conversation is ignored. The model sees this node's prompt plus the prompt below, sent as the user message."
+          />
+        </Box>
+
+        {inputMode === 'isolated' && (
+          <TextField
+            fullWidth
+            label="Isolated prompt"
+            value={isolatedPrompt}
+            onChange={(e) => setIsolatedPrompt(e.target.value)}
+            margin="normal"
+            multiline
+            rows={2}
+            helperText="Sent to the model as the user message. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes)."
+          />
+        )}
       </Box>
 
       <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 120px)' }}>

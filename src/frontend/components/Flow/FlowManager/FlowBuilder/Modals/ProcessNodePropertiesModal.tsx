@@ -43,6 +43,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [excludeModelPrompt, setExcludeModelPrompt] = useState(false);
   const [excludeStartNodePrompt, setExcludeStartNodePrompt] = useState(false);
   const [excludeSystemPrompt, setExcludeSystemPrompt] = useState(false);
+  const [inputMode, setInputMode] = useState<'full-history' | 'latest-message' | 'isolated'>('full-history');
+  const [isolatedPrompt, setIsolatedPrompt] = useState('');
   const [activeTab, setActiveTab] = useState<string>('server');
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
@@ -100,6 +102,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       setExcludeModelPrompt(node.data.properties?.excludeModelPrompt || false);
       setExcludeStartNodePrompt(node.data.properties?.excludeStartNodePrompt || false);
       setExcludeSystemPrompt(node.data.properties?.excludeSystemPrompt || false);
+      setInputMode(node.data.properties?.inputMode || 'full-history');
+      setIsolatedPrompt(node.data.properties?.isolatedPrompt || '');
     }
   }, [node, open]);
 
@@ -171,6 +175,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           excludeModelPrompt: excludeModelPrompt,
           excludeStartNodePrompt: excludeStartNodePrompt,
           excludeSystemPrompt: excludeSystemPrompt,
+          inputMode: inputMode,
+          isolatedPrompt: isolatedPrompt,
         }
       };
       onSave(node.id, updatedNodeData);
@@ -311,6 +317,10 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               setExcludeStartNodePrompt={setExcludeStartNodePrompt}
               excludeSystemPrompt={excludeSystemPrompt}
               setExcludeSystemPrompt={setExcludeSystemPrompt}
+              inputMode={inputMode}
+              setInputMode={setInputMode}
+              isolatedPrompt={isolatedPrompt}
+              setIsolatedPrompt={setIsolatedPrompt}
               isModelBound={isModelBound}
               models={models}
               nodeData={nodeData}

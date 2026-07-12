@@ -22,7 +22,9 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import FlowBuilder, { FlowBuilderHandle } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
+import GenerateFlowDialog, { GeneratedFlowInfo } from '@/frontend/components/Flow/FlowManager/GenerateFlowDialog';
 import { setNavigationGuard, clearNavigationGuard, NavigationGuard } from '@/frontend/utils/navigationGuard';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import { Flow } from '@/frontend/types/flow/flow';
@@ -42,6 +44,12 @@ const FlowsPage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const flowBuilderRef = useRef<FlowBuilderHandle>(null);
   
+  // Generated draft (issue #14): an UNSAVED flow the builder edits via initialFlow.
+  // It is deliberately NOT in `flows` — handleSaveFlow's create-vs-update check relies
+  // on that, so the first save POSTs it like any new flow.
+  const [draftFlow, setDraftFlow] = useState<Flow | null>(null);
+  const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
+
   // Copy flow dialog state
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [flowToCopy, setFlowToCopy] = useState<Flow | null>(null);
@@ -65,9 +73,12 @@ const FlowsPage = () => {
         log.debug('Flows loaded successfully', { count: loadedFlows.length });
         setFlows(loadedFlows);
         
-        // If a flow was previously selected, verify it still exists
+        // If a flow was previously selected, verify it still exists. An unsaved
+        // generated draft is never in the loaded list — don't deselect it.
         if (selectedFlow) {
-          const flowExists = loadedFlows.some(flow => flow.id === selectedFlow);
+          const flowExists =
+            loadedFlows.some(flow => flow.id === selectedFlow) ||
+            draftFlow?.id === selectedFlow;
           if (!flowExists) {
             log.warn('Previously selected flow no longer exists', { flowId: selectedFlow });
             setSelectedFlow(null);
@@ -84,7 +95,7 @@ const FlowsPage = () => {
     };
 
     loadFlows();
-  }, [selectedFlow]);
+  }, [selectedFlow, draftFlow]);
   
   // Handle flow selection
   const handleSelectFlow = useCallback((flowId: string) => {
@@ -109,19 +120,7 @@ const FlowsPage = () => {
     return () => clearNavigationGuard(guard);
   }, [isEditing, selectedFlow]);
 
-  // Handle back to dashboard — routed through the builder's navigation
-  // guard so unsaved changes get a Save/Discard dialog first.
-  const handleBackToDashboard = useCallback(() => {
-    log.debug('Returning to dashboard');
-    const leave = () => setIsEditing(false);
-    if (flowBuilderRef.current) {
-      flowBuilderRef.current.requestNavigation(leave);
-    } else {
-      leave();
-    }
-  }, []);
-  
-  // Show snackbar notification
+  // Show snackbar notification (declared before its first useCallback consumer)
   const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
     log.debug('Showing snackbar', { message, severity });
     setSnackbar({
@@ -130,6 +129,27 @@ const FlowsPage = () => {
       severity
     });
   }, []);
+
+  // Handle back to dashboard — routed through the builder's navigation
+  // guard so unsaved changes get a Save/Discard dialog first.
+  const handleBackToDashboard = useCallback(() => {
+    log.debug('Returning to dashboard');
+    const leave = () => {
+      setIsEditing(false);
+      // Leaving a generated draft without saving discards it (the dashboard only
+      // shows saved flows, so a lingering draft would be unreachable anyway).
+      if (draftFlow && draftFlow.id === selectedFlow) {
+        setDraftFlow(null);
+        setSelectedFlow(null);
+        showSnackbar('Generated draft discarded', 'info');
+      }
+    };
+    if (flowBuilderRef.current) {
+      flowBuilderRef.current.requestNavigation(leave);
+    } else {
+      leave();
+    }
+  }, [draftFlow, selectedFlow, showSnackbar]);
   
   // Handle banner close
   const handleSnackbarClose = useCallback(() => {
@@ -204,6 +224,11 @@ const FlowsPage = () => {
           return [...prevFlows, flow];
         }
       });
+
+      // A saved draft is a draft no longer — it lives in `flows` now.
+      if (draftFlow?.id === flow.id) {
+        setDraftFlow(null);
+      }
 
       setSelectedFlow(flow.id);
       showSnackbar('Flow saved successfully', 'success');
@@ -327,6 +352,31 @@ const FlowsPage = () => {
     setNameError(validateFlowName(name));
   };
   
+  // A generated draft arrives: open it in the builder WITHOUT saving. The first
+  // save POSTs it via handleSaveFlow's create branch (the draft isn't in `flows`).
+  const handleGenerated = useCallback((result: GeneratedFlowInfo) => {
+    log.info('Opening generated draft flow', {
+      flowId: result.flow.id,
+      attempts: result.attempts,
+      errors: result.errorCount,
+      warnings: result.warningCount,
+    });
+    setGenerateDialogOpen(false);
+    setDraftFlow(result.flow);
+    setSelectedFlow(result.flow.id);
+    setIsEditing(true);
+    if (result.errorCount > 0) {
+      showSnackbar(
+        `Draft generated with ${result.errorCount} error(s) and ${result.warningCount} warning(s) — use the Check button, fix, then save`,
+        'warning'
+      );
+    } else if (result.warningCount > 0) {
+      showSnackbar(`Draft generated with ${result.warningCount} warning(s) — review, then save to keep it`, 'info');
+    } else {
+      showSnackbar('Flow drafted — review it and save to keep it', 'success');
+    }
+  }, [showSnackbar]);
+
   // Create a new flow with a unique name
   const createNewFlow = async () => {
     log.info('Creating new flow');
@@ -353,7 +403,10 @@ const FlowsPage = () => {
   // Render content based on state (dashboard or editor)
   const renderContent = () => {
     if (isEditing && selectedFlow) {
-      const selectedFlowData = flows.find((f: Flow) => f.id === selectedFlow);
+      // A generated draft is not in `flows` yet — fall back to it by id.
+      const selectedFlowData =
+        flows.find((f: Flow) => f.id === selectedFlow) ??
+        (draftFlow?.id === selectedFlow ? draftFlow : undefined);
       if (!selectedFlowData) {
         return (
           <Box sx={{ p: 4, textAlign: 'center' }}>
@@ -434,7 +487,9 @@ const FlowsPage = () => {
                 the back arrow (left) plus this dynamic title handle editor nav. */}
             <Typography variant="h5">
               {isEditing && selectedFlow
-                ? `Editing: ${flows.find(f => f.id === selectedFlow)?.name || 'Flow'}`
+                ? draftFlow?.id === selectedFlow
+                  ? `Editing: ${draftFlow.name} (unsaved draft)`
+                  : `Editing: ${flows.find(f => f.id === selectedFlow)?.name || 'Flow'}`
                 : 'Flow Dashboard'
               }
             </Typography>
@@ -443,6 +498,17 @@ const FlowsPage = () => {
         
         {!isEditing && (
           <Box sx={{ display: 'flex', gap: 1 }}>
+            <Tooltip title="Describe a flow in plain language and let a model draft it">
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<AutoAwesomeIcon />}
+                onClick={() => setGenerateDialogOpen(true)}
+                data-tour="generate-flow"
+              >
+                Generate Flow
+              </Button>
+            </Tooltip>
             <Tooltip title="Create a new flow with a starter template">
               <Button
                 variant="contained"
@@ -506,7 +572,14 @@ const FlowsPage = () => {
           </Button>
         </DialogActions>
       </Dialog>
-      
+
+      {/* Generate Flow Dialog (issue #14) */}
+      <GenerateFlowDialog
+        open={generateDialogOpen}
+        onClose={() => setGenerateDialogOpen(false)}
+        onGenerated={handleGenerated}
+      />
+
     </Box>
   );
 };

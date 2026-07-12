@@ -13,7 +13,7 @@
  *    generic "400 Bad Request" (seen via Requesty), so nothing beyond the
  *    OpenAI spec may survive this mapping.
  */
-import { buildNodeContext, stripHandoffPlumbing, toApiMessages } from '@/backend/execution/flow/buildNodeContext';
+import { buildNodeContext, stripHandoffPlumbing, toApiMessages, scopeMessagesForInput } from '@/backend/execution/flow/buildNodeContext';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
 const sys = (content: string, id = content): FlujoChatMessage =>
@@ -32,6 +32,14 @@ const handoffAssistant = (id: string, callId: string): FlujoChatMessage =>
   } as FlujoChatMessage);
 const toolResult = (id: string, callId: string, content = 'r'): FlujoChatMessage =>
   ({ role: 'tool', tool_call_id: callId, content, id, timestamp: 1 } as FlujoChatMessage);
+const toolCallAssistant = (id: string, callId: string): FlujoChatMessage =>
+  ({
+    role: 'assistant',
+    content: '',
+    id,
+    timestamp: 1,
+    tool_calls: [{ id: callId, type: 'function', function: { name: 'mcp_search_abc', arguments: '{}' } }],
+  } as FlujoChatMessage);
 
 describe('buildNodeContext (history — lossless except system swap)', () => {
   it('puts the node system first, drops old system, KEEPS all other messages (incl. handoff plumbing)', () => {
@@ -148,6 +156,82 @@ describe('stripHandoffPlumbing (wire view — clean for the model)', () => {
   it('leaves a plain conversation untouched', () => {
     const messages = [sys('NODE', 'node-sys'), user('hi', 'u1'), assistant('hello', 'a1'), user('more', 'u2')];
     expect(stripHandoffPlumbing(messages).map((m) => m.id)).toEqual(['node-sys', 'u1', 'a1', 'u2']);
+  });
+});
+
+describe('scopeMessagesForInput (process node inputMode — WIRE view only)', () => {
+  it("'full-history' (and undefined) returns the messages unchanged", () => {
+    const messages = [sys('NODE', 'node-sys'), user('a', 'u1'), assistant('b', 'a1'), user('c', 'u2')];
+    expect(scopeMessagesForInput(messages, 'full-history')).toBe(messages);
+    expect(scopeMessagesForInput(messages, undefined)).toBe(messages);
+  });
+
+  it("'latest-message' keeps the system message plus everything from the last user message on", () => {
+    const messages = [sys('NODE', 'node-sys'), user('old', 'u1'), assistant('done', 'a1'), user('current', 'u2')];
+    const out = scopeMessagesForInput(messages, 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u2']);
+  });
+
+  it("'latest-message' includes the in-flight tool exchange that follows the last user message", () => {
+    // Mid tool-loop re-entry: the assistant tool call + its result come after the
+    // current user turn and must survive so the model can continue the loop.
+    const messages = [
+      sys('NODE', 'node-sys'),
+      user('old', 'u1'),
+      assistant('done', 'a1'),
+      user('current', 'u2'),
+      toolCallAssistant('a2', 'call-1'),
+      toolResult('t2', 'call-1'),
+    ];
+    const out = scopeMessagesForInput(messages, 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u2', 'a2', 't2']);
+  });
+
+  it("'latest-message' falls back to the full list when there is no user message", () => {
+    const messages = [sys('NODE', 'node-sys'), assistant('b', 'a1')];
+    expect(scopeMessagesForInput(messages, 'latest-message')).toBe(messages);
+  });
+
+  it("'isolated' drops the conversation and sends the isolated prompt as the user message", () => {
+    const messages = [sys('NODE', 'node-sys'), user('old', 'u1'), assistant('done', 'a1')];
+    const out = scopeMessagesForInput(messages, 'isolated', 'do the thing');
+    expect(out.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(out[0].content).toBe('NODE');
+    expect(out[1]).toMatchObject({ role: 'user', content: 'do the thing' });
+  });
+
+  it("'isolated' keeps the current in-flight tool tail so a tool-using isolated node can loop", () => {
+    // On re-entry the history is [prior settled turns, assistant(tool_calls), tool].
+    // The isolated prompt is re-seeded and the unresolved tail preserved.
+    const messages = [
+      sys('NODE', 'node-sys'),
+      user('old', 'u1'),
+      assistant('settled', 'a1'),
+      toolCallAssistant('a2', 'call-1'),
+      toolResult('t2', 'call-1'),
+    ];
+    const out = scopeMessagesForInput(messages, 'isolated', 'task');
+    expect(out.map((m) => m.id ?? m.role)).toEqual(['node-sys', 'isolated-input', 'a2', 't2']);
+    expect(out[1]).toMatchObject({ role: 'user', content: 'task' });
+  });
+
+  it("'isolated' with a settled conversation has no tail (just system + isolated user)", () => {
+    const messages = [
+      sys('NODE', 'node-sys'),
+      user('old', 'u1'),
+      toolCallAssistant('a1', 'call-1'),
+      toolResult('t1', 'call-1'),
+      assistant('final answer', 'a2'), // loop ended → settled
+    ];
+    const out = scopeMessagesForInput(messages, 'isolated', 'task');
+    expect(out.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(out[1].content).toBe('task');
+  });
+
+  it("'isolated' tolerates a missing prompt (empty user message)", () => {
+    const messages = [sys('NODE', 'node-sys'), user('old', 'u1')];
+    const out = scopeMessagesForInput(messages, 'isolated');
+    expect(out[1]).toMatchObject({ role: 'user', content: '' });
   });
 });
 

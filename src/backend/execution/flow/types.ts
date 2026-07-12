@@ -55,6 +55,22 @@ export interface ProcessNodeProperties {
      *  (workflow/handoff guidance) from the rendered prompt. Independent of
      *  excludeModelPrompt. Defaults to false (block shown). Issue #67. */
     excludeSystemPrompt?: boolean;
+    /** How much of the conversation the node's MODEL sees. Mirrors the subflow
+     *  node's input modes so a process node can run scoped to the current task
+     *  or fully self-contained:
+     *    - 'full-history' (default): the node's rendered prompt (system) plus
+     *      the whole conversation. Today's behavior; existing flows are unchanged.
+     *    - 'latest-message': the node's prompt plus only the most recent user
+     *      message (and any in-flight tool exchange for the current turn).
+     *    - 'isolated': the node's prompt plus `isolatedPrompt` as a single user
+     *      message; the prior conversation is not shown to the model.
+     *  Scoping applies to the WIRE view only — the persisted conversation is
+     *  never truncated (see scopeMessagesForInput / ModelHandler wireMessages). */
+    inputMode?: 'full-history' | 'latest-message' | 'isolated';
+    /** The user message sent to the model in 'isolated' inputMode. Wire-only:
+     *  it shapes the model's input but is not persisted into the conversation
+     *  transcript (analogous to the subflow node's isolated prompt). */
+    isolatedPrompt?: string;
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -104,19 +120,21 @@ export interface SubflowNodeProperties {
     name?: string;
     /** The id of the flow this node runs as a subflow (flow-as-callable). */
     subflowId?: string;
-    /** Optional explicit input passed to the subflow as its user prompt. When
-     *  empty, the subflow receives the parent conversation (governed by
-     *  `inputMode`). (Named-variable templating is a later enhancement.) */
+    /** The user prompt sent to the subflow in 'isolated' inputMode. When
+     *  `inputMode` is unset but this is non-empty, the node is treated as
+     *  'isolated' (back-compat: this field used to override the history
+     *  unconditionally). (Named-variable templating is a later enhancement.) */
     promptTemplate?: string;
-    /** How the parent conversation is mapped into the subflow when there is no
-     *  `promptTemplate` override (issue #74):
+    /** How the parent conversation is mapped into the subflow (issue #74):
      *    - 'full-history' (default): the whole sanitized parent transcript is
      *      passed, so the subflow continues with genuine context. This can make
      *      an orchestrator-driven worker re-anchor on an earlier task, so
      *    - 'latest-message': only the most recent user instruction is passed,
      *      scoping each subflow invocation to the current task.
+     *    - 'isolated': the parent conversation is ignored; `promptTemplate` is
+     *      sent as the subflow's single user prompt.
      *  Default stays 'full-history' so existing flows are unaffected. */
-    inputMode?: 'full-history' | 'latest-message';
+    inputMode?: 'full-history' | 'latest-message' | 'isolated';
     /** Output visibility: 'steps' (default) folds the child run's events into
      *  the parent conversation's live stream + log, nested by depth;
      *  'final-only' shows only the folded final output message. */
@@ -350,6 +368,11 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     availableTools?: ToolDefinition[];
     mcpContext?: MCPContext;
     messages: FlujoChatMessage[]; // Use timestamped type
+    /** The scoped view actually sent to the model when `inputMode` is not
+     *  'full-history'. `messages` above stays the lossless threaded history (it
+     *  is written back to SharedState by post); this narrows only what the
+     *  provider sees. Unset ⇒ the model sees `messages` verbatim. */
+    wireMessages?: FlujoChatMessage[];
     toolCalls?: ToolCallInfo[];
     /** Conversation id, forwarded so self-orchestrating adapters can surface
      *  mid-run tool-approval prompts on the conversation's event stream. */
