@@ -27,6 +27,16 @@ export interface CompletionInput {
    */
   toolNameMap?: Record<string, { server: string; tool: string; timeout?: number }>;
   /**
+   * Executors for caller-defined "virtual" tools (entries in `tools` that are
+   * neither handoffs nor MCP tools), keyed by function name — e.g. the flow
+   * generator's marketplace search/install tools. Request/response adapters
+   * ignore this (the caller reads `tool_calls` and runs its own loop);
+   * self-orchestrating adapters (Claude subscription) MUST execute these
+   * in-loop via the provided executor, since their tool calls never surface to
+   * the caller. Without an executor such tools are silently dropped there.
+   */
+  localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+  /**
    * Upper bound on agentic turns for adapters that orchestrate their own tool
    * loop (Claude subscription). Ignored by the request/response adapters, where
    * FLUJO drives the loop. Falls back to a sane default when unset.

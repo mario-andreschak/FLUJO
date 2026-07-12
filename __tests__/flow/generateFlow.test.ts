@@ -40,6 +40,13 @@ jest.mock('@/backend/services/flow', () => ({
   },
 }));
 
+const searchRegistryMock = jest.fn();
+const installRegistryServerMock = jest.fn();
+jest.mock('@/backend/services/mcp/registryInstall', () => ({
+  searchRegistry: (...a: unknown[]) => searchRegistryMock(...a),
+  installRegistryServer: (...a: unknown[]) => installRegistryServerMock(...a),
+}));
+
 import { generateFlow, extractJsonObject } from '@/backend/services/flow/generateFlow';
 
 // ---------------------------------------------------------------------------
@@ -97,6 +104,8 @@ beforeEach(() => {
     { id: 'flow-1', name: 'Summarizer', description: 'Summarizes text', nodes: [], edges: [] },
   ]);
   createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(goodSpec)));
+  searchRegistryMock.mockResolvedValue([]);
+  installRegistryServerMock.mockResolvedValue({ installed: false, error: 'not mocked' });
 });
 
 // ---------------------------------------------------------------------------
@@ -319,5 +328,123 @@ describe('generateFlow — hard failures', () => {
     createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(specNoServers)));
     const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
     expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capability acquisition — marketplace search / install tool loop
+// ---------------------------------------------------------------------------
+
+describe('generateFlow — marketplace tools', () => {
+  const toolCallCompletion = (name: string, args: object, id = 'call_1') => ({
+    completion: {
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+          },
+        },
+      ],
+    },
+  });
+
+  it('always offers search; offers install ONLY with allowInstall', async () => {
+    await generateFlow({ description: 'x', modelId: 'model-gen' });
+    const withoutInstall = (createCompletionMock.mock.calls[0][0].tools ?? []).map(
+      (t: { function: { name: string } }) => t.function.name
+    );
+    expect(withoutInstall).toEqual(['search_mcp_marketplace']);
+
+    createCompletionMock.mockClear();
+    await generateFlow({ description: 'x', modelId: 'model-gen', allowInstall: true });
+    const withInstall = (createCompletionMock.mock.calls[0][0].tools ?? []).map(
+      (t: { function: { name: string } }) => t.function.name
+    );
+    expect(withInstall).toEqual(['search_mcp_marketplace', 'install_mcp_server']);
+  });
+
+  it('search → install → spec: executes the tools, reports installs, and re-gathers context', async () => {
+    const specWithNewServer = {
+      ...goodSpec,
+      nodes: goodSpec.nodes.map((n) =>
+        n.key === 'p' ? { ...n, servers: [{ name: 'voice', tools: ['sing'] }] } : n
+      ),
+    };
+    searchRegistryMock.mockResolvedValue([
+      { name: 'io.github.acme/voice', description: 'TTS', installable: true, requiredEnv: [] },
+    ]);
+    installRegistryServerMock.mockResolvedValue({
+      installed: true,
+      serverName: 'voice',
+      tools: [{ name: 'sing' }],
+    });
+    // After the install, the re-gathered context must include the new server.
+    loadServerConfigsMock
+      .mockResolvedValueOnce([{ name: 'brave-search' }, { name: 'offline-srv' }, { name: 'disabled-srv', disabled: true }])
+      .mockResolvedValue([{ name: 'brave-search' }, { name: 'voice' }]);
+    getServerStatusMock.mockResolvedValue({ status: 'connected' });
+    listServerToolsMock.mockImplementation(async (name: string) => ({
+      tools: name === 'voice' ? [{ name: 'sing', description: 'sings' }] : [{ name: 'web_search' }],
+    }));
+
+    createCompletionMock
+      .mockResolvedValueOnce(toolCallCompletion('search_mcp_marketplace', { query: 'voice' }))
+      .mockResolvedValueOnce(toolCallCompletion('install_mcp_server', { name: 'io.github.acme/voice' }, 'call_2'))
+      .mockResolvedValueOnce(completionWith(JSON.stringify(specWithNewServer)));
+
+    const result = await generateFlow({ description: 'sing me a song', modelId: 'model-gen', allowInstall: true });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(searchRegistryMock).toHaveBeenCalledWith('voice');
+    expect(installRegistryServerMock).toHaveBeenCalledWith('io.github.acme/voice');
+    expect(result.installedServers).toEqual([{ name: 'voice', tools: ['sing'] }]);
+    // The freshly installed server validates clean (no server-unknown warning).
+    expect(result.validation.errorCount).toBe(0);
+    expect(result.validation.issues.map((i) => i.code)).not.toContain('server-unknown');
+
+    // Tool results were appended as role:'tool' messages tied to the call ids.
+    const finalMessages = createCompletionMock.mock.calls[2][0].messages;
+    const toolMessages = finalMessages.filter((m: { role: string }) => m.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages[0].tool_call_id).toBe('call_1');
+  });
+
+  it('refuses install when allowInstall is off, even if the model tries', async () => {
+    createCompletionMock
+      .mockResolvedValueOnce(toolCallCompletion('install_mcp_server', { name: 'x/y' }))
+      .mockResolvedValueOnce(completionWith(JSON.stringify(goodSpec)));
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(result.installedServers).toEqual([]);
+    // The refusal reached the model as the tool result.
+    const toolMsg = createCompletionMock.mock.calls[1][0].messages.find((m: { role: string }) => m.role === 'tool');
+    expect(toolMsg.content).toContain('not allowed');
+  });
+
+  it('withdraws tools after the turn budget and demands the spec', async () => {
+    createCompletionMock.mockImplementation(async (input: { tools?: unknown[] }) => {
+      if (input.tools && input.tools.length > 0) {
+        return toolCallCompletion('search_mcp_marketplace', { query: 'loop' });
+      }
+      return completionWith(JSON.stringify(goodSpec));
+    });
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen', allowInstall: true });
+    expect(result.success).toBe(true);
+    // Bounded: search ran at most MAX_TOOL_TURNS times, then the spec was demanded.
+    expect(searchRegistryMock.mock.calls.length).toBeLessThanOrEqual(8);
+  });
+
+  it('a search failure is fed to the model as an error result, not thrown', async () => {
+    searchRegistryMock.mockRejectedValue(new Error('registry down'));
+    createCompletionMock
+      .mockResolvedValueOnce(toolCallCompletion('search_mcp_marketplace', { query: 'voice' }))
+      .mockResolvedValueOnce(completionWith(JSON.stringify(goodSpec)));
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    const toolMsg = createCompletionMock.mock.calls[1][0].messages.find((m: { role: string }) => m.role === 'tool');
+    expect(toolMsg.content).toContain('registry down');
   });
 });

@@ -31,20 +31,34 @@ const validation = { issues: [], errorCount: 0, warningCount: 0, isRunnable: tru
 beforeEach(() => {
   jest.clearAllMocks();
   assertUnlockedMock.mockResolvedValue(null);
-  generateFlowMock.mockResolvedValue({ success: true, flow: draft, validation, attempts: 1 });
+  generateFlowMock.mockResolvedValue({ success: true, flow: draft, validation, attempts: 1, installedServers: [] });
 });
 
 describe('POST /api/flow/generate', () => {
-  it('returns the draft + validation + attempts on success', async () => {
+  it('returns the draft + validation + attempts + installedServers on success', async () => {
     const res = await POST(req({ description: 'build me a thing', modelId: 'm1' }));
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ flow: draft, validation, attempts: 1 });
-    expect(generateFlowMock).toHaveBeenCalledWith({ description: 'build me a thing', modelId: 'm1', maxRepairs: undefined });
+    await expect(res.json()).resolves.toEqual({ flow: draft, validation, attempts: 1, installedServers: [] });
+    expect(generateFlowMock).toHaveBeenCalledWith({
+      description: 'build me a thing',
+      modelId: 'm1',
+      maxRepairs: undefined,
+      allowInstall: false,
+    });
   });
 
   it('passes maxRepairs through', async () => {
     await POST(req({ description: 'x', modelId: 'm1', maxRepairs: 2 }));
     expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ maxRepairs: 2 }));
+  });
+
+  it('passes allowInstall through only as an explicit boolean true', async () => {
+    await POST(req({ description: 'x', modelId: 'm1', allowInstall: true }));
+    expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowInstall: true }));
+    generateFlowMock.mockClear();
+    generateFlowMock.mockResolvedValue({ success: true, flow: draft, validation, attempts: 1, installedServers: [] });
+    await POST(req({ description: 'x', modelId: 'm1', allowInstall: 'yes' }));
+    expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowInstall: false }));
   });
 
   it('maps a service failure to its status code + error envelope', async () => {
@@ -64,7 +78,7 @@ describe('POST /api/flow/generate', () => {
     generateFlowMock.mockResolvedValue({ success: false, error: 'A flow description is required', statusCode: 400 });
     const res = await POST(req({}));
     expect(res.status).toBe(400);
-    expect(generateFlowMock).toHaveBeenCalledWith({ description: '', modelId: '', maxRepairs: undefined });
+    expect(generateFlowMock).toHaveBeenCalledWith({ description: '', modelId: '', maxRepairs: undefined, allowInstall: false });
   });
 
   it('is gated by the encryption lock', async () => {

@@ -11,6 +11,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -18,6 +19,7 @@ import {
   DialogContentText,
   DialogTitle,
   FormControl,
+  FormControlLabel,
   InputLabel,
   MenuItem,
   Select,
@@ -37,6 +39,8 @@ export interface GeneratedFlowInfo {
   errorCount: number;
   warningCount: number;
   attempts: number;
+  /** MCP servers the generator installed during this generation (allowInstall only). */
+  installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
 }
 
 interface GenerateFlowDialogProps {
@@ -50,6 +54,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
   const [description, setDescription] = useState('');
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
+  const [allowInstall, setAllowInstall] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,7 +89,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     setError(null);
     setIsGenerating(true);
     try {
-      const result = await flowService.generateFlow(description.trim(), modelId);
+      const result = await flowService.generateFlow(description.trim(), modelId, { allowInstall });
       if (!result.success) {
         setError(result.error);
         return;
@@ -94,6 +99,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         attempts: result.attempts,
         errors: result.validation.errorCount,
         warnings: result.validation.warningCount,
+        installedServers: result.installedServers.length,
       });
       setDescription('');
       onGenerated({
@@ -101,11 +107,12 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         errorCount: result.validation.errorCount,
         warningCount: result.validation.warningCount,
         attempts: result.attempts,
+        installedServers: result.installedServers,
       });
     } finally {
       setIsGenerating(false);
     }
-  }, [description, modelId, onGenerated]);
+  }, [description, modelId, allowInstall, onGenerated]);
 
   const canGenerate = !isGenerating && description.trim().length > 0 && !!modelId;
 
@@ -149,11 +156,32 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             ))}
           </Select>
         </FormControl>
+        <FormControlLabel
+          sx={{ mt: 2 }}
+          control={
+            <Checkbox
+              checked={allowInstall}
+              onChange={(e) => setAllowInstall(e.target.checked)}
+              disabled={isGenerating}
+            />
+          }
+          label="Let the generator install MCP servers it needs (self-improve)"
+        />
+        {allowInstall && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            The generator may <strong>download, install, and run third-party MCP servers</strong> from
+            the public registry on this machine — without asking again. It prefers servers that need
+            no API keys, but anything it installs executes real code with your user&apos;s permissions.
+            Installed servers stay configured afterwards (remove them on the MCP page).
+          </Alert>
+        )}
         {isGenerating && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 2 }}>
             <CircularProgress size={20} />
             <DialogContentText>
-              Generating… the model designs the flow and FLUJO checks it (this can take up to a minute).
+              {allowInstall
+                ? 'Generating… the model may search the marketplace and install servers (this can take a few minutes).'
+                : 'Generating… the model designs the flow and FLUJO checks it (this can take up to a minute).'}
             </DialogContentText>
           </Box>
         )}
