@@ -1,0 +1,60 @@
+name: Publish Docker Image
+
+# Builds the official FLUJO image and pushes it to GHCR as
+# ghcr.io/mario-andreschak/flujo (issue #57). Consumers like the brain stack
+# reference :latest; every push to main also gets the package.json version and
+# a commit-sha tag for pinning.
+#
+# NOTE: the first published package is PRIVATE by default. Make it public once
+# under https://github.com/users/mario-andreschak/packages/container/flujo/settings
+# or anonymous `docker pull` keeps failing with "denied".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read package.json version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Docker metadata (tags + OCI labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Registry paths must be lowercase; the repo name (FLUJO) is not.
+          images: ghcr.io/mario-andreschak/flujo
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.version }},enable={{is_default_branch}}
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
