@@ -5,8 +5,9 @@
 .DESCRIPTION
     Reverses what scripts\install.ps1 did:
       - Optionally removes the prerequisites it installed via winget (Git, Node.js,
-        Python, uv). For each one it asks, defaulting to YES when FLUJO installed it
-        and NO when it was already on the system (read from the install manifest).
+        Python, uv, and Ollama if it was installed). For each one it asks, defaulting
+        to YES when FLUJO installed it and NO when it was already on the system (read
+        from the install manifest).
       - Removes the global 'flujo' command and its user-PATH entry.
       - Removes the desktop shortcut.
       - Optionally reverts the CurrentUser execution policy (only if FLUJO set it).
@@ -67,6 +68,7 @@ $KnownPrereqs = @(
     [PSCustomObject]@{ command = 'node';   wingetId = 'OpenJS.NodeJS';      displayName = 'Node.js (includes npm)' }
     [PSCustomObject]@{ command = 'python'; wingetId = 'Python.Python.3.12'; displayName = 'Python 3.12' }
     [PSCustomObject]@{ command = 'uv';     wingetId = 'astral-sh.uv';       displayName = 'uv' }
+    [PSCustomObject]@{ command = 'ollama'; wingetId = 'Ollama.Ollama';      displayName = 'Ollama' }
 )
 
 Write-Host "FLUJO Uninstaller" -ForegroundColor Magenta
