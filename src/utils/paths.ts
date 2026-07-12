@@ -42,6 +42,34 @@ export function getDataDir(): string {
   return custom && custom.trim().length > 0 ? path.resolve(custom) : getAppDir();
 }
 
+/**
+ * Base URL of the Ollama server FLUJO should talk to for local models.
+ *
+ * Defaults to Ollama's standard local endpoint. The Docker/compose distribution
+ * sets FLUJO_OLLAMA_URL to the sidecar service (e.g. http://ollama:11434), since
+ * `localhost` inside a container is the container itself, not the Ollama one.
+ *
+ * The returned value has no trailing slash, so callers can append `/api/...` or
+ * `/v1` without doubling up.
+ */
+export function getOllamaUrl(): string {
+  const custom = process.env.FLUJO_OLLAMA_URL;
+  const base = custom && custom.trim().length > 0 ? custom.trim() : 'http://localhost:11434';
+  return base.replace(/\/+$/, '');
+}
+
+/**
+ * Whether this install explicitly advertises local models (the Ollama-enabled
+ * Docker image sets FLUJO_OLLAMA=1). This is only a hint for surfacing the
+ * local-model onboarding: a native install where the user installed Ollama
+ * themselves won't set it, so callers should treat actual Ollama reachability as
+ * the authoritative signal and use this only as an additional opt-in.
+ */
+export function isLocalModelsEnabled(): boolean {
+  const v = process.env.FLUJO_OLLAMA;
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 export type InstallMode = 'git' | 'container' | 'npm';
 
 /**
