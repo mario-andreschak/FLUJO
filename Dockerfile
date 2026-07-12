@@ -34,7 +34,8 @@ ENV NODE_ENV=production \
 
 # Runtime toolchains for on-demand MCP server installation/execution:
 #  - git: Marketplace/manual server clones
-#  - python3 + venv: Python-based servers
+#  - python3 + venv + pip: Python-based servers (many configs run `pip install`
+#    literally; python-is-python3 covers the equally common bare `python`)
 #  - ca-certificates: TLS for clones/fetches (works with --use-system-ca)
 #  - curl: uv installer + container HEALTHCHECK
 RUN apt-get update \
@@ -42,9 +43,15 @@ RUN apt-get update \
         git \
         python3 \
         python3-venv \
+        python3-pip \
+        python-is-python3 \
         ca-certificates \
         curl \
     && rm -rf /var/lib/apt/lists/*
+# Debian refuses bare `pip install` into system site-packages (PEP 668). MCP
+# server configs run exactly that, and inside a disposable container the
+# system environment IS the sandbox — so lift the guard.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Install uv/uvx (Python package runner used by many MCP servers) onto PATH.
 RUN curl -LsSf https://astral.sh/uv/install.sh \

@@ -90,8 +90,42 @@ describe('internalToolDefinitions', () => {
         'list_models',
         'list_planned_executions',
         'run_planned_execution',
+        'terminal',
       ])
     );
+  });
+});
+
+describe('terminal', () => {
+  it('runs a shell command and returns its output and exit code', async () => {
+    const r = await internalCallTool(makeService(), 'terminal', {
+      command: process.platform === 'win32' ? 'echo hello-terminal' : 'echo hello-terminal',
+    });
+    expect(r.isError).toBeUndefined();
+    const out = text(r);
+    expect(out).toContain('hello-terminal');
+    expect(out).toContain('"exitCode": 0');
+  });
+
+  it('reports a non-zero exit as an error result', async () => {
+    const r = await internalCallTool(makeService(), 'terminal', { command: 'exit 3' });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('"exitCode": 3');
+  });
+
+  it('requires a command', async () => {
+    const r = await internalCallTool(makeService(), 'terminal', {});
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('command');
+  });
+
+  it('kills a command that exceeds the timeout', async () => {
+    const r = await internalCallTool(makeService(), 'terminal', {
+      command: process.platform === 'win32' ? 'ping -n 6 127.0.0.1 > NUL' : 'sleep 5',
+      timeout: 1,
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('timedOut');
   });
 });
 
