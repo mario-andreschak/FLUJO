@@ -148,6 +148,13 @@ describe('deny-by-default coverage guard', () => {
     [
       'src/app/api/encryption/secure/route.ts',
       'src/app/api/init/route.ts',
+      // Local-models (Ollama) onboarding: capability probe, model pull, and model
+      // suggestion are secret-free and must work on FIRST LAUNCH, before encryption
+      // is even configured. Registering the pulled model (POST /api/model) is what
+      // carries the unlock requirement — see the comments in each route.
+      'src/app/api/local-models/capability/route.ts',
+      'src/app/api/local-models/pull/route.ts',
+      'src/app/api/local-models/suggest/route.ts',
     ].map((p) => p.replace(/\\/g, '/'))
   );
 

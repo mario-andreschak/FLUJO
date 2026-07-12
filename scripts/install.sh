@@ -5,7 +5,8 @@
 #
 # Installs the prerequisites (Git, Node.js + npm, Python 3, uv), clones (or
 # updates) FLUJO, builds it, registers a global 'flujo' command (start FLUJO
-# from any folder), and optionally starts it.
+# from any folder), and optionally starts it. Can also optionally install Ollama
+# (the local-model runtime) — FLUJO then talks to it over HTTP.
 #
 # Run directly:
 #
@@ -22,6 +23,7 @@
 #     FLUJO_BRANCH    git branch                       (default: main)
 #     FLUJO_START     start FLUJO after building       1/true/yes or 0/false/no
 #     FLUJO_SHORTCUT  desktop entry, Linux only        1/true/yes or 0/false/no
+#     FLUJO_OLLAMA    install Ollama for local models  1/true/yes or 0/false/no
 
 set -euo pipefail
 
@@ -131,6 +133,18 @@ elif [ $? -eq 2 ]; then
   if ask_yn "Start FLUJO after building?"; then START_AFTER=true; fi
 fi
 
+# Ollama is a large, optional download, so it defaults to NO (unlike the prompts
+# above): a bare `curl | bash` with no tty must not pull it unattended. Set
+# FLUJO_OLLAMA=1 to opt in non-interactively.
+INSTALL_OLLAMA=false
+if flag "${FLUJO_OLLAMA:-}"; then
+  INSTALL_OLLAMA=true
+elif [ $? -eq 2 ]; then
+  case "$(ask "Install Ollama for local models? (large download, optional) (y/N)" n)" in
+    [yY]|[yY][eE][sS]) INSTALL_OLLAMA=true ;;
+  esac
+fi
+
 # Record what was already on the system BEFORE we touch it, so the uninstall
 # manifest can default to removing only what FLUJO installed itself.
 PRE_GIT=$(have git && echo true || echo false)
@@ -138,6 +152,7 @@ PRE_NODE=$(have node && echo true || echo false)
 PRE_PYTHON=$(have python3 && echo true || echo false)
 PRE_UV=$(have uv && echo true || echo false)
 PRE_CLAUDE=$(have claude && echo true || echo false)
+PRE_OLLAMA=$(have ollama && echo true || echo false)
 
 # ---------------------------------------------------------------------------
 # 2. Install prerequisites.
@@ -270,6 +285,45 @@ else
 fi
 CLAUDE_INSTALLED=$(have claude && echo true || echo false)
 
+# Ollama (optional) — the local-model runtime. Installs the `ollama` daemon and
+# starts `ollama serve`; FLUJO then reaches it over HTTP (default
+# http://localhost:11434) and its onboarding can pull a model on demand. Only
+# installed when the user opted in above.
+if [ "$INSTALL_OLLAMA" = true ]; then
+  if have ollama; then
+    ok "Ollama already installed ($(command -v ollama))"
+  else
+    step "Installing Ollama (local model runtime)"
+    if [ "$OS" = Darwin ]; then
+      if have brew; then
+        brew install ollama || warn "Could not install Ollama via Homebrew."
+        # Homebrew does not auto-start services; launch the daemon as a service so
+        # `ollama serve` is running when FLUJO looks for it.
+        if brew services start ollama >/dev/null 2>&1; then
+          ok "Ollama service started (brew services)."
+        else
+          warn "Start Ollama later with: brew services start ollama  (or run: ollama serve)"
+        fi
+      else
+        warn "Homebrew not available; install Ollama from https://ollama.com/download"
+      fi
+    else
+      # Linux: the official installer sets up and starts a systemd service, and
+      # handles sudo itself, so it is preferred over the distro package managers.
+      if curl -fsSL https://ollama.com/install.sh | sh; then
+        ok "Ollama installed (systemd service configured)."
+      else
+        warn "Could not install Ollama automatically; see https://ollama.com/download"
+      fi
+    fi
+    if have ollama; then
+      ok "Ollama ready ($(command -v ollama))."
+    else
+      warn "Ollama installed but not yet on PATH; open a new terminal if 'ollama' is missing."
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
@@ -363,6 +417,13 @@ fi
 # 6. Record what this install did, so a future uninstall can reverse it.
 # ---------------------------------------------------------------------------
 mkdir -p "$MANIFEST_DIR"
+# Ollama is only recorded when the user chose to install it, so a future
+# uninstaller offers to remove only what this run actually added. The leading
+# comma continues the prerequisites array (the uv entry has none).
+OLLAMA_MANIFEST=''
+if [ "$INSTALL_OLLAMA" = true ]; then
+  OLLAMA_MANIFEST=$(printf ',\n    { "command": "ollama",  "displayName": "Ollama",                  "preexisting": %s }' "$PRE_OLLAMA")
+fi
 cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
 {
   "schema": 1,
@@ -382,7 +443,7 @@ cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
     { "command": "git",     "displayName": "Git",                     "preexisting": $PRE_GIT },
     { "command": "node",    "displayName": "Node.js (includes npm)",  "preexisting": $PRE_NODE },
     { "command": "python3", "displayName": "Python 3",                "preexisting": $PRE_PYTHON },
-    { "command": "uv",      "displayName": "uv",                      "preexisting": $PRE_UV }
+    { "command": "uv",      "displayName": "uv",                      "preexisting": $PRE_UV }$OLLAMA_MANIFEST
   ]
 }
 EOF

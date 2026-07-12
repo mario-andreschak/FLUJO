@@ -7,7 +7,8 @@
     refreshes the environment (PATH + vars) for the current session so the new
     tools are usable immediately, clones (or updates) FLUJO, builds it, registers
     a global 'flujo' command (start FLUJO from any folder), and optionally starts
-    it.
+    it. Can also optionally install Ollama (the local-model runtime) via winget;
+    FLUJO then talks to it over HTTP.
 
     Designed to be run either directly:
 
@@ -23,8 +24,8 @@
 .NOTES
     Parameters only take effect when the script is run as a file. When piped
     through `iex` the script falls back to interactive prompts (or the
-    FLUJO_DIR / FLUJO_START / FLUJO_BRANCH / FLUJO_SHORTCUT environment variables
-    if they are set).
+    FLUJO_DIR / FLUJO_START / FLUJO_BRANCH / FLUJO_SHORTCUT / FLUJO_OLLAMA
+    environment variables if they are set).
 #>
 [CmdletBinding()]
 param(
@@ -379,6 +380,18 @@ if (-not $startAfter) {
     }
 }
 
+# Decide whether to install Ollama (optional local-model runtime). It is a large
+# download, so it defaults to NO (unlike the prompts above). Set FLUJO_OLLAMA=1 to
+# opt in non-interactively.
+if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
+    $installOllama = $true
+} elseif ($env:FLUJO_OLLAMA -in @('0', 'false', 'no')) {
+    $installOllama = $false
+} else {
+    $ollamaAnswer = Read-Host "Install Ollama for local models? (large download, optional) (y/N)"
+    $installOllama = ($ollamaAnswer -match '^\s*(y|yes)\s*$')
+}
+
 # Last question: persist the script-execution policy for future terminals / on-
 # demand MCP server builds (with the user's consent). Skipped automatically if
 # scripts are already allowed. After this, the install runs without interruption.
@@ -402,6 +415,16 @@ Update-SessionEnvironment
 # Claude Code CLI (npm global) — needed only by the optional "Claude Subscription"
 # model provider. Installed after Node/npm are present.
 $claudeCliResult = Install-ClaudeCli
+
+# Ollama (optional) — the local-model runtime. Installed only when the user opted
+# in above. Uses the same winget + manifest path as the core prerequisites (its
+# Windows package registers a background service that runs `ollama serve`), so the
+# uninstaller can offer to remove it just like Git/Node/uv. Appending its result
+# to $prereqResults is what folds it into the manifest's prerequisites array.
+if ($installOllama) {
+    $prereqResults += Install-Prereq -CommandName 'ollama' -WingetId 'Ollama.Ollama' -DisplayName 'Ollama'
+    Update-SessionEnvironment
+}
 
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
