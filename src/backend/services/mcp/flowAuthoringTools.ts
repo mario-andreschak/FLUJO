@@ -13,6 +13,11 @@
  *     agent iterates on.
  *   - create_flow: compile + validate + save. Saving is gated on zero validation
  *     errors, so the loop is: blocks → spec → validate → fix → create.
+ *   - search_mcp_marketplace / install_mcp_server: capability acquisition for the
+ *     brain / self-improvement track — an external agent can find and install NEW
+ *     MCP servers (downloading + running third-party packages on this host) and
+ *     wire them into the flows it authors. Localhost-only posture, same as the
+ *     endpoint itself; the install tool's description carries the warning.
  *
  * Transport-agnostic like flowTools.ts; the route merges both tool sets (authoring
  * names are reserved — a flow whose slug collides is shadowed with a warning).
@@ -22,6 +27,7 @@ import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
+import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
 
 const log = createLogger('backend/services/mcp/flowAuthoringTools');
 
@@ -29,6 +35,8 @@ export const AUTHORING_TOOL_NAMES = [
   'list_flow_building_blocks',
   'validate_flow_spec',
   'create_flow',
+  'search_mcp_marketplace',
+  'install_mcp_server',
 ] as const;
 
 export function isAuthoringTool(name: string): boolean {
@@ -67,6 +75,35 @@ export function authoringToolDefinitions(): Tool[] {
       description: `Create a new FLUJO flow from a FlowSpec. The spec is compiled deterministically (layout, ids, and wiring are generated for you) and saved ONLY when validation finds zero errors — otherwise the issues are returned to fix. Use list_flow_building_blocks first to see the models, MCP servers/tools, and existing flows you may reference.\n\n${FLOWSPEC_DOC}`,
       inputSchema: specInputSchema(),
     },
+    {
+      name: 'search_mcp_marketplace',
+      description:
+        'Search the public MCP server registry for new capabilities (voice, browsing, files, email, vision, …). The registry matches the query against server NAMES only (substring) — use short single terms and try several. Returns name, description, whether FLUJO can install it, and which env vars/keys it would require.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Short search term matched against server names.' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'install_mcp_server',
+      description:
+        'Install an MCP server from the public registry (by the exact name returned by search_mcp_marketplace) and connect it — this DOWNLOADS AND RUNS a third-party package on the FLUJO host. Returns the FLUJO server name (reference it in FlowSpec "servers") and the tools it provides, or needsEnv when required keys are missing (supply values via the optional "env" argument, or pick a keyless alternative). First install can take minutes (package download).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Exact registry name from search results, e.g. "ai.keenable/web-search".' },
+          env: {
+            type: 'object',
+            description: 'Optional env var values for the server (e.g. required API keys).',
+            additionalProperties: { type: 'string' },
+          },
+        },
+        required: ['name'],
+      },
+    },
   ];
 }
 
@@ -98,6 +135,22 @@ export async function authoringCallTool(
     if (toolName === 'list_flow_building_blocks') {
       const context = await gatherGenerationContext();
       return textResult(context.blocks);
+    }
+
+    if (toolName === 'search_mcp_marketplace') {
+      const query = typeof args?.query === 'string' ? args.query : '';
+      const hits = await searchRegistry(query);
+      return textResult(hits);
+    }
+
+    if (toolName === 'install_mcp_server') {
+      const name = typeof args?.name === 'string' ? args.name : '';
+      const env =
+        args?.env && typeof args.env === 'object' && !Array.isArray(args.env)
+          ? (args.env as Record<string, string>)
+          : undefined;
+      const result = await installRegistryServer(name, env);
+      return textResult(result, !result.installed);
     }
 
     if (toolName === 'validate_flow_spec' || toolName === 'create_flow') {

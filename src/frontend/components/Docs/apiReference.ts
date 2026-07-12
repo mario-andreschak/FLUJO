@@ -229,14 +229,16 @@ export const API_GROUPS: ApiGroup[] = [
         method: 'POST',
         path: '/api/flow/generate',
         summary:
-          'Generate a draft flow from a natural-language description using one of your configured models. The model authors a FlowSpec, FLUJO compiles + validates it and feeds problems back for a bounded number of repair rounds. Returns an UNSAVED draft (the UI opens it in the builder for review); persist via the normal save path or /api/flow/compile.',
+          'Generate a draft flow from a natural-language description using one of your configured models. The model authors a FlowSpec, FLUJO compiles + validates it and feeds problems back for a bounded number of repair rounds. The generator can always SEARCH the public MCP registry; with allowInstall it can also INSTALL servers it needs. Returns an UNSAVED draft (the UI opens it in the builder for review); persist via the normal save path or /api/flow/compile.',
         paramsLabel: 'Body',
         params: [
           { name: 'description', type: 'string', required: true, description: 'What the flow should do, in plain language.' },
           { name: 'modelId', type: 'string', required: true, description: 'Configured model that does the generating.' },
           { name: 'maxRepairs', type: 'number', description: 'Repair rounds after the first attempt (default 1, max 2).' },
+          { name: 'allowInstall', type: 'boolean', description: 'Let the generator install MCP servers from the public registry (downloads + RUNS third-party packages on this machine). Off by default.' },
         ],
-        response: '{ flow, validation, attempts } — the flow is a draft; nothing is persisted by this endpoint.',
+        response: '{ flow, validation, attempts, installedServers } — the flow is a draft; nothing flow-related is persisted by this endpoint (installed servers ARE persisted).',
+        notes: ['allowInstall executes third-party code with this machine\'s user permissions — opt in deliberately.'],
       },
       {
         method: 'GET',
@@ -414,7 +416,7 @@ export const API_GROUPS: ApiGroup[] = [
         alsoMethods: ['GET', 'DELETE'],
         path: '/mcp-flows',
         summary:
-          'MCP server with two tool families. Flow tools: one per saved flow (name = slug of the flow name; input = a single "input" string sent as the user turn; runs are ephemeral and never appear in the chat sidebar). Authoring tools: list_flow_building_blocks (models, MCP servers + tools, and existing flows a spec may reference — call first), validate_flow_spec (compile + validate without saving; iterate on the returned issues), and create_flow (compile + validate + save; only saves when validation finds zero errors). The FlowSpec format is documented on POST /api/flow/compile above and inside the tools\' own descriptions.',
+          'MCP server with two tool families. Flow tools: one per saved flow (name = slug of the flow name; input = a single "input" string sent as the user turn; runs are ephemeral and never appear in the chat sidebar). Authoring tools: list_flow_building_blocks (models, MCP servers + tools, and existing flows a spec may reference — call first), validate_flow_spec (compile + validate without saving; iterate on the returned issues), create_flow (compile + validate + save; only saves when validation finds zero errors), plus capability acquisition: search_mcp_marketplace (search the public registry) and install_mcp_server (install + connect a registry server — downloads and RUNS third-party packages on the FLUJO host; required keys can be passed via its env argument). The FlowSpec format is documented on POST /api/flow/compile above and inside the tools\' own descriptions.',
         response: 'MCP JSON-RPC over Streamable HTTP (handled by your MCP client, not called directly).',
       },
     ],

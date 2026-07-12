@@ -139,19 +139,20 @@ class FlowService {
    */
   async generateFlow(
     description: string,
-    modelId: string
+    modelId: string,
+    options?: { allowInstall?: boolean }
   ): Promise<
-    | { success: true; flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean }; attempts: number }
+    | { success: true; flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean }; attempts: number; installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }> }
     | { success: false; error: string }
   > {
-    log.debug('generateFlow: Entering method', { modelId });
+    log.debug('generateFlow: Entering method', { modelId, allowInstall: options?.allowInstall });
     try {
       const response = await fetch('/api/flow/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ description, modelId })
+        body: JSON.stringify({ description, modelId, allowInstall: options?.allowInstall === true })
       });
 
       const data = await response.json().catch(() => null);
@@ -165,9 +166,16 @@ class FlowService {
       log.debug('generateFlow: Draft generated', {
         flowId: data.flow?.id,
         attempts: data.attempts,
-        errorCount: data.validation?.errorCount
+        errorCount: data.validation?.errorCount,
+        installedServers: data.installedServers?.length ?? 0
       });
-      return { success: true, flow: data.flow as Flow, validation: data.validation, attempts: data.attempts };
+      return {
+        success: true,
+        flow: data.flow as Flow,
+        validation: data.validation,
+        attempts: data.attempts,
+        installedServers: data.installedServers ?? []
+      };
     } catch (error) {
       log.warn('generateFlow: Failed to generate flow:', error);
       return {

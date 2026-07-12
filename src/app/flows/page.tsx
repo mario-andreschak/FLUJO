@@ -365,15 +365,19 @@ const FlowsPage = () => {
     setDraftFlow(result.flow);
     setSelectedFlow(result.flow.id);
     setIsEditing(true);
+    const freshInstalls = result.installedServers?.filter(s => !s.alreadyExisted) ?? [];
+    const installNote = freshInstalls.length > 0
+      ? ` Installed MCP server(s): ${freshInstalls.map(s => s.name).join(', ')}.`
+      : '';
     if (result.errorCount > 0) {
       showSnackbar(
-        `Draft generated with ${result.errorCount} error(s) and ${result.warningCount} warning(s) — use the Check button, fix, then save`,
+        `Draft generated with ${result.errorCount} error(s) and ${result.warningCount} warning(s) — use the Check button, fix, then save.${installNote}`,
         'warning'
       );
     } else if (result.warningCount > 0) {
-      showSnackbar(`Draft generated with ${result.warningCount} warning(s) — review, then save to keep it`, 'info');
+      showSnackbar(`Draft generated with ${result.warningCount} warning(s) — review, then save to keep it.${installNote}`, 'info');
     } else {
-      showSnackbar('Flow drafted — review it and save to keep it', 'success');
+      showSnackbar(`Flow drafted — review it and save to keep it.${installNote}`, 'success');
     }
   }, [showSnackbar]);
 
