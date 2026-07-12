@@ -146,7 +146,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, tools, nodeName, nodeId, toolNameMap, maxTurns, conversationId, requireToolApproval } = input; // Added nodeId
+    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, conversationId, requireToolApproval } = input; // Added nodeId
 
     // Fetch model information for display name (and the model's own maxTurns cap)
     let modelDisplayName = '';
@@ -223,8 +223,11 @@ export class ModelHandler {
         }
       : undefined;
 
-    // Call generateCompletion ONCE
-    const response = await this.generateCompletion(modelId, prompt, messages, tools, {
+    // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
+    // scoped its input (latest-message / isolated); otherwise it sees the full
+    // `messages`. `finalMessages` below is always built from `messages`, so the
+    // persisted/returned transcript keeps the complete history regardless.
+    const response = await this.generateCompletion(modelId, prompt, wireMessages ?? messages, tools, {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
       requestToolApproval,

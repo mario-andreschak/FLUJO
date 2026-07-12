@@ -1,6 +1,80 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 
+/** True when this assistant turn is mid-action (made tool calls). */
+function isToolCallTurn(m: FlujoChatMessage): boolean {
+  return m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+}
+
+/**
+ * The trailing agentic exchange for the CURRENT turn, if the conversation ends
+ * in one. A node's tool loop appends `assistant(tool_calls)` then `tool` results
+ * and re-enters until the model emits a plain assistant turn (which ends the
+ * loop). So while a tool loop is in progress, the tail is a contiguous suffix of
+ * `assistant(tool_calls)` / `tool` messages with no plain-final assistant among
+ * them. Walk back from the end collecting those; stop at the first user/system
+ * message or plain (final) assistant turn. Returns [] when the conversation is
+ * settled (does not end in an unresolved tool exchange).
+ */
+function currentToolTail(messages: FlujoChatMessage[]): FlujoChatMessage[] {
+  let i = messages.length - 1;
+  for (; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'tool' || isToolCallTurn(m)) continue;
+    break;
+  }
+  const tail = messages.slice(i + 1);
+  // A bare tail with no tool-call turn (e.g. a stray trailing tool message) is
+  // not a real in-flight exchange — don't resurrect it.
+  return tail.some(isToolCallTurn) ? tail : [];
+}
+
+/**
+ * Narrow a node's assembled context (a leading system message + threaded
+ * history, as produced by buildNodeContext) to just what the MODEL should see
+ * for the given inputMode. This shapes only the WIRE view — the caller keeps the
+ * full history for persistence — so it must be safe to recompute every tool-loop
+ * iteration:
+ *   - 'full-history' (default): unchanged.
+ *   - 'latest-message': the leading system message(s), then everything from the
+ *     most recent user message onward (which includes any in-flight tool
+ *     exchange for the current turn). Falls back to the full list when there is
+ *     no user message.
+ *   - 'isolated': the leading system message(s), then `isolatedPrompt` as a
+ *     single synthetic user message, then the current in-flight tool tail (so a
+ *     tool-using isolated node can continue its loop across re-entries). The
+ *     prior conversation is dropped. The synthetic user message is wire-only.
+ */
+export function scopeMessagesForInput(
+  messages: FlujoChatMessage[],
+  inputMode: 'full-history' | 'latest-message' | 'isolated' | undefined,
+  isolatedPrompt?: string,
+): FlujoChatMessage[] {
+  if (!inputMode || inputMode === 'full-history') return messages;
+
+  const system = messages.filter((m) => m.role === 'system');
+
+  if (inputMode === 'isolated') {
+    const userMsg: FlujoChatMessage = {
+      role: 'user',
+      content: isolatedPrompt ?? '',
+      // Wire-only: id/timestamp are stripped by toApiMessages, but keep the
+      // shape valid.
+      id: 'isolated-input',
+      timestamp: 0,
+    };
+    return [...system, userMsg, ...currentToolTail(messages)];
+  }
+
+  // 'latest-message'
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx === -1) return messages; // no user turn — keep everything
+  return [...system, ...messages.slice(lastUserIdx)];
+}
+
 // The synthetic user message the run loop used to append after a handoff to
 // un-stall the receiving model. No longer produced; also stripped from the wire
 // defensively (old conversations may still contain it).

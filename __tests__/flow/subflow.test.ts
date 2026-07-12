@@ -173,13 +173,37 @@ describe('SubflowNode', () => {
     expect(call.prompt).toBeUndefined();
   });
 
-  it('an explicit promptTemplate overrides the history and is sent as a prompt', async () => {
+  it('back-compat: a promptTemplate with no inputMode is treated as isolated (sent as a prompt)', async () => {
     const node = makeNode({ subflowId: 'inner-flow', promptTemplate: 'use me instead' }, 'edge-next');
     await node.run(makeState());
 
     const call = runFlowMock.mock.calls[0][0];
     expect(call.prompt).toBe('use me instead');
     expect(call.messages).toBeUndefined();
+  });
+
+  it("inputMode 'isolated' sends the promptTemplate as the subflow's prompt, ignoring the history", async () => {
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'isolated', promptTemplate: 'fixed task' }, 'edge-next');
+    await node.run(makeState({
+      messages: [{ role: 'user', content: 'conversation task', id: 'u1', timestamp: 1 } as any],
+    }));
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('fixed task');
+    expect(call.messages).toBeUndefined();
+  });
+
+  it("an explicit inputMode wins over a leftover promptTemplate (history is used, prompt ignored)", async () => {
+    // A flow switched from Isolated back to Full conversation keeps its old
+    // promptTemplate in properties, but the explicit mode must win.
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'full-history', promptTemplate: 'stale' }, 'edge-next');
+    await node.run(makeState());
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBeUndefined();
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'hello world' }),
+    ]);
   });
 
   it('propagates parent runDepth (depth = runDepth + 1)', async () => {

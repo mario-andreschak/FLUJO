@@ -88,11 +88,15 @@ export class SubflowNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
-    const inputMode = node_params?.properties?.inputMode ?? 'full-history';
+    // Back-compat: a promptTemplate saved before the explicit 'isolated' mode
+    // existed used to override the history unconditionally. Preserve that by
+    // treating "has a promptTemplate but no explicit inputMode" as isolated.
+    const inputMode =
+      node_params?.properties?.inputMode ?? (promptTemplate ? 'isolated' : 'full-history');
     const showSteps = node_params?.properties?.outputMode !== 'final-only';
 
-    // An explicit promptTemplate is an override: send exactly that as the
-    // subflow's single user prompt. Otherwise, pass the parent conversation so
+    // 'isolated' mode sends `promptTemplate` as the subflow's single user prompt,
+    // ignoring the parent conversation. Otherwise, pass the parent conversation so
     // the subflow continues with genuine context — either the full sanitized
     // history (default) or, in 'latest-message' mode, just the most recent user
     // instruction so each invocation is scoped to the current task (issue #74).
@@ -109,8 +113,8 @@ export class SubflowNode extends BaseNode {
       emit: sharedState.emit,
       nodeName: node_params?.properties?.name,
     };
-    if (promptTemplate) {
-      prepResult.inputText = promptTemplate;
+    if (inputMode === 'isolated') {
+      prepResult.inputText = promptTemplate ?? '';
     } else {
       const sanitized = sanitizeForSubflow(sharedState.messages);
       prepResult.messages = inputMode === 'latest-message' ? latestUserMessage(sanitized) : sanitized;
@@ -130,7 +134,7 @@ export class SubflowNode extends BaseNode {
     log.info('prep() completed', {
       subflowId,
       depth: prepResult.depth,
-      mode: promptTemplate ? 'promptTemplate' : inputMode,
+      mode: inputMode,
       historyCount: prepResult.messages?.length,
       showSteps,
     });
