@@ -102,6 +102,26 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
           ⚠ {note}
         </Typography>
       ))}
+
+      {endpoint.details && (
+        <Box
+          component="pre"
+          sx={{
+            mt: 1.5,
+            p: 1.5,
+            bgcolor: 'action.hover',
+            borderRadius: 1,
+            fontSize: '0.75rem',
+            fontFamily: 'monospace',
+            whiteSpace: 'pre-wrap',
+            overflowX: 'auto',
+            m: 0,
+            mb: 0,
+          }}
+        >
+          {endpoint.details}
+        </Box>
+      )}
     </Paper>
   );
 }

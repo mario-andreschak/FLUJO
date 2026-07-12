@@ -1,0 +1,167 @@
+/**
+ * Tests for the deterministic FlowSpec authoring surface (#14 follow-up):
+ * the compileSpec service (compile + validate + gated save) and its HTTP wrapper
+ * POST /api/flow/compile. This is the no-LLM sibling of generateFlow — external
+ * agents author FlowSpec directly instead of raw ReactFlow JSON.
+ */
+
+const assertUnlockedMock = jest.fn();
+jest.mock('@/utils/encryption/lockGate', () => ({
+  assertUnlocked: (...a: unknown[]) => assertUnlockedMock(...a),
+}));
+
+const loadModelsMock = jest.fn();
+jest.mock('@/backend/services/model', () => ({
+  modelService: {
+    loadModels: (...a: unknown[]) => loadModelsMock(...a),
+  },
+}));
+
+const loadServerConfigsMock = jest.fn();
+const getServerStatusMock = jest.fn();
+const listServerToolsMock = jest.fn();
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: {
+    loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...a),
+    getServerStatus: (...a: unknown[]) => getServerStatusMock(...a),
+    listServerTools: (...a: unknown[]) => listServerToolsMock(...a),
+  },
+}));
+
+const loadFlowsMock = jest.fn();
+const saveFlowMock = jest.fn();
+jest.mock('@/backend/services/flow', () => ({
+  flowService: {
+    loadFlows: (...a: unknown[]) => loadFlowsMock(...a),
+    saveFlow: (...a: unknown[]) => saveFlowMock(...a),
+  },
+}));
+
+import { compileSpec } from '@/backend/services/flow/compileFlow';
+import { POST } from '@/app/api/flow/compile/route';
+
+const req = (body?: unknown) => ({ json: async () => body }) as any;
+
+const goodSpec = {
+  name: 'wired_flow',
+  nodes: [
+    { key: 's', type: 'start', prompt: 'sys' },
+    { key: 'p', type: 'process', model: 'model-abc', prompt: 'work', servers: [{ name: 'srv', tools: ['tool_a'] }] },
+    { key: 'f', type: 'finish' },
+  ],
+  edges: [
+    { from: 's', to: 'p' },
+    { from: 'p', to: 'f' },
+  ],
+};
+
+const brokenSpec = {
+  ...goodSpec,
+  nodes: goodSpec.nodes.map((n) => (n.key === 'p' ? { ...n, model: 'ghost-model' } : n)),
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  assertUnlockedMock.mockResolvedValue(null);
+  loadModelsMock.mockResolvedValue([{ id: 'model-abc', name: 'worker', ApiKey: 'enc' }]);
+  loadServerConfigsMock.mockResolvedValue([{ name: 'srv' }]);
+  getServerStatusMock.mockResolvedValue({ status: 'connected' });
+  listServerToolsMock.mockResolvedValue({ tools: [{ name: 'tool_a', description: 'does a' }] });
+  loadFlowsMock.mockResolvedValue([]);
+  saveFlowMock.mockResolvedValue(undefined);
+});
+
+describe('compileSpec service', () => {
+  it('compiles + validates without saving by default', async () => {
+    const result = await compileSpec(goodSpec);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.validation.errorCount).toBe(0);
+    expect(result.saved).toBe(false);
+    expect(result.flow.nodes.map((n) => n.type).sort()).toEqual(['finish', 'mcp', 'process', 'start']);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('save: true persists when validation is clean', async () => {
+    const result = await compileSpec(goodSpec, { save: true });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.saved).toBe(true);
+    expect(saveFlowMock).toHaveBeenCalledTimes(1);
+    expect(saveFlowMock).toHaveBeenCalledWith(result.flow);
+  });
+
+  it('save: true does NOT persist when validation has errors', async () => {
+    const result = await compileSpec(brokenSpec, { save: true });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.validation.errorCount).toBeGreaterThan(0);
+    expect(result.saved).toBe(false);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    // The agent-facing loop needs the actionable issue list.
+    expect(result.validation.issues.map((i) => i.code)).toEqual(
+      expect.arrayContaining(['model-unresolved', 'process-model-missing'])
+    );
+  });
+
+  it('rejects a non-object spec with 400', async () => {
+    for (const bad of [null, 'a string', 42, ['array']]) {
+      const result = await compileSpec(bad as unknown);
+      expect(result).toEqual(expect.objectContaining({ success: false, statusCode: 400 }));
+    }
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('422s with issues when the spec produces no usable flow', async () => {
+    const result = await compileSpec({ nodes: [], edges: [] });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.statusCode).toBe(422);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'no-usable-nodes' }));
+  });
+
+  it('each compile mints a fresh flow id — saving is always a create, never an overwrite', async () => {
+    const a = await compileSpec(goodSpec);
+    const b = await compileSpec(goodSpec);
+    if (!a.success || !b.success) throw new Error('expected success');
+    expect(a.flow.id).not.toBe(b.flow.id);
+  });
+});
+
+describe('POST /api/flow/compile', () => {
+  it('200 with { flow, validation, saved: false } for compile-only', async () => {
+    const res = await POST(req({ spec: goodSpec }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.saved).toBe(false);
+    expect(body.validation.errorCount).toBe(0);
+    expect(body.flow.name).toBe('wired_flow');
+  });
+
+  it('201 when saved', async () => {
+    const res = await POST(req({ spec: goodSpec, save: true }));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.saved).toBe(true);
+  });
+
+  it('200 (not 201) when save was requested but errors block it', async () => {
+    const res = await POST(req({ spec: brokenSpec, save: true }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.saved).toBe(false);
+    expect(body.validation.errorCount).toBeGreaterThan(0);
+  });
+
+  it('400 on a missing spec', async () => {
+    const res = await POST(req({}));
+    expect(res.status).toBe(400);
+  });
+
+  it('is gated by the encryption lock', async () => {
+    assertUnlockedMock.mockResolvedValue(new Response(JSON.stringify({ error: 'locked' }), { status: 423 }));
+    const res = await POST(req({ spec: goodSpec }));
+    expect(res.status).toBe(423);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+});

@@ -15,37 +15,26 @@
  * The model call copies the sampling.ts recipe exactly: getModel → resolveAndDecryptApiKey →
  * getCompletionAdapter → createCompletion. Everything stays backend-side; the response
  * carries only the flow + validation, never key material.
+ *
+ * The FlowSpec DSL text and the building-block catalog are shared with the non-LLM
+ * authoring surfaces (POST /api/flow/compile, the MCP authoring tools) via
+ * `flowSpecDoc.ts` and `generationContext.ts`, so the formats can never drift.
  */
 import { createLogger } from '@/utils/logger';
 import OpenAI from 'openai';
 import { Flow } from '@/shared/types/flow';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
-import { mcpService } from '@/backend/services/mcp';
-import { flowService } from '@/backend/services/flow';
-import {
-  compileFlowSpec,
-  CompileContext,
-  CompileIssue,
-  FlowSpec,
-} from '@/utils/shared/flowSpecCompiler';
-import {
-  validateFlow,
-  FlowValidationIssue,
-  FlowValidationResult,
-} from '@/utils/shared/flowValidation';
+import { compileFlowSpec, FlowSpec } from '@/utils/shared/flowSpecCompiler';
+import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
+import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
+import { gatherGenerationContext, mergeIssues } from './generationContext';
 
 const log = createLogger('backend/services/flow/generateFlow');
 
 /** Repair rounds after the initial attempt: default / hard cap. */
 const DEFAULT_MAX_REPAIRS = 1;
 const MAX_REPAIRS_CAP = 2;
-
-/** Catalog bounds, to protect the generator model's context window. */
-const MAX_TOOLS_PER_SERVER = 20;
-const MAX_TOOL_DESCRIPTION_CHARS = 100;
-const MAX_FLOWS_LISTED = 15;
-const MAX_FLOW_DESCRIPTION_CHARS = 300;
 
 export interface GenerateFlowInput {
   /** The user's natural-language description of the flow to build. */
@@ -75,152 +64,15 @@ export interface GenerateFlowFailure {
 export type GenerateFlowResult = GenerateFlowSuccess | GenerateFlowFailure;
 
 // ---------------------------------------------------------------------------
-// Context gathering
-// ---------------------------------------------------------------------------
-
-interface GenerationContext {
-  compile: CompileContext;
-  /** Human-readable catalogs folded into the system prompt. */
-  catalog: string;
-  /** Server status for the validator (name + status). */
-  validatorServers: Array<{ name: string; status?: string }>;
-}
-
-function truncate(text: string, max: number): string {
-  const clean = String(text).replace(/\s+/g, ' ').trim();
-  return clean.length <= max ? clean : `${clean.slice(0, max).trimEnd()}…`;
-}
-
-/**
- * Enumerate what the generator may wire up: configured models, MCP servers (+ tools when
- * the server is already connected — never spawn a server just to introspect it, same
- * guardrail as buildHandoffDescription), and existing flows as subflow targets.
- */
-async function gatherContext(): Promise<GenerationContext> {
-  const models = await modelService.loadModels();
-
-  const lines: string[] = [];
-  lines.push('AVAILABLE MODELS (reference by id or name):');
-  if (models.length === 0) {
-    lines.push('  (none configured)');
-  }
-  for (const m of models) {
-    const label = m.displayName && m.displayName !== m.name ? `"${m.displayName}" (${m.name})` : m.name;
-    const desc = m.description ? ` — ${truncate(m.description, MAX_TOOL_DESCRIPTION_CHARS)}` : '';
-    lines.push(`  - id: ${m.id} — ${label}${desc}`);
-  }
-
-  const validatorServers: Array<{ name: string; status?: string }> = [];
-  const serverTools: Record<string, string[]> = {};
-  lines.push('', 'AVAILABLE MCP SERVERS (attach to process nodes via "servers"):');
-  let anyServer = false;
-  try {
-    const configs = await mcpService.loadServerConfigs();
-    if (Array.isArray(configs)) {
-      for (const config of configs) {
-        if (config.disabled) continue;
-        anyServer = true;
-        let connected = false;
-        try {
-          const status = await mcpService.getServerStatus(config.name);
-          connected = status?.status === 'connected';
-        } catch (error) {
-          log.debug(`getServerStatus failed for ${config.name}; listing name only`, error);
-        }
-        validatorServers.push({ name: config.name, status: connected ? 'connected' : 'disconnected' });
-        if (!connected) {
-          lines.push(`  - ${config.name} (offline — tools unknown; may still be used)`);
-          continue;
-        }
-        const { tools } = await mcpService.listServerTools(config.name);
-        const names = (tools ?? []).map((t) => t.name).filter(Boolean);
-        serverTools[config.name] = names;
-        const shown = (tools ?? []).slice(0, MAX_TOOLS_PER_SERVER);
-        lines.push(`  - ${config.name}:`);
-        for (const tool of shown) {
-          const desc = tool.description ? ` — ${truncate(tool.description, MAX_TOOL_DESCRIPTION_CHARS)}` : '';
-          lines.push(`      - ${tool.name}${desc}`);
-        }
-        if (names.length > shown.length) {
-          lines.push(`      - …and ${names.length - shown.length} more`);
-        }
-      }
-    }
-  } catch (error) {
-    log.warn('Could not load MCP servers for generation context', error);
-  }
-  if (!anyServer) lines.push('  (none configured)');
-
-  let flows: Flow[] = [];
-  try {
-    flows = await flowService.loadFlows();
-  } catch (error) {
-    log.warn('Could not load flows for generation context', error);
-  }
-  lines.push('', 'EXISTING FLOWS (usable as subflow targets via "flow"):');
-  if (flows.length === 0) {
-    lines.push('  (none)');
-  }
-  for (const flow of flows.slice(0, MAX_FLOWS_LISTED)) {
-    const desc = flow.description
-      ? ` — ${truncate(flow.description, MAX_FLOW_DESCRIPTION_CHARS)}`
-      : ` — ${flow.nodes?.length ?? 0} nodes`;
-    lines.push(`  - "${flow.name}"${desc}`);
-  }
-  if (flows.length > MAX_FLOWS_LISTED) {
-    lines.push(`  - …and ${flows.length - MAX_FLOWS_LISTED} more`);
-  }
-
-  return {
-    compile: {
-      models: models.map((m) => ({ id: m.id, name: m.name, displayName: m.displayName })),
-      servers: validatorServers.map((s) => ({ name: s.name })),
-      serverTools,
-      flows: flows.map((f) => ({ id: f.id, name: f.name })),
-    },
-    catalog: lines.join('\n'),
-    validatorServers,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
 
 function buildSystemPrompt(catalog: string): string {
   return `You design workflows for FLUJO, an MCP-first workflow builder. The user describes what they want; you emit a flow specification as JSON.
 
-OUTPUT FORMAT — respond with ONLY one JSON object, no prose, no code fences:
-{
-  "name": "short_flow_name",            // letters/digits/_/- only
-  "description": "what the flow does",
-  "nodes": [ ... ],
-  "edges": [ ... ]
-}
+OUTPUT FORMAT — respond with ONLY one JSON object, no prose, no code fences.
 
-NODE TYPES:
-- { "key": "unique_key", "type": "start", "label": "...", "prompt": "system-level instructions for the whole flow" }
-- { "key": "...", "type": "process", "label": "...", "description": "what this step does",
-    "model": "<model id or name from the catalog>",
-    "prompt": "instructions for this step",
-    "servers": [ { "name": "<server name>", "tools": ["tool_a"] } ],   // optional; omit "tools" to enable all
-    "inputMode": "full-history" | "latest-message" | "isolated",       // optional, default full-history
-    "isolatedPrompt": "..." }                                           // only with inputMode "isolated"
-- { "key": "...", "type": "subflow", "label": "...", "flow": "<existing flow name>",
-    "inputMode": "full-history" | "latest-message" | "isolated",
-    "outputMode": "steps" | "final-only" }
-- { "key": "...", "type": "finish", "label": "..." }
-
-EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false }
-
-RULES:
-1. Exactly ONE start node; at least one finish node reachable from it.
-2. Every process node MUST reference a model from the catalog below.
-3. A process step uses MCP tools ONLY via its "servers" list — never emit nodes of type "mcp".
-4. Do not embed \${tool:...} or \${resource:...} references in prompts — tools are wired through "servers".
-5. Branching: give a process node multiple outgoing edges; its model decides where to hand off at runtime. "bidirectional": true lets the target hand back to the source (agent ↔ agent).
-6. A subflow node may have only ONE outgoing edge, and its "flow" must name an existing flow from the catalog.
-7. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.
+${FLOWSPEC_DOC}
 
 ${catalog}`;
 }
@@ -265,30 +117,6 @@ export function extractJsonObject(text: string): unknown | null {
 }
 
 // ---------------------------------------------------------------------------
-// Issue merging
-// ---------------------------------------------------------------------------
-
-/** Fold compile issues into the validator's result shape (single list for the caller). */
-function mergeIssues(
-  compileIssues: CompileIssue[],
-  validation: FlowValidationResult
-): FlowValidationResult {
-  const compiled: FlowValidationIssue[] = compileIssues.map((i) => ({
-    severity: i.severity,
-    code: i.code,
-    message: i.message,
-  }));
-  const issues = [...compiled, ...validation.issues];
-  const errorCount = issues.filter((i) => i.severity === 'error').length;
-  return {
-    issues,
-    errorCount,
-    warningCount: issues.length - errorCount,
-    isRunnable: errorCount === 0,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Generation
 // ---------------------------------------------------------------------------
 
@@ -310,7 +138,7 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
     return { success: false, error: 'Could not resolve the generator model API key', statusCode: 500 };
   }
 
-  const context = await gatherContext();
+  const context = await gatherGenerationContext();
   const adapter = getCompletionAdapter(model);
 
   const maxRepairs = Math.min(
