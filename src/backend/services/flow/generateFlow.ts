@@ -206,6 +206,17 @@ async function runModelTurn(
   allowInstall: boolean,
   state: ToolLoopState
 ): Promise<string> {
+  // Executors for the self-orchestrating adapters (Claude subscription): their
+  // tool calls never surface as tool_calls to this loop, so the adapter must run
+  // the tools itself via CompletionInput.localToolExecutors. Request/response
+  // adapters ignore this and we handle tool_calls below.
+  const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {};
+  for (const t of tools) {
+    if (t.type !== 'function') continue;
+    const name = t.function.name;
+    localToolExecutors[name] = (args) => executeGeneratorTool(name, args, allowInstall, state);
+  }
+
   for (let turn = 0; turn <= MAX_TOOL_TURNS; turn++) {
     const withTools = tools.length > 0 && turn < MAX_TOOL_TURNS;
     const { completion } = await adapter.createCompletion({
@@ -213,7 +224,7 @@ async function runModelTurn(
       apiKey,
       messages,
       temperature: 0,
-      ...(withTools ? { tools } : {}),
+      ...(withTools ? { tools, localToolExecutors } : {}),
     });
     const message = completion.choices?.[0]?.message;
     const toolCalls = message?.tool_calls ?? [];

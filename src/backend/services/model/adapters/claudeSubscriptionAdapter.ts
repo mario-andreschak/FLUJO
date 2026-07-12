@@ -155,6 +155,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     messages,
     tools,
     toolNameMap,
+    localToolExecutors,
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
@@ -194,15 +195,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     };
 
     // Build the in-process MCP server from the node's tools. MCP tools dispatch to
-    // mcpService; handoff tools record the handoff and abort. Other tool kinds
-    // (external/passthrough) are omitted from an agentic run.
+    // mcpService; handoff tools record the handoff and abort; caller-defined local
+    // tools (e.g. the flow generator's marketplace search/install) dispatch to the
+    // executor supplied via localToolExecutors. Anything else is omitted from an
+    // agentic run.
     const sdkTools = (tools ?? [])
       .filter(t => t.type === 'function')
       .map(t => {
         const fnName = t.function.name;
         const handoff = isHandoffName(fnName);
         const decoded = toolNameMap?.[fnName];
-        if (!handoff && !decoded) return null;
+        const localExec = localToolExecutors?.[fnName];
+        if (!handoff && !decoded && !localExec) return null;
 
         const description = t.function.description ?? '';
         const schemaShape = jsonSchemaToZodShape(t.function.parameters);
@@ -223,6 +227,32 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // handoff and return cleanly; the message loop aborts on its next
             // turn (see the handoffCall check at the top of the for-await).
             return { content: [{ type: 'text', text: 'Handing off.' }] };
+          });
+        }
+
+        if (localExec) {
+          // Caller-executed virtual tool: run the supplied executor in-loop and
+          // hand its JSON result back to the SDK. Keep the exact name — these
+          // names are already OpenAI-safe and the caller keys executors by them.
+          return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            log.debug('Claude subscription local tool call', { tool: fnName });
+            let resultContent: string;
+            let isError = false;
+            try {
+              resultContent = JSON.stringify(await localExec(args ?? {}));
+            } catch (err) {
+              resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+              isError = true;
+            }
+            recordToolPair({
+              id: `call_${uuidv4()}`,
+              name: fnName,
+              argsJson: JSON.stringify(args ?? {}),
+              resultContent,
+            });
+            return isError
+              ? { content: [{ type: 'text', text: resultContent }], isError: true }
+              : { content: [{ type: 'text', text: resultContent }] };
           });
         }
 
