@@ -7,8 +7,8 @@
  * MCP Tool definitions dispatched straight to the backend services, no process, no
  * transport. Unlike the other two it is consumed by FLUJO's OWN flow engine — a flow
  * binds the server named "flujo" like any other MCP server and its model can then
- * author flows, run flows, manage/install MCP servers, and inspect models, planned
- * executions and chat conversations.
+ * author/inspect/update flows, run flows, manage/install MCP servers, and inspect
+ * models, planned executions and chat conversations.
  *
  * Security posture:
  *  - Secrets never reach a model: list_mcp_servers returns name/transport/status
@@ -37,6 +37,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import {
   flushConversationLog,
@@ -122,6 +123,31 @@ export function internalToolDefinitions(): Tool[] {
           input: { type: 'string', description: 'The message to send to the flow as the user turn.' },
         },
         required: ['flow', 'input'],
+      },
+    },
+    {
+      name: 'read_flow',
+      description:
+        'Read a FLUJO flow\'s full definition (by name or id): its nodes with their prompts, bound models, attached MCP servers/tools and input/output modes, plus the control and MCP edges. Note this is the COMPILED flow (node ids, not FlowSpec keys) — to change it, author a fresh FlowSpec and call update_flow.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          flow: { type: 'string', description: 'Flow name or flow id.' },
+        },
+        required: ['flow'],
+      },
+    },
+    {
+      name: 'update_flow',
+      description:
+        'REPLACE an existing FLUJO flow\'s definition (by name or id) with a newly compiled FlowSpec, keeping the flow\'s id — so planned executions, subflow nodes and conversations that reference it keep working. The spec format is the same as create_flow/validate_flow_spec (see those tool descriptions); saving is gated on zero validation errors. WARNING: this replaces the whole flow — any manual canvas edits made in the builder are lost. Use read_flow first to see what you are replacing.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          flow: { type: 'string', description: 'Flow name or flow id of the flow to replace.' },
+          spec: { type: 'object', description: 'The FlowSpec object (see the create_flow tool description for the format).' },
+        },
+        required: ['flow', 'spec'],
       },
     },
     {
@@ -328,6 +354,99 @@ async function deleteFlow(args: Record<string, unknown>): Promise<CallToolResult
     return textResult({ error: result.error ?? `Failed to delete flow "${flow.name}".` }, true);
   }
   return textResult({ deleted: true, flowId: flow.id, flowName: flow.name });
+}
+
+/**
+ * Read a flow's full definition in inspectable form. Canvas trivia (positions,
+ * handle ids, edge ids/styles) is dropped; the derived `mcpNodes` blob on
+ * process properties is dropped too (FlowConverter regenerates it — it must
+ * never round-trip through an author). Everything semantic stays: prompts,
+ * bound models, attached servers/tools, input/output modes, edges.
+ */
+async function readFlow(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  if (!ref) {
+    return textResult({ error: 'Provide "flow": a flow name or id.' }, true);
+  }
+  const flow = await resolveFlow(ref);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
+  }
+
+  const nodes = flow.nodes.map((node) => {
+    const { mcpNodes: _derived, ...properties } = (node.data?.properties ?? {}) as Record<string, unknown>;
+    return {
+      id: node.id,
+      type: node.type,
+      label: node.data?.label,
+      ...(node.data?.description ? { description: node.data.description } : {}),
+      properties,
+    };
+  });
+  const edges = flow.edges.map((edge) => {
+    const data = edge.data as { edgeType?: string; bidirectional?: boolean } | undefined;
+    return {
+      from: edge.source,
+      to: edge.target,
+      type: data?.edgeType === 'mcp' ? 'mcp' : 'control',
+      ...(data?.bidirectional ? { bidirectional: true } : {}),
+    };
+  });
+
+  return textResult({
+    id: flow.id,
+    name: flow.name,
+    ...(flow.description ? { description: flow.description } : {}),
+    nodes,
+    edges,
+    note: 'This is the compiled flow (node ids, not FlowSpec keys). To change it, author a fresh FlowSpec and call update_flow — it replaces the whole definition while keeping this flow id.',
+  });
+}
+
+/** Tolerate the spec arriving as an object or a JSON string (same as the authoring tools). */
+function extractSpecArg(args: Record<string, unknown>): unknown {
+  const raw = args?.spec;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return raw ?? null;
+}
+
+async function updateFlow(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  if (!ref) {
+    return textResult({ error: 'Provide "flow": the name or id of the flow to replace.' }, true);
+  }
+  const spec = extractSpecArg(args);
+  if (!spec) {
+    return textResult({ error: 'Provide a "spec" argument: a FlowSpec object (or a JSON string of one).' }, true);
+  }
+  const flow = await resolveFlow(ref);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
+  }
+
+  const result = await compileSpec(spec, { save: true, updateFlowId: flow.id });
+  if (!result.success) {
+    return textResult({ error: result.error, issues: result.issues ?? [] }, true);
+  }
+  const summary = {
+    flowId: result.flow.id,
+    flowName: result.flow.name,
+    nodeCount: result.flow.nodes.length,
+    edgeCount: result.flow.edges.length,
+    validation: result.validation,
+    saved: result.saved,
+    ...(result.saved
+      ? { note: `Flow "${result.flow.name}" was replaced (id ${result.flow.id} kept — existing references keep working).` }
+      : { note: 'NOT saved: validation found errors. The existing flow is unchanged. Fix the issues and call update_flow again.' }),
+  };
+  // An update that could not save is an error outcome for the caller's loop.
+  return textResult(summary, !result.saved);
 }
 
 async function listMcpServers(service: InternalDispatchService): Promise<CallToolResult> {
@@ -759,6 +878,10 @@ export async function internalCallTool(
     switch (toolName) {
       case 'execute_flow':
         return await executeFlow(args);
+      case 'read_flow':
+        return await readFlow(args);
+      case 'update_flow':
+        return await updateFlow(args);
       case 'delete_flow':
         return await deleteFlow(args);
       case 'list_mcp_servers':

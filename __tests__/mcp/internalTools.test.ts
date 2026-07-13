@@ -35,6 +35,10 @@ jest.mock('@/backend/services/mcp/flowAuthoringTools', () => ({
   ],
   authoringCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'authored' }] })),
 }));
+// update_flow goes through compileSpec, which pulls gatherGenerationContext -> mcpService.
+jest.mock('@/backend/services/flow/compileFlow', () => ({
+  compileSpec: jest.fn(),
+}));
 // The conversation tools reach into the executor's state loader + log projection;
 // stub them so the test never loads the FlowExecutor module graph.
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({
@@ -72,6 +76,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
+import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
@@ -79,6 +84,7 @@ const flows = flowService as unknown as { loadFlows: jest.Mock; deleteFlow: jest
 const models = modelService as unknown as { loadModels: jest.Mock };
 const scheduler = (jest.requireMock('@/backend/services/scheduler') as { __mocks: { list: jest.Mock; runNow: jest.Mock } }).__mocks;
 const runFlowMock = runFlow as jest.Mock;
+const compileSpecMock = compileSpec as jest.Mock;
 const loadConversationStateMock = loadConversationState as jest.Mock;
 const readConversationLogMock = readConversationLog as jest.Mock;
 const projectMessagesMock = projectMessages as jest.Mock;
@@ -112,6 +118,8 @@ describe('internalToolDefinitions', () => {
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
         'execute_flow',
+        'read_flow',
+        'update_flow',
         'delete_flow',
         'list_mcp_servers',
         'list_mcp_server_tools',
@@ -207,6 +215,128 @@ describe('execute_flow', () => {
     runFlowMock.mockResolvedValue({ status: 'completed', outputText: 'ok' });
     await internalCallTool(makeService(), 'execute_flow', { flow: 'f1', input: '' });
     expect((global as { __flujo_internal_flow_depth?: number }).__flujo_internal_flow_depth).toBe(0);
+  });
+});
+
+describe('read_flow', () => {
+  const storedFlow = {
+    id: 'f1',
+    name: 'My Flow',
+    description: 'does things',
+    nodes: [
+      {
+        id: 'n-start',
+        type: 'start',
+        position: { x: 0, y: 0 },
+        data: { label: 'Start', type: 'start', properties: { promptTemplate: 'sys prompt' } },
+      },
+      {
+        id: 'n-proc',
+        type: 'process',
+        position: { x: 0, y: 170 },
+        data: {
+          label: 'Work',
+          type: 'process',
+          description: 'the worker',
+          properties: {
+            promptTemplate: 'do work',
+            boundModel: 'model-1',
+            inputMode: 'latest-message',
+            mcpNodes: [{ derived: 'blob that must not round-trip' }],
+          },
+        },
+      },
+      {
+        id: 'n-mcp',
+        type: 'mcp',
+        position: { x: 320, y: 170 },
+        data: { label: 'srv', type: 'mcp', properties: { boundServer: 'srv', enabledTools: ['tool_a'] } },
+      },
+    ],
+    edges: [
+      {
+        id: 'e1',
+        source: 'n-start',
+        target: 'n-proc',
+        type: 'custom',
+        data: { edgeType: 'standard', bidirectional: true },
+      },
+      { id: 'e2', source: 'n-proc', target: 'n-mcp', type: 'mcpEdge', data: { edgeType: 'mcp' } },
+    ],
+  };
+
+  it('returns the semantic definition: properties and edges kept, positions and derived mcpNodes dropped', async () => {
+    flows.loadFlows.mockResolvedValue([storedFlow]);
+    const r = await internalCallTool(makeService(), 'read_flow', { flow: 'My Flow' });
+    expect(r.isError).toBeUndefined();
+    const out = JSON.parse(text(r));
+    expect(out).toMatchObject({ id: 'f1', name: 'My Flow', description: 'does things' });
+    expect(out.nodes).toHaveLength(3);
+    expect(out.nodes[1]).toEqual({
+      id: 'n-proc',
+      type: 'process',
+      label: 'Work',
+      description: 'the worker',
+      properties: { promptTemplate: 'do work', boundModel: 'model-1', inputMode: 'latest-message' },
+    });
+    expect(text(r)).not.toContain('must not round-trip');
+    expect(text(r)).not.toContain('position');
+    expect(out.edges).toEqual([
+      { from: 'n-start', to: 'n-proc', type: 'control', bidirectional: true },
+      { from: 'n-proc', to: 'n-mcp', type: 'mcp' },
+    ]);
+  });
+
+  it('errors for an unknown flow', async () => {
+    flows.loadFlows.mockResolvedValue([]);
+    const r = await internalCallTool(makeService(), 'read_flow', { flow: 'nope' });
+    expect(r.isError).toBe(true);
+  });
+});
+
+describe('update_flow', () => {
+  it('resolves by name and compiles into the existing flow id', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    compileSpecMock.mockResolvedValue({
+      success: true,
+      flow: { id: 'f1', name: 'My_Flow', nodes: [{}, {}], edges: [{}] },
+      validation: { errorCount: 0, warningCount: 0, issues: [] },
+      saved: true,
+    });
+    const spec = { name: 'My_Flow', nodes: [], edges: [] };
+    const r = await internalCallTool(makeService(), 'update_flow', { flow: 'My Flow', spec });
+    expect(compileSpecMock).toHaveBeenCalledWith(spec, { save: true, updateFlowId: 'f1' });
+    expect(r.isError).toBeUndefined();
+    const out = JSON.parse(text(r));
+    expect(out).toMatchObject({ flowId: 'f1', saved: true, nodeCount: 2, edgeCount: 1 });
+    expect(out.note).toContain('replaced');
+  });
+
+  it('is an error outcome (flow unchanged) when validation blocks the save', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    compileSpecMock.mockResolvedValue({
+      success: true,
+      flow: { id: 'f1', name: 'My_Flow', nodes: [], edges: [] },
+      validation: { errorCount: 2, warningCount: 0, issues: [] },
+      saved: false,
+    });
+    const r = await internalCallTool(makeService(), 'update_flow', { flow: 'f1', spec: { nodes: [] } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('NOT saved');
+  });
+
+  it('errors for an unknown flow without compiling', async () => {
+    flows.loadFlows.mockResolvedValue([]);
+    const r = await internalCallTool(makeService(), 'update_flow', { flow: 'ghost', spec: { nodes: [] } });
+    expect(r.isError).toBe(true);
+    expect(compileSpecMock).not.toHaveBeenCalled();
+  });
+
+  it('requires a spec', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    const r = await internalCallTool(makeService(), 'update_flow', { flow: 'f1' });
+    expect(r.isError).toBe(true);
+    expect(compileSpecMock).not.toHaveBeenCalled();
   });
 });
 

@@ -126,6 +126,45 @@ describe('compileSpec service', () => {
     if (!a.success || !b.success) throw new Error('expected success');
     expect(a.flow.id).not.toBe(b.flow.id);
   });
+
+  describe('updateFlowId (replace an existing flow in place)', () => {
+    it('keeps the target id and lets the flow keep its own name (no dedup rename)', async () => {
+      loadFlowsMock.mockResolvedValue([{ id: 'flow-1', name: 'wired_flow', nodes: [], edges: [] }]);
+      const result = await compileSpec(goodSpec, { save: true, updateFlowId: 'flow-1' });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.flow.id).toBe('flow-1');
+      expect(result.flow.name).toBe('wired_flow'); // not wired_flow_2
+      expect(result.saved).toBe(true);
+      expect(saveFlowMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'flow-1' }));
+    });
+
+    it('still dedupes against OTHER flows\' names', async () => {
+      loadFlowsMock.mockResolvedValue([
+        { id: 'flow-1', name: 'wired_flow', nodes: [], edges: [] },
+        { id: 'flow-2', name: 'taken', nodes: [], edges: [] },
+      ]);
+      const result = await compileSpec({ ...goodSpec, name: 'taken' }, { updateFlowId: 'flow-1' });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.flow.name).toBe('taken_2');
+    });
+
+    it('404s for an unknown target id without compiling or saving', async () => {
+      const result = await compileSpec(goodSpec, { save: true, updateFlowId: 'ghost' });
+      expect(result).toEqual(expect.objectContaining({ success: false, statusCode: 404 }));
+      expect(saveFlowMock).not.toHaveBeenCalled();
+    });
+
+    it('does NOT save (existing flow untouched) when validation has errors', async () => {
+      loadFlowsMock.mockResolvedValue([{ id: 'flow-1', name: 'wired_flow', nodes: [], edges: [] }]);
+      const result = await compileSpec(brokenSpec, { save: true, updateFlowId: 'flow-1' });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.saved).toBe(false);
+      expect(saveFlowMock).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /api/flow/compile', () => {
