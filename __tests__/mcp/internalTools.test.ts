@@ -35,7 +35,33 @@ jest.mock('@/backend/services/mcp/flowAuthoringTools', () => ({
   ],
   authoringCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'authored' }] })),
 }));
+// The conversation tools reach into the executor's state loader + log projection;
+// stub them so the test never loads the FlowExecutor module graph.
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: jest.fn(),
+}));
+jest.mock('@/backend/execution/flow/conversationLog', () => ({
+  flushConversationLog: jest.fn(async () => undefined),
+  readConversationLog: jest.fn(async () => undefined),
+  projectMessages: jest.fn(() => []),
+}));
+jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({
+  executionEventBus: { currentSeq: jest.fn(() => 0) },
+}));
+// list_conversations reads db/conversations under the data dir; point it at a
+// per-test temp dir when set (terminal tests keep the real data dir).
+jest.mock('@/utils/paths', () => {
+  const actual = jest.requireActual('@/utils/paths');
+  return {
+    ...actual,
+    getDataDir: () =>
+      (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir ?? actual.getDataDir(),
+  };
+});
 
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   internalToolDefinitions,
   internalCallTool,
@@ -46,11 +72,16 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
 const flows = flowService as unknown as { loadFlows: jest.Mock; deleteFlow: jest.Mock };
 const models = modelService as unknown as { loadModels: jest.Mock };
 const scheduler = (jest.requireMock('@/backend/services/scheduler') as { __mocks: { list: jest.Mock; runNow: jest.Mock } }).__mocks;
 const runFlowMock = runFlow as jest.Mock;
+const loadConversationStateMock = loadConversationState as jest.Mock;
+const readConversationLogMock = readConversationLog as jest.Mock;
+const projectMessagesMock = projectMessages as jest.Mock;
 
 type MockService = { [K in keyof InternalDispatchService]: jest.Mock };
 
@@ -90,6 +121,8 @@ describe('internalToolDefinitions', () => {
         'list_models',
         'list_planned_executions',
         'run_planned_execution',
+        'list_conversations',
+        'read_conversation',
         'terminal',
       ])
     );
@@ -314,6 +347,143 @@ describe('planned executions', () => {
     const r = await internalCallTool(makeService(), 'run_planned_execution', { id: 'pe1' });
     expect(scheduler.runNow).toHaveBeenCalledWith('pe1');
     expect(text(r)).toContain('"out"');
+  });
+});
+
+describe('list_conversations', () => {
+  let dataDir: string;
+
+  beforeAll(async () => {
+    dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-test-'));
+    const convDir = path.join(dataDir, 'db', 'conversations');
+    await fsp.mkdir(convDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(convDir, 'c1.json'),
+      JSON.stringify({
+        conversationId: 'c1',
+        title: 'Older',
+        flowId: 'f1',
+        status: 'completed',
+        createdAt: 1,
+        updatedAt: 100,
+        messages: [{ id: 'm1', role: 'user', content: 'transcript-body-must-not-leak', timestamp: 1 }],
+      })
+    );
+    await fsp.writeFile(
+      path.join(convDir, 'c2.json'),
+      JSON.stringify({ conversationId: 'c2', title: 'Newer', flowId: 'f2', status: 'running', createdAt: 2, updatedAt: 200 })
+    );
+    (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir = dataDir;
+  });
+
+  afterAll(async () => {
+    delete (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir;
+    await fsp.rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('returns summaries newest-first without message bodies, reporting dead running states as error', async () => {
+    const r = await internalCallTool(makeService(), 'list_conversations', {});
+    expect(r.isError).toBeUndefined();
+    const list = JSON.parse(text(r)) as Array<Record<string, unknown>>;
+    expect(list.map((c) => c.id)).toEqual(['c2', 'c1']);
+    expect(list[1]).toMatchObject({ title: 'Older', flowId: 'f1', status: 'completed' });
+    // c2 is stored as 'running' but no live event channel exists (currentSeq 0)
+    expect(list[0].status).toBe('error');
+    expect(text(r)).not.toContain('transcript-body-must-not-leak');
+  });
+
+  it('honors the limit (newest first)', async () => {
+    const r = await internalCallTool(makeService(), 'list_conversations', { limit: 1 });
+    const list = JSON.parse(text(r)) as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe('c2');
+  });
+});
+
+describe('read_conversation', () => {
+  beforeEach(() => {
+    readConversationLogMock.mockResolvedValue(undefined);
+    projectMessagesMock.mockReturnValue([]);
+  });
+
+  it('errors for an unknown conversation', async () => {
+    loadConversationStateMock.mockResolvedValue(undefined);
+    const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'nope' });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('nope');
+  });
+
+  it('falls back to snapshot messages and excludes system-role messages', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'c1',
+      title: 'T',
+      flowId: 'f1',
+      status: 'completed',
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        { id: 's', role: 'system', content: 'node-system-prompt', timestamp: 1 },
+        { id: 'u', role: 'user', content: 'hello', timestamp: 2 },
+        { id: 'a', role: 'assistant', content: 'hi there', timestamp: 3 },
+      ],
+    });
+    const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'c1' });
+    expect(r.isError).toBeUndefined();
+    const out = text(r);
+    expect(out).toContain('hello');
+    expect(out).toContain('hi there');
+    expect(out).not.toContain('node-system-prompt');
+    expect(JSON.parse(out).totalMessages).toBe(2);
+  });
+
+  it('prefers the conversation-log projection and summarizes tool calls', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'c1',
+      title: 'T',
+      flowId: 'f1',
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [{ id: 'legacy', role: 'user', content: 'legacy-snapshot-message', timestamp: 1 }],
+    });
+    readConversationLogMock.mockResolvedValue([{ type: 'message' }]);
+    projectMessagesMock.mockReturnValue([
+      {
+        id: 'a',
+        role: 'assistant',
+        content: null,
+        timestamp: 3,
+        tool_calls: [
+          { id: 'tc1', type: 'function', function: { name: 'do_thing', arguments: '{"x":1}' } },
+        ],
+      },
+      { id: 't', role: 'tool', tool_call_id: 'tc1', content: 'tool-result', timestamp: 4 },
+    ]);
+    const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'c1' });
+    const out = JSON.parse(text(r));
+    expect(text(r)).not.toContain('legacy-snapshot-message');
+    expect(out.messages).toHaveLength(2);
+    expect(out.messages[0].toolCalls).toEqual([{ id: 'tc1', name: 'do_thing', arguments: '{"x":1}' }]);
+    expect(out.messages[1]).toMatchObject({ role: 'tool', toolCallId: 'tc1', content: 'tool-result' });
+  });
+
+  it('returns only the most recent messages when limit is set, with a note', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'c1',
+      title: 'T',
+      flowId: 'f1',
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        { id: '1', role: 'user', content: 'one', timestamp: 1 },
+        { id: '2', role: 'assistant', content: 'two', timestamp: 2 },
+        { id: '3', role: 'user', content: 'three', timestamp: 3 },
+      ],
+    });
+    const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'c1', limit: 2 });
+    const out = JSON.parse(text(r));
+    expect(out.totalMessages).toBe(3);
+    expect(out.messages.map((m: { content: string }) => m.content)).toEqual(['two', 'three']);
+    expect(out.note).toContain('most recent');
   });
 });
 

@@ -7,14 +7,17 @@
  * MCP Tool definitions dispatched straight to the backend services, no process, no
  * transport. Unlike the other two it is consumed by FLUJO's OWN flow engine — a flow
  * binds the server named "flujo" like any other MCP server and its model can then
- * author flows, run flows, manage/install MCP servers, and inspect models and
- * planned executions.
+ * author flows, run flows, manage/install MCP servers, and inspect models, planned
+ * executions and chat conversations.
  *
  * Security posture:
  *  - Secrets never reach a model: list_mcp_servers returns name/transport/status
  *    only (no env, headers, or OAuth material); list_models whitelists metadata
  *    fields and never the ApiKey; planned executions expose the trigger TYPE only
  *    (webhook trigger configs carry a secret token).
+ *  - Conversation transcripts (read_conversation) exclude system-role messages
+ *    (node system prompts are model plumbing, same rule as the chat UI) and are
+ *    size-bounded so a long conversation can't flood the calling model's context.
  *  - call_mcp_tool refuses the internal server itself, and execute_flow carries a
  *    process-wide depth guard, so a flow cannot recurse through FLUJO unboundedly.
  *
@@ -23,14 +26,24 @@
  * mcpService back, and this file must not be pulled into index.ts's module-init.
  */
 import path from 'path';
+import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
+import type { SharedState } from '@/backend/execution/flow/types';
+import type { FlujoChatMessage } from '@/shared/types/chat';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import {
+  flushConversationLog,
+  readConversationLog,
+  projectMessages,
+} from '@/backend/execution/flow/conversationLog';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getDataDir } from '@/utils/paths';
 import {
   authoringToolDefinitions,
@@ -57,6 +70,11 @@ const MAX_EXECUTE_FLOW_DEPTH = 4;
 const TERMINAL_DEFAULT_TIMEOUT_MS = 60_000;
 const TERMINAL_MAX_TIMEOUT_MS = 600_000;
 const TERMINAL_MAX_OUTPUT_CHARS = 100_000;
+
+/** read_conversation bounds (same rationale as the terminal output cap). */
+const READ_CONVERSATION_DEFAULT_LIMIT = 50;
+const READ_CONVERSATION_MAX_CHARS = 100_000;
+const READ_CONVERSATION_TOOL_ARGS_CHARS = 2_000;
 
 /**
  * The slice of MCPService the dispatcher needs. Passed in by the caller instead
@@ -198,6 +216,33 @@ export function internalToolDefinitions(): Tool[] {
           id: { type: 'string', description: 'The planned execution id.' },
         },
         required: ['id'],
+      },
+    },
+    {
+      name: 'list_conversations',
+      description:
+        'List the chat conversations stored in this FLUJO instance (id, title, bound flow, status, created/updated timestamps), newest first. Use read_conversation to get a transcript.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Optional maximum number of conversations to return (newest first). Default: all.' },
+        },
+      },
+    },
+    {
+      name: 'read_conversation',
+      description:
+        'Read one chat conversation\'s transcript by conversation id (see list_conversations). Returns the displayed messages: system prompts are excluded, nested subflow steps carry a "depth" marker, assistant tool calls are summarized. Long conversations return only the most recent messages — raise "limit" to get more.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          conversation: { type: 'string', description: 'The conversation id.' },
+          limit: {
+            type: 'number',
+            description: `Maximum number of most-recent messages to return (default ${READ_CONVERSATION_DEFAULT_LIMIT}). The total transcript size is capped regardless.`,
+          },
+        },
+        required: ['conversation'],
       },
     },
     {
@@ -464,6 +509,164 @@ async function runPlannedExecution(args: Record<string, unknown>): Promise<CallT
 }
 
 /**
+ * List stored conversations as light summaries. Reads the conversation snapshot
+ * files directly (same source as GET /v1/chat/conversations) instead of loading
+ * full states through the executor: only metadata fields go out, never messages.
+ */
+async function listConversations(args: Record<string, unknown>): Promise<CallToolResult> {
+  const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
+  let files: string[];
+  try {
+    files = await fs.readdir(conversationsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return textResult([]); // no conversations yet
+    }
+    return textResult({ error: `Failed to list conversations: ${err instanceof Error ? err.message : String(err)}` }, true);
+  }
+
+  const summaries = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file) => {
+        try {
+          const raw = await fs.readFile(path.join(conversationsDir, file), 'utf-8');
+          const state = JSON.parse(raw) as SharedState;
+          const id = state.conversationId || file.replace(/\.json$/, '');
+          // Same stale-'running' reconcile as the conversations list route: a
+          // process restart drops the live run without flipping the stored
+          // status, and such a run can never resume.
+          let status = state.status;
+          if (status === 'running' && executionEventBus.currentSeq(id) === 0) {
+            status = 'error';
+          }
+          return {
+            id,
+            title: state.title || 'Untitled Conversation',
+            flowId: state.flowId || null,
+            ...(status ? { status } : {}),
+            createdAt: state.createdAt || 0,
+            updatedAt: state.updatedAt || 0,
+          };
+        } catch (err) {
+          log.warn(`list_conversations: skipping unreadable conversation file ${file}`, err);
+          return null;
+        }
+      })
+  );
+
+  const valid = summaries
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : undefined;
+  return textResult(limit ? valid.slice(0, limit) : valid);
+}
+
+/**
+ * Compact one transcript message for model consumption: role/content/timestamp
+ * plus depth for nested subflow steps; assistant tool calls are reduced to
+ * name + (truncated) arguments, tool results keep their call id for matching.
+ */
+function compactMessage(msg: FlujoChatMessage): Record<string, unknown> {
+  let content = '';
+  if (typeof msg.content === 'string') {
+    content = msg.content;
+  } else if (Array.isArray(msg.content)) {
+    content = msg.content
+      .map((part) => ('text' in part && typeof part.text === 'string' ? part.text : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  const out: Record<string, unknown> = {
+    role: msg.role,
+    ...(content ? { content } : {}),
+    ...(msg.timestamp ? { timestamp: msg.timestamp } : {}),
+    ...(msg.depth ? { depth: msg.depth } : {}),
+  };
+
+  if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+    out.toolCalls = msg.tool_calls.map((tc) => {
+      const fn = 'function' in tc ? tc.function : undefined;
+      const args = fn && typeof fn.arguments === 'string' ? fn.arguments : undefined;
+      return {
+        id: tc.id,
+        ...(fn?.name ? { name: fn.name } : {}),
+        ...(args !== undefined
+          ? {
+              arguments:
+                args.length > READ_CONVERSATION_TOOL_ARGS_CHARS
+                  ? args.slice(0, READ_CONVERSATION_TOOL_ARGS_CHARS) + '…[truncated]'
+                  : args,
+            }
+          : {}),
+      };
+    });
+  }
+  if (msg.role === 'tool' && msg.tool_call_id) {
+    out.toolCallId = msg.tool_call_id;
+  }
+  return out;
+}
+
+/**
+ * Read one conversation's transcript. Same message-resolution order as
+ * GET /v1/chat/conversations/{id}: flush + project the append-only conversation
+ * log (carries subflow depth, never contains node system prompts), falling back
+ * to the snapshot's messages minus system-role ones for pre-log conversations.
+ * Newest messages win the size budget: the transcript is trimmed from the front.
+ */
+async function readConversation(args: Record<string, unknown>): Promise<CallToolResult> {
+  const id = String(args?.conversation ?? '').trim();
+  if (!id) {
+    return textResult({ error: 'Provide "conversation": a conversation id (see list_conversations).' }, true);
+  }
+
+  await flushConversationLog(id);
+  const state = await loadConversationState(id);
+  if (!state) {
+    return textResult({ error: `No conversation with id "${id}". Use list_conversations to see the stored conversations.` }, true);
+  }
+
+  const events = await readConversationLog(id);
+  const projected = events ? projectMessages(events) : [];
+  const all =
+    projected.length > 0
+      ? projected
+      : (state.messages || []).filter((msg) => msg.role !== 'system');
+
+  const limit =
+    typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : READ_CONVERSATION_DEFAULT_LIMIT;
+
+  // Walk backwards so the newest messages always make it into the budget; the
+  // first (newest) message is always included even if it alone exceeds the cap.
+  const selected: Array<Record<string, unknown>> = [];
+  let usedChars = 0;
+  for (let i = all.length - 1; i >= 0 && selected.length < limit; i--) {
+    const compact = compactMessage(all[i]);
+    const size = JSON.stringify(compact).length;
+    if (selected.length > 0 && usedChars + size > READ_CONVERSATION_MAX_CHARS) break;
+    selected.push(compact);
+    usedChars += size;
+  }
+  selected.reverse();
+
+  return textResult({
+    id: state.conversationId || id,
+    title: state.title || 'Untitled Conversation',
+    flowId: state.flowId || null,
+    ...(state.status ? { status: state.status } : {}),
+    createdAt: state.createdAt || 0,
+    updatedAt: state.updatedAt || 0,
+    totalMessages: all.length,
+    ...(selected.length < all.length
+      ? { note: `Returning the ${selected.length} most recent of ${all.length} messages — raise "limit" to get more.` }
+      : {}),
+    messages: selected,
+  });
+}
+
+/**
  * Run a shell command on the host and return its combined output + exit code.
  *
  * Mirrors the spawn semantics of the LocalServerTab backend (app/api/git/route.ts
@@ -574,6 +777,10 @@ export async function internalCallTool(
         return await listPlannedExecutions();
       case 'run_planned_execution':
         return await runPlannedExecution(args);
+      case 'list_conversations':
+        return await listConversations(args);
+      case 'read_conversation':
+        return await readConversation(args);
       case 'terminal':
         return await runTerminal(args);
       default:
