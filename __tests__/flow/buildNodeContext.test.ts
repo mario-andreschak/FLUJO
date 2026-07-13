@@ -304,6 +304,74 @@ describe("collapseNodeOutputs (process node outputMode 'latest-message' — WIRE
     expect(collapseNodeOutputs(messages, new Set())).toBe(messages);
   });
 
+  // A node that hands off never emits a plain assistant turn (a plain turn
+  // would end its loop WITHOUT handing off) — its final response is the prose
+  // on the handoff turn, and a collapsed node must not lose it.
+  it("keeps the prose of a settled handoff turn as the node's final response", () => {
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('research cats', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1', 'big tool payload'), 'node-A'),
+      fromNode({ ...handoffAssistant('a2', 'call-2'), content: 'Research summary: cats are neat.' } as FlujoChatMessage, 'node-A'),
+      fromNode(toolResult('t2', 'call-2', '{"status":"Handoff processed"}'), 'node-A'),
+      fromNode(assistant('B is working', 'b1'), 'node-B'), // settles A's exchange
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2', 'b1']);
+    const kept = out.find((m) => m.id === 'a2')!;
+    expect(kept.content).toBe('Research summary: cats are neat.');
+    expect((kept as { tool_calls?: unknown }).tool_calls).toBeUndefined();
+  });
+
+  it('does NOT collapse a visit that produced no text at all (only tool calls + a textless handoff)', () => {
+    // Erasing it would remove the node's entire contribution from the wire —
+    // later steps would see nothing of its work.
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('research cats', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1', 'the only trace of the work'), 'node-A'),
+      fromNode(handoffAssistant('a2', 'call-2'), 'node-A'), // no prose
+      fromNode(toolResult('t2', 'call-2', '{"status":"Handoff processed"}'), 'node-A'),
+      fromNode(assistant('B is working', 'b1'), 'node-B'),
+    ];
+    expect(collapseNodeOutputs(messages, new Set(['node-A']))).toBe(messages);
+  });
+
+  it("collapses per VISIT — an earlier visit's text does not license erasing a later textless visit", () => {
+    // Recurring chat flow: node-A runs once per user turn. Turn 1 produced a
+    // plain answer (collapses); turn 2 only made tool calls and a textless
+    // handoff (must be preserved).
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('turn one', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1'), 'node-A'),
+      fromNode(assistant('first answer', 'a2'), 'node-A'),
+      user('turn two', 'u2'),
+      fromNode(toolCallAssistant('a3', 'call-2'), 'node-A'),
+      fromNode(toolResult('t3', 'call-2'), 'node-A'),
+      fromNode(handoffAssistant('a4', 'call-3'), 'node-A'), // textless terminal turn
+      fromNode(toolResult('t4', 'call-3', '{"status":"Handoff processed"}'), 'node-A'),
+      fromNode(assistant('B is working', 'b1'), 'node-B'),
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2', 'u2', 'a3', 't3', 'a4', 't4', 'b1']);
+  });
+
+  it('still drops a mid-loop turn that mixes prose with REAL tool calls (narration, not the final response)', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      fromNode({ ...toolCallAssistant('a1', 'call-1'), content: 'Let me search for that…' } as FlujoChatMessage, 'node-A'),
+      fromNode(toolResult('t1', 'call-1'), 'node-A'),
+      fromNode(assistant('the real answer', 'a2'), 'node-A'),
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2']);
+  });
+
   it('composes with scopeMessagesForInput (collapse first, then input scoping)', () => {
     // A single-user-turn run: 'latest-message' inputMode alone keeps everything
     // after u1, so the collapse is what actually removes node-A's tool spam.

@@ -77,13 +77,21 @@ export function scopeMessagesForInput(
   return [...system, ...messages.slice(lastUserIdx)];
 }
 
+/** True when this tool-call turn contains a FLUJO handoff call — i.e. it is a
+ *  node's TERMINAL routing turn (a plain turn would have ended the loop instead). */
+function hasHandoffCall(
+  m: FlujoChatMessage & { tool_calls: OpenAI.ChatCompletionMessageToolCall[] }
+): boolean {
+  return m.tool_calls.some((tc) => tc.type === 'function' && isHandoffToolName(tc.function.name));
+}
+
 /**
  * Collapse the SETTLED internal turns of nodes whose outputMode is
  * 'latest-message' (the output-side counterpart of scopeMessagesForInput):
  * their assistant(tool_calls) turns and the matching tool results are removed
- * from the wire view, leaving only their plain assistant responses. This is
- * what lets a tool-heavy step stop re-sending its whole tool exchange to every
- * later model call.
+ * from the wire view, leaving only their text responses. This is what lets a
+ * tool-heavy step stop re-sending its whole tool exchange to every later
+ * model call.
  *
  * Rules, in the same spirit as stripHandoffPlumbing:
  *   - WIRE view only — callers must keep the full history for persistence.
@@ -93,8 +101,19 @@ export function scopeMessagesForInput(
  *   - Tool results are dropped by tool_call_id of a dropped call turn — never
  *     by processNodeId alone — so a legacy call turn without a processNodeId
  *     can't be left dangling.
- *   - An assistant turn that mixes prose with tool calls is dropped whole
- *     (mid-action turn; same treatment as sanitizeForSubflow).
+ *   - A node that ends a visit by HANDOFF never emits a plain assistant turn
+ *     (a plain turn would end its loop without handing off), so its final
+ *     response is the prose ON the handoff turn. That prose survives as a
+ *     text-only assistant turn — mirroring stripHandoffPlumbing, which treats
+ *     the departing agent's summary as the receiving model's turn boundary.
+ *   - OUTPUT GUARANTEE: a visit is collapsed only when some text of it
+ *     survives (a plain assistant turn, or handoff prose). A visit that only
+ *     made tool calls and handed off with no text keeps its tool exchange —
+ *     collapsing it would erase the node's entire contribution and later
+ *     steps would see nothing of its work.
+ *   - A mid-loop assistant turn that mixes prose with REAL tool calls is
+ *     still dropped whole (mid-action narration, not the final response;
+ *     same treatment as sanitizeForSubflow).
  * Returns the input array unchanged (same reference) when nothing collapses.
  */
 export function collapseNodeOutputs(
@@ -104,25 +123,64 @@ export function collapseNodeOutputs(
   if (collapsedNodeIds.size === 0) return messages;
 
   const settledEnd = messages.length - currentToolTail(messages).length;
+
+  // Segment the settled region into node "visits" — contiguous runs of
+  // messages stamped with the same processNodeId (ModelHandler stamps every
+  // agent-loop message) — and mark, per message, whether its visit keeps any
+  // text after collapsing. Per-VISIT, not per-node: in a recurring chat flow
+  // the same node runs once per user turn, and a later visit that produced no
+  // text must be preserved even when an earlier visit did produce text.
+  const visitKeepsText = new Array<boolean>(settledEnd).fill(false);
+  for (let start = 0; start < settledEnd; ) {
+    const nodeId = messages[start].processNodeId;
+    let end = start;
+    while (end < settledEnd && messages[end].processNodeId === nodeId) end++;
+    let keepsText = false;
+    if (nodeId) {
+      for (let i = start; i < end; i++) {
+        const m = messages[i];
+        if (m.role !== 'assistant' || !hasTextContent(m)) continue;
+        if (!isToolCallTurn(m) || hasHandoffCall(m)) {
+          keepsText = true;
+          break;
+        }
+      }
+    }
+    for (let i = start; i < end; i++) visitKeepsText[i] = keepsText;
+    start = end;
+  }
+
   const droppedCallIds = new Set<string>();
   const out: FlujoChatMessage[] = [];
-  let dropped = false;
+  let changed = false;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (i < settledEnd) {
-      if (isToolCallTurn(m) && m.processNodeId && collapsedNodeIds.has(m.processNodeId)) {
+      if (
+        isToolCallTurn(m) &&
+        m.processNodeId &&
+        collapsedNodeIds.has(m.processNodeId) &&
+        visitKeepsText[i]
+      ) {
         for (const tc of m.tool_calls) droppedCallIds.add(tc.id);
-        dropped = true;
+        changed = true;
+        if (hasHandoffCall(m) && hasTextContent(m)) {
+          // Terminal handoff turn with prose: keep the node's final response
+          // as a plain assistant turn. Its call ids were dropped above, so
+          // the matching tool results go with them and nothing dangles.
+          const { tool_calls: _droppedCalls, ...rest } = m;
+          out.push(rest as FlujoChatMessage);
+        }
         continue;
       }
       if (m.role === 'tool' && m.tool_call_id && droppedCallIds.has(m.tool_call_id)) {
-        dropped = true;
+        changed = true;
         continue;
       }
     }
     out.push(m);
   }
-  return dropped ? out : messages;
+  return changed ? out : messages;
 }
 
 // The synthetic user message the run loop used to append after a handoff to
