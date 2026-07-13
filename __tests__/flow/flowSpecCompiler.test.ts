@@ -8,6 +8,7 @@
  */
 import {
   compileFlowSpec,
+  applyGenerationDefaults,
   sanitizeFlowName,
   FlowSpec,
   CompileContext,
@@ -519,6 +520,72 @@ describe('compileFlowSpec — node rules', () => {
     const p = flow!.nodes.find((n) => n.type === 'process')!;
     expect(p.data.properties!.inputMode).toBe('isolated');
     expect(p.data.properties!.isolatedPrompt).toBe('Only this.');
+  });
+
+  it("process nodes accept outputMode 'latest-message' but reject the subflow values", () => {
+    const spec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'p1', type: 'process', model: 'model-abc', outputMode: 'latest-message' },
+        // 'steps' is a SUBFLOW output mode — on a process node it must warn and be omitted.
+        { key: 'p2', type: 'process', model: 'model-abc', outputMode: 'steps' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p1' },
+        { from: 'p1', to: 'p2' },
+        { from: 'p2', to: 'f' },
+      ],
+    } as unknown as FlowSpec;
+    const { flow, issues } = compileFlowSpec(spec, context);
+    const processNodes = flow!.nodes.filter((n) => n.type === 'process');
+    expect(processNodes[0].data.properties!.outputMode).toBe('latest-message');
+    expect(processNodes[1].data.properties).not.toHaveProperty('outputMode');
+    expect(issues.filter((i) => i.code === 'invalid-output-mode')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generation-only defaults (generateFlow calls this; the compile API does not)
+// ---------------------------------------------------------------------------
+
+describe('applyGenerationDefaults', () => {
+  it("fills inputMode/outputMode 'latest-message' on process nodes that left them unset", () => {
+    const { flow } = compileFlowSpec(happySpec, context);
+    applyGenerationDefaults(flow!);
+    const research = flow!.nodes.find((n) => n.data.label === 'Researcher')!;
+    expect(research.data.properties!.inputMode).toBe('latest-message');
+    expect(research.data.properties!.outputMode).toBe('latest-message');
+    // Non-process nodes are untouched.
+    const sub = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(sub.data.properties!.outputMode).toBe('final-only');
+    const finish = flow!.nodes.find((n) => n.type === 'finish')!;
+    expect(finish.data.properties).not.toHaveProperty('inputMode');
+  });
+
+  it('never overrides modes the spec set explicitly', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'p',
+          type: 'process',
+          model: 'model-abc',
+          inputMode: 'full-history',
+          outputMode: 'full-conversation',
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p' },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const { flow } = compileFlowSpec(spec, context);
+    applyGenerationDefaults(flow!);
+    const p = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(p.data.properties!.inputMode).toBe('full-history');
+    expect(p.data.properties!.outputMode).toBe('full-conversation');
   });
 });
 

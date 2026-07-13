@@ -33,7 +33,7 @@ import { Flow } from '@/shared/types/flow';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter, CompletionAdapter } from '@/backend/services/model/adapters';
 import { Model } from '@/shared/types/model';
-import { compileFlowSpec, FlowSpec } from '@/utils/shared/flowSpecCompiler';
+import { compileFlowSpec, applyGenerationDefaults, FlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
@@ -101,6 +101,8 @@ function buildSystemPrompt(catalog: string, allowInstall: boolean): string {
 OUTPUT FORMAT — when you are done (after any tool use), respond with ONLY one JSON object, no prose, no code fences.
 
 ${FLOWSPEC_DOC}
+
+GENERATED-FLOW DEFAULTS (context saving): process nodes you leave without an explicit inputMode/outputMode are compiled with inputMode "latest-message" and outputMode "latest-message" — each step sees only the current task and later steps see only its final response, not its tool calls/results. When a step genuinely needs the whole conversation or later steps need its intermediate work, set "full-history" / "full-conversation" explicitly.
 
 ${acquisition}
 
@@ -381,6 +383,10 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
     }
 
     const compiled = compileFlowSpec(spec, context.compile);
+    // Generation-only context-saving defaults (announced in the system prompt):
+    // process nodes without an explicit inputMode/outputMode run scoped to the
+    // latest message and hide their tool exchanges from later steps.
+    if (compiled.flow) applyGenerationDefaults(compiled.flow);
     if (!compiled.flow) {
       messages.push(
         { role: 'assistant', content: raw },

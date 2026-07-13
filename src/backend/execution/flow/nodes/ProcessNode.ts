@@ -4,7 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
-import { buildNodeContext, scopeMessagesForInput } from '../buildNodeContext';
+import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs } from '../buildNodeContext';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
 import { flowService } from '@/backend/services/flow/index';
@@ -255,15 +255,32 @@ export class ProcessNode extends BaseNode {
     // so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
     prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
 
-    // Scope what the MODEL sees for latest-message / isolated inputMode. This
-    // narrows only the wire view (prepResult.wireMessages) — prepResult.messages
-    // stays the full history so post() writes it back intact and the tool loop
-    // can re-enter without losing the prior conversation. full-history leaves
-    // wireMessages unset (the model sees prepResult.messages verbatim).
+    // Shape what the MODEL sees — both wire-only, prepResult.messages stays the
+    // full history so post() writes it back intact and the tool loop can
+    // re-enter without losing the prior conversation:
+    //  1. collapseNodeOutputs: drop the settled tool exchanges of every node
+    //     whose outputMode is 'latest-message' (their final responses survive).
+    //  2. scopeMessagesForInput: narrow to this node's inputMode
+    //     (latest-message / isolated).
+    // When neither applies, wireMessages stays unset and the model sees
+    // prepResult.messages verbatim.
     const inputMode = node_params?.properties?.inputMode ?? 'full-history';
-    if (inputMode !== 'full-history') {
+    let wireBase = prepResult.messages;
+    try {
+      const flow = await flowService.getFlow(flowId);
+      const collapsedNodeIds = new Set(
+        (flow?.nodes ?? [])
+          .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
+          .map((n) => n.id)
+      );
+      wireBase = collapseNodeOutputs(prepResult.messages, collapsedNodeIds);
+    } catch (err) {
+      // Collapsing is a context-token optimization — never block the run on it.
+      log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
+    }
+    if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
       prepResult.wireMessages = scopeMessagesForInput(
-        prepResult.messages,
+        wireBase,
         inputMode,
         node_params?.properties?.isolatedPrompt,
       );

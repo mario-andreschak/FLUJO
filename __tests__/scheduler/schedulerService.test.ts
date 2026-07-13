@@ -167,6 +167,36 @@ describe('SchedulerService', () => {
     expect(secondPrompt).toContain('"status": "completed"');
   });
 
+  it("chains the previous run's final output into the next run's input (lastOutput)", async () => {
+    const { execution } = await scheduler.create(scheduleInput());
+
+    // First run has no predecessor.
+    await scheduler.runNow(execution!.id);
+    const firstPrompt = runFlowMock.mock.calls[0][0].prompt as string;
+    expect(firstPrompt).toContain('"lastOutput": null');
+
+    // Second run receives the first run's outputText.
+    await scheduler.runNow(execution!.id);
+    const secondPrompt = runFlowMock.mock.calls[1][0].prompt as string;
+    expect(secondPrompt).toContain('"lastOutput"');
+    expect(secondPrompt).toContain('"text": "All done"');
+  });
+
+  it('lastOutput survives an intervening run without output (error/skip does not blank the chain)', async () => {
+    const { execution } = await scheduler.create(scheduleInput());
+    await scheduler.runNow(execution!.id); // produces "All done"
+
+    // An errored run with no outputText in between.
+    runFlowMock.mockRejectedValueOnce(new Error('crashed'));
+    await scheduler.runNow(execution!.id);
+
+    await scheduler.runNow(execution!.id);
+    const thirdPrompt = runFlowMock.mock.calls[2][0].prompt as string;
+    // lastRun reports the errored attempt, lastOutput still carries the last real answer.
+    expect(thirdPrompt).toContain('"status": "error"');
+    expect(thirdPrompt).toContain('"text": "All done"');
+  });
+
   it('records an error run when the flow ends non-completed or throws', async () => {
     const { execution } = await scheduler.create(scheduleInput());
 

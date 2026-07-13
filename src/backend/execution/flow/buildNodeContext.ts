@@ -2,7 +2,9 @@ import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 
 /** True when this assistant turn is mid-action (made tool calls). */
-function isToolCallTurn(m: FlujoChatMessage): boolean {
+function isToolCallTurn(
+  m: FlujoChatMessage
+): m is FlujoChatMessage & { role: 'assistant'; tool_calls: OpenAI.ChatCompletionMessageToolCall[] } {
   return m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
 }
 
@@ -73,6 +75,54 @@ export function scopeMessagesForInput(
   }
   if (lastUserIdx === -1) return messages; // no user turn — keep everything
   return [...system, ...messages.slice(lastUserIdx)];
+}
+
+/**
+ * Collapse the SETTLED internal turns of nodes whose outputMode is
+ * 'latest-message' (the output-side counterpart of scopeMessagesForInput):
+ * their assistant(tool_calls) turns and the matching tool results are removed
+ * from the wire view, leaving only their plain assistant responses. This is
+ * what lets a tool-heavy step stop re-sending its whole tool exchange to every
+ * later model call.
+ *
+ * Rules, in the same spirit as stripHandoffPlumbing:
+ *   - WIRE view only — callers must keep the full history for persistence.
+ *   - The current in-flight tool exchange (the unresolved trailing tail) is
+ *     NEVER touched, so the node that is looping right now can continue even
+ *     when it itself is collapsed.
+ *   - Tool results are dropped by tool_call_id of a dropped call turn — never
+ *     by processNodeId alone — so a legacy call turn without a processNodeId
+ *     can't be left dangling.
+ *   - An assistant turn that mixes prose with tool calls is dropped whole
+ *     (mid-action turn; same treatment as sanitizeForSubflow).
+ * Returns the input array unchanged (same reference) when nothing collapses.
+ */
+export function collapseNodeOutputs(
+  messages: FlujoChatMessage[],
+  collapsedNodeIds: ReadonlySet<string>,
+): FlujoChatMessage[] {
+  if (collapsedNodeIds.size === 0) return messages;
+
+  const settledEnd = messages.length - currentToolTail(messages).length;
+  const droppedCallIds = new Set<string>();
+  const out: FlujoChatMessage[] = [];
+  let dropped = false;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (i < settledEnd) {
+      if (isToolCallTurn(m) && m.processNodeId && collapsedNodeIds.has(m.processNodeId)) {
+        for (const tc of m.tool_calls) droppedCallIds.add(tc.id);
+        dropped = true;
+        continue;
+      }
+      if (m.role === 'tool' && m.tool_call_id && droppedCallIds.has(m.tool_call_id)) {
+        dropped = true;
+        continue;
+      }
+    }
+    out.push(m);
+  }
+  return dropped ? out : messages;
 }
 
 // The synthetic user message the run loop used to append after a handoff to

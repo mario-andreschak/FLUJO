@@ -3,11 +3,14 @@ import { Box, Typography, FormControlLabel, Switch, CircularProgress, Alert, Pap
 import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import OptionCard from '@/frontend/components/shared/OptionCard';
 import { createLogger } from '@/utils/logger';
 
 type InputMode = 'full-history' | 'latest-message' | 'isolated';
+type OutputMode = 'full-conversation' | 'latest-message';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/PromptTemplateEditor');
 
@@ -24,6 +27,8 @@ interface PromptTemplateEditorProps {
   setInputMode: (value: InputMode) => void;
   isolatedPrompt: string;
   setIsolatedPrompt: (value: string) => void;
+  outputMode: OutputMode;
+  setOutputMode: (value: OutputMode) => void;
   isModelBound: boolean;
   models: any[];
   nodeData: any;
@@ -44,6 +49,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     setInputMode,
     isolatedPrompt,
     setIsolatedPrompt,
+    outputMode,
+    setOutputMode,
     isModelBound,
     models,
     nodeData,
@@ -347,6 +354,29 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
             helperText="Sent to the model as the user message. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes)."
           />
         )}
+      </Box>
+
+      {/* What LATER steps see of this node's work — the output-side counterpart. */}
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+          What do later steps see of this step&apos;s work?
+        </Typography>
+        <Box role="radiogroup" aria-label="Model output" sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <OptionCard
+            selected={outputMode === 'full-conversation'}
+            onClick={() => setOutputMode('full-conversation')}
+            icon={<ForumOutlinedIcon fontSize="small" />}
+            title="Full conversation"
+            description="Later steps see everything this step did — tool calls, tool results, and intermediate turns. The default."
+          />
+          <OptionCard
+            selected={outputMode === 'latest-message'}
+            onClick={() => setOutputMode('latest-message')}
+            icon={<ChatBubbleOutlineIcon fontSize="small" />}
+            title="Latest message only"
+            description="Later steps see only this step's final response. Its tool calls and results are hidden from later models to save context tokens (they stay visible in the chat and log)."
+          />
+        </Box>
       </Box>
 
       <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 120px)' }}>

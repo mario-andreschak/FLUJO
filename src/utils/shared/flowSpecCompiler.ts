@@ -59,8 +59,11 @@ export interface FlowSpecNode {
   isolatedPrompt?: string;
   /** subflow only: target flow name OR id — resolved against the context. */
   flow?: string;
-  /** subflow only. */
-  outputMode?: 'steps' | 'final-only';
+  /** subflow: chat visibility of the child run ('steps' | 'final-only').
+   *  process: what LATER steps see of this step's work ('full-conversation' |
+   *  'latest-message' — the latter hides its tool calls/results from later
+   *  model calls, keeping only its final response). */
+  outputMode?: 'steps' | 'final-only' | 'full-conversation' | 'latest-message';
 }
 
 export interface FlowSpecEdge {
@@ -130,6 +133,7 @@ const MCP_EDGE_STYLE = { stroke: '#1976d2', strokeWidth: 2 };
 
 const VALID_INPUT_MODES = new Set(['full-history', 'latest-message', 'isolated']);
 const VALID_OUTPUT_MODES = new Set(['steps', 'final-only']);
+const VALID_PROCESS_OUTPUT_MODES = new Set(['full-conversation', 'latest-message']);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -312,6 +316,14 @@ export function compileFlowSpec(spec: FlowSpec, context: CompileContext = {}): C
           warn('invalid-input-mode', `Node "${key}": inputMode "${String(specNode.inputMode)}" is not valid (full-history | latest-message | isolated); omitted.`, key);
         }
       }
+
+      if (specNode.outputMode !== undefined) {
+        if (VALID_PROCESS_OUTPUT_MODES.has(specNode.outputMode)) {
+          properties.outputMode = specNode.outputMode;
+        } else {
+          warn('invalid-output-mode', `Node "${key}": outputMode "${String(specNode.outputMode)}" is not valid on a process node (full-conversation | latest-message); omitted.`, key);
+        }
+      }
     } else if (type === 'subflow') {
       if (specNode.flow) {
         const resolved = resolveFlowRef(specNode.flow, flows);
@@ -471,6 +483,27 @@ export function compileFlowSpec(spec: FlowSpec, context: CompileContext = {}): C
     edges,
   };
   return finalize(flow, issues);
+}
+
+/**
+ * Context-saving defaults for GENERATED flows (not part of compileFlowSpec: the
+ * compile API and MCP authoring tools keep the runtime defaults — full-history /
+ * full-conversation — so hand-authored specs behave exactly as documented).
+ *
+ * Auto-generated flows default every process node the spec left unset to
+ * inputMode 'latest-message' and outputMode 'latest-message': each step runs
+ * scoped to the current task and stops re-sending its tool calls/results to
+ * every later step. The generator's system prompt tells the model about these
+ * defaults so it can opt back into full-history/full-conversation explicitly.
+ */
+export function applyGenerationDefaults(flow: Flow): void {
+  for (const node of flow.nodes) {
+    if (node.type !== 'process') continue;
+    const properties = (node.data.properties ?? {}) as Record<string, unknown>;
+    if (properties.inputMode === undefined) properties.inputMode = 'latest-message';
+    if (properties.outputMode === undefined) properties.outputMode = 'latest-message';
+    node.data.properties = properties;
+  }
 }
 
 /** Layered top-down layout: BFS depth over flow-control edges; MCP nodes beside their process. */

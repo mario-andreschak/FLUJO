@@ -28,7 +28,8 @@ NODE TYPES:
     "prompt": "instructions for this step",
     "servers": [ { "name": "<server name>", "tools": ["tool_a"] } ],   // optional; omit "tools" to enable all
     "inputMode": "full-history" | "latest-message" | "isolated",       // optional, default full-history
-    "isolatedPrompt": "..." }                                           // only with inputMode "isolated"
+    "isolatedPrompt": "...",                                            // only with inputMode "isolated"
+    "outputMode": "full-conversation" | "latest-message" }              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
 - { "key": "...", "type": "subflow", "label": "...", "flow": "<existing flow name or id>",
     "inputMode": "full-history" | "latest-message" | "isolated",
     "outputMode": "steps" | "final-only" }

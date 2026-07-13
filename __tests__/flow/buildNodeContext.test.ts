@@ -13,7 +13,7 @@
  *    generic "400 Bad Request" (seen via Requesty), so nothing beyond the
  *    OpenAI spec may survive this mapping.
  */
-import { buildNodeContext, stripHandoffPlumbing, toApiMessages, scopeMessagesForInput } from '@/backend/execution/flow/buildNodeContext';
+import { buildNodeContext, stripHandoffPlumbing, toApiMessages, scopeMessagesForInput, collapseNodeOutputs } from '@/backend/execution/flow/buildNodeContext';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
 const sys = (content: string, id = content): FlujoChatMessage =>
@@ -232,6 +232,90 @@ describe('scopeMessagesForInput (process node inputMode — WIRE view only)', ()
     const messages = [sys('NODE', 'node-sys'), user('old', 'u1')];
     const out = scopeMessagesForInput(messages, 'isolated');
     expect(out[1]).toMatchObject({ role: 'user', content: '' });
+  });
+});
+
+describe("collapseNodeOutputs (process node outputMode 'latest-message' — WIRE view only)", () => {
+  const fromNode = (m: FlujoChatMessage, nodeId: string): FlujoChatMessage =>
+    ({ ...m, processNodeId: nodeId } as FlujoChatMessage);
+
+  it("collapses a settled node's tool exchange but keeps its final response", () => {
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('research cats', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1', 'big tool payload'), 'node-A'),
+      fromNode(assistant('final summary', 'a2'), 'node-A'), // settled → collapse applies
+      user('next task', 'u2'),
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2', 'u2']);
+  });
+
+  it('only collapses the listed nodes — other nodes keep their tool pairs', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1'), 'node-A'),
+      fromNode(assistant('A done', 'a2'), 'node-A'),
+      fromNode(toolCallAssistant('b1', 'call-2'), 'node-B'),
+      fromNode(toolResult('t2', 'call-2'), 'node-B'),
+      fromNode(assistant('B done', 'b2'), 'node-B'),
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2', 'b1', 't2', 'b2']);
+  });
+
+  it('NEVER touches the current in-flight tool exchange (the collapsed node can keep looping)', () => {
+    // node-A is mid tool-loop: its earlier settled exchange collapses, the
+    // unresolved trailing exchange must survive for the loop to continue.
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1'), 'node-A'),
+      fromNode(assistant('first answer', 'a2'), 'node-A'), // settles the first exchange
+      fromNode(toolCallAssistant('a3', 'call-2'), 'node-A'),
+      fromNode(toolResult('t3', 'call-2'), 'node-A'), // in-flight tail
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2', 'a3', 't3']);
+  });
+
+  it('drops tool results only when their call turn was dropped (no dangling pairs from legacy messages)', () => {
+    // A legacy call turn WITHOUT a processNodeId cannot be attributed → it stays,
+    // and so must its result, even though the result carries the collapsed node id.
+    const legacyCall = toolCallAssistant('a1', 'call-1'); // no processNodeId
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      legacyCall,
+      fromNode(toolResult('t1', 'call-1'), 'node-A'),
+      fromNode(assistant('done', 'a2'), 'node-A'),
+    ];
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a1', 't1', 'a2']);
+  });
+
+  it('returns the SAME array when there is nothing to collapse', () => {
+    const messages = [sys('NODE', 'node-sys'), user('q', 'u1'), fromNode(assistant('done', 'a1'), 'node-A')];
+    expect(collapseNodeOutputs(messages, new Set(['node-A']))).toBe(messages);
+    expect(collapseNodeOutputs(messages, new Set())).toBe(messages);
+  });
+
+  it('composes with scopeMessagesForInput (collapse first, then input scoping)', () => {
+    // A single-user-turn run: 'latest-message' inputMode alone keeps everything
+    // after u1, so the collapse is what actually removes node-A's tool spam.
+    const messages: FlujoChatMessage[] = [
+      sys('NODE', 'node-sys'),
+      user('the task', 'u1'),
+      fromNode(toolCallAssistant('a1', 'call-1'), 'node-A'),
+      fromNode(toolResult('t1', 'call-1'), 'node-A'),
+      fromNode(assistant('A final', 'a2'), 'node-A'),
+    ];
+    const out = scopeMessagesForInput(collapseNodeOutputs(messages, new Set(['node-A'])), 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a2']);
   });
 });
 

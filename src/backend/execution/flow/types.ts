@@ -71,6 +71,17 @@ export interface ProcessNodeProperties {
      *  it shapes the model's input but is not persisted into the conversation
      *  transcript (analogous to the subflow node's isolated prompt). */
     isolatedPrompt?: string;
+    /** How much of THIS node's work later model calls see (the output-side
+     *  counterpart of inputMode, for context-token control):
+     *    - 'full-conversation' (default): everything the node produced — tool
+     *      calls, tool results, intermediate turns — stays on the wire for
+     *      subsequent nodes/turns. Today's behavior; existing flows unchanged.
+     *    - 'latest-message': once the node's tool loop has settled, only its
+     *      plain assistant responses stay visible to models; its
+     *      assistant(tool_calls) turns and their tool results are collapsed.
+     *  Like inputMode, this shapes the WIRE view only — the persisted
+     *  conversation/log keeps every message (see collapseNodeOutputs). */
+    outputMode?: 'full-conversation' | 'latest-message';
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];

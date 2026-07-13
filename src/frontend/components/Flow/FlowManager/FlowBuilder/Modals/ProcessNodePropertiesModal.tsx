@@ -45,6 +45,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [excludeSystemPrompt, setExcludeSystemPrompt] = useState(false);
   const [inputMode, setInputMode] = useState<'full-history' | 'latest-message' | 'isolated'>('full-history');
   const [isolatedPrompt, setIsolatedPrompt] = useState('');
+  const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
   const [activeTab, setActiveTab] = useState<string>('server');
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
@@ -104,6 +105,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       setExcludeSystemPrompt(node.data.properties?.excludeSystemPrompt || false);
       setInputMode(node.data.properties?.inputMode || 'full-history');
       setIsolatedPrompt(node.data.properties?.isolatedPrompt || '');
+      setOutputMode(node.data.properties?.outputMode || 'full-conversation');
     }
   }, [node, open]);
 
@@ -177,6 +179,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           excludeSystemPrompt: excludeSystemPrompt,
           inputMode: inputMode,
           isolatedPrompt: isolatedPrompt,
+          outputMode: outputMode,
         }
       };
       onSave(node.id, updatedNodeData);
@@ -321,6 +324,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               setInputMode={setInputMode}
               isolatedPrompt={isolatedPrompt}
               setIsolatedPrompt={setIsolatedPrompt}
+              outputMode={outputMode}
+              setOutputMode={setOutputMode}
               isModelBound={isModelBound}
               models={models}
               nodeData={nodeData}
