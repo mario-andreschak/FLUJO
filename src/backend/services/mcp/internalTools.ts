@@ -32,6 +32,7 @@ import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
 import type { SharedState } from '@/backend/execution/flow/types';
+import type { Flow } from '@/shared/types/flow';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
@@ -140,7 +141,7 @@ export function internalToolDefinitions(): Tool[] {
     {
       name: 'update_flow',
       description:
-        'REPLACE an existing FLUJO flow\'s definition (by name or id) with a newly compiled FlowSpec, keeping the flow\'s id — so planned executions, subflow nodes and conversations that reference it keep working. The spec format is the same as create_flow/validate_flow_spec (see those tool descriptions); saving is gated on zero validation errors. WARNING: this replaces the whole flow — any manual canvas edits made in the builder are lost. Use read_flow first to see what you are replacing.',
+        'REPLACE an existing FLUJO flow\'s definition (by name or id) with a newly compiled FlowSpec, keeping the flow\'s id — so planned executions, subflow nodes and conversations that reference it keep working. The spec format is the same as create_flow/validate_flow_spec (see those tool descriptions); saving is gated on zero validation errors. The replaced definition is archived automatically — list_flow_versions / revert_flow can restore it. Note that manual canvas edits made in the builder are part of what gets replaced. Use read_flow first to see what you are replacing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -151,9 +152,47 @@ export function internalToolDefinitions(): Tool[] {
       },
     },
     {
+      name: 'list_flow_versions',
+      description:
+        'List a flow\'s archived versions (by name or id), newest first. A version is created automatically whenever the flow\'s definition is overwritten (builder save, update_flow, revert_flow) and holds the definition that was replaced. Use read_flow_version to inspect one and revert_flow to restore one.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          flow: { type: 'string', description: 'Flow name or flow id.' },
+        },
+        required: ['flow'],
+      },
+    },
+    {
+      name: 'read_flow_version',
+      description:
+        'Read one archived version of a flow (see list_flow_versions): the full definition it held before it was replaced, in the same format as read_flow.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          flow: { type: 'string', description: 'Flow name or flow id.' },
+          version: { type: 'string', description: 'The version id (see list_flow_versions).' },
+        },
+        required: ['flow', 'version'],
+      },
+    },
+    {
+      name: 'revert_flow',
+      description:
+        'Restore an archived version (see list_flow_versions) as the flow\'s CURRENT definition. The definition being reverted away from is archived first, so a revert can itself be undone. References by flow id keep working.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          flow: { type: 'string', description: 'Flow name or flow id.' },
+          version: { type: 'string', description: 'The version id to restore (see list_flow_versions).' },
+        },
+        required: ['flow', 'version'],
+      },
+    },
+    {
       name: 'delete_flow',
       description:
-        'PERMANENTLY delete a FLUJO flow (by name or id). This cannot be undone. Verify the target with list_flow_building_blocks first.',
+        'PERMANENTLY delete a FLUJO flow (by name or id). This cannot be undone — the flow\'s version history is deleted with it. Verify the target with list_flow_building_blocks first.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -357,22 +396,14 @@ async function deleteFlow(args: Record<string, unknown>): Promise<CallToolResult
 }
 
 /**
- * Read a flow's full definition in inspectable form. Canvas trivia (positions,
- * handle ids, edge ids/styles) is dropped; the derived `mcpNodes` blob on
- * process properties is dropped too (FlowConverter regenerates it — it must
- * never round-trip through an author). Everything semantic stays: prompts,
- * bound models, attached servers/tools, input/output modes, edges.
+ * A flow definition in inspectable form. Canvas trivia (positions, handle ids,
+ * edge ids/styles) is dropped; the derived `mcpNodes` blob on process
+ * properties is dropped too (FlowConverter regenerates it — it must never
+ * round-trip through an author). Everything semantic stays: prompts, bound
+ * models, attached servers/tools, input/output modes, edges. Shared by
+ * read_flow and read_flow_version.
  */
-async function readFlow(args: Record<string, unknown>): Promise<CallToolResult> {
-  const ref = String(args?.flow ?? '').trim();
-  if (!ref) {
-    return textResult({ error: 'Provide "flow": a flow name or id.' }, true);
-  }
-  const flow = await resolveFlow(ref);
-  if (!flow) {
-    return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
-  }
-
+function formatFlowDefinition(flow: Flow): Record<string, unknown> {
   const nodes = flow.nodes.map((node) => {
     const { mcpNodes: _derived, ...properties } = (node.data?.properties ?? {}) as Record<string, unknown>;
     return {
@@ -392,14 +423,90 @@ async function readFlow(args: Record<string, unknown>): Promise<CallToolResult> 
       ...(data?.bidirectional ? { bidirectional: true } : {}),
     };
   });
-
-  return textResult({
+  return {
     id: flow.id,
     name: flow.name,
     ...(flow.description ? { description: flow.description } : {}),
     nodes,
     edges,
+  };
+}
+
+async function readFlow(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  if (!ref) {
+    return textResult({ error: 'Provide "flow": a flow name or id.' }, true);
+  }
+  const flow = await resolveFlow(ref);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
+  }
+  return textResult({
+    ...formatFlowDefinition(flow),
     note: 'This is the compiled flow (node ids, not FlowSpec keys). To change it, author a fresh FlowSpec and call update_flow — it replaces the whole definition while keeping this flow id.',
+  });
+}
+
+async function listFlowVersionsTool(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  if (!ref) {
+    return textResult({ error: 'Provide "flow": a flow name or id.' }, true);
+  }
+  const flow = await resolveFlow(ref);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${ref}".` }, true);
+  }
+  const versions = await flowService.listFlowVersions(flow.id);
+  return textResult({
+    flowId: flow.id,
+    flowName: flow.name,
+    versions,
+    ...(versions.length === 0
+      ? { note: 'No archived versions yet — versions appear once the flow\'s definition is overwritten for the first time.' }
+      : {}),
+  });
+}
+
+async function readFlowVersion(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  const versionId = String(args?.version ?? '').trim();
+  if (!ref || !versionId) {
+    return textResult({ error: 'Provide "flow" (name or id) and "version" (see list_flow_versions).' }, true);
+  }
+  const flow = await resolveFlow(ref);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${ref}".` }, true);
+  }
+  const record = await flowService.getFlowVersion(flow.id, versionId);
+  if (!record) {
+    return textResult({ error: `No version "${versionId}" of flow "${flow.name}". Use list_flow_versions to see the archived versions.` }, true);
+  }
+  return textResult({
+    versionId: record.versionId,
+    savedAt: record.savedAt,
+    ...formatFlowDefinition(record.flow),
+  });
+}
+
+async function revertFlowTool(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  const versionId = String(args?.version ?? '').trim();
+  if (!ref || !versionId) {
+    return textResult({ error: 'Provide "flow" (name or id) and "version" (see list_flow_versions).' }, true);
+  }
+  const flow = await resolveFlow(ref);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${ref}".` }, true);
+  }
+  const result = await flowService.revertFlow(flow.id, versionId);
+  if (!result.success) {
+    return textResult({ error: result.error ?? `Failed to revert flow "${flow.name}".` }, true);
+  }
+  return textResult({
+    reverted: true,
+    flowId: flow.id,
+    versionId,
+    note: 'The definition that was just replaced has been archived too, so this revert can itself be undone via list_flow_versions / revert_flow.',
   });
 }
 
@@ -882,6 +989,12 @@ export async function internalCallTool(
         return await readFlow(args);
       case 'update_flow':
         return await updateFlow(args);
+      case 'list_flow_versions':
+        return await listFlowVersionsTool(args);
+      case 'read_flow_version':
+        return await readFlowVersion(args);
+      case 'revert_flow':
+        return await revertFlowTool(args);
       case 'delete_flow':
         return await deleteFlow(args);
       case 'list_mcp_servers':

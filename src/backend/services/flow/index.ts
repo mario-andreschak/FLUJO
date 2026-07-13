@@ -17,6 +17,14 @@ import {
 import { StorageKey } from '@/shared/types/storage';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import {
+  archiveFlowVersion,
+  listFlowVersions,
+  getFlowVersion,
+  wipeFlowVersions,
+  FlowVersionRecord,
+  FlowVersionSummary,
+} from './flowVersions';
 
 const log = createLogger('backend/services/flow/index');
 
@@ -166,6 +174,19 @@ export class FlowService { // Add export keyword here
       assertSafeCollectionId(flow.id);
       await ensureFlowsMigrated();
 
+      // Version history: when this save OVERWRITES an existing flow, archive
+      // the definition being replaced (skipping no-op saves). Best-effort —
+      // a save must never fail because history could not be written.
+      let previous: Flow | null = null;
+      try {
+        previous = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flow.id, null);
+      } catch (error) {
+        log.debug(`saveFlow: could not read previous definition of ${flow.id} for versioning`, error);
+      }
+      if (previous && JSON.stringify(previous) !== JSON.stringify(flow)) {
+        await archiveFlowVersion(previous);
+      }
+
       // Write only this flow's file (no whole-collection rewrite).
       await saveCollectionItem(FLOWS_COLLECTION, flow.id, flow);
 
@@ -217,15 +238,42 @@ export class FlowService { // Add export keyword here
       // Drop any compiled copy of the deleted flow from the execution engine.
       await this.invalidateExecutionCache(flowId);
 
+      // A deleted flow's version history goes with it (best-effort).
+      await wipeFlowVersions(flowId);
+
       log.info(`Flow ${flowId} deleted successfully`);
       return { success: true };
     } catch (error) {
       log.error(`Failed to delete flow: ${flowId}`, error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to delete flow' 
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to delete flow'
       };
     }
+  }
+
+  /** Archived (superseded) versions of a flow, newest first. */
+  async listFlowVersions(flowId: string): Promise<FlowVersionSummary[]> {
+    return listFlowVersions(flowId);
+  }
+
+  /** One archived version with its full definition, or null. */
+  async getFlowVersion(flowId: string, versionId: string): Promise<FlowVersionRecord | null> {
+    return getFlowVersion(flowId, versionId);
+  }
+
+  /**
+   * Restore an archived version as the flow's current definition. Goes through
+   * saveFlow, so the definition being reverted AWAY from is archived first —
+   * a revert is itself reversible.
+   */
+  async revertFlow(flowId: string, versionId: string): Promise<FlowServiceResponse> {
+    const record = await getFlowVersion(flowId, versionId);
+    if (!record) {
+      return { success: false, error: `No version "${versionId}" of flow ${flowId}` };
+    }
+    // The id is pinned to the live flow id (defensive — records store it too).
+    return this.saveFlow({ ...record.flow, id: flowId });
   }
 
   /**

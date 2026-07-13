@@ -9,6 +9,9 @@ jest.mock('@/backend/services/flow', () => ({
   flowService: {
     loadFlows: jest.fn(),
     deleteFlow: jest.fn(),
+    listFlowVersions: jest.fn(),
+    getFlowVersion: jest.fn(),
+    revertFlow: jest.fn(),
   },
 }));
 jest.mock('@/backend/services/model', () => ({
@@ -80,7 +83,13 @@ import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
-const flows = flowService as unknown as { loadFlows: jest.Mock; deleteFlow: jest.Mock };
+const flows = flowService as unknown as {
+  loadFlows: jest.Mock;
+  deleteFlow: jest.Mock;
+  listFlowVersions: jest.Mock;
+  getFlowVersion: jest.Mock;
+  revertFlow: jest.Mock;
+};
 const models = modelService as unknown as { loadModels: jest.Mock };
 const scheduler = (jest.requireMock('@/backend/services/scheduler') as { __mocks: { list: jest.Mock; runNow: jest.Mock } }).__mocks;
 const runFlowMock = runFlow as jest.Mock;
@@ -120,6 +129,9 @@ describe('internalToolDefinitions', () => {
         'execute_flow',
         'read_flow',
         'update_flow',
+        'list_flow_versions',
+        'read_flow_version',
+        'revert_flow',
         'delete_flow',
         'list_mcp_servers',
         'list_mcp_server_tools',
@@ -337,6 +349,66 @@ describe('update_flow', () => {
     const r = await internalCallTool(makeService(), 'update_flow', { flow: 'f1' });
     expect(r.isError).toBe(true);
     expect(compileSpecMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('flow version tools', () => {
+  beforeEach(() => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+  });
+
+  it('list_flow_versions resolves by name and returns the summaries', async () => {
+    flows.listFlowVersions.mockResolvedValue([
+      { versionId: '2000-ab', savedAt: 2000, name: 'My Flow', nodeCount: 3, edgeCount: 2 },
+    ]);
+    const r = await internalCallTool(makeService(), 'list_flow_versions', { flow: 'My Flow' });
+    expect(flows.listFlowVersions).toHaveBeenCalledWith('f1');
+    const out = JSON.parse(text(r));
+    expect(out.flowId).toBe('f1');
+    expect(out.versions).toHaveLength(1);
+    expect(out.versions[0].versionId).toBe('2000-ab');
+  });
+
+  it('read_flow_version returns the archived definition in read_flow format', async () => {
+    flows.getFlowVersion.mockResolvedValue({
+      versionId: '2000-ab',
+      flowId: 'f1',
+      savedAt: 2000,
+      flow: {
+        id: 'f1',
+        name: 'My Flow',
+        nodes: [{ id: 'n1', type: 'start', position: { x: 0, y: 0 }, data: { label: 'Start', type: 'start', properties: { promptTemplate: 'old prompt' } } }],
+        edges: [],
+      },
+    });
+    const r = await internalCallTool(makeService(), 'read_flow_version', { flow: 'f1', version: '2000-ab' });
+    expect(flows.getFlowVersion).toHaveBeenCalledWith('f1', '2000-ab');
+    const out = JSON.parse(text(r));
+    expect(out).toMatchObject({ versionId: '2000-ab', savedAt: 2000, id: 'f1' });
+    expect(out.nodes[0].properties.promptTemplate).toBe('old prompt');
+  });
+
+  it('read_flow_version errors for an unknown version', async () => {
+    flows.getFlowVersion.mockResolvedValue(null);
+    const r = await internalCallTool(makeService(), 'read_flow_version', { flow: 'f1', version: 'ghost' });
+    expect(r.isError).toBe(true);
+  });
+
+  it('revert_flow restores a version and reports that the revert is reversible', async () => {
+    flows.revertFlow.mockResolvedValue({ success: true });
+    const r = await internalCallTool(makeService(), 'revert_flow', { flow: 'My Flow', version: '2000-ab' });
+    expect(flows.revertFlow).toHaveBeenCalledWith('f1', '2000-ab');
+    expect(r.isError).toBeUndefined();
+    const out = JSON.parse(text(r));
+    expect(out.reverted).toBe(true);
+    expect(out.note).toContain('undone');
+  });
+
+  it('revert_flow maps a service failure to an error result', async () => {
+    flows.revertFlow.mockResolvedValue({ success: false, error: 'No version "x"' });
+    const r = await internalCallTool(makeService(), 'revert_flow', { flow: 'f1', version: 'x' });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('No version');
   });
 });
 

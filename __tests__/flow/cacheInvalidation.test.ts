@@ -34,6 +34,18 @@ jest.mock('@/utils/storage/backend', () => ({
   migrateArrayFileToCollection: jest.fn(async () => 0),
 }));
 
+// deleteFlow also wipes the flow's version-history directory on the real
+// filesystem — point the data dir at a temp location, away from the repo's db/.
+jest.mock('@/utils/paths', () => {
+  const actual = jest.requireActual('@/utils/paths');
+  return {
+    ...actual,
+    getDataDir: () =>
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('path').join(require('os').tmpdir(), 'flujo-cacheinvalidation-test'),
+  };
+});
+
 import { FlowService } from '@/backend/services/flow';
 
 const flowFixture = (id: string, name: string): Flow => ({
