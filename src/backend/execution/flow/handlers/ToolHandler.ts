@@ -109,8 +109,23 @@ export class ToolHandler {
         }
       }
       
+      // Deterministic tool ordering (#89). The serialized tool block is a large,
+      // fixed prefix re-sent on every stateless Chat Completions turn. Providers
+      // auto-cache long identical prefixes and bill the re-read at a discount,
+      // but that prefix cache only keeps hitting if the bytes are byte-identical
+      // turn-to-turn. Tool order otherwise derives from MCP-node iteration order
+      // plus each server's tool-listing order, which is NOT guaranteed stable
+      // across reconnects / re-listing. Sort by the (namespaced, unique) tool
+      // name with a locale-independent comparison so the serialized block is
+      // identical every turn and keeps landing on the provider's prefix cache.
+      // Purely a byte-stability change: the model receives the same tools, and
+      // tool names are already unique (deduped in processMCPNodes).
+      const orderedTools = [...availableTools].sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
+
       // Map tools to OpenAI format with sanitized schemas
-      const tools: OpenAI.ChatCompletionTool[] = availableTools.map(tool => ({
+      const tools: OpenAI.ChatCompletionTool[] = orderedTools.map(tool => ({
         type: "function",
         function: {
           name: tool.name,

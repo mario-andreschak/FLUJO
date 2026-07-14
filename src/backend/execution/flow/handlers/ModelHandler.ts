@@ -15,6 +15,7 @@ import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
+import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -261,20 +262,14 @@ export class ModelHandler {
 
     // Extract provider-reported token usage, if present, so the UI can show
     // per-message and aggregated token/cost figures.
-    const rawUsage = modelResponse.fullResponse?.usage;
+    //
     // Cache RE-READ tokens (Anthropic cache_read / OpenAI cached_tokens) live in
     // the provider's `prompt_tokens_details`. They ARE part of prompt_tokens; we
     // carry the subset separately so the UI can subtract them from the headline
-    // instead of counting a warmed cache as fresh input every turn (#87).
-    const cachedTokens = rawUsage?.prompt_tokens_details?.cached_tokens;
-    const usage = rawUsage
-      ? {
-          promptTokens: rawUsage.prompt_tokens ?? 0,
-          completionTokens: rawUsage.completion_tokens ?? 0,
-          totalTokens: rawUsage.total_tokens ?? 0,
-          ...(cachedTokens != null ? { cacheReadTokens: cachedTokens } : {}),
-        }
-      : undefined;
+    // instead of counting a warmed cache as fresh input every turn (#87, and its
+    // OpenAI-path sibling #89). The mapping is a small pure helper so it can be
+    // unit-tested (see __tests__/model/openaiUsageMapping.test.ts).
+    const usage = mapOpenAiUsage(modelResponse.fullResponse?.usage);
 
     if (modelResponse.transcript && modelResponse.transcript.length > 0) {
       // Self-orchestrating adapter (Claude subscription): the adapter already ran
