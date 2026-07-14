@@ -162,17 +162,22 @@ export async function authoringCallTool(
       if (!result.success) {
         return textResult({ error: result.error, issues: result.issues ?? [] }, true);
       }
+      // A spec may nest inline child flows (subflowSpec), so a create can produce several
+      // flows at once (root + descendants, saved descendants-first).
+      const bundleCount = result.flows.length;
+      const subflowNote = bundleCount > 1 ? ` (plus ${bundleCount - 1} nested subflow flow(s))` : '';
       const summary = {
         flowId: result.flow.id,
         flowName: result.flow.name,
         nodeCount: result.flow.nodes.length,
         edgeCount: result.flow.edges.length,
+        ...(bundleCount > 1 ? { flows: result.flows.map((f) => ({ id: f.id, name: f.name })) } : {}),
         validation: result.validation,
         ...(toolName === 'create_flow'
           ? {
               saved: result.saved,
               ...(result.saved
-                ? { note: `Flow "${result.flow.name}" was created. It is callable as a tool on this MCP server (after a fresh tools/list) and as model "flow-${result.flow.name}" on the OpenAI-compatible endpoint.` }
+                ? { note: `Flow "${result.flow.name}"${subflowNote} was created. It is callable as a tool on this MCP server (after a fresh tools/list) and as model "flow-${result.flow.name}" on the OpenAI-compatible endpoint.` }
                 : { note: 'NOT saved: validation found errors. Fix the issues and call create_flow again.' }),
             }
           : {}),

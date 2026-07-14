@@ -48,6 +48,11 @@ const FlowsPage = () => {
   // It is deliberately NOT in `flows` — handleSaveFlow's create-vs-update check relies
   // on that, so the first save POSTs it like any new flow.
   const [draftFlow, setDraftFlow] = useState<Flow | null>(null);
+  // Multi-level generation (#94): auto-generated subflow flows that belong to the current
+  // draft, in dependency order (descendants first). They are UNSAVED like the root and are
+  // persisted just before the root on first save, so every subflowId resolves. Discarding
+  // the draft discards these too.
+  const [draftDescendants, setDraftDescendants] = useState<Flow[]>([]);
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
 
   // Copy flow dialog state
@@ -136,12 +141,18 @@ const FlowsPage = () => {
     log.debug('Returning to dashboard');
     const leave = () => {
       setIsEditing(false);
-      // Leaving a generated draft without saving discards it (the dashboard only
-      // shows saved flows, so a lingering draft would be unreachable anyway).
+      // Leaving a generated draft without saving discards it — the root AND any
+      // auto-generated subflow descendants (the dashboard only shows saved flows, so a
+      // lingering draft would be unreachable anyway).
       if (draftFlow && draftFlow.id === selectedFlow) {
+        const hadDescendants = draftDescendants.length > 0;
         setDraftFlow(null);
+        setDraftDescendants([]);
         setSelectedFlow(null);
-        showSnackbar('Generated draft discarded', 'info');
+        showSnackbar(
+          hadDescendants ? 'Generated draft (and its subflows) discarded' : 'Generated draft discarded',
+          'info'
+        );
       }
     };
     if (flowBuilderRef.current) {
@@ -149,7 +160,7 @@ const FlowsPage = () => {
     } else {
       leave();
     }
-  }, [draftFlow, selectedFlow, showSnackbar]);
+  }, [draftFlow, draftDescendants, selectedFlow, showSnackbar]);
   
   // Handle banner close
   const handleSnackbarClose = useCallback(() => {
@@ -196,6 +207,30 @@ const FlowsPage = () => {
   const handleSaveFlow = async (flow: Flow) => {
     log.info('Saving flow', { flowId: flow.id, flowName: flow.name });
     try {
+      // Multi-level draft: persist the auto-generated descendant flows FIRST (they arrive in
+      // dependency order) so the root's subflowId references resolve, then fall through to
+      // save the root as usual.
+      if (draftFlow?.id === flow.id && draftDescendants.length > 0) {
+        log.info('Persisting generated subflow descendants before the root', { count: draftDescendants.length });
+        for (const child of draftDescendants) {
+          const childIsNew = !flows.some(f => f.id === child.id);
+          const childResult = childIsNew
+            ? await flowService.addFlow(child)
+            : await flowService.updateFlow(child);
+          if (!childResult.success) {
+            log.error('Failed to save a generated subflow', { error: childResult.error, childId: child.id });
+            showSnackbar(childResult.error || 'Failed to save a generated subflow', 'error');
+            return;
+          }
+        }
+        setFlows(prev => {
+          const known = new Set(prev.map(f => f.id));
+          const added = draftDescendants.filter(c => !known.has(c.id));
+          return added.length ? [...prev, ...added] : prev;
+        });
+        setDraftDescendants([]);
+      }
+
       // A flow not yet in state is a create (POST); otherwise it's an update (PUT).
       const isNew = !flows.some(f => f.id === flow.id);
       const result = isNew
@@ -362,22 +397,29 @@ const FlowsPage = () => {
       warnings: result.warningCount,
     });
     setGenerateDialogOpen(false);
+    // The root is opened in the builder; its auto-generated subflow descendants ride along
+    // as an unsaved bundle and are persisted just before the root on first save.
+    const descendants = (result.flows ?? []).filter(f => f.id !== result.rootFlowId);
     setDraftFlow(result.flow);
+    setDraftDescendants(descendants);
     setSelectedFlow(result.flow.id);
     setIsEditing(true);
     const freshInstalls = result.installedServers?.filter(s => !s.alreadyExisted) ?? [];
     const installNote = freshInstalls.length > 0
       ? ` Installed MCP server(s): ${freshInstalls.map(s => s.name).join(', ')}.`
       : '';
+    const subflowNote = descendants.length > 0
+      ? ` Includes ${descendants.length} auto-generated subflow(s) that save with it.`
+      : '';
     if (result.errorCount > 0) {
       showSnackbar(
-        `Draft generated with ${result.errorCount} error(s) and ${result.warningCount} warning(s) — use the Check button, fix, then save.${installNote}`,
+        `Draft generated with ${result.errorCount} error(s) and ${result.warningCount} warning(s) — use the Check button, fix, then save.${subflowNote}${installNote}`,
         'warning'
       );
     } else if (result.warningCount > 0) {
-      showSnackbar(`Draft generated with ${result.warningCount} warning(s) — review, then save to keep it.${installNote}`, 'info');
+      showSnackbar(`Draft generated with ${result.warningCount} warning(s) — review, then save to keep it.${subflowNote}${installNote}`, 'info');
     } else {
-      showSnackbar(`Flow drafted — review it and save to keep it.${installNote}`, 'success');
+      showSnackbar(`Flow drafted — review it and save to keep it.${subflowNote}${installNote}`, 'success');
     }
   }, [showSnackbar]);
 

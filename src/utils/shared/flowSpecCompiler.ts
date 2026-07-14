@@ -1,5 +1,5 @@
 /**
- * FlowSpec → Flow compiler (issue #14, flow generation).
+ * FlowSpec → Flow compiler (issue #14, flow generation; issue #94, multi-level nesting).
  *
  * The flow generator does NOT ask the LLM to emit raw ReactFlow JSON — that format is
  * full of load-bearing trivia a model will fumble (edges without sourceHandle/targetHandle
@@ -9,6 +9,18 @@
  * hand-authored). Instead the model emits a compact semantic {@link FlowSpec} and this
  * pure, deterministic compiler produces the ReactFlow JSON: uuids, layered layout,
  * handle ids, edge ids, MCP nodes + mcp edges, markers.
+ *
+ * MULTI-LEVEL (issue #94): a subflow node can reference an existing flow (`flow`) OR carry
+ * an inline child {@link FlowSpec} (`subflowSpec`). Inline children are compiled into their
+ * OWN flows and the parent subflow node's `subflowId` is wired to the compiled child's id.
+ * The compiler therefore returns a BUNDLE of flows ({@link CompileResult.flows}) in
+ * dependency order (descendants before the root) so the caller can persist them
+ * descendants-first, keeping every `subflowId` resolvable. `CompileResult.flow` remains the
+ * ROOT flow for back-compatibility with the single-flow callers. Recursion is bounded by a
+ * hard depth cap and a total-flow cap. A third field, `generateSubflow`, is a
+ * generator-only instruction (a natural-language description of a child to auto-generate);
+ * the deterministic compiler cannot fulfil it and flags it — the LLM generator expands it
+ * into a `subflowSpec` before compiling.
  *
  * The compiler is BEST-EFFORT: it always returns a flow when at least one node is usable,
  * recording everything it skipped or could not resolve as {@link CompileIssue}s. Semantic
@@ -26,6 +38,20 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
+
+// ---------------------------------------------------------------------------
+// Recursion bounds (issue #94) — token/latency + loop guards
+// ---------------------------------------------------------------------------
+
+/** Hard maximum subflow nesting depth (root is depth 0). Never exceeded, whatever the caller asks. */
+export const MAX_SUBFLOW_DEPTH = 3;
+/** Hard maximum number of flows a single compile/generate may produce (root + descendants). */
+export const MAX_GENERATED_FLOWS = 8;
+
+function clamp(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
 
 // ---------------------------------------------------------------------------
 // FlowSpec — the DSL the generator model emits
@@ -57,8 +83,20 @@ export interface FlowSpecNode {
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
   /** process only, inputMode 'isolated': the replacement context. */
   isolatedPrompt?: string;
-  /** subflow only: target flow name OR id — resolved against the context. */
+  /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
+  /**
+   * subflow only (issue #94): an INLINE child FlowSpec. The compiler compiles it into its
+   * own flow and wires this node's subflowId to it. Mutually exclusive with `flow`
+   * (precedence: flow > subflowSpec > generateSubflow).
+   */
+  subflowSpec?: FlowSpec;
+  /**
+   * subflow only (issue #94): a natural-language description of a child flow to
+   * AUTO-GENERATE. Generator-only — the deterministic compiler cannot fulfil it and flags
+   * it; the LLM generator expands it into a `subflowSpec` before compiling.
+   */
+  generateSubflow?: string;
   /** subflow: chat visibility of the child run ('steps' | 'final-only').
    *  process: what LATER steps see of this step's work ('full-conversation' |
    *  'latest-message' — the latter hides its tool calls/results from later
@@ -97,6 +135,14 @@ export interface CompileContext {
   flows?: Array<{ id: string; name: string }>;
 }
 
+/** Bounds for nested (subflowSpec) compilation. Clamped to the hard caps above. */
+export interface CompileOptions {
+  /** Max nesting depth (root is 0). Clamped to [0, MAX_SUBFLOW_DEPTH]. */
+  maxDepth?: number;
+  /** Max total flows in the bundle. Clamped to [1, MAX_GENERATED_FLOWS]. */
+  maxFlows?: number;
+}
+
 export interface CompileIssue {
   severity: 'error' | 'warning';
   /** Stable machine code, e.g. 'subflow-unresolved'. */
@@ -108,8 +154,15 @@ export interface CompileIssue {
 }
 
 export interface CompileResult {
-  /** Best-effort flow; null only when no node was usable at all. */
+  /** Best-effort ROOT flow; null only when the root spec had no usable node at all. */
   flow: Flow | null;
+  /**
+   * The full bundle — root plus every inline-subflow descendant — in DEPENDENCY ORDER
+   * (descendants before the root) so callers can persist them descendants-first and keep
+   * each subflowId resolvable. For a non-nested spec this is `[flow]`. Empty when
+   * `flow` is null.
+   */
+  flows: Flow[];
   issues: CompileIssue[];
   errorCount: number;
   warningCount: number;
@@ -189,7 +242,7 @@ function resolveModel(
 /** Resolve a subflow reference: exact id, then case-insensitive name. */
 function resolveFlowRef(
   ref: string,
-  flows: NonNullable<CompileContext['flows']>
+  flows: Array<{ id: string; name: string }>
 ): string | null {
   if (flows.some((f) => f.id === ref)) return ref;
   const lower = ref.toLowerCase();
@@ -236,7 +289,15 @@ function mcpEdge(processNode: FlowNode, mcpNode: FlowNode): Edge {
 // Compiler
 // ---------------------------------------------------------------------------
 
-export function compileFlowSpec(spec: FlowSpec, context: CompileContext = {}): CompileResult {
+/**
+ * Compile a {@link FlowSpec} into a Flow (or a BUNDLE of flows, when it nests inline
+ * subflows via `subflowSpec`). See {@link CompileResult} for the return shape.
+ */
+export function compileFlowSpec(
+  spec: FlowSpec,
+  context: CompileContext = {},
+  options: CompileOptions = {}
+): CompileResult {
   const issues: CompileIssue[] = [];
   const error = (code: string, message: string, nodeKey?: string) =>
     issues.push({ severity: 'error', code, message, nodeKey });
@@ -246,243 +307,337 @@ export function compileFlowSpec(spec: FlowSpec, context: CompileContext = {}): C
   const models = context.models ?? [];
   const knownServers = new Set((context.servers ?? []).map((s) => s.name));
   const serverTools = context.serverTools ?? {};
-  const flows = context.flows ?? [];
 
-  const specNodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
-  const specEdges = Array.isArray(spec?.edges) ? spec.edges : [];
+  const maxDepth = clamp(options.maxDepth, 0, MAX_SUBFLOW_DEPTH, MAX_SUBFLOW_DEPTH);
+  const maxFlows = clamp(options.maxFlows, 1, MAX_GENERATED_FLOWS, MAX_GENERATED_FLOWS);
 
-  // --- Pass 1: nodes ---------------------------------------------------------
-  const nodesByKey = new Map<string, FlowNode>();
-  const flowNodes: FlowNode[] = [];
-  // MCP nodes are created per (process, server) pair so each step keeps its own
-  // enabledTools subset; collected separately for placement next to their process node.
-  const mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }> = [];
+  // Bundle state, shared across recursion levels:
+  //  - `bundle` collects compiled flows in dependency order (children pushed before parents).
+  //  - `takenNames` grows so sibling/child flow names never collide with each other or existing flows.
+  //  - `bundleRefs` are the flows already compiled in THIS bundle, resolvable by a later
+  //    subflow `flow` reference (a sibling can reference an earlier sibling). Ancestors are
+  //    NOT added until their own level finishes, so a descendant can never resolve an
+  //    ancestor by name — that structurally prevents reference cycles.
+  const bundle: Flow[] = [];
+  const takenNames = [...(context.flows ?? []).map((f) => f.name)];
+  const bundleRefs: Array<{ id: string; name: string }> = [];
+  // Counts every flow whose id has been reserved this bundle (root included, and counted
+  // even if a level turns out to have no usable node) so the total-flow cap is honoured
+  // exactly regardless of the children-before-parent push order.
+  let flowCount = 0;
 
-  for (const specNode of specNodes) {
-    const key = specNode?.key;
-    if (!key || typeof key !== 'string') {
-      error('node-missing-key', 'A node is missing its "key" — every node needs a unique key.');
-      continue;
-    }
-    if (nodesByKey.has(key)) {
-      error('node-duplicate-key', `Duplicate node key "${key}" — keys must be unique; the later node was dropped.`, key);
-      continue;
-    }
-    const type = specNode.type;
-    if (type === ('mcp' as string)) {
-      error(
-        'mcp-node-not-allowed',
-        `Node "${key}": do not emit "mcp" nodes — attach servers to a process node via its "servers" list instead.`,
-        key
-      );
-      continue;
-    }
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow') {
-      error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
-      continue;
-    }
+  const rootFlow = compileLevel(spec, 0, []);
+  return finalize(rootFlow, bundle, issues);
 
-    const properties: Record<string, any> = {};
-    const prompt = typeof specNode.prompt === 'string' ? specNode.prompt : undefined;
+  // -------------------------------------------------------------------------
+  // Per-level compile (recurses for inline subflowSpec children)
+  // -------------------------------------------------------------------------
+  function compileLevel(levelSpec: FlowSpec, depth: number, ancestorNames: string[]): Flow | null {
+    const specNodes = Array.isArray(levelSpec?.nodes) ? levelSpec.nodes : [];
+    const specEdges = Array.isArray(levelSpec?.edges) ? levelSpec.edges : [];
 
-    if (type === 'start') {
-      const { text, stripped } = stripPills(prompt ?? '');
-      if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-      properties.promptTemplate = text;
-    } else if (type === 'process') {
-      const { text, stripped } = stripPills(prompt ?? '');
-      if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-      properties.promptTemplate = text;
+    // Reserve the name up-front so nested children dedupe against it and cycle
+    // detection can compare a subflow `flow` reference against ancestor names.
+    const flowName = sanitizeFlowName(levelSpec?.name, takenNames);
+    takenNames.push(flowName);
+    flowCount++;
+    const flowId = uuidv4();
+    const childAncestors = [...ancestorNames, flowName];
 
-      if (specNode.model) {
-        const resolved = resolveModel(specNode.model, models);
-        if (resolved) {
-          properties.boundModel = resolved;
-        } else {
-          // Keep the raw reference so the intent stays visible in the builder;
-          // validateFlow raises the blocking 'process-model-missing' error.
-          properties.boundModel = specNode.model;
-          warn('model-unresolved', `Node "${key}": model "${specNode.model}" does not match any configured model (by id, display name, or name).`, key);
-        }
+    // --- Pass 1: nodes -------------------------------------------------------
+    const nodesByKey = new Map<string, FlowNode>();
+    const flowNodes: FlowNode[] = [];
+    const mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }> = [];
+
+    for (const specNode of specNodes) {
+      const key = specNode?.key;
+      if (!key || typeof key !== 'string') {
+        error('node-missing-key', 'A node is missing its "key" — every node needs a unique key.');
+        continue;
+      }
+      if (nodesByKey.has(key)) {
+        error('node-duplicate-key', `Duplicate node key "${key}" — keys must be unique; the later node was dropped.`, key);
+        continue;
+      }
+      const type = specNode.type;
+      if (type === ('mcp' as string)) {
+        error(
+          'mcp-node-not-allowed',
+          `Node "${key}": do not emit "mcp" nodes — attach servers to a process node via its "servers" list instead.`,
+          key
+        );
+        continue;
+      }
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow') {
+        error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
+        continue;
       }
 
-      if (specNode.inputMode !== undefined) {
-        if (VALID_INPUT_MODES.has(specNode.inputMode)) {
-          properties.inputMode = specNode.inputMode;
-          if (specNode.inputMode === 'isolated' && typeof specNode.isolatedPrompt === 'string') {
-            properties.isolatedPrompt = specNode.isolatedPrompt;
-          }
-        } else {
-          warn('invalid-input-mode', `Node "${key}": inputMode "${String(specNode.inputMode)}" is not valid (full-history | latest-message | isolated); omitted.`, key);
-        }
-      }
+      const properties: Record<string, any> = {};
+      const prompt = typeof specNode.prompt === 'string' ? specNode.prompt : undefined;
 
-      if (specNode.outputMode !== undefined) {
-        if (VALID_PROCESS_OUTPUT_MODES.has(specNode.outputMode)) {
-          properties.outputMode = specNode.outputMode;
-        } else {
-          warn('invalid-output-mode', `Node "${key}": outputMode "${String(specNode.outputMode)}" is not valid on a process node (full-conversation | latest-message); omitted.`, key);
-        }
-      }
-    } else if (type === 'subflow') {
-      if (specNode.flow) {
-        const resolved = resolveFlowRef(specNode.flow, flows);
-        if (resolved) {
-          properties.subflowId = resolved;
-        } else {
-          error('subflow-unresolved', `Node "${key}": flow "${specNode.flow}" does not match any existing flow (by id or name).`, key);
-        }
-      } else {
-        error('subflow-missing-flow', `Node "${key}": subflow nodes need a "flow" (name or id of an existing flow).`, key);
-      }
-      if (specNode.inputMode !== undefined) {
-        if (VALID_INPUT_MODES.has(specNode.inputMode)) {
-          properties.inputMode = specNode.inputMode;
-        } else {
-          warn('invalid-input-mode', `Node "${key}": inputMode "${String(specNode.inputMode)}" is not valid (full-history | latest-message | isolated); omitted.`, key);
-        }
-      }
-      if (specNode.outputMode !== undefined) {
-        if (VALID_OUTPUT_MODES.has(specNode.outputMode)) {
-          properties.outputMode = specNode.outputMode;
-        } else {
-          warn('invalid-output-mode', `Node "${key}": outputMode "${String(specNode.outputMode)}" is not valid (steps | final-only); omitted.`, key);
-        }
-      }
-      // A prompt on a subflow is its isolated-mode input (runtime back-compat treats a
-      // promptTemplate with no inputMode as isolated).
-      if (prompt !== undefined) {
-        const { text, stripped } = stripPills(prompt);
+      if (type === 'start') {
+        const { text, stripped } = stripPills(prompt ?? '');
         if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
         properties.promptTemplate = text;
-      }
-    }
-    // finish: no properties.
+      } else if (type === 'process') {
+        const { text, stripped } = stripPills(prompt ?? '');
+        if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+        properties.promptTemplate = text;
 
-    const node: FlowNode = {
-      id: uuidv4(),
-      type,
-      position: { x: 0, y: 0 }, // layout pass below
-      data: {
-        label: specNode.label || defaultLabel(type),
-        type,
-        ...(specNode.description ? { description: specNode.description } : {}),
-        properties,
-      },
-    };
-    nodesByKey.set(key, node);
-    flowNodes.push(node);
-
-    // --- MCP attachments (process only) ---
-    if (type === 'process' && Array.isArray(specNode.servers)) {
-      const seenServers = new Set<string>();
-      for (const ref of specNode.servers) {
-        const serverName = ref?.name;
-        if (!serverName || typeof serverName !== 'string') {
-          warn('server-missing-name', `Node "${key}": a server reference is missing its "name"; skipped.`, key);
-          continue;
-        }
-        if (seenServers.has(serverName)) continue;
-        seenServers.add(serverName);
-        if (!knownServers.has(serverName)) {
-          warn('server-unknown', `Node "${key}": MCP server "${serverName}" is not configured in FLUJO.`, key);
-        }
-        const known = serverTools[serverName];
-        let enabledTools: string[];
-        if (Array.isArray(ref.tools)) {
-          enabledTools = ref.tools.filter((t) => typeof t === 'string' && t);
-          if (known) {
-            const unknown = enabledTools.filter((t) => !known.includes(t));
-            if (unknown.length > 0) {
-              warn('tool-unknown', `Node "${key}": server "${serverName}" does not report tool(s): ${unknown.join(', ')}.`, key);
-            }
+        if (specNode.model) {
+          const resolved = resolveModel(specNode.model, models);
+          if (resolved) {
+            properties.boundModel = resolved;
+          } else {
+            // Keep the raw reference so the intent stays visible in the builder;
+            // validateFlow raises the blocking 'process-model-missing' error.
+            properties.boundModel = specNode.model;
+            warn('model-unresolved', `Node "${key}": model "${specNode.model}" does not match any configured model (by id, display name, or name).`, key);
           }
-        } else {
-          // Tools omitted → enable everything we know about (empty if the server is
-          // unknown/offline — the builder is where the user refines this).
-          enabledTools = known ? [...known] : [];
         }
-        const mcpNode: FlowNode = {
-          id: uuidv4(),
-          type: 'mcp',
-          position: { x: 0, y: 0 },
-          data: {
-            label: serverName,
-            type: 'mcp',
-            properties: { boundServer: serverName, enabledTools },
-          },
-        };
-        flowNodes.push(mcpNode);
-        mcpAttachments.push({ processKey: key, mcpNode });
+
+        if (specNode.inputMode !== undefined) {
+          if (VALID_INPUT_MODES.has(specNode.inputMode)) {
+            properties.inputMode = specNode.inputMode;
+            if (specNode.inputMode === 'isolated' && typeof specNode.isolatedPrompt === 'string') {
+              properties.isolatedPrompt = specNode.isolatedPrompt;
+            }
+          } else {
+            warn('invalid-input-mode', `Node "${key}": inputMode "${String(specNode.inputMode)}" is not valid (full-history | latest-message | isolated); omitted.`, key);
+          }
+        }
+
+        if (specNode.outputMode !== undefined) {
+          if (VALID_PROCESS_OUTPUT_MODES.has(specNode.outputMode)) {
+            properties.outputMode = specNode.outputMode;
+          } else {
+            warn('invalid-output-mode', `Node "${key}": outputMode "${String(specNode.outputMode)}" is not valid on a process node (full-conversation | latest-message); omitted.`, key);
+          }
+        }
+      } else if (type === 'subflow') {
+        resolveSubflowTarget(specNode, key, depth, childAncestors, properties);
+        if (specNode.inputMode !== undefined) {
+          if (VALID_INPUT_MODES.has(specNode.inputMode)) {
+            properties.inputMode = specNode.inputMode;
+          } else {
+            warn('invalid-input-mode', `Node "${key}": inputMode "${String(specNode.inputMode)}" is not valid (full-history | latest-message | isolated); omitted.`, key);
+          }
+        }
+        if (specNode.outputMode !== undefined) {
+          if (VALID_OUTPUT_MODES.has(specNode.outputMode)) {
+            properties.outputMode = specNode.outputMode;
+          } else {
+            warn('invalid-output-mode', `Node "${key}": outputMode "${String(specNode.outputMode)}" is not valid (steps | final-only); omitted.`, key);
+          }
+        }
+        // A prompt on a subflow is its isolated-mode input (runtime back-compat treats a
+        // promptTemplate with no inputMode as isolated).
+        if (prompt !== undefined) {
+          const { text, stripped } = stripPills(prompt);
+          if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+          properties.promptTemplate = text;
+        }
       }
-    } else if (type !== 'process' && Array.isArray(specNode.servers) && specNode.servers.length > 0) {
-      warn('servers-on-non-process', `Node "${key}": only process nodes can have "servers"; ignored.`, key);
+      // finish: no properties.
+
+      const node: FlowNode = {
+        id: uuidv4(),
+        type,
+        position: { x: 0, y: 0 }, // layout pass below
+        data: {
+          label: specNode.label || defaultLabel(type),
+          type,
+          ...(specNode.description ? { description: specNode.description } : {}),
+          properties,
+        },
+      };
+      nodesByKey.set(key, node);
+      flowNodes.push(node);
+
+      // --- MCP attachments (process only) ---
+      if (type === 'process' && Array.isArray(specNode.servers)) {
+        const seenServers = new Set<string>();
+        for (const ref of specNode.servers) {
+          const serverName = ref?.name;
+          if (!serverName || typeof serverName !== 'string') {
+            warn('server-missing-name', `Node "${key}": a server reference is missing its "name"; skipped.`, key);
+            continue;
+          }
+          if (seenServers.has(serverName)) continue;
+          seenServers.add(serverName);
+          if (!knownServers.has(serverName)) {
+            warn('server-unknown', `Node "${key}": MCP server "${serverName}" is not configured in FLUJO.`, key);
+          }
+          const known = serverTools[serverName];
+          let enabledTools: string[];
+          if (Array.isArray(ref.tools)) {
+            enabledTools = ref.tools.filter((t) => typeof t === 'string' && t);
+            if (known) {
+              const unknown = enabledTools.filter((t) => !known.includes(t));
+              if (unknown.length > 0) {
+                warn('tool-unknown', `Node "${key}": server "${serverName}" does not report tool(s): ${unknown.join(', ')}.`, key);
+              }
+            }
+          } else {
+            // Tools omitted → enable everything we know about (empty if the server is
+            // unknown/offline — the builder is where the user refines this).
+            enabledTools = known ? [...known] : [];
+          }
+          const mcpNode: FlowNode = {
+            id: uuidv4(),
+            type: 'mcp',
+            position: { x: 0, y: 0 },
+            data: {
+              label: serverName,
+              type: 'mcp',
+              properties: { boundServer: serverName, enabledTools },
+            },
+          };
+          flowNodes.push(mcpNode);
+          mcpAttachments.push({ processKey: key, mcpNode });
+        }
+      } else if (type !== 'process' && Array.isArray(specNode.servers) && specNode.servers.length > 0) {
+        warn('servers-on-non-process', `Node "${key}": only process nodes can have "servers"; ignored.`, key);
+      }
     }
+
+    if (nodesByKey.size === 0) {
+      error('no-usable-nodes', 'No usable nodes — the spec must contain at least a start node and one step.');
+      return null;
+    }
+
+    // --- Pass 2: edges -------------------------------------------------------
+    const edges: Edge[] = [];
+    const seenControlPairs = new Set<string>();
+    for (const specEdge of specEdges) {
+      const fromKey = specEdge?.from;
+      const toKey = specEdge?.to;
+      const source = fromKey ? nodesByKey.get(fromKey) : undefined;
+      const target = toKey ? nodesByKey.get(toKey) : undefined;
+      if (!source || !target) {
+        error('edge-unknown-node', `Edge "${String(fromKey)}" -> "${String(toKey)}" references a node key that does not exist (or was dropped).`);
+        continue;
+      }
+      if (source === target) {
+        error('edge-self-loop', `Edge "${fromKey}" -> "${toKey}": a node cannot connect to itself.`);
+        continue;
+      }
+      // Same legality rules as the builder's getConnectionError for flow control.
+      if (target.type === 'start') {
+        error('edge-into-start', `Edge "${fromKey}" -> "${toKey}": nothing may connect INTO a start node.`);
+        continue;
+      }
+      if (source.type === 'finish') {
+        error('edge-out-of-finish', `Edge "${fromKey}" -> "${toKey}": nothing may connect OUT OF a finish node.`);
+        continue;
+      }
+      const pair = `${fromKey}->${toKey}`;
+      if (seenControlPairs.has(pair)) {
+        warn('edge-duplicate', `Edge "${fromKey}" -> "${toKey}" appears more than once; kept the first.`);
+        continue;
+      }
+      seenControlPairs.add(pair);
+      let bidirectional = specEdge.bidirectional === true;
+      if (bidirectional && (source.type === 'start' || target.type === 'finish')) {
+        // The reverse direction would be illegal (into start / out of finish).
+        warn('bidirectional-illegal', `Edge "${fromKey}" -> "${toKey}" cannot be bidirectional; downgraded to one-way.`);
+        bidirectional = false;
+      }
+      edges.push(controlEdge(source, target, bidirectional));
+    }
+
+    // MCP edges after control edges (order is cosmetic; grouping aids debugging).
+    for (const { processKey, mcpNode } of mcpAttachments) {
+      const processNode = nodesByKey.get(processKey)!;
+      edges.push(mcpEdge(processNode, mcpNode));
+    }
+
+    // --- Pass 3: layout ------------------------------------------------------
+    layout(flowNodes, nodesByKey, edges, mcpAttachments);
+
+    const flow: Flow = {
+      id: flowId,
+      name: flowName,
+      ...(levelSpec?.description ? { description: levelSpec.description } : {}),
+      nodes: flowNodes,
+      edges,
+    };
+    // Register AFTER children compiled so a descendant can never resolve this flow (cycle
+    // guard); a later sibling, compiled after this returns, still can.
+    bundle.push(flow);
+    bundleRefs.push({ id: flow.id, name: flow.name });
+    return flow;
   }
 
-  if (nodesByKey.size === 0) {
-    error('no-usable-nodes', 'No usable nodes — the spec must contain at least a start node and one step.');
-    return finalize(null, issues);
+  /**
+   * Resolve a subflow node's target into `properties.subflowId`, honouring the precedence
+   * flow (existing) > subflowSpec (inline child) > generateSubflow (generator-only).
+   */
+  function resolveSubflowTarget(
+    specNode: FlowSpecNode,
+    key: string,
+    depth: number,
+    ancestorNames: string[],
+    properties: Record<string, any>
+  ): void {
+    const present = [
+      specNode.flow !== undefined && specNode.flow !== null ? 'flow' : null,
+      specNode.subflowSpec !== undefined && specNode.subflowSpec !== null ? 'subflowSpec' : null,
+      specNode.generateSubflow !== undefined && specNode.generateSubflow !== null ? 'generateSubflow' : null,
+    ].filter(Boolean);
+    if (present.length > 1) {
+      warn(
+        'subflow-multiple-sources',
+        `Node "${key}": a subflow node should have only one of "flow", "subflowSpec", or "generateSubflow"; applying precedence flow > subflowSpec > generateSubflow.`,
+        key
+      );
+    }
+
+    if (specNode.flow) {
+      // A reference to an ancestor by name would close a loop (A → B → A).
+      if (ancestorNames.some((n) => n.toLowerCase() === specNode.flow!.toLowerCase())) {
+        error('subflow-cycle', `Node "${key}": flow "${specNode.flow}" refers to an ancestor flow, which would create a cycle.`, key);
+        return;
+      }
+      const resolved = resolveFlowRef(specNode.flow, [...(context.flows ?? []), ...bundleRefs]);
+      if (resolved) {
+        properties.subflowId = resolved;
+      } else {
+        error('subflow-unresolved', `Node "${key}": flow "${specNode.flow}" does not match any existing flow (by id or name).`, key);
+      }
+      return;
+    }
+
+    if (specNode.subflowSpec) {
+      if (depth + 1 > maxDepth) {
+        error('subflow-too-deep', `Node "${key}": nested subflows may not go deeper than ${maxDepth} level(s); this inline subflow was not compiled.`, key);
+        return;
+      }
+      if (flowCount >= maxFlows) {
+        error('subflow-too-many', `Node "${key}": compiling this inline subflow would exceed the maximum of ${maxFlows} flows in one bundle; it was not compiled.`, key);
+        return;
+      }
+      const childFlow = compileLevel(specNode.subflowSpec, depth + 1, ancestorNames);
+      if (childFlow) {
+        properties.subflowId = childFlow.id;
+      } else {
+        error('subflow-child-empty', `Node "${key}": the inline "subflowSpec" produced no usable flow.`, key);
+      }
+      return;
+    }
+
+    if (specNode.generateSubflow !== undefined && specNode.generateSubflow !== null) {
+      error(
+        'subflow-generate-unsupported',
+        `Node "${key}": "generateSubflow" is only available through the AI flow generator. Use "subflowSpec" for deterministic nested authoring, or "flow" to reference an existing flow.`,
+        key
+      );
+      return;
+    }
+
+    error('subflow-missing-flow', `Node "${key}": subflow nodes need a "flow" (existing flow), a "subflowSpec" (inline child), or "generateSubflow".`, key);
   }
-
-  // --- Pass 2: edges ---------------------------------------------------------
-  const edges: Edge[] = [];
-  const seenControlPairs = new Set<string>();
-  for (const specEdge of specEdges) {
-    const fromKey = specEdge?.from;
-    const toKey = specEdge?.to;
-    const source = fromKey ? nodesByKey.get(fromKey) : undefined;
-    const target = toKey ? nodesByKey.get(toKey) : undefined;
-    if (!source || !target) {
-      error('edge-unknown-node', `Edge "${String(fromKey)}" -> "${String(toKey)}" references a node key that does not exist (or was dropped).`);
-      continue;
-    }
-    if (source === target) {
-      error('edge-self-loop', `Edge "${fromKey}" -> "${toKey}": a node cannot connect to itself.`);
-      continue;
-    }
-    // Same legality rules as the builder's getConnectionError for flow control.
-    if (target.type === 'start') {
-      error('edge-into-start', `Edge "${fromKey}" -> "${toKey}": nothing may connect INTO a start node.`);
-      continue;
-    }
-    if (source.type === 'finish') {
-      error('edge-out-of-finish', `Edge "${fromKey}" -> "${toKey}": nothing may connect OUT OF a finish node.`);
-      continue;
-    }
-    const pair = `${fromKey}->${toKey}`;
-    if (seenControlPairs.has(pair)) {
-      warn('edge-duplicate', `Edge "${fromKey}" -> "${toKey}" appears more than once; kept the first.`);
-      continue;
-    }
-    seenControlPairs.add(pair);
-    let bidirectional = specEdge.bidirectional === true;
-    if (bidirectional && (source.type === 'start' || target.type === 'finish')) {
-      // The reverse direction would be illegal (into start / out of finish).
-      warn('bidirectional-illegal', `Edge "${fromKey}" -> "${toKey}" cannot be bidirectional; downgraded to one-way.`);
-      bidirectional = false;
-    }
-    edges.push(controlEdge(source, target, bidirectional));
-  }
-
-  // MCP edges after control edges (order is cosmetic; grouping aids debugging).
-  for (const { processKey, mcpNode } of mcpAttachments) {
-    const processNode = nodesByKey.get(processKey)!;
-    edges.push(mcpEdge(processNode, mcpNode));
-  }
-
-  // --- Pass 3: layout --------------------------------------------------------
-  layout(flowNodes, nodesByKey, edges, mcpAttachments);
-
-  const existingNames = flows.map((f) => f.name);
-  const flow: Flow = {
-    id: uuidv4(),
-    name: sanitizeFlowName(spec?.name, existingNames),
-    ...(spec?.description ? { description: spec.description } : {}),
-    nodes: flowNodes,
-    edges,
-  };
-  return finalize(flow, issues);
 }
 
 /**
@@ -563,7 +718,7 @@ function layout(
   }
 }
 
-function finalize(flow: Flow | null, issues: CompileIssue[]): CompileResult {
+function finalize(flow: Flow | null, flows: Flow[], issues: CompileIssue[]): CompileResult {
   const errorCount = issues.filter((i) => i.severity === 'error').length;
-  return { flow, issues, errorCount, warningCount: issues.length - errorCount };
+  return { flow, flows, issues, errorCount, warningCount: issues.length - errorCount };
 }

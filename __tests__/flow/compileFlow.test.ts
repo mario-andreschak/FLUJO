@@ -204,3 +204,82 @@ describe('POST /api/flow/compile', () => {
     expect(saveFlowMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-level (nested subflowSpec) bundles — issue #94
+// ---------------------------------------------------------------------------
+
+const nestedSpec = {
+  name: 'parent',
+  nodes: [
+    { key: 's', type: 'start' },
+    {
+      key: 'sub',
+      type: 'subflow',
+      label: 'child',
+      subflowSpec: {
+        name: 'child',
+        nodes: [
+          { key: 'cs', type: 'start' },
+          { key: 'cp', type: 'process', model: 'model-abc', prompt: 'x', servers: [{ name: 'srv', tools: ['tool_a'] }] },
+          { key: 'cf', type: 'finish' },
+        ],
+        edges: [
+          { from: 'cs', to: 'cp' },
+          { from: 'cp', to: 'cf' },
+        ],
+      },
+    },
+    { key: 'f', type: 'finish' },
+  ],
+  edges: [
+    { from: 's', to: 'sub' },
+    { from: 'sub', to: 'f' },
+  ],
+};
+
+describe('compileSpec — nested bundle (#94)', () => {
+  it('returns the whole bundle and saves descendants-first when clean', async () => {
+    const result = await compileSpec(nestedSpec, { save: true });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.flows).toHaveLength(2);
+    expect(result.saved).toBe(true);
+    expect(saveFlowMock).toHaveBeenCalledTimes(2);
+    // Child saved first, root second (dependency order).
+    const firstSaved = saveFlowMock.mock.calls[0][0];
+    const secondSaved = saveFlowMock.mock.calls[1][0];
+    expect(firstSaved.name).toBe('child');
+    expect(secondSaved.name).toBe('parent');
+    // The parent's subflow node points at the (already-saved) child id.
+    const sub = result.flow.nodes.find((n) => n.type === 'subflow')!;
+    expect(sub.data.properties!.subflowId).toBe(firstSaved.id);
+  });
+
+  it('saves NOTHING when a nested child has validation errors', async () => {
+    const broken = {
+      ...nestedSpec,
+      nodes: nestedSpec.nodes.map((n: any) =>
+        n.key === 'sub'
+          ? {
+              ...n,
+              subflowSpec: {
+                ...n.subflowSpec,
+                nodes: n.subflowSpec.nodes.map((cn: any) => (cn.key === 'cp' ? { ...cn, model: 'ghost-model' } : cn)),
+              },
+            }
+          : n
+      ),
+    };
+    const result = await compileSpec(broken, { save: true });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.validation.errorCount).toBeGreaterThan(0);
+    // The error lives in the CHILD flow, yet it still blocks the whole save.
+    expect(result.validation.issues.map((i) => i.code)).toEqual(
+      expect.arrayContaining(['process-model-missing'])
+    );
+    expect(result.saved).toBe(false);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+});

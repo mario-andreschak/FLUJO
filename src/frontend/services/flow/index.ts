@@ -140,19 +140,39 @@ class FlowService {
   async generateFlow(
     description: string,
     modelId: string,
-    options?: { allowInstall?: boolean }
+    options?: { allowInstall?: boolean; allowSubflows?: boolean; maxDepth?: number }
   ): Promise<
-    | { success: true; flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean }; attempts: number; installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }> }
+    | {
+        success: true;
+        flow: Flow;
+        validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean };
+        /** The whole bundle (root + auto-generated subflow descendants), dependency order (descendants first). */
+        flows: Array<{ flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean } }>;
+        rootFlowId: string;
+        attempts: number;
+        installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
+      }
     | { success: false; error: string }
   > {
-    log.debug('generateFlow: Entering method', { modelId, allowInstall: options?.allowInstall });
+    log.debug('generateFlow: Entering method', {
+      modelId,
+      allowInstall: options?.allowInstall,
+      allowSubflows: options?.allowSubflows,
+      maxDepth: options?.maxDepth,
+    });
     try {
       const response = await fetch('/api/flow/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ description, modelId, allowInstall: options?.allowInstall === true })
+        body: JSON.stringify({
+          description,
+          modelId,
+          allowInstall: options?.allowInstall === true,
+          allowSubflows: options?.allowSubflows === true,
+          ...(typeof options?.maxDepth === 'number' ? { maxDepth: options.maxDepth } : {}),
+        })
       });
 
       const data = await response.json().catch(() => null);
@@ -163,8 +183,13 @@ class FlowService {
         };
       }
 
+      // Back-compat: a server that predates the bundle response returns only `flow`.
+      const flows = Array.isArray(data.flows) && data.flows.length > 0
+        ? data.flows
+        : [{ flow: data.flow as Flow, validation: data.validation }];
       log.debug('generateFlow: Draft generated', {
         flowId: data.flow?.id,
+        flowCount: flows.length,
         attempts: data.attempts,
         errorCount: data.validation?.errorCount,
         installedServers: data.installedServers?.length ?? 0
@@ -173,6 +198,8 @@ class FlowService {
         success: true,
         flow: data.flow as Flow,
         validation: data.validation,
+        flows,
+        rootFlowId: data.rootFlowId ?? (data.flow as Flow)?.id,
         attempts: data.attempts,
         installedServers: data.installedServers ?? []
       };

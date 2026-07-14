@@ -27,29 +27,57 @@ const req = (body?: unknown, jsonThrows = false) =>
 
 const draft = { id: 'f-new', name: 'generated_flow', nodes: [], edges: [] };
 const validation = { issues: [], errorCount: 0, warningCount: 0, isRunnable: true };
+const flows = [{ flow: draft, validation }];
 
 beforeEach(() => {
   jest.clearAllMocks();
   assertUnlockedMock.mockResolvedValue(null);
-  generateFlowMock.mockResolvedValue({ success: true, flow: draft, validation, attempts: 1, installedServers: [] });
+  generateFlowMock.mockResolvedValue({
+    success: true,
+    flow: draft,
+    validation,
+    flows,
+    rootFlowId: 'f-new',
+    attempts: 1,
+    installedServers: [],
+  });
 });
 
 describe('POST /api/flow/generate', () => {
-  it('returns the draft + validation + attempts + installedServers on success', async () => {
+  it('returns the draft + bundle + validation + attempts + installedServers on success', async () => {
     const res = await POST(req({ description: 'build me a thing', modelId: 'm1' }));
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ flow: draft, validation, attempts: 1, installedServers: [] });
+    await expect(res.json()).resolves.toEqual({
+      flow: draft,
+      validation,
+      flows,
+      rootFlowId: 'f-new',
+      attempts: 1,
+      installedServers: [],
+    });
     expect(generateFlowMock).toHaveBeenCalledWith({
       description: 'build me a thing',
       modelId: 'm1',
       maxRepairs: undefined,
       allowInstall: false,
+      allowSubflows: false,
+      maxDepth: undefined,
     });
   });
 
   it('passes maxRepairs through', async () => {
     await POST(req({ description: 'x', modelId: 'm1', maxRepairs: 2 }));
     expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ maxRepairs: 2 }));
+  });
+
+  it('passes allowSubflows + maxDepth through for multi-level generation', async () => {
+    await POST(req({ description: 'x', modelId: 'm1', allowSubflows: true, maxDepth: 3 }));
+    expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowSubflows: true, maxDepth: 3 }));
+  });
+
+  it('coerces allowSubflows to an explicit boolean (only literal true enables it)', async () => {
+    await POST(req({ description: 'x', modelId: 'm1', allowSubflows: 'yes' }));
+    expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowSubflows: false }));
   });
 
   it('passes allowInstall through only as an explicit boolean true', async () => {
@@ -78,7 +106,7 @@ describe('POST /api/flow/generate', () => {
     generateFlowMock.mockResolvedValue({ success: false, error: 'A flow description is required', statusCode: 400 });
     const res = await POST(req({}));
     expect(res.status).toBe(400);
-    expect(generateFlowMock).toHaveBeenCalledWith({ description: '', modelId: '', maxRepairs: undefined, allowInstall: false });
+    expect(generateFlowMock).toHaveBeenCalledWith({ description: '', modelId: '', maxRepairs: undefined, allowInstall: false, allowSubflows: false, maxDepth: undefined });
   });
 
   it('is gated by the encryption lock', async () => {

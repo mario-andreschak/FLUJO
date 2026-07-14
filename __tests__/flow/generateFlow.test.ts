@@ -448,3 +448,75 @@ describe('generateFlow — marketplace tools', () => {
     expect(toolMsg.content).toContain('registry down');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-level generation (issue #94)
+// ---------------------------------------------------------------------------
+
+describe('generateFlow — multi-level (issue #94)', () => {
+  const rootSpecWithGen = {
+    name: 'orchestrator',
+    nodes: [
+      { key: 's', type: 'start' },
+      { key: 'sub', type: 'subflow', label: 'Summarize step', generateSubflow: 'summarize the research findings' },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [
+      { from: 's', to: 'sub' },
+      { from: 'sub', to: 'f' },
+    ],
+  };
+  const childSpec = {
+    name: 'summarizer_child',
+    nodes: [
+      { key: 'cs', type: 'start' },
+      { key: 'cp', type: 'process', model: 'model-abc', prompt: 'summarize' },
+      { key: 'cf', type: 'finish' },
+    ],
+    edges: [
+      { from: 'cs', to: 'cp' },
+      { from: 'cp', to: 'cf' },
+    ],
+  };
+
+  it('expands a generateSubflow node into its own generated child flow (bundle)', async () => {
+    createCompletionMock
+      .mockResolvedValueOnce(completionWith(JSON.stringify(rootSpecWithGen))) // root spec
+      .mockResolvedValueOnce(completionWith(JSON.stringify(childSpec))); // recursive child generation
+    const result = await generateFlow({
+      description: 'orchestrate research + summary',
+      modelId: 'model-gen',
+      allowSubflows: true,
+      maxDepth: 2,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.flows).toHaveLength(2);
+    expect(result.rootFlowId).toBe(result.flow.id);
+    // The root's subflow node is wired to the generated child.
+    const child = result.flows.find((f) => f.flow.id !== result.rootFlowId)!.flow;
+    const sub = result.flow.nodes.find((n) => n.type === 'subflow')!;
+    expect(sub.data.properties!.subflowId).toBe(child.id);
+    expect(result.validation.errorCount).toBe(0);
+    // Two model turns: the root, then the child generation.
+    expect(createCompletionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT expand generateSubflow when allowSubflows is off (surfaces as a compile error)', async () => {
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(rootSpecWithGen)));
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen' }); // allowSubflows default false
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.flows).toHaveLength(1);
+    expect(result.validation.issues.map((i) => i.code)).toContain('subflow-generate-unsupported');
+  });
+
+  it('single-flow drafts still expose flows[] and rootFlowId (back-compat)', async () => {
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.flows).toHaveLength(1);
+    expect(result.flows[0].flow.id).toBe(result.rootFlowId);
+    expect(result.flow.id).toBe(result.rootFlowId);
+  });
+});

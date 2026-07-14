@@ -10,10 +10,15 @@
  * Save semantics: opt-in (`save: true`) and gated on ZERO validation errors — an agent
  * iterates spec → issues → fixed spec until clean, then the save goes through. Compiled
  * flows always get a fresh uuid, so saving is always a create, never an overwrite —
- * UNLESS `updateFlowId` targets an existing flow: then the compiled flow takes over
- * that id and the save REPLACES the flow's whole definition (references by id — planned
- * executions, subflow nodes, conversations — keep working; manual canvas edits are
- * lost, since a spec cannot express them).
+ * UNLESS `updateFlowId` targets an existing flow: then the compiled (root) flow takes
+ * over that id and the save REPLACES the flow's whole definition (references by id —
+ * planned executions, subflow nodes, conversations — keep working; manual canvas edits
+ * are lost, since a spec cannot express them).
+ *
+ * Multi-level (#94): a spec may nest inline child flows via `subflowSpec`, so compilation
+ * yields a BUNDLE (root + descendants). Validation covers every flow in the bundle, and a
+ * clean save persists them descendants-first (so each subflowId resolves the moment its
+ * parent is saved). `flow` is the root; `flows` is the whole bundle.
  */
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
@@ -26,8 +31,11 @@ const log = createLogger('backend/services/flow/compileFlow');
 
 export interface CompileSpecSuccess {
   success: true;
+  /** The ROOT flow. */
   flow: Flow;
-  /** Shared-validator result with compile issues merged in. */
+  /** The full bundle (root + inline-subflow descendants), dependency order (descendants first). */
+  flows: Flow[];
+  /** Shared-validator result with compile issues merged in (covers the WHOLE bundle). */
   validation: FlowValidationResult;
   /** True when `save` was requested AND validation found zero errors. */
   saved: boolean;
@@ -75,28 +83,40 @@ export async function compileSpec(
   }
 
   // Take over the target's id BEFORE validate/save so the result (and the
-  // saveFlow upsert) consistently carry the surviving id.
+  // saveFlow upsert) consistently carry the surviving id. Only the ROOT flow
+  // adopts the target id; inline-subflow descendants are always fresh creates.
   if (options.updateFlowId) {
     compiled.flow.id = options.updateFlowId;
   }
 
-  const validation = mergeIssues(
-    compiled.issues,
-    validateFlow(compiled.flow, {
+  // Validate every flow in the bundle and merge all issues into one result so the
+  // agent-facing loop sees problems in nested children too, not just the root.
+  const perFlowIssues = compiled.flows.flatMap((f) =>
+    validateFlow(f, {
       models: context.compile.models,
       servers: context.validatorServers,
       serverTools: context.compile.serverTools,
-    })
+    }).issues
   );
+  const validation = mergeIssues(compiled.issues, {
+    issues: perFlowIssues,
+    errorCount: 0,
+    warningCount: 0,
+    isRunnable: true,
+  });
 
   let saved = false;
   if (options.save && validation.errorCount === 0) {
-    await flowService.saveFlow(compiled.flow);
+    // Descendants first (compiled.flows is dependency-ordered), then the root, so a
+    // subflowId is always resolvable by the time its parent lands.
+    for (const f of compiled.flows) {
+      await flowService.saveFlow(f);
+    }
     saved = true;
-    log.info(`Compiled and saved flow "${compiled.flow.name}" (${compiled.flow.id})`);
+    log.info(`Compiled and saved ${compiled.flows.length} flow(s); root "${compiled.flow.name}" (${compiled.flow.id})`);
   } else if (options.save) {
     log.info(`Compiled flow "${compiled.flow.name}" has ${validation.errorCount} error(s); NOT saved`);
   }
 
-  return { success: true, flow: compiled.flow, validation, saved };
+  return { success: true, flow: compiled.flow, flows: compiled.flows, validation, saved };
 }

@@ -35,7 +35,15 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('frontend/components/Flow/FlowManager/GenerateFlowDialog');
 
 export interface GeneratedFlowInfo {
+  /** The root draft flow (opened in the builder for review). */
   flow: Flow;
+  /**
+   * The whole draft bundle (root + auto-generated subflow descendants) in dependency order
+   * (descendants first). Single-level drafts have just the root. The caller saves the
+   * descendants before the root so every subflowId resolves.
+   */
+  flows: Flow[];
+  rootFlowId: string;
   errorCount: number;
   warningCount: number;
   attempts: number;
@@ -55,6 +63,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
   const [allowInstall, setAllowInstall] = useState(false);
+  const [allowSubflows, setAllowSubflows] = useState(false);
+  const [maxDepth, setMaxDepth] = useState(2);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,13 +99,18 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     setError(null);
     setIsGenerating(true);
     try {
-      const result = await flowService.generateFlow(description.trim(), modelId, { allowInstall });
+      const result = await flowService.generateFlow(description.trim(), modelId, {
+        allowInstall,
+        allowSubflows,
+        ...(allowSubflows ? { maxDepth } : {}),
+      });
       if (!result.success) {
         setError(result.error);
         return;
       }
       log.info('Draft flow generated', {
         flowId: result.flow.id,
+        flowCount: result.flows.length,
         attempts: result.attempts,
         errors: result.validation.errorCount,
         warnings: result.validation.warningCount,
@@ -104,6 +119,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       setDescription('');
       onGenerated({
         flow: result.flow,
+        flows: result.flows.map((f) => f.flow),
+        rootFlowId: result.rootFlowId,
         errorCount: result.validation.errorCount,
         warningCount: result.validation.warningCount,
         attempts: result.attempts,
@@ -112,7 +129,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     } finally {
       setIsGenerating(false);
     }
-  }, [description, modelId, allowInstall, onGenerated]);
+  }, [description, modelId, allowInstall, allowSubflows, maxDepth, onGenerated]);
 
   const canGenerate = !isGenerating && description.trim().length > 0 && !!modelId;
 
@@ -167,6 +184,39 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           }
           label="Let the generator install MCP servers it needs (self-improve)"
         />
+        <FormControlLabel
+          sx={{ mt: 1, display: 'flex' }}
+          control={
+            <Checkbox
+              checked={allowSubflows}
+              onChange={(e) => setAllowSubflows(e.target.checked)}
+              disabled={isGenerating}
+            />
+          }
+          label="Allow multi-level flows (auto-generate nested subflows)"
+        />
+        {allowSubflows && (
+          <Box sx={{ mt: 1, ml: 4, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <FormControl sx={{ maxWidth: 220 }} size="small" disabled={isGenerating}>
+              <InputLabel id="generate-flow-depth-label">Max nesting depth</InputLabel>
+              <Select
+                labelId="generate-flow-depth-label"
+                label="Max nesting depth"
+                value={maxDepth}
+                onChange={(e) => setMaxDepth(Number(e.target.value))}
+              >
+                <MenuItem value={1}>1 level</MenuItem>
+                <MenuItem value={2}>2 levels</MenuItem>
+                <MenuItem value={3}>3 levels</MenuItem>
+              </Select>
+            </FormControl>
+            <Alert severity="info">
+              The generator can design subflows that are themselves generated (up to a few
+              flows total). This is slower and uses more tokens. You review the whole bundle
+              before anything is saved.
+            </Alert>
+          </Box>
+        )}
         {allowInstall && (
           <Alert severity="warning" sx={{ mt: 1 }}>
             The generator may <strong>download, install, and run third-party MCP servers</strong> from

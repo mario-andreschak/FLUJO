@@ -14,9 +14,10 @@ const log = createLogger('app/api/flow/compile/route');
  * have to write raw ReactFlow JSON.
  *
  * Body: { spec: FlowSpec, save?: boolean }
- * Response: { flow, validation, saved } — 201 when saved, 200 otherwise. `save`
- * only persists when validation finds ZERO errors; iterate on the returned
- * issues until clean.
+ * Response: { flow, flows, validation, saved } — 201 when saved, 200 otherwise.
+ * `flow` is the root; `flows` is the whole bundle when the spec nests inline child
+ * flows via `subflowSpec` (#94). `save` only persists when validation finds ZERO
+ * errors across the whole bundle; iterate on the returned issues until clean.
  */
 export async function POST(request: NextRequest) {
   const _lock = await assertUnlocked();
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
       return json({ error: result.error, ...(result.issues ? { issues: result.issues } : {}) }, result.statusCode);
     }
     return json(
-      { flow: result.flow, validation: result.validation, saved: result.saved },
+      { flow: result.flow, flows: result.flows, validation: result.validation, saved: result.saved },
       result.saved ? 201 : 200
     );
   } catch (error) {

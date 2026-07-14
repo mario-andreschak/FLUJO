@@ -719,3 +719,200 @@ describe('compileFlowSpec — layout resilience', () => {
     expect(validation.issues.map((i) => i.code)).toContain('no-start-node');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-level (nested subflowSpec) bundles — issue #94
+// ---------------------------------------------------------------------------
+
+function leafSpec(name?: string): FlowSpec {
+  return {
+    ...(name ? { name } : {}),
+    nodes: [
+      { key: 's', type: 'start' },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [{ from: 's', to: 'f' }],
+  };
+}
+
+describe('compileFlowSpec — nested subflows (bundle)', () => {
+  const nestedSpec: FlowSpec = {
+    name: 'parent_flow',
+    nodes: [
+      { key: 's', type: 'start' },
+      {
+        key: 'sub',
+        type: 'subflow',
+        label: 'Child',
+        subflowSpec: {
+          name: 'child_flow',
+          nodes: [
+            { key: 'cs', type: 'start' },
+            { key: 'cp', type: 'process', model: 'model-abc', prompt: 'work' },
+            { key: 'cf', type: 'finish' },
+          ],
+          edges: [
+            { from: 'cs', to: 'cp' },
+            { from: 'cp', to: 'cf' },
+          ],
+        },
+      },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [
+      { from: 's', to: 'sub' },
+      { from: 'sub', to: 'f' },
+    ],
+  };
+
+  it('compiles one flow per level; the bundle is dependency-ordered (descendants before root)', () => {
+    const result = compileFlowSpec(nestedSpec, context);
+    expect(result.errorCount).toBe(0);
+    expect(result.flows).toHaveLength(2);
+    // Root is CompileResult.flow and is LAST in the bundle.
+    expect(result.flows[result.flows.length - 1]).toBe(result.flow);
+    expect(result.flows[0].name).toBe('child_flow');
+    expect(result.flow!.name).toBe('parent_flow');
+  });
+
+  it("wires the parent subflow node's subflowId to the compiled child's id", () => {
+    const result = compileFlowSpec(nestedSpec, context);
+    const child = result.flows[0];
+    const sub = result.flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(sub.data.properties!.subflowId).toBe(child.id);
+  });
+
+  it('a non-nested spec yields a single-flow bundle (flows[0] === flow) — back-compat', () => {
+    const result = compileFlowSpec(happySpec, context);
+    expect(result.flows).toHaveLength(1);
+    expect(result.flows[0]).toBe(result.flow);
+  });
+
+  it('compiles grandchildren too and dedupes generated flow names across the bundle', () => {
+    const deep: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'sub',
+          type: 'subflow',
+          subflowSpec: {
+            nodes: [
+              { key: 's', type: 'start' },
+              { key: 'sub2', type: 'subflow', subflowSpec: leafSpec() },
+              { key: 'f', type: 'finish' },
+            ],
+            edges: [
+              { from: 's', to: 'sub2' },
+              { from: 'sub2', to: 'f' },
+            ],
+          },
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'sub' },
+        { from: 'sub', to: 'f' },
+      ],
+    };
+    const result = compileFlowSpec(deep, context, { maxDepth: 3 });
+    expect(result.errorCount).toBe(0);
+    expect(result.flows).toHaveLength(3);
+    const names = result.flows.map((f) => f.name);
+    expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(3);
+  });
+
+  it('rejects nesting deeper than maxDepth and does not compile the child', () => {
+    const result = compileFlowSpec(nestedSpec, context, { maxDepth: 0 });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'subflow-too-deep', severity: 'error' }));
+    expect(result.flows).toHaveLength(1); // only the root
+  });
+
+  it('rejects a bundle exceeding maxFlows', () => {
+    const siblings: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'a', type: 'subflow', subflowSpec: leafSpec() },
+        { key: 'b', type: 'subflow', subflowSpec: leafSpec() },
+        { key: 'c', type: 'subflow', subflowSpec: leafSpec() },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'a' },
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'c' },
+        { from: 'c', to: 'f' },
+      ],
+    };
+    const result = compileFlowSpec(siblings, context, { maxDepth: 3, maxFlows: 3 });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'subflow-too-many', severity: 'error' }));
+    expect(result.flows.length).toBeLessThanOrEqual(3);
+  });
+
+  it('precedence flow > subflowSpec: uses the existing flow, warns, and skips the inline child', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'sub', type: 'subflow', flow: 'Summarizer', subflowSpec: leafSpec() },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'sub' },
+        { from: 'sub', to: 'f' },
+      ],
+    };
+    const result = compileFlowSpec(spec, context);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'subflow-multiple-sources', severity: 'warning' }));
+    const sub = result.flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(sub.data.properties!.subflowId).toBe('flow-1'); // the existing flow won
+    expect(result.flows).toHaveLength(1); // inline child NOT compiled
+  });
+
+  it('flags generateSubflow as generator-only in the deterministic compiler', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'sub', type: 'subflow', generateSubflow: 'summarize the result' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'sub' },
+        { from: 'sub', to: 'f' },
+      ],
+    };
+    const result = compileFlowSpec(spec, context);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'subflow-generate-unsupported', severity: 'error' }));
+  });
+
+  it('an inline child can reference an existing flow by name', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'sub',
+          type: 'subflow',
+          subflowSpec: {
+            nodes: [
+              { key: 's', type: 'start' },
+              { key: 'inner', type: 'subflow', flow: 'Summarizer' },
+              { key: 'f', type: 'finish' },
+            ],
+            edges: [
+              { from: 's', to: 'inner' },
+              { from: 'inner', to: 'f' },
+            ],
+          },
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'sub' },
+        { from: 'sub', to: 'f' },
+      ],
+    };
+    const result = compileFlowSpec(spec, context, { maxDepth: 2 });
+    expect(result.errorCount).toBe(0);
+    const child = result.flows[0];
+    const inner = child.nodes.find((n) => n.type === 'subflow')!;
+    expect(inner.data.properties!.subflowId).toBe('flow-1');
+  });
+});

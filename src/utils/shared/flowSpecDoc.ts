@@ -30,7 +30,9 @@ NODE TYPES:
     "inputMode": "full-history" | "latest-message" | "isolated",       // optional, default full-history
     "isolatedPrompt": "...",                                            // only with inputMode "isolated"
     "outputMode": "full-conversation" | "latest-message" }              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
-- { "key": "...", "type": "subflow", "label": "...", "flow": "<existing flow name or id>",
+- { "key": "...", "type": "subflow", "label": "...",
+    "flow": "<existing flow name or id>",          // reference an EXISTING flow, OR:
+    "subflowSpec": { ...a nested FlowSpec... },     // define a brand-new child flow INLINE (compiled into its own flow and wired automatically)
     "inputMode": "full-history" | "latest-message" | "isolated",
     "outputMode": "steps" | "final-only" }
 - { "key": "...", "type": "finish", "label": "..." }
@@ -43,5 +45,5 @@ RULES:
 3. A process step uses MCP tools ONLY via its "servers" list — never emit nodes of type "mcp".
 4. Do not embed \${tool:...} or \${resource:...} references in prompts — tools are wired through "servers".
 5. Branching: give a process node multiple outgoing edges; its model decides where to hand off at runtime. "bidirectional": true lets the target hand back to the source (agent <-> agent).
-6. A subflow node may have only ONE outgoing edge, and its "flow" must name an existing flow.
+6. A subflow node may have only ONE outgoing edge. Give it EITHER a "flow" (naming an existing flow) OR a "subflowSpec" (an inline nested FlowSpec that becomes its own child flow) — not both. A "subflowSpec" may itself contain subflow nodes with their own "subflowSpec" (bounded nesting), so you can author whole multi-level flows in one object.
 7. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.`;
