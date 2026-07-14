@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
+import BoltIcon from '@mui/icons-material/Bolt';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 
@@ -24,6 +25,8 @@ interface ChatHistoryProps {
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onNewConversation: () => void;
+  /** Start a Quick Chat (model + optional MCP servers, no saved flow) — issue #61. */
+  onQuickChat?: () => void;
   /** Optional: collapse/hide the sidebar. When provided, a toggle button is
    *  rendered next to the header. State is owned by the parent. */
   onCollapse?: () => void;
@@ -35,6 +38,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   onSelectConversation,
   onDeleteConversation,
   onNewConversation,
+  onQuickChat,
   onCollapse
 }) => {
   // Format date for display
@@ -83,9 +87,22 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Tooltip>
         )}
         <Typography variant="h6" sx={{ flex: 1 }} noWrap>Conversations</Typography>
-        <Button 
-          variant="contained" 
-          color="primary" 
+        {onQuickChat && (
+          <Tooltip title="Quick Chat: a model + optional MCP servers, no saved flow">
+            <Button
+              variant="outlined"
+              color="primary"
+              startIcon={<BoltIcon />}
+              onClick={onQuickChat}
+              size="small"
+            >
+              Quick
+            </Button>
+          </Tooltip>
+        )}
+        <Button
+          variant="contained"
+          color="primary"
           startIcon={<AddIcon />}
           onClick={onNewConversation}
           size="small"

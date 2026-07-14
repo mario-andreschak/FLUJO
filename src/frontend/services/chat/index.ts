@@ -6,6 +6,7 @@ import type {
   Conversation,
   ConversationListItem,
 } from '@/frontend/components/Chat';
+import type { Flow } from '@/shared/types/flow';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -34,6 +35,10 @@ export interface CreateConversationPayload {
   flowId: string;
   createdAt: number;
   updatedAt: number;
+  /** Quick-Chats (issue #61): seed an in-memory flow snapshot onto the new
+   *  conversation instead of referencing a stored flow. `flowId` is the
+   *  snapshot's id (quickchat-<id>). */
+  flowSnapshot?: Flow;
 }
 
 // Handlers for the live execution event stream (SSE).
@@ -185,6 +190,27 @@ class ChatService {
       body: JSON.stringify({ breakpoints }),
     });
     await parse<void>(response);
+  }
+
+  /**
+   * POST /api/flow/quick-chat — synthesize an ephemeral quick-chat flow (issue
+   * #61) from selections (one model + optional MCP servers/tools). Returns the
+   * flow (with its namespaced quickchat-<id> id); the caller then creates a
+   * conversation seeded with it as `flowSnapshot`.
+   */
+  async synthesizeQuickChat(payload: {
+    conversationId: string;
+    modelId: string;
+    servers?: Array<{ name: string; enabledTools?: string[] }>;
+    systemPrompt?: string;
+  }): Promise<{ conversationId: string; flow: Flow }> {
+    log.debug('synthesizeQuickChat: Entering method', { conversationId: payload.conversationId });
+    const response = await fetch('/api/flow/quick-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return parse<{ conversationId: string; flow: Flow }>(response);
   }
 
   /** POST /v1/chat/conversations/{id}/cancel — cancel an in-flight run. */

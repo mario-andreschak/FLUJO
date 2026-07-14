@@ -1,4 +1,4 @@
-import { NodeType } from '@/shared/types/flow/flow';
+import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
@@ -220,6 +220,19 @@ export interface SharedState {
     messages: FlujoChatMessage[];
     // Flow ID needed by some nodes
     flowId: string;
+    /**
+     * Quick-Chats (issue #61): a self-contained flow definition that travels
+     * WITH the conversation state instead of living in the flows store. When
+     * present, the engine resolves the flow from this snapshot (bypassing
+     * flowService.getFlow); when absent, it falls back to the store lookup by
+     * flowId (the unchanged path for every saved flow). Persisted for
+     * mode:'conversation' quick chats by the normal persistConversationState
+     * path, which is what makes follow-up turns, crash recovery and app
+     * restarts work without any temp-flow store or GC. The snapshot is
+     * immutable for the life of the conversation. Removed by the "Save as flow"
+     * promotion, after which the conversation behaves like any flow-backed one.
+     */
+    flowSnapshot?: Flow;
     // Last response from the model
     lastResponse?: string | Record<string, unknown>;
     // MCP context for tool handling
