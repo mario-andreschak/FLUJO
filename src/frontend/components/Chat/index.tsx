@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -15,7 +16,9 @@ import ChatInput from './ChatInput';
 import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
 import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
+import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
+import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
@@ -638,6 +641,50 @@ const Chat: React.FC = () => {
       setError(errorMsg);
       // Do not update UI state if backend creation failed
     }
+  };
+
+  // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
+  const [quickChatOpen, setQuickChatOpen] = useState<boolean>(false);
+
+  // Synthesize the ephemeral flow, create a conversation seeded with it as a
+  // snapshot, then select it. Every turn afterwards uses the normal streaming
+  // send path (the engine resolves the flow from the snapshot on the state).
+  const startQuickChat = async (selection: QuickChatStartSelection) => {
+    setError(null);
+    const conversationId = uuidv4();
+    // Throws on failure → surfaced by the dialog's own error state.
+    const { flow } = await chatService.synthesizeQuickChat({
+      conversationId,
+      modelId: selection.modelId,
+      servers: selection.servers,
+      systemPrompt: selection.systemPrompt,
+    });
+
+    const now = Date.now();
+    const created = await chatService.createConversation({
+      id: conversationId,
+      title: 'Quick Chat',
+      flowId: flow.id,
+      flowSnapshot: flow,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    setConversationList(prev =>
+      [created, ...prev].sort((a, b) => b.updatedAt - a.updatedAt)
+    );
+    setCurrentConversationId(created.id);
+    setDetailedConversation({
+      id: created.id,
+      title: created.title,
+      flowId: created.flowId,
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+      messages: [],
+    });
+    setIsLoadingDetails(false);
+    setDetailsError(null);
+    setQuickChatOpen(false);
   };
 
 
@@ -1269,13 +1316,25 @@ const Chat: React.FC = () => {
     let success = false; // Track if API call itself succeeded
 
     try {
-      // Look up the flow by ID to get its name
-      const flow = await flowService.getFlow(conversation.flowId);
-      if (!flow) {
-        throw new Error(`Flow with ID ${conversation.flowId} not found`);
+      // Resolve the model string sent to /v1/chat/completions.
+      // Quick-Chats (issue #61) carry an in-memory flow SNAPSHOT on the
+      // conversation state and their flowId (quickchat-<id>) is NOT in the flows
+      // store, so there is nothing to look up: the backend ignores the model for
+      // an existing conversation and resolves the flow from the snapshot. A
+      // stable, non-"model-" label keeps it on the flow path.
+      let modelName: string;
+      if (isQuickChatFlowId(conversation.flowId)) {
+        modelName = 'flow-Quick Chat';
+        log.debug('Sending quick chat to completions', { flowId: conversation.flowId, conversationId: conversation.id });
+      } else {
+        // Look up the flow by ID to get its name
+        const flow = await flowService.getFlow(conversation.flowId);
+        if (!flow) {
+          throw new Error(`Flow with ID ${conversation.flowId} not found`);
+        }
+        modelName = `flow-${flow.name}`;
+        log.debug('Sending to chat completions', { flowId: conversation.flowId, flowName: flow.name, conversationId: conversation.id });
       }
-
-      log.debug('Sending to chat completions', { flowId: conversation.flowId, flowName: flow.name, conversationId: conversation.id });
 
       // Prepare messages for the API from the detailed conversation.
       // depth>0 messages are nested subflow steps served by the backend's
@@ -1350,7 +1409,7 @@ const Chat: React.FC = () => {
 
       // Call the API
       const completion = await openaiRef.current.chat.completions.create({
-        model: `flow-${flow.name}`,
+        model: modelName,
         messages,
         stream: false,
         metadata: (() => {
@@ -1850,6 +1909,7 @@ const Chat: React.FC = () => {
               onSelectConversation={setCurrentConversationId}
               onDeleteConversation={deleteConversation}
               onNewConversation={createNewConversation}
+              onQuickChat={() => setQuickChatOpen(true)}
               onCollapse={toggleSidebarCollapsed}
             />
           )}
@@ -1884,12 +1944,19 @@ const Chat: React.FC = () => {
           {currentConversationId && (
             <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <FlowSelector
-                  // Remove duplicate selectedFlowId prop
-                  selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
-                  onSelectFlow={handleFlowSelect}
-                  disabled={isDebugPaused} // Disable flow selection when debugging
-                />
+                {isQuickChatFlowId(currentConversationSummary?.flowId || detailedConversation?.flowId) ? (
+                  // Quick chats have no stored flow to select — the flow lives on
+                  // the conversation as a snapshot. Show a badge instead of the
+                  // flow dropdown (which would render blank).
+                  <Chip color="primary" variant="outlined" icon={<BoltIcon />} label="Quick Chat" />
+                ) : (
+                  <FlowSelector
+                    // Remove duplicate selectedFlowId prop
+                    selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+                    onSelectFlow={handleFlowSelect}
+                    disabled={isDebugPaused} // Disable flow selection when debugging
+                  />
+                )}
               </Box>
               {/* Token totals + context meter (persisted usage; refreshed with the conversation) */}
               <ConversationStats
@@ -2133,6 +2200,13 @@ const Chat: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Quick Chat setup (issue #61) */}
+      <QuickChatDialog
+        open={quickChatOpen}
+        onClose={() => setQuickChatOpen(false)}
+        onStart={startQuickChat}
+      />
     </Box>
   );
 };

@@ -2,7 +2,6 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { buildQuickChatFlow } from '@/backend/services/flow/quickChat';
-import { runFlow } from '@/backend/execution/flow/runFlow';
 import { json } from '../_helpers';
 
 const log = createLogger('app/api/flow/quick-chat/route');
@@ -10,22 +9,25 @@ const log = createLogger('app/api/flow/quick-chat/route');
 /**
  * POST /api/flow/quick-chat  (issue #61)
  *
- * Start a "quick chat": chat with ONE model plus zero or more MCP servers / tool
- * subsets, without building and saving a flow. The backend synthesizes an
- * ephemeral flow from the SELECTIONS (never a caller-supplied graph) and runs
- * the first turn; the synthesized flow travels with the conversation state
- * (`flowSnapshot`) and never enters the flows store, so follow-up turns go
- * through the completely unchanged /v1/chat/completions path with the returned
- * conversation id.
+ * Synthesize (but do NOT run or save) an ephemeral quick-chat flow from
+ * SELECTIONS: ONE model plus zero or more MCP servers / tool subsets. The
+ * backend builds the graph itself — it never accepts a caller-supplied node
+ * graph. Unknown model/server ids are rejected and requested tools are
+ * intersected with what each server exposes.
+ *
+ * The returned flow carries the namespaced id `quickchat-<conversationId>`; the
+ * caller then creates a conversation whose `flowSnapshot` is this flow (POST
+ * /v1/chat/conversations with `flowSnapshot`), after which every turn — the
+ * first included — runs through the unchanged streaming chat path, resolving
+ * the flow from the snapshot on the conversation state.
  *
  * Body: {
- *   modelId: string,                                  // required
+ *   modelId: string,                                       // required
  *   servers?: { name: string, enabledTools?: string[] }[],
- *   systemPrompt?: string,                            // Start-node prompt
- *   prompt?: string | messages?: OpenAI messages[],  // the first user turn
- *   conversationId?: string                           // optional, for resuming
+ *   systemPrompt?: string,
+ *   conversationId?: string                                // namespaces the flow id
  * }
- * Response: { conversation_id, status, outputText, messages } or { error }.
+ * Response: { conversationId, flow } or { error }.
  */
 export async function POST(request: NextRequest) {
   const _lock = await assertUnlocked();
@@ -36,8 +38,6 @@ export async function POST(request: NextRequest) {
       modelId?: string;
       servers?: Array<{ name?: string; enabledTools?: string[] }>;
       systemPrompt?: string;
-      prompt?: string;
-      messages?: any[];
       conversationId?: string;
     } | null;
 
@@ -63,34 +63,8 @@ export async function POST(request: NextRequest) {
       return json({ error: built.error }, built.statusCode);
     }
 
-    const messages =
-      Array.isArray(body.messages) && body.messages.length > 0
-        ? body.messages
-        : body.prompt !== undefined
-          ? [{ role: 'user', content: body.prompt }]
-          : [];
-
-    const result = await runFlow({
-      flowDefinition: built.flow,
-      messages,
-      mode: 'conversation',
-      conversationId,
-      flujo: true,
-      userTurn: true,
-    });
-
-    if (result.status === 'error') {
-      const message = result.error?.message ?? 'Quick chat failed';
-      log.warn(`Quick chat run errored for ${conversationId}: ${message}`);
-      return json({ error: message, conversation_id: conversationId }, result.error?.statusCode ?? 500);
-    }
-
-    return json({
-      conversation_id: result.conversationId,
-      status: result.sharedState.status ?? 'completed',
-      outputText: result.outputText,
-      messages: result.messages,
-    });
+    log.info(`Synthesized quick-chat flow for conversation ${conversationId}`);
+    return json({ conversationId, flow: built.flow });
   } catch (error) {
     log.error('Error handling POST /api/flow/quick-chat', error);
     return json({ error: 'Internal server error' }, 500);

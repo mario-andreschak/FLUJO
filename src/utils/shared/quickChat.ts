@@ -62,6 +62,11 @@ export function quickChatFlowId(conversationId: string): string {
   return `quickchat-${conversationId}`;
 }
 
+/** True when a flow id belongs to a Quick-Chat snapshot (never a stored flow). */
+export function isQuickChatFlowId(flowId: string | null | undefined): boolean {
+  return typeof flowId === 'string' && flowId.startsWith('quickchat-');
+}
+
 /** Resolve a model reference the same way the compiler does: id, then displayName, then name. */
 function resolveModelId(
   ref: string,

@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
+import { Flow } from '@/shared/types/flow';
 import { saveItem } from '@/utils/storage/backend'; // Import saveItem directly
 import { getDataDir } from '@/utils/paths';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -23,6 +24,11 @@ interface CreateConversationPayload {
   flowId: string | null;
   createdAt: number;
   updatedAt: number;
+  /** Quick-Chats (issue #61): a self-contained flow definition to seed onto the
+   *  conversation state instead of referencing a stored flow. When present, the
+   *  engine resolves the flow from this snapshot; `flowId` must be the
+   *  snapshot's id (quickchat-<id>). */
+  flowSnapshot?: Flow;
 }
 
 
@@ -205,6 +211,9 @@ export async function POST(req: NextRequest) {
       conversationId: conversationId,
       title: payload.title,
       flowId: payload.flowId, // Now guaranteed to be a string by validation
+      // Quick-Chats (issue #61): seed the in-memory flow snapshot so the engine
+      // resolves the flow from the conversation state rather than the store.
+      ...(payload.flowSnapshot ? { flowSnapshot: payload.flowSnapshot } : {}),
       trackingInfo: { // Initialize required tracking info
         executionId: `exec-${conversationId}-${startTime}`, // Generate an initial execution ID
         startTime: startTime,
