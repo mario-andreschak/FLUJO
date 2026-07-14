@@ -30,6 +30,9 @@ import {
 } from '@/frontend/services/plannedExecutions';
 import { describeTrigger } from './triggerSummary';
 
+/** How many run records to show before the "Load more" button. */
+const RUNS_PAGE_SIZE = 10;
+
 /** Status → theme color, mirroring the chat sidebar's conversation dots. */
 const statusColor = (status: RunRecordStatus) => {
   switch (status) {
@@ -73,12 +76,15 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [runningNow, setRunningNow] = useState(false);
   const [detail, setDetail] = useState<RunRecord | null>(null);
+  const [visibleCount, setVisibleCount] = useState(RUNS_PAGE_SIZE);
 
   const loadRuns = useCallback(async () => {
     setLoadingRuns(true);
     const loaded = await plannedExecutionsService.loadRuns(execution.id);
     // Newest first for display.
     setRuns([...loaded].reverse());
+    // Start each (re)load at the first page; older runs are revealed on demand.
+    setVisibleCount(RUNS_PAGE_SIZE);
     setLoadingRuns(false);
   }, [execution.id]);
 
@@ -192,7 +198,7 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
               No runs yet. Use the play button to try it now.
             </Typography>
           )}
-          {runs?.map(record => (
+          {runs?.slice(0, visibleCount).map(record => (
             <Box
               key={record.runId}
               sx={{
@@ -253,6 +259,15 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
               </Tooltip>
             </Box>
           ))}
+          {runs && runs.length > visibleCount && (
+            <Button
+              size="small"
+              onClick={() => setVisibleCount(c => c + RUNS_PAGE_SIZE)}
+              sx={{ mt: 1 }}
+            >
+              Load more ({runs.length - visibleCount} older)
+            </Button>
+          )}
         </Box>
       </Collapse>
 
