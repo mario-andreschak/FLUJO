@@ -108,6 +108,20 @@ const FlowsPage = () => {
     setSelectedFlow(flowId);
     setIsEditing(true); // Auto-enter edit mode when a flow is selected
   }, []);
+
+  // Deep link: ?flow=<id> opens that flow straight in the editor (used by the
+  // brain viewer's "Open in Editor" link). Runs once the flows have loaded so
+  // we only open a flow that actually exists; an unknown id is ignored.
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current || isLoading) return;
+    const wanted = new URLSearchParams(window.location.search).get('flow');
+    if (!wanted) { deepLinkDone.current = true; return; }
+    if (flows.some(f => f.id === wanted)) {
+      deepLinkDone.current = true;
+      handleSelectFlow(wanted);
+    }
+  }, [isLoading, flows, handleSelectFlow]);
   
   // While the editor is open, app-wide navigation (the top menu) must run
   // through the builder's guard too — otherwise switching to Models/MCP/Chat
