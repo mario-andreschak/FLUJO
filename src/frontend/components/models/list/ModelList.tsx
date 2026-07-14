@@ -25,6 +25,7 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ModelCard from './ModelCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import { groupByFolder, groupItems, CardGroup } from '@/utils/shared/cardGrouping';
+import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   ModelSortOption,
   MODEL_SORT_LABELS,
@@ -54,12 +55,15 @@ type GroupMode = 'none' | 'folder' | 'sort';
 
 export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folders = [], onSetFolder }: ModelListProps) => {
     const theme = useTheme();
-    const [sortOption, setSortOption] = useState<ModelSortOption>('name-asc');
-    const [groupMode, setGroupMode] = useState<GroupMode>('none');
+    // Persisted view preferences (#93): retained across navigation.
+    const [sortOption, setSortOption] = useUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
+    const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:models:group', 'none');
     const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
     const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
     // Keys of the sections the user has collapsed; everything defaults to expanded.
-    const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
+    // Persisted as a string[] and re-derived into a Set for O(1) lookups.
+    const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:models:collapsed', []);
+    const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
     const handleSortChange = (option: ModelSortOption) => {
         setSortOption(option);
@@ -72,15 +76,9 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
     };
 
     const toggleCollapsed = (key: string) => {
-        setCollapsedKeys((prev) => {
-            const next = new Set(prev);
-            if (next.has(key)) {
-                next.delete(key);
-            } else {
-                next.add(key);
-            }
-            return next;
-        });
+        setCollapsedList((prev) =>
+            prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+        );
     };
 
     const handleUpdate = async (model: Model): Promise<void> => {

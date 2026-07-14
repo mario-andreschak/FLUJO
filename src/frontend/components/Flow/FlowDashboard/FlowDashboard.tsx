@@ -35,6 +35,7 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import { groupByFolder, groupItems, alphaBucket, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
 
@@ -94,13 +95,18 @@ const FlowDashboard = ({
   isLoading = false,
 }: FlowDashboardProps) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useState<SortOption>('name-asc');
-  const [viewMode, setViewMode] = useState<'grid' | 'compact'>('grid');
+  // Persisted view preferences (#93): survive navigating away and back. Search
+  // is intentionally NOT persisted (session-scoped), and the transient menu
+  // anchors stay ephemeral.
+  const [sortOption, setSortOption] = useUiPreference<SortOption>('flujo-ui:flows:sort', 'name-asc');
+  const [viewMode, setViewMode] = useUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useState<GroupMode>('none');
+  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', 'none');
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   // Keys of the sections the user has collapsed; everything defaults to expanded.
-  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
+  // Persisted as a string[] and re-derived into a Set for O(1) lookups.
+  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:flows:collapsed', []);
+  const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   // Context for the per-card consistency badge. Loaded once; flows are revalidated
   // whenever the list or the context changes. A failed load leaves a family undefined
@@ -190,15 +196,9 @@ const FlowDashboard = ({
   };
 
   const toggleCollapsed = (key: string) => {
-    setCollapsedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
+    setCollapsedList((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
   };
   
   // Filter and sort flows

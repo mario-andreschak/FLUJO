@@ -47,6 +47,7 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import { groupByFolder, groupItems, alphaBucket, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
@@ -185,14 +186,17 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     ? servers.find((s) => s.name === detailsServerName) || null
     : null;
   
-  // Toolbar state
+  // Toolbar state. The view preferences (#93) persist across navigation via
+  // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useState<SortOption>('name-asc');
-  const [filterOption, setFilterOption] = useState<FilterOption>('all');
+  const [sortOption, setSortOption] = useUiPreference<SortOption>('flujo-ui:mcp:sort', 'name-asc');
+  const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useState<GroupMode>('none');
+  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', 'none');
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
-  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
+  // Collapsed sections persisted as a string[] and re-derived into a Set.
+  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
+  const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
   const [bulkActionDialog, setBulkActionDialog] = useState<{open: boolean; action: 'enable' | 'disable' | null}>({open: false, action: null});
@@ -420,12 +424,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   }, [groupMode, filteredAndSortedServers, sortOption]);
 
   const toggleCollapsed = (key: string) => {
-    setCollapsedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    setCollapsedList((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
   };
 
   const handleGroupChange = (mode: GroupMode) => {
