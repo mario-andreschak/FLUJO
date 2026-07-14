@@ -35,9 +35,11 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
+import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
 import { ChatMessage } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
+import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
 import { createLogger } from '@/utils/logger'; // Import the logger
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
@@ -64,6 +66,51 @@ interface ChatMessagesProps {
 // Type guard to check if a message has tool_calls
 function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: OpenAI.ChatCompletionMessageToolCall[] } {
   return message.role === 'assistant' && 'tool_calls' in message && Array.isArray(message.tool_calls);
+}
+
+// --- Handoff rendering (issue: declutter routing in chat) ---
+// A handoff shows up as an ordinary assistant tool_call named `handoff_to_<slug>`
+// (often with empty args) plus a `tool` result of `{"handoff":true,...}`. Both
+// hit the generic tool accordions and read as noise. We detect them and render a
+// single slim "Handoff → Target" marker instead, suppressing the empty result.
+
+/** True when a tool function name is a handoff (matches the runtime prefix). */
+function isHandoffToolName(name?: string): boolean {
+  return !!name && (name.startsWith(HANDOFF_TOOL_PREFIX) || name === 'handoff');
+}
+
+/** True when a tool-result message is the meaningless `{handoff:true}` blob. */
+function isHandoffResult(message: ChatMessage): boolean {
+  if (message.role !== 'tool' || typeof message.content !== 'string') return false;
+  try {
+    return JSON.parse(message.content)?.handoff === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Human-readable name for a handoff target. Prefer the exact node label (matched
+ * by slugifying each available node the same way the tool name was built), and
+ * fall back to de-slugifying the tool name (`handoff_to_finish_node` → "Finish
+ * Node"). The optional numeric collision suffix (`_2`) is tolerated in matching.
+ */
+function handoffTargetLabel(toolName: string, availableNodes: { id: string; label: string }[]): string {
+  const slug = toolName.startsWith(HANDOFF_TOOL_PREFIX)
+    ? toolName.slice(HANDOFF_TOOL_PREFIX.length)
+    : toolName;
+  const bareSlug = slug.replace(/_\d+$/, ''); // drop a trailing collision suffix
+  const match = availableNodes.find((n) => {
+    const nodeSlug = slugifyHandoffTarget(n.label);
+    return nodeSlug === slug || nodeSlug === bareSlug;
+  });
+  if (match?.label) return match.label;
+  // De-slugify: underscores → spaces, Title Case.
+  return bareSlug
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ') || 'target node';
 }
 
 // Compact token count for the per-message chip (12345 → "12.3k").
@@ -384,15 +431,37 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           </>
         )}
 
-        {/* Display tool calls if any - use type guard */}
-        {hasToolCalls(message) && message.tool_calls.length > 0 && (
+        {/* Handoffs: render each as a slim "→ Target" marker rather than an empty
+            tool accordion (they usually carry no args and just clutter the chat). */}
+        {hasToolCalls(message) && message.tool_calls
+          .filter((tc) => isHandoffToolName(tc.function.name))
+          .map((toolCall, hIndex) => (
+            <Box
+              key={toolCall.id || `handoff-${message.id}-${hIndex}`}
+              sx={{
+                mt: 1, display: 'flex', alignItems: 'center', gap: 0.5,
+                color: 'secondary.main', fontStyle: 'italic',
+              }}
+            >
+              <ArrowRightAltIcon fontSize="small" />
+              <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                Handoff to
+                <Box component="span" sx={{ fontWeight: 'bold', fontStyle: 'normal' }}>
+                  {handoffTargetLabel(toolCall.function.name, availableNodes)}
+                </Box>
+              </Typography>
+            </Box>
+          ))}
+
+        {/* Display real tool calls (excluding handoffs) - use type guard */}
+        {hasToolCalls(message) && message.tool_calls.filter((tc) => !isHandoffToolName(tc.function.name)).length > 0 && (
           <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
             <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main', mb: 1 }}>
               <HandymanIcon fontSize="small" sx={{ mr: 1 }} />
               The assistant is using a tool
             </Typography>
 
-            {message.tool_calls.map((toolCall, tcIndex) => { // Added index for key
+            {message.tool_calls.filter((tc) => !isHandoffToolName(tc.function.name)).map((toolCall, tcIndex) => { // Added index for key
               const toolName = displayToolName(toolCall.function.name);
               let formattedArgs = toolCall.function.arguments;
               try {
@@ -434,8 +503,9 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           </Box>
         )}
 
-        {/* Display tool call result for tool messages */}
-        {message.role === 'tool' && message.tool_call_id && (
+        {/* Display tool call result for tool messages. Handoff results are the
+            meaningless `{handoff:true}` blob — suppressed; the marker above says it all. */}
+        {message.role === 'tool' && message.tool_call_id && !isHandoffResult(message) && (
           <Box>
             <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', mb: 1 }}>
               <TerminalIcon fontSize="small" sx={{ mr: 1 }} />
@@ -753,6 +823,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       )}
 
       {visibleMessages.map((message, index) => {
+        // Handoff tool results are the meaningless `{handoff:true}` blob; the
+        // "Handoff to X" marker on the paired assistant call already conveys the
+        // routing, so skip the result entirely rather than render an empty bubble.
+        if (isHandoffResult(message)) return null;
         const isThisEditing = isEditing && message.id === editingMessageId;
         return (
           <MessageBubble

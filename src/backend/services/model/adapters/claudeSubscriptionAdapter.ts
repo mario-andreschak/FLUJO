@@ -388,6 +388,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     let usage: SdkUsage | undefined;
     let lastTurnUsage: SdkUsage | undefined;
     let totalOutputTokens = 0;
+    // Whether we streamed at least one assistant text turn live (below). If so,
+    // the final answer is already in the transcript and we must not re-emit the
+    // concatenated text at the end (it would duplicate in the UI).
+    let streamedText = false;
 
     try {
       for await (const message of response) {
@@ -403,10 +407,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         if (message.type === 'assistant') {
           const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
+          let turnText = '';
           if (Array.isArray(content)) {
             for (const block of content) {
-              if (block?.type === 'text' && typeof block.text === 'string') accumulatedText += block.text;
+              if (block?.type === 'text' && typeof block.text === 'string') turnText += block.text;
             }
+          }
+          if (turnText) {
+            accumulatedText += turnText;
+            // Stream THIS turn's narration live as its own assistant message, so
+            // the UI shows Claude's step-by-step reasoning interleaved with the
+            // tool calls (which already stream via recordToolPair) instead of
+            // arriving as one block after the whole (possibly long) run. Text
+            // blocks precede tool_use within a turn, so this lands in the right
+            // order: turn text -> tool pair -> next turn text -> ...
+            recordMessage({ role: 'assistant', content: turnText });
+            streamedText = true;
           }
           if (assistant?.usage) {
             lastTurnUsage = assistant.usage;
@@ -438,9 +454,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       totalOutputTokens,
     });
 
-    // The per-tool assistant(tool_call)+tool(result) pairs were already recorded
-    // and streamed live as they happened (see recordToolPair). Here we only add
-    // the final assistant turn: a handoff tool_call (for routing) or plain text.
+    // The per-tool assistant(tool_call)+tool(result) pairs, and now each turn's
+    // narration text, were already recorded and streamed live as they happened
+    // (see recordToolPair and the `assistant` branch above). So here we only add
+    // what is NOT yet in the transcript:
+    //   - a handoff tool_call (routing), with content null since the handoff
+    //     turn's text — a node can legitimately answer AND hand off in one turn —
+    //     already streamed above; the node's output is still `finalText` (below),
+    //     which createCompletion returns separately from the transcript.
+    //   - a plain-text answer ONLY when nothing streamed (e.g. the run produced
+    //     no assistant text turns and only the terminal `result` carried text).
+    // Re-emitting `finalText` when we already streamed it would duplicate it.
     let finalToolCalls: OpenAI.ChatCompletionMessageToolCall[] | undefined;
     if (handoffCall) {
       const h = handoffCall as { name: string; args: Record<string, unknown> };
@@ -448,15 +472,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         { id: `call_${uuidv4()}`, type: 'function', function: { name: h.name, arguments: JSON.stringify(h.args) } },
       ];
     }
-    recordMessage({
-      role: 'assistant',
-      // Keep the model's text even on a handoff: a node can legitimately answer
-      // AND hand off in one turn (e.g. say "LEFT" then route to finish), and
-      // that text is the node's output. The post-handoff narration is prevented
-      // upstream by breaking the loop, so finalText here is the genuine answer.
-      content: finalText || (finalToolCalls ? null : ''),
-      ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}),
-    });
+    if (finalToolCalls) {
+      recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
+    } else if (!streamedText) {
+      recordMessage({ role: 'assistant', content: finalText || '' });
+    }
 
     const completion: OpenAI.Chat.Completions.ChatCompletion = {
       id: `claude_sub_${uuidv4()}`,
