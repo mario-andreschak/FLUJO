@@ -28,6 +28,9 @@ import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
+import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
+import { isVerifiedStatus } from '@/utils/mcp/registry';
 
 const log = createLogger('backend/services/mcp/flowAuthoringTools');
 
@@ -90,7 +93,7 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'install_mcp_server',
       description:
-        'Install an MCP server from the public registry (by the exact name returned by search_mcp_marketplace) and connect it — this DOWNLOADS AND RUNS a third-party package on the FLUJO host. Returns the FLUJO server name (reference it in FlowSpec "servers") and the tools it provides, or needsEnv when required keys are missing (supply values via the optional "env" argument, or pick a keyless alternative). First install can take minutes (package download).',
+        'Install an MCP server from the public registry (by the exact name returned by search_mcp_marketplace) and connect it — this DOWNLOADS AND RUNS a third-party package on the FLUJO host. Installs are gated by consent (SEP-1024): unless this trusted authoring tool is allowed via the mcpAutoInstall settings (trustBrainStem / requireConsent / namespaceAllowlist), the tool returns the exact resolved command + arguments with consentRequired=true INSTEAD of installing, and the caller must obtain explicit approval. Every attempt is written to an audit log (command, args, env NAMES, verification status — never secret values) before any spawn. Returns the FLUJO server name (reference it in FlowSpec "servers") and the tools it provides, or needsEnv when required keys are missing (supply values via the optional "env" argument), or the resolved plan when consent is required. First install can take minutes (package download).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -149,8 +152,43 @@ export async function authoringCallTool(
         args?.env && typeof args.env === 'object' && !Array.isArray(args.env)
           ? (args.env as Record<string, string>)
           : undefined;
+
+      // SEP-1024: resolve WITHOUT spawning first, so the exact command/args can be
+      // shown/logged/approved before anything runs.
+      const resolved = await installRegistryServer(name, env, { resolveOnly: true });
+      if (!resolved.plan) {
+        // Couldn't resolve to a runnable entry (bad name / unsupported / lookup error).
+        return textResult(resolved, true);
+      }
+
+      const settings = await loadAutoInstallSettings();
+      const decision = decideInstallConsent({ caller: 'authoring-tool', settings, registryName: name });
+      const verificationWarning = isVerifiedStatus(resolved.plan.verificationStatus)
+        ? undefined
+        : `Unverified / self-asserted registry entry (status: ${resolved.plan.verificationStatus}). Registry entries are publisher-asserted — review the command before approving.`;
+
+      // Audit BEFORE any spawn, on every path (trusted or not).
+      await appendInstallAudit(planToAuditEntry(resolved.plan, 'authoring-tool', decision, false));
+
+      if (!decision.allowed) {
+        // Do NOT spawn: return the resolved plan so the caller can surface it for approval.
+        return textResult({
+          installed: false,
+          consentRequired: true,
+          message: decision.message,
+          plan: resolved.plan,
+          ...(verificationWarning ? { verificationWarning } : {}),
+        });
+      }
+
       const result = await installRegistryServer(name, env);
-      return textResult(result, !result.installed);
+      await appendInstallAudit(
+        planToAuditEntry(result.plan ?? resolved.plan, 'authoring-tool', decision, result.installed, result.error)
+      );
+      return textResult(
+        { ...result, ...(verificationWarning ? { verificationWarning } : {}) },
+        !result.installed
+      );
     }
 
     if (toolName === 'validate_flow_spec' || toolName === 'create_flow') {

@@ -364,6 +364,91 @@ export function buildConfigFromOption(
 }
 
 // ---------------------------------------------------------------------------
+// Resolved install plan (SEP-1024 consent preview — issue #98)
+// ---------------------------------------------------------------------------
+
+/**
+ * The exact, untruncated result of resolving a registry entry into something
+ * FLUJO would run — WITHOUT running it. This is the SEP-1024 "consent preview":
+ * the resolved command + args a caller must be able to show/log/approve before
+ * any spawn. It carries env-var NAMES only, never values, per FLUJO's
+ * secrets-never-to-the-frontend posture.
+ */
+export interface ResolvedInstallPlan {
+  /** The name the caller asked to install. */
+  registryName: string;
+  /** The registry server.name actually resolved (may differ from the request). */
+  resolvedName: string;
+  /** Sanitized FLUJO server name the config would be saved under. */
+  serverName: string;
+  transport: 'stdio' | 'streamable' | 'sse';
+  /** Runner command for stdio packages, e.g. "npx" / "uvx" / "docker". */
+  command?: string;
+  /** Untruncated argument vector as it would be spawned. */
+  args?: string[];
+  /** Endpoint for remote transports. */
+  serverUrl?: string;
+  /** Required env-var / header NAMES this entry declares — NEVER values. */
+  requiredEnvNames: string[];
+  /**
+   * Registry verification status (from `_meta … status`). 'unverified' when the
+   * registry did not assert one — registry entries are self-asserted.
+   */
+  verificationStatus: string;
+}
+
+/** The registry only asserts a lifecycle status; treat only 'active' as vouched-for. */
+export function isVerifiedStatus(status: string | undefined | null): boolean {
+  return status === 'active';
+}
+
+/** Extract the registry verification status, defaulting to 'unverified' when absent. */
+export function verificationStatusOf(result: RegistryServerResult | null | undefined): string {
+  const status = result?._meta?.['io.modelcontextprotocol.registry/official']?.status;
+  return typeof status === 'string' && status.length > 0 ? status : 'unverified';
+}
+
+/** Required env-var / header NAMES an option declares (regardless of whether a value exists). */
+export function requiredInputNames(option: InstallOption): string[] {
+  if (option.kind === 'package') {
+    return (option.pkg.environmentVariables ?? []).filter(v => v.isRequired && v.name).map(v => v.name);
+  }
+  return (option.remote.headers ?? []).filter(h => h.isRequired && h.name).map(h => h.name);
+}
+
+/**
+ * Build the resolve-only plan for a registry entry + chosen option. Pure:
+ * derives command/args from the same config builders the install/UI use, so the
+ * preview is exactly what would be spawned.
+ */
+export function resolvedPlanFrom(
+  registryName: string,
+  server: RegistryServer,
+  option: InstallOption,
+  verificationStatus: string
+): ResolvedInstallPlan {
+  // MCPServerConfig is a discriminated union (stdio | websocket | streamable | …);
+  // read the transport-specific fields through a loose view rather than narrowing.
+  const config = buildConfigFromOption(server, option) as Partial<MCPServerConfig> & {
+    command?: string;
+    args?: string[];
+    serverUrl?: string;
+  };
+  const transport = (config.transport ?? 'stdio') as 'stdio' | 'streamable' | 'sse';
+  return {
+    registryName,
+    resolvedName: server.name,
+    serverName: (config.name as string) ?? sanitizeServerName(server.name),
+    transport,
+    ...(config.command ? { command: config.command } : {}),
+    ...(Array.isArray(config.args) ? { args: config.args } : {}),
+    ...(config.serverUrl ? { serverUrl: config.serverUrl } : {}),
+    requiredEnvNames: requiredInputNames(option),
+    verificationStatus,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Spotlight (curated servers)
 // ---------------------------------------------------------------------------
 

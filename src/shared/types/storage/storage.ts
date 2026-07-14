@@ -13,7 +13,8 @@ export enum StorageKey {
   SELECTED_FLOW_ID = 'selected_flow_id',
   SPEECH_SETTINGS = 'speech_settings',
   SPOTLIGHT_SERVERS = 'spotlight_servers',
-  PLANNED_EXECUTIONS = 'planned_executions'
+  PLANNED_EXECUTIONS = 'planned_executions',
+  MCP_AUTO_INSTALL_SETTINGS = 'mcp_auto_install_settings'
 }
 
 export const StorageKeys = {
@@ -29,6 +30,7 @@ export const StorageKeys = {
   SPEECH_SETTINGS: StorageKey.SPEECH_SETTINGS,
   SPOTLIGHT_SERVERS: StorageKey.SPOTLIGHT_SERVERS,
   PLANNED_EXECUTIONS: StorageKey.PLANNED_EXECUTIONS,
+  MCP_AUTO_INSTALL_SETTINGS: StorageKey.MCP_AUTO_INSTALL_SETTINGS,
 } as const;
 
 /**

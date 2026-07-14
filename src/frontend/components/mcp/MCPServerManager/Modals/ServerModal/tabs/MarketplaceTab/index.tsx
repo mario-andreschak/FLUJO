@@ -11,7 +11,9 @@ import {
   buildConfigFromOption,
   displayName,
   missingRequiredInputs,
-  registryTypeLabel
+  registryTypeLabel,
+  verificationStatusOf,
+  isVerifiedStatus
 } from '@/utils/mcp/registry';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
 import { useTheme } from '@mui/material/styles';
@@ -47,6 +49,7 @@ import LanguageIcon from '@mui/icons-material/Language';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import CloudIcon from '@mui/icons-material/Cloud';
 import ClearIcon from '@mui/icons-material/Clear';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 const PAGE_SIZE = 30;
 
@@ -288,6 +291,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
               {results.map(result => {
                 const server = result.server;
                 const installable = getInstallOptions(server).length > 0;
+                const verified = isVerifiedStatus(verificationStatusOf(result));
                 return (
                   <Grid item xs={12} sm={6} md={4} key={server.name}>
                     <Card
@@ -356,6 +360,16 @@ const MarketplaceTab: React.FC<TabProps> = ({
                             )}
                             {!installable && (
                               <Chip size="small" color="warning" variant="outlined" label="Manual setup" />
+                            )}
+                            {installable && !verified && (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                                icon={<WarningAmberIcon />}
+                                label="Unverified"
+                                title="Self-asserted registry entry — review the command before installing."
+                              />
                             )}
                           </Box>
                         </CardContent>

@@ -45,6 +45,8 @@ import {
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
+import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { gatherGenerationContext, mergeIssues, GenerationContext } from './generationContext';
 
 const log = createLogger('backend/services/flow/generateFlow');
@@ -93,6 +95,23 @@ export interface GeneratedFlowEntry {
   validation: FlowValidationResult;
 }
 
+/**
+ * A server the generator installed (or found already present) during a run.
+ * Carries the resolved command/args + verification status (SEP-1024) so the
+ * post-generation summary can show EXACTLY what was run per install.
+ */
+export interface InstalledServerInfo {
+  name: string;
+  tools: string[];
+  alreadyExisted?: boolean;
+  /** The exact runner command that was spawned (stdio packages). */
+  command?: string;
+  /** Untruncated argument vector that was spawned. */
+  args?: string[];
+  /** Registry verification status; 'unverified' when the registry asserted none. */
+  verificationStatus?: string;
+}
+
 export interface GenerateFlowSuccess {
   success: true;
   /** The UNSAVED root draft flow — never persisted here (back-compat with single-flow callers). */
@@ -113,7 +132,7 @@ export interface GenerateFlowSuccess {
   /** Total spec-producing attempts (1 = first try was good enough). */
   attempts: number;
   /** Servers the generator installed (or found already present) along the way. */
-  installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
+  installedServers: InstalledServerInfo[];
 }
 
 export interface GenerateFlowFailure {
@@ -212,7 +231,7 @@ function generatorTools(allowInstall: boolean): OpenAI.ChatCompletionTool[] {
 }
 
 interface ToolLoopState {
-  installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
+  installedServers: InstalledServerInfo[];
   /** True once an install happened → the building-block context must be re-gathered. */
   contextDirty: boolean;
 }
@@ -236,13 +255,37 @@ async function executeGeneratorTool(
       return { error: 'Installing is not allowed in this generation (allowInstall is off).' };
     }
     const serverRef = typeof args.name === 'string' ? args.name : '';
+
+    // SEP-1024: resolve WITHOUT spawning first so the exact command/args are
+    // captured for the audit log before anything runs. The per-generation
+    // allowInstall opt-in IS the consent for the generator (brain-stem policy).
+    const resolved = await installRegistryServer(serverRef, undefined, { resolveOnly: true });
+    const settings = await loadAutoInstallSettings();
+    const decision = decideInstallConsent({
+      caller: 'generator',
+      settings,
+      registryName: serverRef,
+      allowInstall,
+    });
+    if (resolved.plan) {
+      await appendInstallAudit(planToAuditEntry(resolved.plan, 'generator', decision, false));
+    }
+
     const result = await installRegistryServer(serverRef);
+    if (result.plan) {
+      await appendInstallAudit(
+        planToAuditEntry(result.plan, 'generator', decision, result.installed, result.error)
+      );
+    }
     if (result.installed && result.serverName) {
       state.contextDirty = true;
       state.installedServers.push({
         name: result.serverName,
         tools: (result.tools ?? []).map((t) => t.name),
         ...(result.alreadyExisted ? { alreadyExisted: true } : {}),
+        ...(result.plan?.command ? { command: result.plan.command } : {}),
+        ...(result.plan?.args ? { args: result.plan.args } : {}),
+        ...(result.plan?.verificationStatus ? { verificationStatus: result.plan.verificationStatus } : {}),
       });
     }
     return result;

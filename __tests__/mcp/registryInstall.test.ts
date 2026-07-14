@@ -110,6 +110,48 @@ describe('installRegistryServer', () => {
     expect(config.env.THE_API_KEY).toEqual({ value: 'sk-123', metadata: { isSecret: true } });
   });
 
+  it('resolveOnly returns the resolved plan WITHOUT spawning (no updateServerConfig)', async () => {
+    registryGetJsonMock.mockResolvedValue({
+      servers: [
+        {
+          ...keyedEntry('io.github.acme/keyed-voice'),
+          _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active' } },
+        },
+      ],
+    });
+    const result = await installRegistryServer('io.github.acme/keyed-voice', undefined, { resolveOnly: true });
+    expect(result.installed).toBe(false);
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+    expect(result.plan).toEqual(
+      expect.objectContaining({
+        command: 'npx',
+        args: expect.arrayContaining(['-y', '@example/keyed-voice@1.0.0']),
+        serverName: 'keyed-voice',
+        requiredEnvNames: ['THE_API_KEY'],
+        verificationStatus: 'active',
+      })
+    );
+    // Resolve-only carries required env NAMES only — never a value.
+    expect(JSON.stringify(result.plan)).not.toContain('sk-');
+  });
+
+  it('the actual-install path also returns the plan and defaults verification to "unverified"', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice');
+    expect(result.installed).toBe(true);
+    expect(result.plan?.command).toBe('npx');
+    expect(result.plan?.verificationStatus).toBe('unverified');
+  });
+
+  it('still surfaces the plan alongside needsEnv when required env is missing', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [keyedEntry('io.github.acme/keyed-voice')] });
+    const result = await installRegistryServer('io.github.acme/keyed-voice');
+    expect(result.installed).toBe(false);
+    expect(result.needsEnv).toEqual(['THE_API_KEY']);
+    expect(result.plan?.requiredEnvNames).toEqual(['THE_API_KEY']);
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
   it('never clobbers an existing server — reuses it and reports alreadyExisted', async () => {
     registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
     loadServerConfigsMock.mockResolvedValue([{ name: 'voice' }]);

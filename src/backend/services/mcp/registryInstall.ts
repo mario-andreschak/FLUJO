@@ -25,10 +25,13 @@ import {
   RegistryServerResult,
   RegistryServer,
   InstallOption,
+  ResolvedInstallPlan,
   getInstallOptions,
   buildConfigFromOption,
   applySpotlightEnvDefaults,
   missingRequiredInputs,
+  resolvedPlanFrom,
+  verificationStatusOf,
 } from '@/utils/mcp/registry';
 import { mcpService } from '@/backend/services/mcp';
 
@@ -98,11 +101,30 @@ export interface InstallResult {
   alreadyExisted?: boolean;
   /** Required env vars/headers the caller must provide; set when NOT installed. */
   needsEnv?: string[];
+  /**
+   * The resolved install plan (SEP-1024 consent preview): exact command/args +
+   * required env NAMES + verification status. Populated on every path where an
+   * entry resolved to a runnable option — including resolve-only, needsEnv and
+   * the actual-install path — so any caller can preview/log what would run.
+   */
+  plan?: ResolvedInstallPlan;
   error?: string;
 }
 
-/** Resolve a registry entry by its exact name (falls back to best search hit). */
-async function resolveEntry(registryName: string): Promise<RegistryServer | null> {
+export interface InstallOptions {
+  /**
+   * Resolve the entry and return the plan WITHOUT spawning (SEP-1024 dry-run).
+   * `installed` is false and `plan` is populated; the server is not saved.
+   */
+  resolveOnly?: boolean;
+}
+
+/**
+ * Resolve a registry entry by its exact name (falls back to best search hit).
+ * Returns the full result (not just `.server`) so the caller can read the
+ * `_meta … status` verification field.
+ */
+async function resolveEntry(registryName: string): Promise<RegistryServerResult | null> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
   url.searchParams.set('version', 'latest');
   url.searchParams.set('limit', '10');
@@ -110,7 +132,7 @@ async function resolveEntry(registryName: string): Promise<RegistryServer | null
   const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS)) as RegistryListResponse;
   const results: RegistryServerResult[] = Array.isArray(data?.servers) ? data.servers : [];
   const exact = results.find((r) => r.server?.name === registryName);
-  return (exact ?? results[0])?.server ?? null;
+  return exact ?? results[0] ?? null;
 }
 
 /**
@@ -120,26 +142,37 @@ async function resolveEntry(registryName: string): Promise<RegistryServer | null
  */
 export async function installRegistryServer(
   registryName: string,
-  envOverrides?: Record<string, string>
+  envOverrides?: Record<string, string>,
+  options?: InstallOptions
 ): Promise<InstallResult> {
   if (!registryName || typeof registryName !== 'string') {
     return { installed: false, error: 'A registry server name is required' };
   }
 
-  let server: RegistryServer | null;
+  let result: RegistryServerResult | null;
   try {
-    server = await resolveEntry(registryName);
+    result = await resolveEntry(registryName);
   } catch (err) {
     return { installed: false, error: `Registry lookup failed: ${err instanceof Error ? err.message : String(err)}` };
   }
+  const server: RegistryServer | null = result?.server ?? null;
   if (!server) {
     return { installed: false, error: `No registry entry found for "${registryName}"` };
   }
 
-  const options = getInstallOptions(server);
-  const option: InstallOption | undefined = options[0]; // packages first, same as the UI
+  const installOptions = getInstallOptions(server);
+  const option: InstallOption | undefined = installOptions[0]; // packages first, same as the UI
   if (!option) {
     return { installed: false, error: `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)` };
+  }
+
+  // Resolve-only / consent preview: exact command + args + required env NAMES,
+  // never touching updateServerConfig. Available before any missing-env or
+  // already-exists check so a caller can always show/log what would run.
+  const verificationStatus = verificationStatusOf(result);
+  const plan = resolvedPlanFrom(registryName, server, option, verificationStatus);
+  if (options?.resolveOnly) {
+    return { installed: false, serverName: plan.serverName, plan };
   }
 
   const missing = missingRequiredInputs(option, envOverrides);
@@ -147,6 +180,7 @@ export async function installRegistryServer(
     return {
       installed: false,
       needsEnv: missing,
+      plan,
       error: `"${server.name}" requires values for: ${missing.join(', ')}`,
     };
   }
@@ -163,6 +197,7 @@ export async function installRegistryServer(
       installed: true,
       alreadyExisted: true,
       serverName,
+      plan,
       tools: (tools ?? []).map((t) => ({ name: t.name, ...(t.description ? { description: t.description } : {}) })),
       ...(error ? { error } : {}),
     };
@@ -181,6 +216,7 @@ export async function installRegistryServer(
   return {
     installed: true,
     serverName,
+    plan,
     tools: (tools ?? []).map((t) => ({ name: t.name, ...(t.description ? { description: t.description } : {}) })),
     ...(error ? { error } : {}),
   };

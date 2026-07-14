@@ -48,7 +48,14 @@ export interface GeneratedFlowInfo {
   warningCount: number;
   attempts: number;
   /** MCP servers the generator installed during this generation (allowInstall only). */
-  installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
+  installedServers: Array<{
+    name: string;
+    tools: string[];
+    alreadyExisted?: boolean;
+    command?: string;
+    args?: string[];
+    verificationStatus?: string;
+  }>;
 }
 
 interface GenerateFlowDialogProps {
@@ -220,9 +227,11 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         {allowInstall && (
           <Alert severity="warning" sx={{ mt: 1 }}>
             The generator may <strong>download, install, and run third-party MCP servers</strong> from
-            the public registry on this machine — without asking again. It prefers servers that need
-            no API keys, but anything it installs executes real code with your user&apos;s permissions.
-            Installed servers stay configured afterwards (remove them on the MCP page).
+            the public registry on this machine. It prefers servers that need no API keys, but anything
+            it installs executes real code with your user&apos;s permissions. The <strong>exact command
+            and arguments</strong> of every install are recorded (audited) before it runs, and each
+            installed server is listed in the post-generation summary so you can review — and remove
+            (on the MCP page) — exactly what was added.
           </Alert>
         )}
         {isGenerating && (
