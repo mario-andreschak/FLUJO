@@ -44,7 +44,7 @@ import { ChatMessage } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
-import { type ToolCallPair, pairToolCallsWithResults } from './toolCallPairing'; // #95: merge tool call + result
+import { type ToolCallPair, groupToolCallsByAnchor } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
 import { createLogger } from '@/utils/logger'; // Import the logger
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
@@ -442,6 +442,12 @@ interface MessageBubbleProps {
    * assistant turn with no non-handoff tool calls.
    */
   toolCallPairs?: ToolCallPair<ChatMessage>[];
+  /**
+   * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
+   * messages in the same assistant run, rendered as slim markers on this anchor
+   * bubble (in addition to any handoffs the message owns itself).
+   */
+  hoistedHandoffs?: OpenAI.ChatCompletionMessageToolCall[];
   /** Non-null only while THIS bubble is in edit mode. */
   edit: BubbleEditState | null;
   onMenuOpen: (event: React.MouseEvent<HTMLElement>, messageId: string) => void;
@@ -466,6 +472,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   availableNodes,
   showRaw,
   toolCallPairs,
+  hoistedHandoffs,
   edit,
   onMenuOpen,
   onToggleRaw,
@@ -687,10 +694,16 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         )}
 
         {/* Handoffs: render each as a slim "→ Target" marker rather than an empty
-            tool accordion (they usually carry no args and just clutter the chat). */}
-        {hasToolCalls(message) && message.tool_calls
-          .filter((tc) => isHandoffToolName(tc.function.name))
-          .map((toolCall, hIndex) => (
+            tool accordion (they usually carry no args and just clutter the chat).
+            #95 (follow-up): also render handoff markers hoisted from suppressed
+            tool-call-only messages in the same assistant run, so a handoff whose
+            own bubble was folded away still shows its routing on the anchor. */}
+        {(() => {
+          const ownHandoffs = hasToolCalls(message)
+            ? message.tool_calls.filter((tc) => isHandoffToolName(tc.function.name))
+            : [];
+          const allHandoffs = [...ownHandoffs, ...(hoistedHandoffs ?? [])];
+          return allHandoffs.map((toolCall, hIndex) => (
             <Box
               key={toolCall.id || `handoff-${message.id}-${hIndex}`}
               sx={{
@@ -706,7 +719,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 </Box>
               </Typography>
             </Box>
-          ))}
+          ));
+        })()}
 
         {/* #95: merged tool-call timeline. The old vertical stack of tool-call
             accordions (plus the separate downstream tool-result bubbles) is
@@ -827,15 +841,46 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     [messages, hiddenCount]
   );
 
-  // #95: pair each assistant turn's (non-handoff) tool calls with their result
-  // messages once per `messages` change. Bubbles render a merged, expandable
-  // timeline from these pairs; standalone tool-result bubbles that a timeline
-  // consumed are skipped in the render loop below. Computed over the FULL list
-  // (not just the window) so pairing still holds across the window boundary.
-  const { pairsByMessageId, consumedToolCallIds } = useMemo(
-    () => pairToolCallsWithResults(messages),
-    [messages]
+  // #95 (follow-up): group each contiguous assistant run's (non-handoff) tool
+  // calls onto ONE anchor bubble — the run's narration message — so the
+  // Claude-subscription split-message shape (narration, then one empty
+  // tool-call message per call) renders as a single combined timeline instead
+  // of a standalone bubble per call. Computed over the FULL list (not just the
+  // window) so grouping still holds across the window boundary; standalone
+  // tool-result bubbles a timeline consumed are skipped in the loop below.
+  const {
+    pairsByAnchorId,
+    handoffsByAnchorId,
+    consumedToolCallIds,
+    groups,
+  } = useMemo(() => groupToolCallsByAnchor(messages), [messages]);
+
+  // Ids currently mounted (the render window is a suffix of the message list).
+  const visibleIdSet = useMemo(
+    () => new Set(visibleMessages.map((m) => m.id)),
+    [visibleMessages]
   );
+
+  // Resolve the grouping to concrete per-message render instructions, applying
+  // the window-boundary fallback: if an anchor is scrolled out of view while
+  // its hoisted tool-call messages are still visible, promote the earliest
+  // visible group member to host the timeline so it never silently disappears.
+  const { renderPairsById, renderHandoffsById, suppressedIds } = useMemo(() => {
+    const renderPairsById = new Map<string, ToolCallPair<ChatMessage>[]>();
+    const renderHandoffsById = new Map<string, OpenAI.ChatCompletionMessageToolCall[]>();
+    const suppressedIds = new Set<string>();
+    for (const group of groups) {
+      const pairs = pairsByAnchorId.get(group.anchorId) ?? [];
+      const handoffs = handoffsByAnchorId.get(group.anchorId) ?? [];
+      const effectiveId = group.memberIds.find((id) => visibleIdSet.has(id)) ?? group.anchorId;
+      if (pairs.length > 0) renderPairsById.set(effectiveId, pairs);
+      if (handoffs.length > 0) renderHandoffsById.set(effectiveId, handoffs);
+      for (const id of group.hoistedIds) {
+        if (id !== effectiveId) suppressedIds.add(id);
+      }
+    }
+    return { renderPairsById, renderHandoffsById, suppressedIds };
+  }, [groups, pairsByAnchorId, handoffsByAnchorId, visibleIdSet]);
 
   // Auto-scroll is owned by the parent (Chat/index.tsx), which holds the scroll
   // container ref and implements position-aware stick-to-bottom + a jump-to-latest
@@ -968,6 +1013,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         ) {
           return null;
         }
+        // #95 (follow-up): this assistant message's tool calls were hoisted onto
+        // a still-visible anchor; suppress its now-empty standalone bubble.
+        if (suppressedIds.has(message.id)) return null;
         const isThisEditing = isEditing && message.id === editingMessageId;
         return (
           <MessageBubble
@@ -976,7 +1024,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             nodeLabel={message.processNodeId ? nodeLabelById.get(message.processNodeId) : undefined}
             availableNodes={availableNodes}
             showRaw={!!showRawToolResult[message.id]}
-            toolCallPairs={pairsByMessageId.get(message.id)}
+            toolCallPairs={renderPairsById.get(message.id)}
+            hoistedHandoffs={renderHandoffsById.get(message.id)}
             edit={isThisEditing ? { content: editContent, nodeId: editNodeId } : null}
             onMenuOpen={handleMenuOpen}
             onToggleRaw={handleToggleRaw}
