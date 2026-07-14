@@ -34,7 +34,8 @@ interface FlowCardProps {
   flow: Flow;
   selected: boolean;
   onSelect: (flowId: string) => void;
-  onDelete: (flowId: string) => void;
+  /** Optional in picker mode; required for the management dashboard. */
+  onDelete?: (flowId: string) => void;
   onCopy?: (flowId: string) => void;
   onEdit?: (flowId: string) => void;
   /** Assign/clear this flow's organizing folder (#71). */
@@ -43,6 +44,12 @@ interface FlowCardProps {
   folders?: string[];
   /** Consistency-check result; drives the problem badge. */
   validation?: FlowValidationResult;
+  /**
+   * When true, the card is used purely to *select* a flow (#92): all
+   * management actions (edit/copy/folder/delete) are hidden so the picker and
+   * the dashboard share the exact same card body without drifting.
+   */
+  pickerMode?: boolean;
 }
 
 // Styled card with hover effects
@@ -93,7 +100,8 @@ const FlowCard = ({
   onEdit,
   onSetFolder,
   folders = [],
-  validation
+  validation,
+  pickerMode = false
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
   const theme = useTheme();
@@ -127,7 +135,7 @@ const FlowCard = ({
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onDelete(flow.id);
+    if (onDelete) onDelete(flow.id);
   };
   
   const handleCopyClick = (e: React.MouseEvent) => {
@@ -336,6 +344,7 @@ const FlowCard = ({
         </CardContent>
       </CardActionArea>
       
+      {!pickerMode && (
       <CardActions sx={{ 
         justifyContent: 'flex-end', 
         p: 1,
@@ -372,14 +381,17 @@ const FlowCard = ({
           </Tooltip>
         )}
         
-        <Tooltip title="Delete flow">
-          <IconButton size="small" onClick={handleDeleteClick} color="error">
-            <DeleteIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        {onDelete && (
+          <Tooltip title="Delete flow">
+            <IconButton size="small" onClick={handleDeleteClick} color="error">
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
       </CardActions>
+      )}
 
-      {onSetFolder && (
+      {!pickerMode && onSetFolder && (
         <FolderAssignMenu
           anchorEl={folderAnchorEl}
           open={Boolean(folderAnchorEl)}

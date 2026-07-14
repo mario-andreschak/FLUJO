@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import {
   Card,
+  CardActionArea,
   CardContent,
   CardActions,
   Typography,
@@ -28,17 +29,37 @@ const log = createLogger('frontend/components/models/list/ModelCard');
 
 export interface ModelCardProps {
   model: Model;
-  onEdit: () => void;
-  onDelete: () => void;
+  /** Optional in selectable/picker mode; required on the management page. */
+  onEdit?: () => void;
+  onDelete?: () => void;
   /** The model's current organizing folder (#80 / shared with #71). */
   folder?: string;
   /** Existing folders on the Models surface, offered for reuse in the picker. */
   folders?: string[];
   /** Assign/clear this model's folder. When omitted, the folder action is hidden. */
   onSetFolder?: (folder: string | undefined) => void;
+  /**
+   * When true, the card becomes a selectable picker cell (#92): the whole body
+   * is clickable, the selected state is highlighted, and management actions
+   * (test/edit/delete/folder) are hidden. Used by the Process node model
+   * binding so the picker reuses the Models-page card verbatim.
+   */
+  selectable?: boolean;
+  selected?: boolean;
+  onSelect?: (modelId: string) => void;
 }
 
-export const ModelCard = ({ model, onEdit, onDelete, folder, folders = [], onSetFolder }: ModelCardProps) => {
+export const ModelCard = ({
+  model,
+  onEdit,
+  onDelete,
+  folder,
+  folders = [],
+  onSetFolder,
+  selectable = false,
+  selected = false,
+  onSelect,
+}: ModelCardProps) => {
   const [testOpen, setTestOpen] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
@@ -67,8 +88,8 @@ export const ModelCard = ({ model, onEdit, onDelete, folder, folders = [], onSet
     runTest();
   };
 
-  return (
-    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+  const body = (
+    <>
       <CardContent sx={{ flexGrow: 1 }}>
         <Typography variant="h6" gutterBottom>
           {model.displayName || model.name}
@@ -119,6 +140,39 @@ export const ModelCard = ({ model, onEdit, onDelete, folder, folders = [], onSet
           />
         )}
       </CardContent>
+    </>
+  );
+
+  // Selectable/picker mode (#92): the whole card is a single selection target,
+  // management actions are suppressed, and the selected state is highlighted
+  // with the same primary border used by FlowCard so pickers look consistent.
+  if (selectable) {
+    return (
+      <Card
+        elevation={selected ? 4 : 2}
+        role="radio"
+        aria-checked={selected}
+        sx={{
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          border: (theme) => (selected ? `2px solid ${theme.palette.primary.main}` : '2px solid transparent'),
+          transition: 'border-color 120ms, box-shadow 120ms',
+        }}
+      >
+        <CardActionArea
+          onClick={() => onSelect?.(model.id)}
+          sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
+        >
+          {body}
+        </CardActionArea>
+      </Card>
+    );
+  }
+
+  return (
+    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {body}
       <CardActions disableSpacing>
         <Tooltip title="Test model (direct SDK call, no flow)" arrow>
           <IconButton aria-label="test" onClick={handleOpenTest}>

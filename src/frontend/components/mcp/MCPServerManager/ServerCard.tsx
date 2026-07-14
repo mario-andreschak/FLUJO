@@ -51,12 +51,19 @@ interface ServerCardProps {
   path: string;
   enabled: boolean;
   transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
-  onToggle: (enabled: boolean) => void;
-  onRetry: () => void;
-  onDelete: () => void;
+  onToggle?: (enabled: boolean) => void;
+  onRetry?: () => void;
+  onDelete?: () => void;
   onClick: () => void;
-  onEdit: () => void;
+  onEdit?: () => void;
   onAuthenticate?: () => void; // OAuth authentication handler
+  /**
+   * When true, the card is used purely to *pick* a server (#92): the whole
+   * card is a single click target (via onClick), and all mutating controls
+   * (enable toggle, retry, edit, delete, expose, authenticate) are hidden so
+   * the picker reuses the management card body without side effects.
+   */
+  pickerMode?: boolean;
   error?: string; // Optional error message
   stderrOutput?: string; // Optional stderr output
   authorizationUrl?: string; // OAuth authorization URL
@@ -81,12 +88,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
   path,
   enabled,
   transport,
-  onToggle,
-  onRetry,
-  onDelete,
+  onToggle = () => {},
+  onRetry = () => {},
+  onDelete = () => {},
   onClick,
-  onEdit,
+  onEdit = () => {},
   onAuthenticate,
+  pickerMode = false,
   error,
   stderrOutput,
   authorizationUrl,
@@ -159,7 +167,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   
   // Poll for status updates when server is connecting or initializing
   useEffect(() => {
-    if ((status === 'connecting' || status === 'initialization') && enabled) {
+    if ((status === 'connecting' || status === 'initialization') && enabled && !pickerMode) {
       setIsPolling(true);
       const timer = setTimeout(() => {
         log.debug(`Polling status for server: ${name}`);
@@ -277,9 +285,14 @@ const ServerCard: React.FC<ServerCardProps> = ({
   
   return (
     <Card 
+      role={pickerMode ? 'button' : undefined}
+      aria-pressed={pickerMode ? selected : undefined}
       sx={{ 
         cursor: 'pointer',
-        transition: 'box-shadow 0.3s ease',
+        height: pickerMode ? '100%' : undefined,
+        transition: 'box-shadow 0.3s ease, border-color 0.12s ease',
+        border: (theme) =>
+          pickerMode && selected ? `2px solid ${theme.palette.primary.main}` : '2px solid transparent',
         '&:hover': {
           boxShadow: 3
         }
@@ -356,7 +369,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </Typography>
 
         {/* Built-in server: always exposed at its proxy endpoint — read-only URL, no toggle */}
-        {builtIn && (
+        {builtIn && !pickerMode && (
           <Box sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
               <PublicIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
@@ -384,7 +397,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         )}
 
         {/* Expose to external apps (#17A) */}
-        {!builtIn && (
+        {!builtIn && !pickerMode && (
         <Box
           sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
           onClick={(e) => e.stopPropagation()}
@@ -457,7 +470,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </Box>
         )}
 
-        {status === 'requires_authentication' && (
+        {status === 'requires_authentication' && !pickerMode && (
           <Box sx={{ mt: 1, mb: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="body2" fontWeight="medium" color="warning.main">
@@ -536,7 +549,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         )}
       </CardContent>
       
-      {!builtIn && (
+      {!builtIn && !pickerMode && (
       <CardActions sx={{ justifyContent: 'space-between', px: 2, py: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <Switch

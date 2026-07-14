@@ -1,19 +1,17 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { 
-  FormControl, 
-  InputLabel, 
-  Select, 
-  MenuItem, 
-  Typography, 
-  Box, 
+import {
+  Typography,
+  Box,
   CircularProgress,
-  FormHelperText,
-  SelectChangeEvent
+  Button,
 } from '@mui/material';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 
 interface FlowSelectorProps {
   selectedFlowId: string | null;
@@ -29,13 +27,14 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   const [flows, setFlows] = useState<Flow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   // Load flows on component mount
   useEffect(() => {
     const loadFlows = async () => {
       setIsLoading(true);
       setError(null);
-      
+
       try {
         const loadedFlows = await flowService.loadFlows();
         setFlows(loadedFlows);
@@ -46,30 +45,30 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         setIsLoading(false);
       }
     };
-    
+
     loadFlows();
   }, []);
-  
-  // Handle flow selection
-  const handleFlowChange = (event: SelectChangeEvent<string>) => {
-    const flowId = event.target.value;
-    onSelectFlow(flowId);
-  };
-  
+
   // Get selected flow name
   const getSelectedFlowName = () => {
     if (!selectedFlowId) return '';
-    
     const flow = flows.find(f => f.id === selectedFlowId);
     return flow ? flow.name : '';
   };
-  
+
+  const handleSelect = (flowId: string) => {
+    onSelectFlow(flowId);
+    setPickerOpen(false);
+  };
+
+  const selectedFlowName = getSelectedFlowName();
+
   return (
     <Box>
       <Typography variant="subtitle1" gutterBottom>
         Select Flow
       </Typography>
-      
+
       {isLoading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
@@ -86,28 +85,46 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
           No flows available. Create some flows in the Flow Builder first.
         </Typography>
       ) : (
-        <FormControl fullWidth disabled={disabled}> {/* Apply disabled prop */}
-          <InputLabel id="flow-select-label">Flow</InputLabel>
-          <Select
-            labelId="flow-select-label"
-            id="flow-select"
-            value={selectedFlowId || ''}
-            label="Flow"
-            onChange={handleFlowChange}
-            disabled={disabled} // Apply disabled prop
+        <>
+          {/* The picker itself reuses the Flow dashboard card layout (#92) so
+              choosing a flow here looks exactly like the Flows page. */}
+          <Button
+            variant="outlined"
+            startIcon={<AccountTreeOutlinedIcon />}
+            onClick={() => setPickerOpen(true)}
+            disabled={disabled}
+            sx={{ textTransform: 'none', maxWidth: '100%' }}
           >
-            {flows.map((flow) => (
-              <MenuItem key={flow.id} value={flow.id}>
-                {flow.name}
-              </MenuItem>
-            ))}
-          </Select>
-          <FormHelperText>
-            {selectedFlowId 
-              ? `Using "${getSelectedFlowName()}" flow for this conversation` 
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedFlowId ? (selectedFlowName || 'Select a flow') : 'Select a flow'}
+            </Box>
+          </Button>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+            {selectedFlowId
+              ? `Using "${selectedFlowName}" flow for this conversation`
               : 'Select a flow to use for this conversation'}
-          </FormHelperText>
-        </FormControl>
+          </Typography>
+
+          <CardPickerDialog
+            open={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            title="Select a flow"
+            description="Pick the flow this conversation will run."
+            skeleton={<FlowCardSkeleton />}
+            emptyMessage="No flows available. Create some flows in the Flow Builder first."
+            items={flows.map((flow) => ({
+              key: flow.id,
+              content: (
+                <FlowCard
+                  flow={flow}
+                  selected={flow.id === selectedFlowId}
+                  onSelect={handleSelect}
+                  pickerMode
+                />
+              ),
+            }))}
+          />
+        </>
       )}
     </Box>
   );

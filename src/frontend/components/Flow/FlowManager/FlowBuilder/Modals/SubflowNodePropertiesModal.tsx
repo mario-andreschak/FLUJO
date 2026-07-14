@@ -12,13 +12,10 @@ import {
   IconButton,
   Divider,
   TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Alert,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import HistoryIcon from '@mui/icons-material/History';
@@ -27,6 +24,8 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import OptionCard from '@/frontend/components/shared/OptionCard';
+import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
@@ -50,6 +49,7 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
 
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loadingFlows, setLoadingFlows] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     if (node) {
@@ -100,6 +100,9 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   const selectableFlows = flows.filter((f) => f.id !== flowId);
   const selectedSubflowId = nodeData.properties?.subflowId || '';
   const selectedMissing = !!selectedSubflowId && !flows.some((f) => f.id === selectedSubflowId);
+  const selectedSubflowName = selectedMissing
+    ? ''
+    : flows.find((f) => f.id === selectedSubflowId)?.name || '';
 
   // Back-compat: a flow saved before the explicit 'isolated' mode existed just
   // has a promptTemplate and no inputMode — surface it as Isolated so the same
@@ -151,33 +154,53 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           margin="normal"
         />
 
-        <FormControl fullWidth margin="normal">
-          <InputLabel id="subflow-select-label">Flow to run</InputLabel>
-          <Select
-            labelId="subflow-select-label"
-            label="Flow to run"
-            value={selectedMissing ? '' : selectedSubflowId}
-            onChange={(e) => handlePropertyChange('subflowId', e.target.value)}
-            displayEmpty
+        {/* Flow picker reuses the Flows dashboard card layout (#92) so choosing
+            a subflow looks exactly like the Flows page. */}
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Flow to run
+          </Typography>
+          <Button
+            variant="outlined"
+            startIcon={<AccountTreeOutlinedIcon />}
+            onClick={() => setPickerOpen(true)}
+            sx={{ textTransform: 'none', maxWidth: '100%' }}
           >
-            {selectableFlows.length === 0 && (
-              <MenuItem value="" disabled>
-                {loadingFlows ? 'Loading flows…' : 'No other flows available'}
-              </MenuItem>
-            )}
-            {selectableFlows.map((f) => (
-              <MenuItem key={f.id} value={f.id}>
-                {f.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedSubflowName || 'Choose a flow…'}
+            </Box>
+          </Button>
+        </Box>
 
         {selectedMissing && (
           <Alert severity="warning" sx={{ mt: 1 }}>
             The previously selected flow no longer exists. Please choose another.
           </Alert>
         )}
+
+        <CardPickerDialog
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          title="Choose a flow to run"
+          description="This subflow node will run the selected flow as a helper."
+          isLoading={loadingFlows}
+          skeleton={<FlowCardSkeleton />}
+          emptyMessage="No other flows available. Create another flow first."
+          items={selectableFlows.map((f) => ({
+            key: f.id,
+            content: (
+              <FlowCard
+                flow={f}
+                selected={f.id === selectedSubflowId}
+                onSelect={(id) => {
+                  handlePropertyChange('subflowId', id);
+                  setPickerOpen(false);
+                }}
+                pickerMode
+              />
+            ),
+          }))}
+        />
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           What does the subflow receive?
