@@ -10,6 +10,7 @@ import {
   Typography, 
   Divider,
   IconButton,
+  Tooltip,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
@@ -42,6 +43,7 @@ import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { createEdgeFromConnection } from './Canvas/utils/edgeUtils';
+import { computeAutoLayout } from './Canvas/utils/autoLayout';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { FlowValidationButton } from './FlowValidationButton';
@@ -54,6 +56,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { Collapse } from '@mui/material';
 
@@ -594,6 +597,18 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
 
+  // Auto-Align (issue #100): re-arrange nodes into a clean top-to-bottom
+  // layered layout. Uses the functional setNodes so it stacks on the latest
+  // state; because positions change outside a drag gesture, the history effect
+  // records it as a single undoable step and flags the flow unsaved. Nothing
+  // is persisted until the user hits Save. fitView re-frames after the new
+  // positions are applied.
+  const handleAutoAlign = useCallback(() => {
+    log.debug('handleAutoAlign: auto-arranging flow nodes');
+    setNodes(prev => computeAutoLayout(prev, edges));
+    requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.2 }));
+  }, [edges, reactFlowInstance]);
+
   const handleNodeUpdate = useCallback((nodeId: string, data: any) => {
     log.debug(`handleNodeUpdate: Updating node ${nodeId} properties`);
     
@@ -781,6 +796,20 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             </Button>
             
             <FlowValidationButton nodes={nodes} edges={edges} />
+
+            <Tooltip title="Auto-arrange nodes into a clean layout">
+              <span>
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  onClick={handleAutoAlign}
+                  startIcon={<AccountTreeIcon />}
+                  disabled={nodes.length <= 1}
+                >
+                  Auto-Align
+                </Button>
+              </span>
+            </Tooltip>
 
             {initialFlow && (
               <>
