@@ -36,6 +36,7 @@ import { Model } from '@/shared/types/model';
 import {
   compileFlowSpec,
   applyGenerationDefaults,
+  flowToSpec,
   FlowSpec,
   FlowSpecNode,
   MAX_SUBFLOW_DEPTH,
@@ -581,6 +582,205 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
 
   log.info(
     `Generated draft bundle rooted at "${best.rootFlow.name}" (${best.flows.length} flow(s)) in ${attempts} attempt(s): ${best.validation.errorCount} error(s), ${best.validation.warningCount} warning(s), ${state.installedServers.length} server(s) installed`
+  );
+  return {
+    success: true,
+    flow: best.rootFlow,
+    validation: best.validation,
+    flows: best.flows,
+    rootFlowId: best.rootFlow.id,
+    attempts,
+    installedServers: state.installedServers,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Improve an existing flow (issue #99)
+// ---------------------------------------------------------------------------
+
+export interface ImproveFlowInput {
+  /**
+   * The flow to revise — the CURRENT (possibly edited-but-unsaved) canvas state from the
+   * FlowBuilder. Serialized to a FlowSpec via {@link flowToSpec} and shown to the model.
+   */
+  flow: Flow;
+  /** The user's natural-language description of the changes they want. */
+  description: string;
+  /** Id of the configured model that will do the improving. */
+  modelId: string;
+  /** Repair rounds after the first attempt (default 1, capped at 2). */
+  maxRepairs?: number;
+  /**
+   * Let the improver INSTALL MCP servers from the public registry when the requested change
+   * needs a capability no configured server provides. Same third-party-code-execution risk
+   * as {@link generateFlow} — strictly opt-in per request. Searching is always allowed.
+   */
+  allowInstall?: boolean;
+}
+
+/**
+ * Revise an EXISTING flow from a natural-language change request (issue #99).
+ *
+ * Reuses the generate machinery (model resolve → adapter → search/install tool loop → JSON
+ * extract → compile → validate → bounded repair). The current flow is serialized back into a
+ * FlowSpec (`flowToSpec`) and injected into the prompt so the model reads and writes the
+ * same compact DSL. Two things keep the result stable across an edit:
+ *   - node identity/layout: `flowToSpec` keys each node by its id and the compile is handed a
+ *     `positions` map keyed by those ids, so nodes the model leaves alone stay put; only
+ *     genuinely new nodes are laid out.
+ *   - flow identity: the flow being improved is excluded from the compile's flow list (so
+ *     compileFlowSpec keeps its name instead of dedup-renaming it, and it can't reference
+ *     itself as a subflow), and the compiled flow's id is forced back to the original.
+ *
+ * Single-shot and single-flow: it does NOT author nested subflows (that's generate's job).
+ * The result is ALWAYS an unsaved draft — the builder applies it to the canvas for review
+ * and persisting happens only through the normal save path. Everything stays backend-side;
+ * the response carries only the flow + validation, never key material.
+ */
+export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlowResult> {
+  const description = typeof input?.description === 'string' ? input.description.trim() : '';
+  if (!description) {
+    return { success: false, error: 'A change description is required', statusCode: 400 };
+  }
+  if (!input?.modelId || typeof input.modelId !== 'string') {
+    return { success: false, error: 'A generator model id is required', statusCode: 400 };
+  }
+  const flow = input?.flow;
+  if (!flow || typeof flow !== 'object' || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
+    return { success: false, error: 'A valid flow to improve is required', statusCode: 400 };
+  }
+
+  const model = await modelService.getModel(input.modelId);
+  if (!model) {
+    return { success: false, error: `Generator model not found: ${input.modelId}`, statusCode: 404 };
+  }
+  const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  if (!apiKey) {
+    return { success: false, error: 'Could not resolve the generator model API key', statusCode: 500 };
+  }
+
+  const allowInstall = input.allowInstall === true;
+  let context: GenerationContext = await gatherGenerationContext();
+  const adapter = getCompletionAdapter(model);
+  const tools = generatorTools(allowInstall);
+  const state: ToolLoopState = { installedServers: [], contextDirty: false };
+  const maxRepairs = Math.min(
+    typeof input.maxRepairs === 'number' && input.maxRepairs >= 0 ? input.maxRepairs : DEFAULT_MAX_REPAIRS,
+    MAX_REPAIRS_CAP
+  );
+
+  // Serialize the current flow to the DSL the model authors in, keyed by node id so
+  // unchanged nodes keep their canvas positions after recompilation.
+  const currentSpec = flowToSpec(flow);
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (const n of flow.nodes) {
+    if (n?.id && n.position && typeof n.position.x === 'number' && typeof n.position.y === 'number') {
+      positions[n.id] = { x: n.position.x, y: n.position.y };
+    }
+  }
+
+  // The flow's own id is dropped from the compile context each round (see above): keep the
+  // name, forbid self-subflow. Recomputed after any install re-gathers the context.
+  const compileContextFor = (ctx: GenerationContext) => ({
+    models: ctx.compile.models,
+    servers: ctx.compile.servers,
+    serverTools: ctx.compile.serverTools,
+    flows: (ctx.compile.flows ?? []).filter((f) => f.id !== flow.id),
+  });
+
+  const userPrompt = `EXISTING FLOW (modify this — keep unchanged parts intact, and KEEP each node's "key" for any node you do NOT restructure so its canvas position is preserved):\n${JSON.stringify(
+    currentSpec
+  )}\n\nCHANGE REQUEST:\n${description}\n\nRe-emit the COMPLETE flow specification as a single JSON object (only the JSON), including the nodes you did not change.`;
+
+  const messages: OpenAI.ChatCompletionMessageParam[] = [
+    // Subflow authoring is off for improve (single-shot, single-flow).
+    { role: 'system', content: buildSystemPrompt(context.catalog, allowInstall, false, 0) },
+    { role: 'user', content: userPrompt },
+  ];
+
+  let best: { flows: GeneratedFlowEntry[]; rootFlow: Flow; validation: FlowValidationResult } | null = null;
+  let attempts = 0;
+
+  for (let round = 0; round <= maxRepairs; round++) {
+    attempts++;
+    let raw: string;
+    try {
+      raw = await runModelTurn(adapter, model, apiKey, messages, tools, allowInstall, state);
+    } catch (error) {
+      log.error('Improver model call failed', error);
+      if (best) break;
+      return {
+        success: false,
+        error: `The generator model call failed: ${error instanceof Error ? error.message : String(error)}`,
+        statusCode: 502,
+      };
+    }
+
+    // An install (if any) changed what exists — re-gather before compile/validate.
+    if (state.contextDirty) {
+      try {
+        context = await gatherGenerationContext();
+      } catch (err) {
+        log.warn('Re-gathering context after install failed; using the stale catalog', err);
+      }
+      state.contextDirty = false;
+    }
+
+    const spec = extractJsonObject(raw) as FlowSpec | null;
+    if (!spec) {
+      log.warn(`Improve attempt ${attempts}: model output contained no parseable JSON object`);
+      messages.push(
+        { role: 'assistant', content: raw },
+        { role: 'user', content: 'Your reply contained no parseable JSON object. Re-emit the COMPLETE flow specification as a single JSON object and nothing else.' }
+      );
+      continue;
+    }
+
+    const compiled = compileFlowSpec(spec, compileContextFor(context), { maxDepth: 0, maxFlows: 1, positions });
+    if (!compiled.flow) {
+      messages.push(
+        { role: 'assistant', content: raw },
+        { role: 'user', content: `The specification could not be compiled:\n${issueLines(compiled.issues)}\nFix these problems and re-emit the COMPLETE corrected JSON (only the JSON).` }
+      );
+      continue;
+    }
+    // The improved flow IS the flow being edited: keep its id, and keep its name if the
+    // model dropped it (a nameless spec would otherwise sanitize to "generated_flow").
+    compiled.flow.id = flow.id;
+    if (typeof spec.name !== 'string' || !spec.name.trim()) compiled.flow.name = flow.name;
+    // New nodes the model added without explicit modes get the generated-flow defaults;
+    // nodes carried over already have their modes serialized, so they're untouched.
+    applyGenerationDefaults(compiled.flow);
+
+    const flowValidation = validateFlow(compiled.flow, {
+      models: context.compile.models,
+      servers: context.validatorServers,
+      serverTools: context.compile.serverTools,
+    });
+    const validation = mergeIssues(compiled.issues, flowValidation);
+    best = { flows: [{ flow: compiled.flow, validation: flowValidation }], rootFlow: compiled.flow, validation };
+
+    if (validation.errorCount === 0) break;
+
+    log.info(`Improve attempt ${attempts}: flow has ${validation.errorCount} error(s)` + (round < maxRepairs ? '; asking the model to repair' : '; repair budget exhausted'));
+    if (round < maxRepairs) {
+      messages.push(
+        { role: 'assistant', content: raw },
+        { role: 'user', content: `The flow you specified has these problems:\n${issueLines(validation.issues)}\nFix the errors (warnings are advisory) and re-emit the COMPLETE corrected JSON (only the JSON).` }
+      );
+    }
+  }
+
+  if (!best) {
+    return {
+      success: false,
+      error: 'The model did not produce a usable flow specification. Try rephrasing the change request or a different generator model.',
+      statusCode: 422,
+    };
+  }
+
+  log.info(
+    `Improved draft "${best.rootFlow.name}" in ${attempts} attempt(s): ${best.validation.errorCount} error(s), ${best.validation.warningCount} warning(s), ${state.installedServers.length} server(s) installed`
   );
   return {
     success: true,

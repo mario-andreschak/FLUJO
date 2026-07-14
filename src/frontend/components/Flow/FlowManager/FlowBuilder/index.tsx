@@ -53,6 +53,9 @@ import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
+import { Collapse } from '@mui/material';
 
 const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -134,6 +137,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [finishModalOpen, setFinishModalOpen] = useState(false);
   const [subflowModalOpen, setSubflowModalOpen] = useState(false);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
+
+  // AI-Improve (issue #99): the dialog that revises the current flow, plus a transient
+  // notice summarizing the last improvement (validation counts / installed servers).
+  const [improveDialogOpen, setImproveDialogOpen] = useState(false);
+  const [improveNotice, setImproveNotice] = useState<
+    { severity: 'success' | 'info' | 'warning'; message: string } | null
+  >(null);
   
   // History for undo/redo functionality
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -386,6 +396,48 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
   }, [initialFlow, onDelete]);
   
+  // AI-Improve result (issue #99): the model returned a revised flow. Apply it to the
+  // canvas as an UNSAVED, undoable change — replacing nodes/edges triggers the history
+  // snapshot (so Undo reverts the AI change) and the unsaved-changes guard; name/description
+  // are flagged dirty explicitly since the history effect only watches nodes/edges. Nothing
+  // is persisted until the user hits Save.
+  const handleImproved = useCallback((info: ImprovedFlowInfo) => {
+    log.info('Applying AI-improved flow to the canvas', {
+      flowId: info.flow.id,
+      attempts: info.attempts,
+      errors: info.errorCount,
+      warnings: info.warningCount,
+    });
+    setImproveDialogOpen(false);
+    setNodes(info.flow.nodes || []);
+    setEdges(filterInvalidEdges(info.flow.edges || []));
+    setFlowName(info.flow.name);
+    setFlowDescription(info.flow.description || '');
+    setFlowNameError(validateFlowName(info.flow.name));
+    setHasUnsavedChanges(true);
+
+    const freshInstalls = info.installedServers.filter((s) => !s.alreadyExisted);
+    const installNote = freshInstalls.length > 0
+      ? ` Installed MCP server(s): ${freshInstalls.map((s) => s.name).join(', ')}.`
+      : '';
+    if (info.errorCount > 0) {
+      setImproveNotice({
+        severity: 'warning',
+        message: `Flow revised with ${info.errorCount} error(s) and ${info.warningCount} warning(s) — use the Check button, fix, then Save.${installNote}`,
+      });
+    } else if (info.warningCount > 0) {
+      setImproveNotice({
+        severity: 'info',
+        message: `Flow revised with ${info.warningCount} warning(s) — review the changes, then Save to keep them.${installNote}`,
+      });
+    } else {
+      setImproveNotice({
+        severity: 'success',
+        message: `Flow revised — review the changes (Undo reverts them), then Save to keep them.${installNote}`,
+      });
+    }
+  }, [filterInvalidEdges]);
+
   // Handle copy flow
   const handleCopyFlow = useCallback((flowToCopy: Flow, newName: string) => {
     log.debug(`handleCopyFlow: Copying flow "${flowToCopy.name}" to "${newName}"`);
@@ -734,6 +786,15 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               <>
                 <Button
                   variant="outlined"
+                  color="secondary"
+                  onClick={() => setImproveDialogOpen(true)}
+                  startIcon={<AutoFixHighIcon />}
+                  data-tour="improve-flow"
+                >
+                  AI-Improve
+                </Button>
+                <Button
+                  variant="outlined"
                   color="primary"
                   onClick={() => {
                     setDialogType('duplicate');
@@ -771,6 +832,19 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             
             <Box sx={{ flex: 1 }} />
           </ToolbarContainer>
+
+          {/* AI-Improve result notice (issue #99) — dismissible summary of the last revision. */}
+          <Collapse in={!!improveNotice} unmountOnExit>
+            {improveNotice && (
+              <Alert
+                severity={improveNotice.severity}
+                onClose={() => setImproveNotice(null)}
+                sx={{ mb: 1 }}
+              >
+                {improveNotice.message}
+              </Alert>
+            )}
+          </Collapse>
           
           <Box sx={{ flex: 1, position: 'relative' }}>
             <Canvas
@@ -832,6 +906,20 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         onClose={() => setSubflowModalOpen(false)}
         onSave={handleNodeUpdate}
         flowId={initialFlow?.id}
+      />
+
+      {/* AI-Improve dialog (issue #99): revises the CURRENT canvas state (incl. unsaved edits). */}
+      <ImproveFlowDialog
+        open={improveDialogOpen}
+        onClose={() => setImproveDialogOpen(false)}
+        currentFlow={{
+          id: initialFlow?.id || '',
+          name: flowName,
+          description: flowDescription,
+          nodes,
+          edges,
+        }}
+        onImproved={handleImproved}
       />
       
       {/* Dialog for Copy/Rename/Unsaved Changes */}

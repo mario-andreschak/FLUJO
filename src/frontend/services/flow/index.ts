@@ -213,6 +213,74 @@ class FlowService {
   }
 
   /**
+   * Revise an existing flow from a natural-language change request (POST /api/flow/improve).
+   *
+   * Sends the CURRENT flow (nodes/edges/name/description — including unsaved canvas edits)
+   * plus the change description; the model returns a revised flow with the SAME id. Like
+   * generateFlow the result is an UNSAVED draft (NOT cached) — the builder applies it to the
+   * canvas as an undoable change and persisting still happens through updateFlow on Save.
+   */
+  async improveFlow(
+    flow: Flow,
+    description: string,
+    modelId: string,
+    options?: { allowInstall?: boolean }
+  ): Promise<
+    | {
+        success: true;
+        flow: Flow;
+        validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean };
+        attempts: number;
+        installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
+      }
+    | { success: false; error: string }
+  > {
+    log.debug('improveFlow: Entering method', { flowId: flow?.id, modelId, allowInstall: options?.allowInstall });
+    try {
+      const response = await fetch('/api/flow/improve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          flow,
+          description,
+          modelId,
+          allowInstall: options?.allowInstall === true,
+        })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data?.error || 'Failed to improve flow'
+        };
+      }
+
+      log.debug('improveFlow: Draft revised', {
+        flowId: data.flow?.id,
+        attempts: data.attempts,
+        errorCount: data.validation?.errorCount,
+        installedServers: data.installedServers?.length ?? 0
+      });
+      return {
+        success: true,
+        flow: data.flow as Flow,
+        validation: data.validation,
+        attempts: data.attempts,
+        installedServers: data.installedServers ?? []
+      };
+    } catch (error) {
+      log.warn('improveFlow: Failed to improve flow:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to improve flow'
+      };
+    }
+  }
+
+  /**
    * Update an existing flow (PUT /api/flow/{id}). Use addFlow to create a new flow.
    */
   async updateFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {

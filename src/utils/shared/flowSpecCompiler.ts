@@ -141,6 +141,15 @@ export interface CompileOptions {
   maxDepth?: number;
   /** Max total flows in the bundle. Clamped to [1, MAX_GENERATED_FLOWS]. */
   maxFlows?: number;
+  /**
+   * Layout override for the ROOT level (issue #99, AI-Improve): a map from a spec node's
+   * `key` to the canvas position it should keep. Any root node whose key is present is
+   * placed there verbatim instead of being auto-laid-out; nodes without an entry (e.g. new
+   * ones the model added) still get the layered layout, and MCP nodes follow their process
+   * node's final position. This lets an "improve this flow" round-trip keep unchanged nodes
+   * exactly where the user left them. Applied at depth 0 only.
+   */
+  positions?: Record<string, { x: number; y: number }>;
 }
 
 export interface CompileIssue {
@@ -554,7 +563,8 @@ export function compileFlowSpec(
     }
 
     // --- Pass 3: layout ------------------------------------------------------
-    layout(flowNodes, nodesByKey, edges, mcpAttachments);
+    // Positions are honoured only at the root level (they key off root node ids).
+    layout(flowNodes, nodesByKey, edges, mcpAttachments, depth === 0 ? options.positions : undefined);
 
     const flow: Flow = {
       id: flowId,
@@ -641,6 +651,102 @@ export function compileFlowSpec(
 }
 
 /**
+ * Reverse of {@link compileFlowSpec} (issue #99, AI-Improve): serialize an existing Flow
+ * back into a semantic {@link FlowSpec} so it can be shown to the flow-generation model for
+ * an "improve this flow" pass.
+ *
+ * Each spec node's `key` is the ORIGINAL FlowNode id, so the improve caller can (a) tell the
+ * model to preserve keys for nodes it does not restructure and (b) hand compileFlowSpec a
+ * `positions` map keyed by those same keys, keeping unchanged nodes exactly where they were
+ * on the canvas. MCP nodes are folded back into their process node's `servers` list (never
+ * emitted as spec nodes — mirroring compileFlowSpec's rule 3), and MCP edges are
+ * reconstructed from `servers`, not serialized.
+ *
+ * Round-trip goal: `compileFlowSpec(flowToSpec(flow))` reproduces `flow` modulo cosmetic
+ * defaults (fresh uuids; auto-layout when no positions are supplied). Pinned by
+ * __tests__/flow/flowToSpec.test.ts.
+ */
+export function flowToSpec(flow: Flow): FlowSpec {
+  const nodes: FlowNode[] = Array.isArray(flow?.nodes) ? flow.nodes : [];
+  const edges: Edge[] = Array.isArray(flow?.edges) ? flow.edges : [];
+
+  // Index MCP nodes so each process node can pull back its bound server + enabled tools.
+  const mcpById = new Map<string, FlowNode>();
+  for (const n of nodes) if (n.type === 'mcp') mcpById.set(n.id, n);
+
+  // process node id → server refs, reconstructed from the MCP edges leaving it.
+  const serversByProcess = new Map<string, FlowSpecServerRef[]>();
+  for (const e of edges) {
+    if ((e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp') continue;
+    const mcp = mcpById.get(e.target);
+    if (!mcp) continue;
+    const props = (mcp.data?.properties ?? {}) as Record<string, unknown>;
+    const name =
+      typeof props.boundServer === 'string' && props.boundServer ? props.boundServer : mcp.data?.label;
+    if (!name || typeof name !== 'string') continue;
+    const tools = Array.isArray(props.enabledTools)
+      ? (props.enabledTools.filter((t): t is string => typeof t === 'string' && !!t))
+      : undefined;
+    const list = serversByProcess.get(e.source) ?? [];
+    list.push({ name, ...(tools ? { tools } : {}) });
+    serversByProcess.set(e.source, list);
+  }
+
+  const specNodes: FlowSpecNode[] = [];
+  for (const node of nodes) {
+    if (node.type === 'mcp') continue; // folded into `servers`
+    const type = node.type;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow') continue;
+    const props = (node.data?.properties ?? {}) as Record<string, any>;
+    const specNode: FlowSpecNode = {
+      key: node.id,
+      type,
+      ...(node.data?.label ? { label: node.data.label } : {}),
+      ...(node.data?.description ? { description: node.data.description } : {}),
+    };
+    if (type === 'start') {
+      if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
+    } else if (type === 'process') {
+      if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
+      if (typeof props.boundModel === 'string' && props.boundModel) specNode.model = props.boundModel;
+      if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
+      if (typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) specNode.isolatedPrompt = props.isolatedPrompt;
+      if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
+      const servers = serversByProcess.get(node.id);
+      if (servers && servers.length > 0) specNode.servers = servers;
+    } else if (type === 'subflow') {
+      if (typeof props.subflowId === 'string' && props.subflowId) specNode.flow = props.subflowId;
+      if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
+      if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
+      if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
+    }
+    // finish: no properties to carry.
+    specNodes.push(specNode);
+  }
+
+  // Control edges only — MCP edges are rebuilt from `servers`. Guard against edges that
+  // reference an MCP node on a control handle (shouldn't happen, but keeps the spec clean).
+  const specEdges: FlowSpecEdge[] = [];
+  for (const e of edges) {
+    if ((e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp') continue;
+    if (!e.source || !e.target) continue;
+    if (mcpById.has(e.source) || mcpById.has(e.target)) continue;
+    specEdges.push({
+      from: e.source,
+      to: e.target,
+      ...((e.data as { bidirectional?: boolean } | undefined)?.bidirectional ? { bidirectional: true } : {}),
+    });
+  }
+
+  return {
+    ...(flow?.name ? { name: flow.name } : {}),
+    ...(flow?.description ? { description: flow.description } : {}),
+    nodes: specNodes,
+    edges: specEdges,
+  };
+}
+
+/**
  * Context-saving defaults for GENERATED flows (not part of compileFlowSpec: the
  * compile API and MCP authoring tools keep the runtime defaults — full-history /
  * full-conversation — so hand-authored specs behave exactly as documented).
@@ -661,12 +767,15 @@ export function applyGenerationDefaults(flow: Flow): void {
   }
 }
 
-/** Layered top-down layout: BFS depth over flow-control edges; MCP nodes beside their process. */
+/** Layered top-down layout: BFS depth over flow-control edges; MCP nodes beside their process.
+ *  When `positions` is supplied (root improve), a node whose spec key has a pinned position
+ *  keeps it verbatim; the rest are laid out and MCP nodes follow their process node. */
 function layout(
   flowNodes: FlowNode[],
   nodesByKey: Map<string, FlowNode>,
   edges: Edge[],
-  mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }>
+  mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }>,
+  positions?: Record<string, { x: number; y: number }>
 ): void {
   const controlAdj = new Map<string, string[]>();
   for (const e of edges) {
@@ -697,8 +806,18 @@ function layout(
     if (!depths.has(n.id)) depths.set(n.id, maxDepth + 1);
   }
 
+  // Reverse lookup so a pinned position (keyed by spec key) can find its compiled node.
+  const keyByNodeId = new Map<string, string>();
+  for (const [key, node] of nodesByKey) keyByNodeId.set(node.id, key);
+
   const columnCounters = new Map<number, number>();
   for (const n of specNodes) {
+    const key = keyByNodeId.get(n.id);
+    const pinned = positions && key ? positions[key] : undefined;
+    if (pinned && typeof pinned.x === 'number' && typeof pinned.y === 'number') {
+      n.position = { x: pinned.x, y: pinned.y };
+      continue;
+    }
     const depth = depths.get(n.id)!;
     const col = columnCounters.get(depth) ?? 0;
     columnCounters.set(depth, col + 1);
