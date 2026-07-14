@@ -191,11 +191,34 @@ else
   fi
 fi
 
+# Fresh Mint/Ubuntu ISO installs keep the installation CD-ROM as an enabled apt
+# source. Once the medium is gone (e.g. a VM after first boot) `apt-get update`
+# fails on that entry and, under `set -e`, would abort the whole installer.
+# Comment those lines out (non-destructively) before the first update. This also
+# protects the NodeSource bootstrap, which runs its own `apt-get update`.
+disable_cdrom_apt_source() {
+  [ "$PM" = apt ] || return 0
+  local f changed=false
+  for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [ -f "$f" ] || continue
+    if grep -Eq '^[[:space:]]*deb[^#]*cdrom:' "$f"; then
+      $SUDO sed -i -E 's|^([[:space:]]*deb[^#]*cdrom:)|# disabled-by-FLUJO-installer \1|' "$f"
+      changed=true
+    fi
+  done
+  [ "$changed" = true ] && warn "Disabled a CD-ROM apt source that would break 'apt-get update'."
+  return 0
+}
+
 APT_UPDATED=false
 pm_install() {
   case "$PM" in
     apt)
-      if [ "$APT_UPDATED" = false ]; then $SUDO apt-get update; APT_UPDATED=true; fi
+      if [ "$APT_UPDATED" = false ]; then
+        disable_cdrom_apt_source
+        $SUDO apt-get update || warn "'apt-get update' reported errors (continuing; a broken source may be present)."
+        APT_UPDATED=true
+      fi
       $SUDO apt-get install -y "$@" ;;
     dnf)    $SUDO dnf install -y "$@" ;;
     yum)    $SUDO yum install -y "$@" ;;
@@ -226,8 +249,13 @@ else
   step "Installing Node.js (includes npm)"
   case "$PM" in
     apt)
-      curl -fsSL https://deb.nodesource.com/setup_22.x | ${SUDO:+$SUDO -E} bash -
-      $SUDO apt-get install -y nodejs
+      disable_cdrom_apt_source
+      if curl -fsSL https://deb.nodesource.com/setup_22.x | ${SUDO:+$SUDO -E} bash -; then
+        $SUDO apt-get install -y nodejs
+      else
+        warn "NodeSource setup failed; falling back to the distro nodejs package."
+        $SUDO apt-get install -y nodejs npm || true
+      fi
       ;;
     dnf|yum)
       curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash -
