@@ -3,8 +3,36 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
+import { Flow } from '@/shared/types/flow';
 
 const log = createLogger('backend/execution/flow/validateFlowForRun');
+
+/**
+ * Pre-flight consistency check for an in-memory flow definition (a Quick-Chat
+ * snapshot, issue #61, which never enters the flows store). Same model/server
+ * context and validator as {@link validateFlowForRun}, just against the object
+ * the caller already holds instead of a store lookup by id.
+ */
+export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidationResult> {
+  let models: Array<{ id: string; name?: string; displayName?: string }> | undefined;
+  try {
+    models = await modelService.loadModels();
+  } catch (error) {
+    log.warn('validateFlowObjectForRun: could not load models; skipping model checks', error);
+  }
+
+  let servers: Array<{ name: string; status?: string }> | undefined;
+  try {
+    const configs = await mcpService.loadServerConfigs();
+    if (Array.isArray(configs)) {
+      servers = configs.map((s) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
+    }
+  } catch (error) {
+    log.warn('validateFlowObjectForRun: could not load servers; skipping server checks', error);
+  }
+
+  return validateFlow(flow as any, { models, servers });
+}
 
 /**
  * Pre-flight consistency check for a flow about to run.
@@ -31,22 +59,5 @@ export async function validateFlowForRun(flowId: string): Promise<FlowValidation
     return { issues: [], errorCount: 0, warningCount: 0, isRunnable: true };
   }
 
-  let models: Array<{ id: string; name?: string; displayName?: string }> | undefined;
-  try {
-    models = await modelService.loadModels();
-  } catch (error) {
-    log.warn('validateFlowForRun: could not load models; skipping model checks', error);
-  }
-
-  let servers: Array<{ name: string; status?: string }> | undefined;
-  try {
-    const configs = await mcpService.loadServerConfigs();
-    if (Array.isArray(configs)) {
-      servers = configs.map((s) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
-    }
-  } catch (error) {
-    log.warn('validateFlowForRun: could not load servers; skipping server checks', error);
-  }
-
-  return validateFlow(flow as any, { models, servers });
+  return validateFlowObjectForRun(flow as Flow);
 }

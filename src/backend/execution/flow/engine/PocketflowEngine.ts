@@ -25,18 +25,33 @@ export class PocketflowEngine implements FlowEngine {
     }
   }
 
-  private async loadAndConvertFlow(flowId: string): Promise<PocketFlow> {
+  /**
+   * Resolve the compiled flow for a run. Quick-Chats (issue #61) carry a
+   * `flowSnapshot` on the state: when present it is converted directly,
+   * bypassing the flows store; otherwise we fall back to the store lookup by
+   * `flowId` (the unchanged path for every saved flow). The compiled-flow cache
+   * is keyed by flowId either way — a snapshot's `quickchat-<convId>` id can
+   * never collide with a stored flow id, and the snapshot is immutable for the
+   * life of the conversation so its cache entry is always safe.
+   */
+  private async resolveFlowDefinition(sharedState: SharedState): Promise<PocketFlow> {
+    const flowId = sharedState.flowId;
     if (this.pocketFlowCache.has(flowId)) {
       log.debug(`Using cached Pocket Flow for flowId: ${flowId}`);
       // Return a clone to prevent modification of the cached instance
       return this.pocketFlowCache.get(flowId)!.clone() as PocketFlow;
     }
 
-    log.verbose(`Loading and converting flow for flowId: ${flowId}`);
-    const reactFlow = await flowService.getFlow(flowId);
-    if (!reactFlow) {
-      log.error(`Flow not found for flowId: ${flowId}`);
-      throw new Error(`Flow not found: ${flowId}`);
+    let reactFlow = sharedState.flowSnapshot;
+    if (reactFlow) {
+      log.verbose(`Resolving flow ${flowId} from an in-memory quick-chat snapshot.`);
+    } else {
+      log.verbose(`Loading and converting flow for flowId: ${flowId}`);
+      reactFlow = (await flowService.getFlow(flowId)) ?? undefined;
+      if (!reactFlow) {
+        log.error(`Flow not found for flowId: ${flowId}`);
+        throw new Error(`Flow not found: ${flowId}`);
+      }
     }
 
     log.info(`Found flow: ${reactFlow.name}`, {
@@ -89,8 +104,8 @@ export class PocketflowEngine implements FlowEngine {
   }
 
   async resolveNode(sharedState: SharedState): Promise<ResolvedNode> {
-    const { conversationId, flowId, currentNodeId } = sharedState;
-    const pocketFlow = await this.loadAndConvertFlow(flowId);
+    const { conversationId, currentNodeId } = sharedState;
+    const pocketFlow = await this.resolveFlowDefinition(sharedState);
 
     let currentNode: BaseNode | undefined;
 
@@ -141,12 +156,12 @@ export class PocketflowEngine implements FlowEngine {
   }
 
   async resolveHandoff(sharedState: SharedState, action: string): Promise<HandoffResolution> {
-    const { flowId, currentNodeId } = sharedState;
+    const { currentNodeId } = sharedState;
     if (!currentNodeId || !action) {
       return { isSuccessorEdge: false, targetNodeId: null };
     }
 
-    const pocketFlow = await this.loadAndConvertFlow(flowId);
+    const pocketFlow = await this.resolveFlowDefinition(sharedState);
     const currentNode = await this.findNodeById(pocketFlow, currentNodeId);
 
     if (!currentNode || !currentNode.successors.has(action)) {

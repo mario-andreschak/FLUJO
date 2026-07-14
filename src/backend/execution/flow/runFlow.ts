@@ -22,7 +22,7 @@ import { Flow } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
-import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
+import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 
 const log = createLogger('backend/execution/flow/runFlow');
@@ -57,6 +57,13 @@ export interface FlowRunInput {
    *  conversation (mirrors the legacy completions path). Ignored when resuming
    *  an existing conversation (the flowId comes from loaded state). */
   modelName?: string;
+  /** Quick-Chats (issue #61): a self-contained, in-memory flow definition to
+   *  run WITHOUT persisting it to the flows store. Mutually exclusive with
+   *  `flowId`/`modelName`. For a NEW conversation it is snapshotted onto the
+   *  state (`flowSnapshot`) so the engine resolves it from there and follow-up
+   *  turns/restarts work by construction. Ignored when resuming (the snapshot
+   *  is already on the loaded state). */
+  flowDefinition?: Flow;
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
   messages?: any[];
@@ -284,8 +291,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- Configure State Based on Source ---
   if (stateSource === 'new') {
+    // Quick-Chats (issue #61): an in-memory flow definition is snapshotted onto
+    // the state and resolved from there by the engine — it never touches the
+    // flows store. Takes precedence over flowId/modelName resolution.
+    if (input.flowDefinition) {
+      sharedState.flowSnapshot = input.flowDefinition;
+      sharedState.flowId = input.flowDefinition.id;
+    }
     // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
-    let resolvedFlowId = input.flowId;
+    let resolvedFlowId = input.flowDefinition ? input.flowDefinition.id : input.flowId;
     if (!resolvedFlowId && data.model) {
       const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
       const reactFlow = await flowServiceWithGetByName.getFlowByName(flowName);
@@ -495,7 +509,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // error path below formats the result (and emits run:done).
   if ((userTurn || stateSource === 'new') && sharedState.flowId) {
     try {
-      const validation = await validateFlowForRun(sharedState.flowId);
+      // Quick-Chat snapshots aren't in the store, so validate the in-memory
+      // object; everything else validates by id (unchanged path).
+      const validation = sharedState.flowSnapshot
+        ? await validateFlowObjectForRun(sharedState.flowSnapshot)
+        : await validateFlowForRun(sharedState.flowId);
       if (!validation.isRunnable) {
         const errs = validation.issues.filter(i => i.severity === 'error');
         const message =

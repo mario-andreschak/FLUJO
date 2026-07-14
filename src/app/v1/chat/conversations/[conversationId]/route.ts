@@ -17,6 +17,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { ConversationListItem } from '@/frontend/components/Chat'; // Import for response type
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
+import { quickChatFlowId } from '@/utils/shared/quickChat';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -349,6 +350,12 @@ export async function DELETE(
       FlowExecutor.conversationStates.delete(conversationId);
       log.debug(`Removed conversation state from memory`, { requestId, conversationId });
     }
+
+    // A Quick-Chat (issue #61) carried its flow as an in-memory snapshot compiled
+    // under the namespaced id quickchat-<conversationId>; evict that cache entry
+    // so snapshots don't accumulate. Targeted by id, so it can never evict a
+    // real (shared) flow's compiled cache.
+    FlowExecutor.clearFlowCache(quickChatFlowId(conversationId));
 
     // Remove the append-only conversation log alongside the state (idempotent).
     await deleteConversationLog(conversationId);
