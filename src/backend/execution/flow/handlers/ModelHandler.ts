@@ -18,6 +18,7 @@ import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
+import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
@@ -28,6 +29,34 @@ const log = createLogger('backend/flow/execution/handlers/ModelHandler'
 );
 
 export class ModelHandler {
+  /**
+   * MCP Apps (#97): resolve a tool result's linked `ui://` UI resource, honoring
+   * the per-server opt-in. Returns the `{ uri, serverName }` link only when the
+   * result carries a SEP-1865 `_meta.ui.resourceUri` AND the server has
+   * `enableMcpApps` turned on. The opt-in is enforced here (server-side) so an
+   * un-opted server's HTML is never even referenced to the browser. The config
+   * lookup only runs when a UI link is actually present (rare), so it adds no
+   * per-call cost to ordinary tools.
+   */
+  private static async resolveToolUiLink(
+    serverName: string,
+    resultData: unknown
+  ): Promise<{ uri: string; serverName: string } | undefined> {
+    const meta = (resultData as { _meta?: unknown } | null | undefined)?._meta;
+    const uri = extractUiResourceUri(meta);
+    if (!uri) return undefined;
+    try {
+      const configs = await mcpService.loadServerConfigs();
+      if (!Array.isArray(configs)) return undefined;
+      const config = configs.find((c) => c.name === serverName);
+      if (!config?.enableMcpApps) return undefined;
+      return { uri, serverName };
+    } catch (error) {
+      log.warn(`resolveToolUiLink: failed to check MCP Apps opt-in for ${serverName}`, error);
+      return undefined;
+    }
+  }
+
   /**
    * Normalize a provider error body into a detailed, human-readable message
    * plus structured detail fields.
@@ -754,13 +783,21 @@ export class ModelHandler {
             isError: !result.success
           });
 
+          // MCP Apps (#97): if the server linked this tool to a `ui://` UI
+          // resource (SEP-1865 `_meta.ui.resourceUri`) AND has the per-server
+          // opt-in enabled, attach the link so chat can render it sandboxed.
+          const uiLink = result.success
+            ? await ModelHandler.resolveToolUiLink(serverName, result.data)
+            : undefined;
+
             // Add tool result message with timestamp and ID
             toolCallMessages.push({
               id: uuidv4(), // Generate unique ID
               role: "tool",
               tool_call_id: id,
               content: resultContent,
-              timestamp: Date.now() // Add timestamp
+              timestamp: Date.now(), // Add timestamp
+              ...(uiLink ? { ui: uiLink } : {})
             });
 
           // Add to processed tool calls

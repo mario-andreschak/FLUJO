@@ -61,6 +61,20 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
    */
   depth?: number;
 
+  /**
+   * MCP Apps (SEP-1865, #97): a `role: 'tool'` result may carry a link to an
+   * interactive `ui://` UI resource the originating server wants rendered for
+   * this tool call. Present only when the server has MCP Apps opt-in enabled
+   * (`enableMcpApps`); the chat renders it as a read-only, sandboxed iframe
+   * (Phase 1 — no iframe→host bridge). Display-only: never part of model context.
+   */
+  ui?: {
+    /** The `ui://…` resource URI to read and render. */
+    uri: string;
+    /** Server that owns the resource, used to read it back for rendering. */
+    serverName: string;
+  };
+
   /** Token usage reported by the provider for the call that produced this message (assistant messages only). */
   usage?: {
     promptTokens: number;

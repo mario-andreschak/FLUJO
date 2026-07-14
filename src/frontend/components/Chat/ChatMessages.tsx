@@ -45,6 +45,7 @@ import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
 import { type ToolCallPair, groupToolCallsByAnchor } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
+import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
@@ -413,6 +414,13 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
                 >
                   <CircularProgress size={14} thickness={6} /> Waiting for the tool to respond…
                 </Typography>
+              )}
+
+              {/* #97: an MCP App (ui:// resource) linked to this tool result,
+                  rendered read-only in a sandboxed iframe. Present only when the
+                  server has the MCP Apps opt-in enabled (gated server-side). */}
+              {pair.result?.ui?.uri && pair.result.ui.serverName && (
+                <McpAppFrame serverName={pair.result.ui.serverName} uri={pair.result.ui.uri} />
               )}
             </Box>
           </Collapse>

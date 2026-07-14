@@ -15,6 +15,7 @@ import LockIcon from '@mui/icons-material/Lock';
 import LoginIcon from '@mui/icons-material/Login';
 import KeyOffIcon from '@mui/icons-material/KeyOff';
 import PublicIcon from '@mui/icons-material/Public';
+import WidgetsIcon from '@mui/icons-material/Widgets';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
@@ -72,6 +73,7 @@ interface ServerCardProps {
   selectionMode?: boolean; // Whether selection mode is active
   hasOAuthTokens?: boolean; // Whether the server has OAuth tokens that can be reset
   exposeAsMcpServer?: boolean; // Whether this server is re-exposed at /mcp-proxy/<name> (#17A)
+  enableMcpApps?: boolean; // Whether this server may render interactive ui:// UI resources in chat (#97)
   updateInfo?: ServerUpdateInfo; // Git update status for locally cloned servers
   installCommand?: string; // Stored install command, re-run after a git update
   buildCommand?: string; // Stored build command, re-run after a git update
@@ -103,6 +105,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   selectionMode = false,
   hasOAuthTokens = false,
   exposeAsMcpServer = false,
+  enableMcpApps = false,
   updateInfo,
   installCommand,
   buildCommand,
@@ -122,12 +125,18 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [isResettingTokens, setIsResettingTokens] = useState(false);
   // Local optimistic state for the "expose as MCP server" toggle (#17A).
   const [exposed, setExposed] = useState(exposeAsMcpServer);
+  // Local optimistic state for the "MCP Apps" opt-in toggle (#97).
+  const [appsEnabled, setAppsEnabled] = useState(enableMcpApps);
   const muiTheme = useTheme();
 
   // Keep the toggle in sync if the parent reloads configs.
   useEffect(() => {
     setExposed(exposeAsMcpServer);
   }, [exposeAsMcpServer]);
+
+  useEffect(() => {
+    setAppsEnabled(enableMcpApps);
+  }, [enableMcpApps]);
 
   // The URL external MCP clients paste in. Only meaningful in the browser.
   const proxyUrl =
@@ -144,6 +153,24 @@ const ServerCard: React.FC<ServerCardProps> = ({
     } else {
       setExposed(!checked); // revert
       setToastMessage('Failed to update exposure setting.');
+      setToastSeverity('error');
+    }
+    setShowToast(true);
+  };
+
+  const handleToggleApps = async (checked: boolean) => {
+    setAppsEnabled(checked); // optimistic
+    const result = await mcpService.updateServerConfig(name, { enableMcpApps: checked });
+    if ('success' in result && result.success) {
+      setToastMessage(
+        checked
+          ? 'This server may now render interactive apps in chat (sandboxed).'
+          : 'Interactive apps disabled for this server.',
+      );
+      setToastSeverity('success');
+    } else {
+      setAppsEnabled(!checked); // revert
+      setToastMessage('Failed to update the MCP Apps setting.');
       setToastSeverity('error');
     }
     setShowToast(true);
@@ -431,6 +458,29 @@ const ServerCard: React.FC<ServerCardProps> = ({
               </Tooltip>
             </Box>
           )}
+        </Box>
+        )}
+
+        {/* MCP Apps opt-in (#97): let this server render interactive ui:// UI
+            resources in chat, read-only and sandboxed. Off by default. */}
+        {!builtIn && !pickerMode && (
+        <Box
+          sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <WidgetsIcon fontSize="small" sx={{ mr: 0.5, color: appsEnabled ? 'primary.main' : 'text.disabled' }} />
+            <Switch
+              checked={appsEnabled}
+              onChange={(e) => handleToggleApps(e.target.checked)}
+              size="small"
+            />
+            <Tooltip title="Allow this server's tools to render interactive apps (MCP Apps / ui:// resources) in chat. Rendered read-only in a strict sandbox. Only enable for servers you trust.">
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                Render interactive apps
+              </Typography>
+            </Tooltip>
+          </Box>
         </Box>
         )}
 
