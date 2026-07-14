@@ -44,6 +44,15 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
 
   const byNode = usage?.byNode ? Object.entries(usage.byNode) : [];
 
+  // Cache RE-READ tokens are a subset of promptTokens that was re-read cheaply
+  // from the provider prompt cache. Counting them as fresh input made warmed
+  // conversations report absurd totals (#87), so the headline shows the FRESH
+  // figure (total minus cached reads) and the cached amount is called out
+  // separately in the tooltip/breakdown.
+  const cachedReads = usage?.cacheReadTokens ?? 0;
+  const freshPrompt = usage ? Math.max(0, usage.promptTokens - cachedReads) : 0;
+  const freshTotal = usage ? Math.max(0, usage.totalTokens - cachedReads) : 0;
+
   // Context meter: provider-reported prompt tokens of the latest call vs the
   // bound model's configured window. Rendered only when both are known.
   const contextPct =
@@ -53,12 +62,12 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
-      {usage && usage.totalTokens > 0 && (
+      {usage && freshTotal > 0 && (
         <>
-          <Tooltip title={`Total tokens this conversation — ${usage.promptTokens.toLocaleString()} prompt / ${usage.completionTokens.toLocaleString()} completion. Click for the per-node breakdown.`}>
+          <Tooltip title={`Tokens this conversation — ${freshPrompt.toLocaleString()} prompt / ${usage.completionTokens.toLocaleString()} completion${cachedReads > 0 ? ` (+${cachedReads.toLocaleString()} cached reads, not counted)` : ''}. Click for the per-node breakdown.`}>
             <Chip
               icon={<DataUsageIcon />}
-              label={`${formatTokens(usage.totalTokens)} tokens`}
+              label={`${formatTokens(freshTotal)} tokens`}
               size="small"
               variant="outlined"
               onClick={(e) => setAnchorEl(e.currentTarget)}
@@ -106,6 +115,13 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
                   </TableRow>
                 </TableBody>
               </Table>
+              {cachedReads > 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  Prompt totals include {cachedReads.toLocaleString()} tokens re-read from the
+                  prompt cache. The header chip shows the fresh figure
+                  ({freshTotal.toLocaleString()}) with those cached reads excluded.
+                </Typography>
+              )}
             </Box>
           </Popover>
         </>

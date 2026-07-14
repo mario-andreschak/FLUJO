@@ -437,11 +437,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     totals.promptTokens += msg.usage.promptTokens;
     totals.completionTokens += msg.usage.completionTokens;
     totals.totalTokens += msg.usage.totalTokens;
+    // Cache RE-READ tokens are a subset of promptTokens; track them separately so
+    // the UI can show the honest "fresh (+cached)" split (#87). Guard with ?? 0
+    // so state persisted before #87 (no cacheReadTokens) doesn't produce NaN.
+    const msgCacheRead = msg.usage.cacheReadTokens ?? 0;
+    if (msgCacheRead) totals.cacheReadTokens = (totals.cacheReadTokens ?? 0) + msgCacheRead;
     const nodeKey = msg.processNodeId || 'unknown';
     const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
     node.promptTokens += msg.usage.promptTokens;
     node.completionTokens += msg.usage.completionTokens;
     node.totalTokens += msg.usage.totalTokens;
+    if (msgCacheRead) node.cacheReadTokens = (node.cacheReadTokens ?? 0) + msgCacheRead;
     totals.byNode[nodeKey] = node;
     sharedState.usage = totals;
     emit({
@@ -451,6 +457,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       completionTokens: msg.usage.completionTokens,
       totalTokens: msg.usage.totalTokens,
       costUsd: 0,
+      ...(msgCacheRead ? { cacheReadTokens: msgCacheRead } : {}),
     });
   };
 

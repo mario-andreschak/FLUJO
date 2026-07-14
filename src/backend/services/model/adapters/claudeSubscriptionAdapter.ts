@@ -12,6 +12,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
+import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
@@ -70,6 +71,20 @@ function isHandoffName(name: string): boolean {
  * When there are no images the content is a plain string — byte-for-byte the
  * prompt the old flat-string path produced — so non-image runs are unchanged;
  * only the delivery channel (streaming input) differs.
+ *
+ * KNOWN LIMITATION (#87) — quadratic re-send: every node call spawns a fresh
+ * `query()` (a new `claude` subprocess, no `resume`/`session_id`) and re-sends
+ * the ENTIRE prior conversation flattened here. Only `systemPrompt` + tool defs
+ * form a cacheable prefix; the conversation body is re-tokenized each turn, so
+ * cumulative input grows ~O(n^2) with conversation length. The reporting side of
+ * this was fixed by surfacing cache RE-READ tokens separately (see claudeUsage
+ * .ts) so warmed-cache reads stop inflating the headline. The efficiency side
+ * — reusing the SDK session per conversation via `resume` + a persisted
+ * `session_id` and sending only the per-turn delta — is a larger, separate
+ * change (needs per-(conversation,node) session keying because each node has
+ * its own systemPrompt/tool set, plus reconciliation with client-side history
+ * pruning and handoff "clean conversation" semantics) and is deliberately left
+ * as a follow-up; this flatten path remains the documented fallback.
  */
 export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]): {
   systemPrompt?: string;
@@ -366,19 +381,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // usage, but a handoff ABORTS the loop before that message arrives — so we
     // also track per-turn usage from each assistant message as a fallback
     // (otherwise every run that ends by routing to another node reports 0
-    // tokens). Prompt tokens include the cache read/creation tokens: they ARE
-    // context the model consumed, and without them a warmed-cache turn reports
-    // an absurd input_tokens of ~2.
-    interface SdkUsage {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    }
-    const promptTokensOf = (u: SdkUsage | undefined) =>
-      (u?.input_tokens ?? 0) +
-      (u?.cache_creation_input_tokens ?? 0) +
-      (u?.cache_read_input_tokens ?? 0);
+    // tokens). The fresh/cached split is computed by mapSdkUsage (see
+    // claudeUsage.ts and issue #87): promptTokens is the full input context,
+    // but the cheap cache RE-READ tokens are also surfaced separately so the UI
+    // doesn't count them as fresh on every turn.
     let usage: SdkUsage | undefined;
     let lastTurnUsage: SdkUsage | undefined;
     let totalOutputTokens = 0;
@@ -424,9 +430,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     const finalText = resultText || accumulatedText;
     // Prefer the result message's totals; on handoff-aborted runs fall back to
-    // the last turn's context size + the summed output of all turns.
-    const promptTokens = usage ? promptTokensOf(usage) : promptTokensOf(lastTurnUsage);
-    const completionTokens = usage?.output_tokens ?? totalOutputTokens;
+    // the last turn's context size + the summed output of all turns. cacheRead
+    // is the prefix re-read cheaply from the prompt cache — kept out of the
+    // "fresh" headline so a warmed-cache conversation stops reporting millions.
+    const { promptTokens, completionTokens, cacheReadTokens } = mapSdkUsage(usage, {
+      lastTurnUsage,
+      totalOutputTokens,
+    });
 
     // The per-tool assistant(tool_call)+tool(result) pairs were already recorded
     // and streamed live as they happened (see recordToolPair). Here we only add
@@ -470,6 +480,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
         total_tokens: promptTokens + completionTokens,
+        // Surface the cheap cache RE-READ subset via OpenAI's own usage detail
+        // field so downstream (ModelHandler → usage totals → UI) can present a
+        // "fresh (+cached)" split instead of one inflated number (#87).
+        ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
       },
     };
 

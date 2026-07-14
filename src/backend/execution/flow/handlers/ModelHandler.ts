@@ -262,11 +262,17 @@ export class ModelHandler {
     // Extract provider-reported token usage, if present, so the UI can show
     // per-message and aggregated token/cost figures.
     const rawUsage = modelResponse.fullResponse?.usage;
+    // Cache RE-READ tokens (Anthropic cache_read / OpenAI cached_tokens) live in
+    // the provider's `prompt_tokens_details`. They ARE part of prompt_tokens; we
+    // carry the subset separately so the UI can subtract them from the headline
+    // instead of counting a warmed cache as fresh input every turn (#87).
+    const cachedTokens = rawUsage?.prompt_tokens_details?.cached_tokens;
     const usage = rawUsage
       ? {
           promptTokens: rawUsage.prompt_tokens ?? 0,
           completionTokens: rawUsage.completion_tokens ?? 0,
           totalTokens: rawUsage.total_tokens ?? 0,
+          ...(cachedTokens != null ? { cacheReadTokens: cachedTokens } : {}),
         }
       : undefined;
 

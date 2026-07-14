@@ -137,6 +137,8 @@ export interface UsageEvent extends ExecutionEventBase {
   completionTokens: number;
   totalTokens: number;
   costUsd?: number;
+  /** Subset of promptTokens re-read cheaply from the provider prompt cache (#87). */
+  cacheReadTokens?: number;
 }
 /** A new message was appended to the conversation (assistant, tool result, etc.). */
 export interface MessageEvent extends ExecutionEventBase {
@@ -218,5 +220,11 @@ export interface UsageTotals {
   completionTokens: number;
   totalTokens: number;
   costUsd: number;
-  byNode: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd: number }>;
+  /**
+   * Sum of the cache RE-READ tokens across the conversation (subset of
+   * promptTokens). Optional: absent on state persisted before #87. Lets the UI
+   * show the honest "fresh (+cached)" split.
+   */
+  cacheReadTokens?: number;
+  byNode: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd: number; cacheReadTokens?: number }>;
 }

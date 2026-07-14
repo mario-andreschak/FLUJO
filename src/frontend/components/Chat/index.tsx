@@ -93,7 +93,9 @@ export interface Conversation {
     completionTokens: number;
     totalTokens: number;
     costUsd?: number;
-    byNode?: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd?: number }>;
+    /** Cache RE-READ tokens (subset of promptTokens) — shown as "cached", not fresh (#87). */
+    cacheReadTokens?: number;
+    byNode?: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd?: number; cacheReadTokens?: number }>;
   };
   /** Context snapshot of the latest model call (provider-reported prompt size
    *  + the bound model's configured context window, when available). */

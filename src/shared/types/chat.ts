@@ -66,5 +66,12 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /**
+     * Subset of `promptTokens` that was cheaply RE-READ from the provider's
+     * prompt cache (Anthropic cache_read / OpenAI cached_tokens). Surfaced so
+     * the UI can present a "fresh (+cached)" split instead of counting warmed
+     * cache reads as fresh input on every turn (#87). Absent when unknown.
+     */
+    cacheReadTokens?: number;
   };
 };
