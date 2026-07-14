@@ -64,6 +64,14 @@ export interface RegistryRepository {
   subfolder?: string;
 }
 
+export interface RegistryIcon {
+  src: string;
+  sizes?: string;
+  mimeType?: string;
+  /** 'light' | 'dark' — which UI theme the icon is intended for. */
+  theme?: string;
+}
+
 export interface RegistryServer {
   name: string;
   title?: string;
@@ -73,6 +81,8 @@ export interface RegistryServer {
   repository?: RegistryRepository;
   packages?: RegistryPackage[];
   remotes?: RegistryRemote[];
+  /** Optional server-provided icons (server.json `icons`); may be absent. */
+  icons?: RegistryIcon[];
 }
 
 export interface RegistryServerResult {
@@ -197,6 +207,32 @@ function qualifiedSlug(registryName: string): string {
 export function displayName(server: RegistryServer): string {
   if (server.title) return server.title;
   return qualifiedSlug(server.name);
+}
+
+/**
+ * Best icon URL for a registry server, or null when none is usable. Prefers an
+ * icon matching the given theme, falls back to any icon. Only http(s) sources
+ * are returned (a registry entry is untrusted data — never render data: URIs or
+ * other schemes as an <img> src). Returns null if the registry provides no
+ * icons, in which case the UI falls back to the lettered avatar.
+ */
+export function serverIconUrl(
+  server: RegistryServer,
+  theme?: 'light' | 'dark'
+): string | null {
+  const icons = server.icons;
+  if (!icons || icons.length === 0) return null;
+  const usable = icons.filter(icon => {
+    if (!icon?.src) return false;
+    try {
+      return /^https?:$/.test(new URL(icon.src).protocol);
+    } catch {
+      return false;
+    }
+  });
+  if (usable.length === 0) return null;
+  const themed = theme ? usable.find(icon => icon.theme === theme) : undefined;
+  return (themed ?? usable[0]).src;
 }
 
 /**

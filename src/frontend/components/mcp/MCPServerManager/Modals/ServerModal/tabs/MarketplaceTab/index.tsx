@@ -13,7 +13,8 @@ import {
   missingRequiredInputs,
   registryTypeLabel,
   verificationStatusOf,
-  isVerifiedStatus
+  isVerifiedStatus,
+  serverIconUrl
 } from '@/utils/mcp/registry';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
 import { useTheme } from '@mui/material/styles';
@@ -25,12 +26,14 @@ import {
   Card,
   CardActionArea,
   CardContent,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Grid,
   IconButton,
   InputAdornment,
@@ -70,8 +73,21 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
   const [selectedServer, setSelectedServer] = useState<RegistryServer | null>(null);
+  // The trust gate: Install actions stay disabled until the user explicitly
+  // confirms they trust the server. Reset every time the details dialog opens.
+  const [trustConfirmed, setTrustConfirmed] = useState<boolean>(false);
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
+
+  const openServerDetails = useCallback((server: RegistryServer) => {
+    setTrustConfirmed(false);
+    setSelectedServer(server);
+  }, []);
+
+  const closeServerDetails = useCallback(() => {
+    setSelectedServer(null);
+    setTrustConfirmed(false);
+  }, []);
 
   const fetchServers = useCallback(async (search: string, cursor?: string) => {
     const fetchId = ++fetchIdRef.current;
@@ -147,7 +163,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
       // local tab can start the test run (which performs the install) right away
       onUpdate(config as MCPServerConfig, { autoTestRun: true });
     }
-    setSelectedServer(null);
+    closeServerDetails();
     if (setActiveTab) {
       setActiveTab('local');
     }
@@ -177,18 +193,15 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const handleManualInstall = (server: RegistryServer) => {
     const repoUrl = githubRepoUrl(server);
     if (!repoUrl || !onOpenInGitHubTab) return;
-    setSelectedServer(null);
+    closeServerDetails();
     onOpenInGitHubTab(repoUrl);
   };
 
+  // Every card click routes through the details/trust dialog — nothing installs
+  // or switches tabs on click. Install happens only from an explicit action in
+  // the dialog, after the trust checkbox is ticked.
   const handleServerClick = (server: RegistryServer) => {
-    const options = getInstallOptions(server);
-    if (options.length === 1) {
-      handleInstall(server, options[0]);
-    } else {
-      // Zero or several options: open the dialog (it explains the zero case)
-      setSelectedServer(server);
-    }
+    openServerDetails(server);
   };
 
   const renderOptionChips = (server: RegistryServer) => {
@@ -320,6 +333,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                           }}
                         >
                           <Avatar
+                            src={serverIconUrl(server, theme.palette.mode) ?? undefined}
                             sx={{
                               bgcolor: theme.palette.primary.main,
                               color: '#fff',
@@ -402,15 +416,80 @@ const MarketplaceTab: React.FC<TabProps> = ({
         </Box>
       </Stack>
 
-      {/* Install-option chooser (also shown when nothing is installable) */}
-      <Dialog open={selectedServer !== null} onClose={() => setSelectedServer(null)} maxWidth="sm" fullWidth>
+      {/* Details + trust gate — every card click lands here first. Install
+          happens only from an explicit action, and only once the user confirms
+          they trust the server. */}
+      <Dialog open={selectedServer !== null} onClose={closeServerDetails} maxWidth="sm" fullWidth>
         {selectedServer && (
           <>
-            <DialogTitle>{displayName(selectedServer)}</DialogTitle>
+            <DialogTitle component="div">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+                <Avatar
+                  src={serverIconUrl(selectedServer, theme.palette.mode) ?? undefined}
+                  sx={{ bgcolor: theme.palette.primary.main, color: '#fff', width: 40, height: 40 }}
+                >
+                  {displayName(selectedServer).charAt(0).toUpperCase()}
+                </Avatar>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6" noWrap title={displayName(selectedServer)}>
+                    {displayName(selectedServer)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap component="div" title={selectedServer.name}>
+                    {selectedServer.name}
+                  </Typography>
+                </Box>
+              </Box>
+            </DialogTitle>
             <DialogContent>
+              {/* Repository / website links, prominent near the top */}
+              {(selectedServer.repository?.url || selectedServer.websiteUrl) && (
+                <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+                  {selectedServer.repository?.url && (
+                    <Button
+                      size="small"
+                      startIcon={<GitHubIcon />}
+                      component="a"
+                      href={selectedServer.repository.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Repository
+                    </Button>
+                  )}
+                  {selectedServer.websiteUrl && (
+                    <Button
+                      size="small"
+                      startIcon={<LanguageIcon />}
+                      component="a"
+                      href={selectedServer.websiteUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Website
+                    </Button>
+                  )}
+                </Box>
+              )}
+
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {selectedServer.description || 'No description provided.'}
               </Typography>
+
+              {/* Persistent security warning + explicit trust confirmation */}
+              <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1 }}>
+                MCP servers run code or connect to external services on your machine.
+                Only install servers you trust — review the repository and the command it runs first.
+              </Alert>
+              <FormControlLabel
+                sx={{ mb: 1 }}
+                control={
+                  <Checkbox
+                    checked={trustConfirmed}
+                    onChange={e => setTrustConfirmed(e.target.checked)}
+                  />
+                }
+                label="I understand the risk and trust this server"
+              />
 
               {selectedOptions.length > 0 ? (
                 <>
@@ -421,7 +500,11 @@ const MarketplaceTab: React.FC<TabProps> = ({
                     {selectedOptions.map((option, index) => {
                       const missing = missingRequiredInputs(option);
                       return (
-                        <ListItemButton key={index} onClick={() => handleInstall(selectedServer, option)}>
+                        <ListItemButton
+                          key={index}
+                          disabled={!trustConfirmed}
+                          onClick={() => handleInstall(selectedServer, option)}
+                        >
                           <ListItemIcon>
                             {option.kind === 'package' ? <TerminalIcon /> : <CloudIcon />}
                           </ListItemIcon>
@@ -455,6 +538,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                     <Button
                       variant="contained"
                       startIcon={<GitHubIcon />}
+                      disabled={!trustConfirmed}
                       onClick={() => handleManualInstall(selectedServer)}
                       sx={{ mt: 2 }}
                     >
@@ -463,36 +547,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
                   )}
                 </>
               )}
-
-              <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-                {selectedServer.repository?.url && (
-                  <Button
-                    size="small"
-                    startIcon={<GitHubIcon />}
-                    component="a"
-                    href={selectedServer.repository.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Repository
-                  </Button>
-                )}
-                {selectedServer.websiteUrl && (
-                  <Button
-                    size="small"
-                    startIcon={<LanguageIcon />}
-                    component="a"
-                    href={selectedServer.websiteUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Website
-                  </Button>
-                )}
-              </Box>
             </DialogContent>
             <DialogActions>
-              <Button onClick={() => setSelectedServer(null)}>Close</Button>
+              <Button onClick={closeServerDetails}>Close</Button>
             </DialogActions>
           </>
         )}
