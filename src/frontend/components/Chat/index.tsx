@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom } from '@mui/material';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -282,6 +283,51 @@ const Chat: React.FC = () => {
   useEffect(() => {
     currentConversationIdRef.current = currentConversationId;
   }, [currentConversationId]);
+
+  // --- Stick-to-bottom (chat autoscroll) ---
+  // The messages area (rendered below) is the single scroll container. We keep it
+  // pinned to the bottom as content streams in — but only while the user is
+  // already at the bottom. Once they scroll up to read, we stop yanking them down
+  // and surface a "jump to latest" button instead. (This replaces the old
+  // new-message-only scrollIntoView in ChatMessages, which had no position
+  // awareness and did not follow in-place streaming updates.)
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef<boolean>(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState<boolean>(false);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceFromBottom < 80; // px tolerance
+    stickToBottomRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    stickToBottomRef.current = true;
+    setShowScrollToBottom(false);
+    scrollMessagesToBottom('smooth');
+  }, [scrollMessagesToBottom]);
+
+  // Reset to "stick" whenever the viewed conversation changes.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    setShowScrollToBottom(false);
+  }, [currentConversationId]);
+
+  // Keep pinned to the bottom as messages change — new messages AND in-place
+  // streaming updates (the reducer rebuilds the array either way) — but only
+  // while the user hasn't scrolled up.
+  useEffect(() => {
+    if (stickToBottomRef.current) scrollMessagesToBottom('auto');
+  }, [detailedConversation?.messages, scrollMessagesToBottom]);
   // Mirror of the conversation whose run we are currently tracking, so the
   // re-attach effect can tell "already tracking" from "needs re-attach" without
   // taking loadingConversationId as a dependency (which would re-fire the effect
@@ -1854,8 +1900,15 @@ const Chat: React.FC = () => {
             </Box>
           )}
 
-        {/* Chat messages - Use detailed data */}
-        <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+        {/* Chat messages - Use detailed data. The wrapper is position:relative and
+            does NOT scroll, so the "jump to latest" FAB stays pinned over the
+            visible area while the inner Box (the scroll container) scrolls. */}
+        <Box sx={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        <Box
+          ref={messagesScrollRef}
+          onScroll={handleMessagesScroll}
+          sx={{ flex: 1, overflow: 'auto', p: 2 }}
+        >
           {isLoadingDetails ? (
              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                <Spinner size="medium" color="primary" />
@@ -1968,6 +2021,20 @@ const Chat: React.FC = () => {
                 : "Create a new conversation to start chatting."}
             </Typography>
           )}
+        </Box>
+        {/* Jump-to-latest: appears only when the user has scrolled up from the
+            bottom. Clicking re-enables stick-to-bottom and scrolls down. */}
+        <Zoom in={showScrollToBottom} unmountOnExit>
+          <Fab
+            size="small"
+            color="primary"
+            aria-label="Scroll to latest messages"
+            onClick={jumpToLatest}
+            sx={{ position: 'absolute', bottom: 16, right: 24, zIndex: 2 }}
+          >
+            <KeyboardArrowDownIcon />
+          </Fab>
+        </Zoom>
         </Box>
 
         {/* Chat input */}

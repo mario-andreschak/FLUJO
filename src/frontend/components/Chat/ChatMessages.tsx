@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -685,8 +685,6 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onApproveToolCall, // Destructure new prop
   onRejectToolCall // Destructure new prop
 }) => {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
   useEffect(() => {
@@ -700,16 +698,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     [messages, hiddenCount]
   );
 
-  // Scroll to bottom only when a NEW last message arrives — not when an
-  // existing message is updated in place, and not when the user expands the
-  // window to read older messages.
-  const lastMessageId = totalCount > 0 ? messages[totalCount - 1].id : undefined;
-  const prevLastMessageIdRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (lastMessageId === prevLastMessageIdRef.current) return;
-    prevLastMessageIdRef.current = lastMessageId;
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [lastMessageId]);
+  // Auto-scroll is owned by the parent (Chat/index.tsx), which holds the scroll
+  // container ref and implements position-aware stick-to-bottom + a jump-to-latest
+  // button. This component no longer scrolls on its own.
 
   // Message menu state
   const [menuAnchorEl, setMenuAnchorEl] = React.useState<null | HTMLElement>(null);
@@ -898,8 +889,6 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         </MenuItem>
       </Menu>
 
-      {/* Invisible element to scroll to */}
-      <div ref={messagesEndRef} />
 
       {/* Display Pending Tool Calls for Approval */}
       {/* Add null check for pendingToolCalls before accessing length */}
