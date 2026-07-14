@@ -11,7 +11,8 @@ import {
   missingRequiredInputs,
   applySpotlightEnvDefaults,
   spotlightRequestPath,
-  firstServerFromResponse
+  firstServerFromResponse,
+  serverIconUrl
 } from '@/utils/mcp/registry';
 import { normalizeSpotlightSource } from '@/shared/config/spotlightServers';
 import { MCPStdioConfig, MCPStreamableConfig, MCPSSEConfig } from '@/shared/types/mcp/mcp';
@@ -53,6 +54,54 @@ describe('sanitizeServerName / displayName', () => {
     expect(displayName(baseServer({ name: 'com.googleapis.firestore/mcp' }))).toBe('firestore-mcp');
     // Non-generic slugs stay untouched
     expect(displayName(baseServer({ name: 'io.github.example/weather-mcp' }))).toBe('weather-mcp');
+  });
+});
+
+// Issue #45: the details/trust dialog renders a server-provided icon when the
+// registry supplies one, falling back to the lettered avatar otherwise.
+describe('serverIconUrl', () => {
+  it('returns null when the server has no icons', () => {
+    expect(serverIconUrl(baseServer({}))).toBeNull();
+    expect(serverIconUrl(baseServer({ icons: [] }))).toBeNull();
+  });
+
+  it('returns the first usable http(s) icon', () => {
+    expect(
+      serverIconUrl(baseServer({ icons: [{ src: 'https://example.com/icon.png' }] }))
+    ).toBe('https://example.com/icon.png');
+  });
+
+  it('prefers an icon matching the requested theme', () => {
+    const server = baseServer({
+      icons: [
+        { src: 'https://example.com/light.png', theme: 'light' },
+        { src: 'https://example.com/dark.png', theme: 'dark' }
+      ]
+    });
+    expect(serverIconUrl(server, 'dark')).toBe('https://example.com/dark.png');
+    expect(serverIconUrl(server, 'light')).toBe('https://example.com/light.png');
+    // No theme requested → first usable icon
+    expect(serverIconUrl(server)).toBe('https://example.com/light.png');
+  });
+
+  it('falls back to any icon when no themed match exists', () => {
+    const server = baseServer({ icons: [{ src: 'https://example.com/icon.png', theme: 'light' }] });
+    expect(serverIconUrl(server, 'dark')).toBe('https://example.com/icon.png');
+  });
+
+  // A registry entry is untrusted data — never let it inject a non-http src
+  // (data:, javascript:, file:) into an <img>.
+  it('rejects non-http(s) icon sources', () => {
+    expect(serverIconUrl(baseServer({ icons: [{ src: 'data:image/png;base64,AAAA' }] }))).toBeNull();
+    expect(serverIconUrl(baseServer({ icons: [{ src: 'javascript:alert(1)' }] }))).toBeNull();
+    expect(serverIconUrl(baseServer({ icons: [{ src: 'not a url' }] }))).toBeNull();
+  });
+
+  it('skips an unusable icon and returns the next valid one', () => {
+    const server = baseServer({
+      icons: [{ src: 'data:image/png;base64,AAAA' }, { src: 'https://example.com/ok.svg' }]
+    });
+    expect(serverIconUrl(server)).toBe('https://example.com/ok.svg');
   });
 });
 
