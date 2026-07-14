@@ -114,7 +114,26 @@ export class SubflowNode extends BaseNode {
       nodeName: node_params?.properties?.name,
     };
     if (inputMode === 'isolated') {
-      prepResult.inputText = promptTemplate ?? '';
+      // Isolated mode sends a single authored prompt. When this node opted into
+      // `allowCallerPrompt` (issue #96) and an upstream routing model passed a
+      // `prompt` via the handoff tool, that caller prompt OVERRIDES the authored
+      // `promptTemplate` (which becomes the default/fallback). The transient
+      // handoffInput is single-shot and node-id-scoped: only apply it when it
+      // targets THIS node, and clear it once inspected so it can never leak to a
+      // later node or a subsequent turn.
+      const allowCallerPrompt = node_params?.properties?.allowCallerPrompt === true;
+      const pendingInput = sharedState.handoffInput;
+      if (pendingInput && pendingInput.targetNodeId === node_params?.id) {
+        sharedState.handoffInput = undefined; // consume on read
+        if (allowCallerPrompt && pendingInput.prompt.trim()) {
+          prepResult.inputText = pendingInput.prompt;
+          log.info('Using caller-supplied prompt for isolated subflow', { nodeId: node_params?.id });
+        } else {
+          prepResult.inputText = promptTemplate ?? '';
+        }
+      } else {
+        prepResult.inputText = promptTemplate ?? '';
+      }
     } else {
       const sanitized = sanitizeForSubflow(sharedState.messages);
       prepResult.messages = inputMode === 'latest-message' ? latestUserMessage(sanitized) : sanitized;

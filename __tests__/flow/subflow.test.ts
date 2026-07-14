@@ -193,6 +193,68 @@ describe('SubflowNode', () => {
     expect(call.messages).toBeUndefined();
   });
 
+  // --- Caller-supplied isolated prompt via the handoff tool (issue #96) ---
+
+  it('isolated + allowCallerPrompt: a matching handoffInput OVERRIDES the authored promptTemplate', async () => {
+    const node = makeNode(
+      { subflowId: 'inner-flow', inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'default task' },
+      'edge-next',
+    );
+    const state = makeState({ handoffInput: { targetNodeId: 'sub-node', prompt: 'caller instruction' } });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('caller instruction');
+    expect(call.messages).toBeUndefined();
+    // Single-shot: consumed on read so it can't leak to a later node/turn.
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('isolated + allowCallerPrompt but NO handoffInput: falls back to the authored promptTemplate', async () => {
+    const node = makeNode(
+      { subflowId: 'inner-flow', inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'default task' },
+      'edge-next',
+    );
+    const state = makeState();
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('default task');
+  });
+
+  it('isolated WITHOUT allowCallerPrompt: ignores a handoffInput (uses promptTemplate) but still consumes it', async () => {
+    const node = makeNode(
+      { subflowId: 'inner-flow', inputMode: 'isolated', promptTemplate: 'default task' },
+      'edge-next',
+    );
+    const state = makeState({ handoffInput: { targetNodeId: 'sub-node', prompt: 'caller instruction' } });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('default task');
+    // Even when not honored, a handoffInput addressed to THIS node is cleared.
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('isolated + allowCallerPrompt: a handoffInput for a DIFFERENT node is ignored and left intact', async () => {
+    const node = makeNode(
+      { subflowId: 'inner-flow', inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'default task' },
+      'edge-next',
+    );
+    const stale = { targetNodeId: 'some-other-node', prompt: 'not for me' };
+    const state = makeState({ handoffInput: stale });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('default task');
+    // Not addressed to this node, so it stays for its real target.
+    expect(state.handoffInput).toBe(stale);
+  });
+
   it("an explicit inputMode wins over a leftover promptTemplate (history is used, prompt ignored)", async () => {
     // A flow switched from Isolated back to Full conversation keeps its old
     // promptTemplate in properties, but the explicit mode must win.

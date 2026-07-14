@@ -106,14 +106,40 @@ export class ProcessNode extends BaseNode {
         ? await buildHandoffDescription(flowNode)
         : `Hand off execution to ${target.label} (${target.type})`;
 
+      // A subflow node in 'isolated' inputMode that opted into `allowCallerPrompt`
+      // (issue #96) lets the routing model pass an instruction to the child flow.
+      // Only those targets get a `prompt` parameter; every other handoff tool
+      // stays byte-identically parameter-less (preserving the provider
+      // prefix-cache stability from #89). The param is OPTIONAL: the model may
+      // still route with no prompt, in which case the authored promptTemplate is
+      // used as the default (see SubflowNode.prep).
+      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean } | undefined;
+      const acceptsCallerPrompt =
+        target.type === 'subflow' &&
+        targetProps?.inputMode === 'isolated' &&
+        targetProps?.allowCallerPrompt === true;
+
       handoffTools.push({
         name: toolName,
-        description,
-        inputSchema: {
-          type: "object",
-          properties: {}, // No parameters needed anymore
-          required: []
-        }
+        description: acceptsCallerPrompt
+          ? `${description}\n\nOptionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.`
+          : description,
+        inputSchema: acceptsCallerPrompt
+          ? {
+              type: "object",
+              properties: {
+                prompt: {
+                  type: "string",
+                  description: "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
+                }
+              },
+              required: []
+            }
+          : {
+              type: "object",
+              properties: {}, // No parameters needed for a standard handoff
+              required: []
+            }
       });
 
       log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });

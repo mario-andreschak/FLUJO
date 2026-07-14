@@ -150,6 +150,14 @@ export interface SubflowNodeProperties {
      *  the parent conversation's live stream + log, nested by depth;
      *  'final-only' shows only the folded final output message. */
     outputMode?: 'steps' | 'final-only';
+    /** Opt-in (issue #96): only meaningful in 'isolated' inputMode. When true,
+     *  the handoff tool that targets this node exposes an optional `prompt`
+     *  string parameter; a caller-supplied value OVERRIDES `promptTemplate`
+     *  (which becomes the default/fallback used when the caller passes none).
+     *  Defaults to false — existing isolated subflows keep sending their static
+     *  prompt and their handoff tools stay parameter-less. Groundwork for
+     *  running subflows as independent, callable workers. */
+    allowCallerPrompt?: boolean;
 }
 
 // Type-specific node params
@@ -222,6 +230,16 @@ export interface SharedState {
     handoffRequested?: {
         edgeId: string;
         targetNodeId?: string;
+    };
+    /** Transient, single-shot caller-supplied prompt captured at a handoff
+     *  transition (issue #96) when the model passes a `prompt` argument to a
+     *  handoff tool targeting an isolated subflow with `allowCallerPrompt`.
+     *  Consumed and cleared by the NEXT node's prep (SubflowNode.prep), matched
+     *  by `targetNodeId` so a stale value can never apply to the wrong node.
+     *  Never persisted meaningfully across nodes. */
+    handoffInput?: {
+        targetNodeId: string;
+        prompt: string;
     };
     // Conversation ID for tracking multiple conversations
     conversationId?: string;

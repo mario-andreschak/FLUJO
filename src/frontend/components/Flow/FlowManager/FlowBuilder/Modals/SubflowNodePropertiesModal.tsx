@@ -13,6 +13,8 @@ import {
   Divider,
   TextField,
   Alert,
+  Checkbox,
+  FormControlLabel,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -230,16 +232,37 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
         </Box>
 
         {inputMode === 'isolated' && (
-          <TextField
-            fullWidth
-            label="Isolated prompt"
-            value={promptTemplate}
-            onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
-            margin="normal"
-            multiline
-            rows={3}
-            helperText="Sent to the subflow as its single user message. The parent conversation is not passed."
-          />
+          <>
+            <FormControlLabel
+              sx={{ mt: 1, display: 'block' }}
+              control={
+                <Checkbox
+                  checked={!!nodeData.properties?.allowCallerPrompt}
+                  onChange={(e) => handlePropertyChange('allowCallerPrompt', e.target.checked)}
+                />
+              }
+              label="Let the caller pass a prompt"
+            />
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
+              When on, a step that routes to this subflow can attach an instruction through
+              its handoff tool, overriding the prompt below. The prompt below is then used
+              only as a default when the caller sends none.
+            </Typography>
+            <TextField
+              fullWidth
+              label={nodeData.properties?.allowCallerPrompt ? 'Default prompt (used if the caller sends none)' : 'Isolated prompt'}
+              value={promptTemplate}
+              onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
+              margin="normal"
+              multiline
+              rows={3}
+              helperText={
+                nodeData.properties?.allowCallerPrompt
+                  ? 'The default first message for the subflow. A routing model may override it via the handoff tool. The parent conversation is not passed.'
+                  : 'Sent to the subflow as its single user message. The parent conversation is not passed.'
+              }
+            />
+          </>
         )}
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>

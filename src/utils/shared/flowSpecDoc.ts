@@ -34,6 +34,7 @@ NODE TYPES:
     "flow": "<existing flow name or id>",          // reference an EXISTING flow, OR:
     "subflowSpec": { ...a nested FlowSpec... },     // define a brand-new child flow INLINE (compiled into its own flow and wired automatically)
     "inputMode": "full-history" | "latest-message" | "isolated",
+    "allowCallerPrompt": true | false,             // optional, only with inputMode "isolated"; when true a routing step may pass a "prompt" via its handoff tool that overrides the subflow's "prompt" (default)
     "outputMode": "steps" | "final-only" }
 - { "key": "...", "type": "finish", "label": "..." }
 

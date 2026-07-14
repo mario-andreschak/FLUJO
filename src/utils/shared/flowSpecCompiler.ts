@@ -102,6 +102,10 @@ export interface FlowSpecNode {
    *  'latest-message' — the latter hides its tool calls/results from later
    *  model calls, keeping only its final response). */
   outputMode?: 'steps' | 'final-only' | 'full-conversation' | 'latest-message';
+  /** subflow only, inputMode 'isolated' (issue #96): when true, a step that hands
+   *  off to this subflow may pass a `prompt` argument that overrides `prompt`
+   *  (the authored default). Defaults to false. */
+  allowCallerPrompt?: boolean;
 }
 
 export interface FlowSpecEdge {
@@ -447,6 +451,10 @@ export function compileFlowSpec(
           if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
           properties.promptTemplate = text;
         }
+        // Opt-in caller prompt (issue #96): only meaningful in isolated mode.
+        if (typeof specNode.allowCallerPrompt === 'boolean') {
+          properties.allowCallerPrompt = specNode.allowCallerPrompt;
+        }
       }
       // finish: no properties.
 
@@ -719,6 +727,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
+      if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);

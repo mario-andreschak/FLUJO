@@ -823,6 +823,24 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 handoffToolCallId = handoffToolCall.id;
                 log.debug(`Found handoff tool call ID: ${handoffToolCallId} for edge ${currentAction}`);
 
+                // Capture a caller-supplied `prompt` argument (issue #96) so an
+                // isolated subflow with `allowCallerPrompt` can be driven by the
+                // routing model. Single-shot and node-id-scoped; the target
+                // node's prep consumes and clears it. A malformed args string
+                // must NEVER break routing — parse defensively and skip on error.
+                if (handoffToolCall.type === 'function') {
+                  try {
+                    const parsedArgs = JSON.parse(handoffToolCall.function.arguments || '{}');
+                    const callerPrompt = typeof parsedArgs?.prompt === 'string' ? parsedArgs.prompt.trim() : '';
+                    if (callerPrompt) {
+                      sharedState.handoffInput = { targetNodeId: nextNodeId, prompt: callerPrompt };
+                      log.info(`Captured caller prompt for handoff to node ${nextNodeId} (${callerPrompt.length} chars)`);
+                    }
+                  } catch (parseError) {
+                    log.warn(`Could not parse handoff tool-call arguments for edge ${currentAction}; ignoring caller prompt`, { parseError });
+                  }
+                }
+
                 const toolResultMessage: FlujoChatMessage = {
                   id: crypto.randomUUID(),
                   role: 'tool',
