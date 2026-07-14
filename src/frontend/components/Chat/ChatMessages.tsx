@@ -20,7 +20,9 @@ import {
   InputLabel,
   Select,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  Collapse,
+  CircularProgress
 } from '@mui/material';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -32,6 +34,8 @@ import MicIcon from '@mui/icons-material/Mic';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HandymanIcon from '@mui/icons-material/Handyman';
 import TerminalIcon from '@mui/icons-material/Terminal';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
@@ -40,6 +44,7 @@ import { ChatMessage } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
+import { type ToolCallPair, pairToolCallsWithResults } from './toolCallPairing'; // #95: merge tool call + result
 import { createLogger } from '@/utils/logger'; // Import the logger
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
@@ -174,6 +179,249 @@ const MARKDOWN_COMPONENTS: Components = {
   }
 };
 
+/**
+ * Renders a tool result body — either the raw string or the "rendered" view
+ * that understands the MCP `{ content: [...] }` shape (text → markdown,
+ * image/audio → inline media, everything else → pretty-printed JSON). Extracted
+ * so the merged tool-call timeline (#95) and the legacy orphan tool bubble share
+ * a single implementation.
+ */
+const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ content, showRaw }) => {
+  if (showRaw) {
+    return (
+      <Box
+        component="pre"
+        sx={{
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          fontSize: '0.8rem',
+          p: 1,
+          borderRadius: 1,
+          border: 1,
+          borderColor: (theme) => (theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'),
+          bgcolor: 'action.hover',
+          color: (theme) => theme.palette.text.primary,
+          overflow: 'auto',
+          maxHeight: '300px',
+        }}
+      >
+        {typeof content === 'string' ? content : '[Invalid tool content]'}
+      </Box>
+    );
+  }
+
+  if (typeof content !== 'string') {
+    return (
+      <Typography variant="body2" fontStyle="italic" color="text.secondary">
+        [Invalid tool content]
+      </Typography>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 0 }}>
+      {(() => {
+        try {
+          const parsedContent = JSON.parse(content);
+          // MCP structured content: an array of text/image/audio parts.
+          if (parsedContent && Array.isArray(parsedContent.content)) {
+            return (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {parsedContent.content.map((item: any, index: number) => {
+                  if (item.type === 'text') {
+                    return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
+                  } else if (item.type === 'image' && item.data && item.mimeType) {
+                    return (
+                      <img
+                        key={index}
+                        src={`data:${item.mimeType};base64,${item.data}`}
+                        alt={`Tool Result Image ${index + 1}`}
+                        style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }}
+                      />
+                    );
+                  } else if (item.type === 'audio' && item.data && item.mimeType) {
+                    return (
+                      <audio
+                        key={index}
+                        controls
+                        src={`data:${item.mimeType};base64,${item.data}`}
+                        style={{ width: '100%', marginTop: '8px' }}
+                      >
+                        Your browser does not support the audio element.
+                      </audio>
+                    );
+                  } else {
+                    return (
+                      <Box
+                        key={index}
+                        component="pre"
+                        sx={{
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', p: 1,
+                          borderRadius: 1, border: 1, borderColor: (theme) => (theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'),
+                          bgcolor: 'action.hover', color: (theme) => theme.palette.text.primary, overflow: 'auto', mt: 1,
+                        }}
+                      >
+                        {`Unsupported content type: ${item.type}\n${JSON.stringify(item, null, 2)}`}
+                      </Box>
+                    );
+                  }
+                })}
+              </Box>
+            );
+          }
+          // Valid JSON but not the MCP shape: pretty-print it.
+          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
+        } catch (e) {
+          // Not JSON: render the raw string as markdown.
+          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
+        }
+      })()}
+    </Box>
+  );
+};
+
+type ToolCallStatus = 'pending' | 'done' | 'error';
+
+/** Classify a tool result: pending (none yet), error (MCP `isError` / an `error` field), else done. */
+function toolCallStatus(result?: ChatMessage): ToolCallStatus {
+  if (!result) return 'pending';
+  if (typeof result.content === 'string') {
+    try {
+      const parsed = JSON.parse(result.content);
+      if (parsed && (parsed.isError === true || parsed.error != null)) return 'error';
+    } catch {
+      /* a non-JSON string result is a normal (done) result */
+    }
+  }
+  return 'done';
+}
+
+function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
+  if (status === 'pending') return <CircularProgress size={14} thickness={6} />;
+  if (status === 'error') return <ErrorOutlineIcon fontSize="small" />;
+  return <CheckCircleOutlineIcon fontSize="small" />;
+}
+
+/**
+ * Merged tool-call view (#95): a horizontal, wrapping timeline of the assistant
+ * turn's (non-handoff) tool calls, rendered at the bottom of its bubble. Each
+ * node shows the tool name + a status chip (pending spinner / done check / error).
+ * Clicking a node expands an inline panel showing that call's parameters AND its
+ * result together — replacing the old separate tool-call and tool-result bubbles.
+ * One panel open at a time. Expansion + the per-result raw/rendered toggle are
+ * local state; the component is keyed by the stable message id so the state
+ * survives the parent list's re-renders.
+ */
+const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId: string }> = ({ pairs, messageId }) => {
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
+  const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
+    pair.toolCall.id || `tc-${messageId}-${index}`;
+
+  return (
+    <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', color: 'primary.main', mb: 1 }}>
+        <HandymanIcon fontSize="small" sx={{ mr: 1 }} />
+        <Typography variant="body2">
+          {pairs.length === 1 ? 'The assistant used a tool' : `The assistant used ${pairs.length} tools`}
+        </Typography>
+      </Box>
+
+      {/* Horizontal, wrapping timeline of clickable nodes. */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5 }}>
+        {pairs.map((pair, index) => {
+          const key = keyFor(pair, index);
+          const status = toolCallStatus(pair.result);
+          const isOpen = expandedKey === key;
+          return (
+            <React.Fragment key={key}>
+              {index > 0 && (
+                <Box sx={{ width: 14, height: '2px', bgcolor: 'divider', flexShrink: 0 }} />
+              )}
+              <Tooltip title={isOpen ? 'Hide call & result' : 'Show call & result'}>
+                <Chip
+                  icon={toolCallStatusIcon(status)}
+                  label={displayToolName(pair.toolCall.function.name)}
+                  size="small"
+                  clickable
+                  variant={isOpen ? 'filled' : 'outlined'}
+                  color={status === 'error' ? 'error' : status === 'pending' ? 'default' : 'primary'}
+                  onClick={() => setExpandedKey(isOpen ? null : key)}
+                  sx={{ maxWidth: '100%' }}
+                />
+              </Tooltip>
+            </React.Fragment>
+          );
+        })}
+      </Box>
+
+      {/* One expandable panel per node (single-open model). */}
+      {pairs.map((pair, index) => {
+        const key = keyFor(pair, index);
+        let formattedArgs = pair.toolCall.function.arguments;
+        try {
+          formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
+        } catch (e) { /* keep the original string */ }
+        const showRaw = !!rawByKey[key];
+
+        return (
+          <Collapse key={key} in={expandedKey === key} unmountOnExit>
+            <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
+              {/* Call parameters */}
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                <HandymanIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
+                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>Parameters</Typography>
+                <Chip
+                  label={`ID: ${pair.toolCall.id ? pair.toolCall.id.substring(0, 8) : 'N/A'}...`}
+                  size="small" color="default" variant="outlined"
+                  sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+                />
+              </Box>
+              <Box component="pre" sx={{
+                bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
+                fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}>
+                {formattedArgs}
+              </Box>
+
+              {/* Matching result (or a pending placeholder) */}
+              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
+                <TerminalIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
+                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>Result</Typography>
+                {pair.result && (
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={showRaw}
+                        onChange={(e) => setRawByKey((prev) => ({ ...prev, [key]: e.target.checked }))}
+                      />
+                    }
+                    label="Raw"
+                    sx={{ ml: 'auto', mr: 0, '& .MuiTypography-root': { fontSize: '0.75rem' } }}
+                  />
+                )}
+              </Box>
+              {pair.result ? (
+                <ToolResultView content={pair.result.content} showRaw={showRaw} />
+              ) : (
+                <Typography
+                  variant="body2"
+                  fontStyle="italic"
+                  color="text.secondary"
+                  sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
+                >
+                  <CircularProgress size={14} thickness={6} /> Waiting for the tool to respond…
+                </Typography>
+              )}
+            </Box>
+          </Collapse>
+        );
+      })}
+    </Box>
+  );
+};
+
 /** Edit state, present only on the single bubble currently being edited. */
 interface BubbleEditState {
   content: string;
@@ -186,8 +434,14 @@ interface MessageBubbleProps {
   nodeLabel?: string;
   /** Stable reference (memoized by the parent) — used by the edit-mode Select. */
   availableNodes: { id: string; label: string }[];
-  /** Raw/rendered toggle for tool results (scoped to this bubble). */
+  /** Raw/rendered toggle for the LEGACY standalone (orphan) tool-result bubble. */
   showRaw: boolean;
+  /**
+   * #95: for an assistant message, its ordered non-handoff tool-call/result
+   * pairs (computed once by the container). Undefined for other roles or an
+   * assistant turn with no non-handoff tool calls.
+   */
+  toolCallPairs?: ToolCallPair<ChatMessage>[];
   /** Non-null only while THIS bubble is in edit mode. */
   edit: BubbleEditState | null;
   onMenuOpen: (event: React.MouseEvent<HTMLElement>, messageId: string) => void;
@@ -211,6 +465,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   nodeLabel,
   availableNodes,
   showRaw,
+  toolCallPairs,
   edit,
   onMenuOpen,
   onToggleRaw,
@@ -453,54 +708,13 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             </Box>
           ))}
 
-        {/* Display real tool calls (excluding handoffs) - use type guard */}
-        {hasToolCalls(message) && message.tool_calls.filter((tc) => !isHandoffToolName(tc.function.name)).length > 0 && (
-          <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
-            <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main', mb: 1 }}>
-              <HandymanIcon fontSize="small" sx={{ mr: 1 }} />
-              The assistant is using a tool
-            </Typography>
-
-            {message.tool_calls.filter((tc) => !isHandoffToolName(tc.function.name)).map((toolCall, tcIndex) => { // Added index for key
-              const toolName = displayToolName(toolCall.function.name);
-              let formattedArgs = toolCall.function.arguments;
-              try {
-                const parsedArgs = JSON.parse(toolCall.function.arguments);
-                formattedArgs = JSON.stringify(parsedArgs, null, 2);
-              } catch (e) { /* Use original string */ }
-
-              return (
-                <Accordion
-                  key={toolCall.id || `tc-${message.id}-${tcIndex}`} // Use toolCall.id as key
-                  defaultExpanded={false}
-                  sx={{ mb: 0.5, '&:before': { display: 'none' }, boxShadow: 'none', bgcolor: 'rgba(0, 0, 0, 0.04)' }}
-                >
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                      <HandymanIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} />
-                      <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
-                        {toolName}
-                      </Typography>
-                      <Chip
-                        label={`ID: ${toolCall.id ? toolCall.id.substring(0, 8) : 'N/A'}...`}
-                        size="small" color="default" variant="outlined"
-                        sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
-                      />
-                    </Box>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ p: 0, pl: 2, pr: 2, pb: 1 }}>
-                    <Box component="pre" sx={{
-                      bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
-                      fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', // Ensure wrapping
-                      wordBreak: 'break-word', // Ensure breaking
-                    }}>
-                      {formattedArgs}
-                    </Box>
-                  </AccordionDetails>
-                </Accordion>
-              );
-            })}
-          </Box>
+        {/* #95: merged tool-call timeline. The old vertical stack of tool-call
+            accordions (plus the separate downstream tool-result bubbles) is
+            replaced by one horizontal timeline at the bottom of the assistant
+            bubble; clicking a node reveals that call's parameters AND its result
+            together. Pairs are handoff-filtered and computed by the container. */}
+        {toolCallPairs && toolCallPairs.length > 0 && (
+          <ToolCallTimeline pairs={toolCallPairs} messageId={message.id} />
         )}
 
         {/* Display tool call result for tool messages. Handoff results are the
@@ -542,93 +756,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 </Box>
               </AccordionSummary>
               <AccordionDetails sx={{ pt: 0, pb: 1, overflow: 'hidden' }}>
-                {showRaw ? (
-                  // Show Raw Content
-                  <Box
-                    component="pre"
-                    sx={{
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-all',
-                      fontSize: '0.8rem',
-                      p: 1,
-                      borderRadius: 1,
-                      border: 1,
-                      borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
-                      bgcolor: 'action.hover',
-                      color: (theme) => theme.palette.text.primary,
-                      overflow: 'auto',
-                      maxHeight: '300px', // Limit height
-                    }}
-                  >
-                    {typeof message.content === 'string' ? message.content : '[Invalid tool content]'}
-                  </Box>
-                ) : (
-                  // Show Rendered Content
-                  <Box sx={{ width: '100%', minWidth: 0 }}>
-                    {typeof message.content === 'string' ? (() => {
-                      try {
-                        const parsedContent = JSON.parse(message.content);
-                        // Check for MCP content structure (directly under parsed object)
-                        if (parsedContent && Array.isArray(parsedContent.content)) {
-                          return (
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                              {parsedContent.content.map((item: any, index: number) => {
-                                if (item.type === 'text') {
-                                  return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
-                                } else if (item.type === 'image' && item.data && item.mimeType) {
-                                  return (
-                                    <img
-                                      key={index}
-                                      src={`data:${item.mimeType};base64,${item.data}`}
-                                      alt={`Tool Result Image ${index + 1}`}
-                                      style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }}
-                                    />
-                                  );
-                                } else if (item.type === 'audio' && item.data && item.mimeType) {
-                                  return (
-                                    <audio
-                                      key={index}
-                                      controls
-                                      src={`data:${item.mimeType};base64,${item.data}`}
-                                      style={{ width: '100%', marginTop: '8px' }}
-                                    >
-                                      Your browser does not support the audio element.
-                                    </audio>
-                                  );
-                                } else {
-                                  // Fallback for unknown content types
-                                  return (
-                                    <Box
-                                      key={index}
-                                      component="pre"
-                                      sx={{
-                                        whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', p: 1,
-                                        borderRadius: 1, border: 1, borderColor: (theme) => theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb',
-                                        bgcolor: 'action.hover', color: (theme) => theme.palette.text.primary, overflow: 'auto', mt: 1
-                                      }}
-                                    >
-                                      {`Unsupported content type: ${item.type}\n${JSON.stringify(item, null, 2)}`}
-                                    </Box>
-                                  );
-                                }
-                              })}
-                            </Box>
-                          );
-                        } else {
-                          // If JSON doesn't match expected structure (e.g., missing content array), render as formatted JSON
-                          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
-                        }
-                      } catch (e) {
-                        // If parsing fails, render original string content as markdown
-                        return <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>;
-                      }
-                    })() : (
-                      <Typography variant="body2" fontStyle="italic" color="text.secondary">
-                        [Invalid tool content]
-                      </Typography>
-                    )}
-                  </Box>
-                )}
+                {/* #95: rendering shared with the merged timeline via ToolResultView. */}
+                <ToolResultView content={message.content} showRaw={showRaw} />
               </AccordionDetails>
             </Accordion>
           </Box>
@@ -696,6 +825,16 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const visibleMessages = useMemo(
     () => (Array.isArray(messages) ? (hiddenCount > 0 ? messages.slice(hiddenCount) : messages) : []),
     [messages, hiddenCount]
+  );
+
+  // #95: pair each assistant turn's (non-handoff) tool calls with their result
+  // messages once per `messages` change. Bubbles render a merged, expandable
+  // timeline from these pairs; standalone tool-result bubbles that a timeline
+  // consumed are skipped in the render loop below. Computed over the FULL list
+  // (not just the window) so pairing still holds across the window boundary.
+  const { pairsByMessageId, consumedToolCallIds } = useMemo(
+    () => pairToolCallsWithResults(messages),
+    [messages]
   );
 
   // Auto-scroll is owned by the parent (Chat/index.tsx), which holds the scroll
@@ -818,6 +957,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         // "Handoff to X" marker on the paired assistant call already conveys the
         // routing, so skip the result entirely rather than render an empty bubble.
         if (isHandoffResult(message)) return null;
+        // #95: a tool result that was merged into an assistant timeline is not
+        // rendered as its own bubble. Orphan results (parent call outside the
+        // window / missing) are NOT consumed, so they fall through to the legacy
+        // standalone tool bubble below and nothing silently disappears.
+        if (
+          message.role === 'tool' &&
+          typeof message.tool_call_id === 'string' &&
+          consumedToolCallIds.has(message.tool_call_id)
+        ) {
+          return null;
+        }
         const isThisEditing = isEditing && message.id === editingMessageId;
         return (
           <MessageBubble
@@ -826,6 +976,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             nodeLabel={message.processNodeId ? nodeLabelById.get(message.processNodeId) : undefined}
             availableNodes={availableNodes}
             showRaw={!!showRawToolResult[message.id]}
+            toolCallPairs={pairsByMessageId.get(message.id)}
             edit={isThisEditing ? { content: editContent, nodeId: editNodeId } : null}
             onMenuOpen={handleMenuOpen}
             onToggleRaw={handleToggleRaw}
