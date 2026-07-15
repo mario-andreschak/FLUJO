@@ -53,15 +53,23 @@ interface ImproveFlowDialogProps {
   currentFlow: Flow;
   /** Called with the revised flow when improvement succeeds; the builder applies it. */
   onImproved: (result: ImprovedFlowInfo) => void;
+  /** Pre-fills the change description each time the dialog opens (e.g. AI-supported repair). */
+  initialDescription?: string;
 }
 
-const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved }: ImproveFlowDialogProps) => {
+const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDescription }: ImproveFlowDialogProps) => {
   const [description, setDescription] = useState('');
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
   const [allowInstall, setAllowInstall] = useState(false);
   const [isImproving, setIsImproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Seed the description from `initialDescription` each time the dialog opens (used by
+  // AI-supported repair to pre-fill the repair instruction; the user can still edit it).
+  useEffect(() => {
+    if (open) setDescription(initialDescription ?? '');
+  }, [open, initialDescription]);
 
   // Load the configured models when the dialog opens (frontend model list is masked).
   useEffect(() => {

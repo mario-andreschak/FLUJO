@@ -130,6 +130,52 @@ describe('validateFlow — subflow single outgoing path', () => {
     const r = validateFlow(flow, ctx);
     expect(codes(r)).toContain('subflow-multiple-outgoing');
   });
+
+  it('accepts a parallel subflow (parallelSubflowIds) with a single outgoing edge', () => {
+    const parallel: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { parallelSubflowIds: ['a', 'b'] } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, parallel],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).not.toContain('subflow-multiple-outgoing');
+    expect(codes(r)).not.toContain('subflow-both-targets');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('errors when a subflow sets BOTH subflowId and parallelSubflowIds', () => {
+    const both: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { subflowId: 'x', parallelSubflowIds: ['a'] } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, both],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-both-targets');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('warns on a concurrencyLimit below 1 in parallel mode', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { parallelSubflowIds: ['a'], concurrencyLimit: 0 } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-concurrency-limit');
+    expect(r.isRunnable).toBe(true); // warning only
+  });
 });
 
 describe('validateFlow — model binding', () => {

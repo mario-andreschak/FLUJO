@@ -29,10 +29,20 @@ NODE TYPES:
     "servers": [ { "name": "<server name>", "tools": ["tool_a"] } ],   // optional; omit "tools" to enable all
     "inputMode": "full-history" | "latest-message" | "isolated",       // optional, default full-history
     "isolatedPrompt": "...",                                            // only with inputMode "isolated"
-    "outputMode": "full-conversation" | "latest-message" }              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
+    "outputMode": "full-conversation" | "latest-message",              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
+    "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (50)
+    "allowedTools": ["tool_a"],                                        // optional; step-level tool allowlist (independent of servers[].tools)
+    "excludeModelPrompt": true|false,                                   // optional; drop the model's base prompt
+    "excludeStartNodePrompt": true|false,                              // optional; drop the start node's prompt for this step
+    "excludeSystemPrompt": true|false }                                // optional; drop the workflow/handoff guidance block
 - { "key": "...", "type": "subflow", "label": "...",
     "flow": "<existing flow name or id>",          // reference an EXISTING flow, OR:
-    "subflowSpec": { ...a nested FlowSpec... },     // define a brand-new child flow INLINE (compiled into its own flow and wired automatically)
+    "subflowSpec": { ...a nested FlowSpec... },     // define a brand-new child flow INLINE (compiled into its own flow and wired automatically), OR fan out concurrently:
+    "parallelFlows": ["flow_a", "flow_b"],          // run several EXISTING child flows CONCURRENTLY, same input to each, outputs joined; OR:
+    "parallelSubflowSpecs": [ { ...FlowSpec... } ], // run several INLINE child flows concurrently
+    "concurrencyLimit": 4,                          // optional (parallel only), default 4
+    "joinSeparator": "\\n\\n---\\n\\n",              // optional (parallel only), string between joined lane outputs, default "\\n\\n"
+    "errorStrategy": "collect-all" | "fail-fast",   // optional (parallel only), default collect-all
     "inputMode": "full-history" | "latest-message" | "isolated",
     "allowCallerPrompt": true | false,             // optional, only with inputMode "isolated"; when true a routing step may pass a "prompt" via its handoff tool that overrides the subflow's "prompt" (default)
     "outputMode": "steps" | "final-only" }
@@ -47,4 +57,5 @@ RULES:
 4. Do not embed \${tool:...} or \${resource:...} references in prompts — tools are wired through "servers".
 5. Branching: give a process node multiple outgoing edges; its model decides where to hand off at runtime. "bidirectional": true lets the target hand back to the source (agent <-> agent).
 6. A subflow node may have only ONE outgoing edge. Give it EITHER a "flow" (naming an existing flow) OR a "subflowSpec" (an inline nested FlowSpec that becomes its own child flow) — not both. A "subflowSpec" may itself contain subflow nodes with their own "subflowSpec" (bounded nesting), so you can author whole multi-level flows in one object.
-7. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.`;
+7. A subflow node may instead fan out to SEVERAL child flows CONCURRENTLY via "parallelFlows" (existing flows) or "parallelSubflowSpecs" (inline). The same input is sent to every lane and their outputs are joined. This is about multiple CHILDREN, not successors — the single-outgoing-edge rule (rule 6) still holds. Prefer "parallelFlows" for large fan-outs.
+8. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.`;

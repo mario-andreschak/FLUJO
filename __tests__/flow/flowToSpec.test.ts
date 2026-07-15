@@ -213,6 +213,85 @@ describe('flowToSpec + compile positions option — layout preservation', () => 
   });
 });
 
+describe('flowToSpec — Tier 1 fields round-trip', () => {
+  const parallelContext: CompileContext = {
+    ...context,
+    flows: [
+      { id: 'flow-1', name: 'Summarizer' },
+      { id: 'flow-tests', name: 'run_tests' },
+      { id: 'flow-lint', name: 'run_lint_typecheck' },
+    ],
+  };
+
+  it('round-trips process maxTurns / prompt flags / allowedTools', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'p',
+          type: 'process',
+          model: 'model-abc',
+          maxTurns: 25,
+          excludeModelPrompt: true,
+          excludeSystemPrompt: true,
+          allowedTools: ['read_file', 'write_file'],
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p' },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const flow1 = compileFlowSpec(spec, parallelContext).flow!;
+    const reSpec = flowToSpec(flow1);
+    const p = reSpec.nodes.find((n) => n.type === 'process')!;
+    expect(p.maxTurns).toBe(25);
+    expect(p.excludeModelPrompt).toBe(true);
+    expect(p.excludeSystemPrompt).toBe(true);
+    expect(p.excludeStartNodePrompt).toBeUndefined(); // was false → not emitted
+    expect(p.allowedTools).toEqual(['read_file', 'write_file']);
+
+    const flow2 = compileFlowSpec(reSpec, parallelContext).flow!;
+    const p2 = flow2.nodes.find((n) => n.type === 'process')!;
+    expect(p2.data.properties).toEqual(flow1.nodes.find((n) => n.type === 'process')!.data.properties);
+  });
+
+  it('serializes a parallel subflow back to parallelFlows + tuning fields (not flow)', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'gate',
+          type: 'subflow',
+          parallelFlows: ['run_tests', 'run_lint_typecheck'],
+          concurrencyLimit: 3,
+          joinSeparator: '\n--\n',
+          errorStrategy: 'fail-fast',
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'gate' },
+        { from: 'gate', to: 'f' },
+      ],
+    };
+    const flow1 = compileFlowSpec(spec, parallelContext).flow!;
+    const reSpec = flowToSpec(flow1);
+    const gate = reSpec.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.flow).toBeUndefined();
+    expect(gate.parallelFlows).toEqual(['flow-tests', 'flow-lint']);
+    expect(gate.concurrencyLimit).toBe(3);
+    expect(gate.joinSeparator).toBe('\n--\n');
+    expect(gate.errorStrategy).toBe('fail-fast');
+
+    const flow2 = compileFlowSpec(reSpec, parallelContext).flow!;
+    const gate2 = flow2.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate2.data.properties!.parallelSubflowIds).toEqual(['flow-tests', 'flow-lint']);
+    expect(gate2.data.properties).not.toHaveProperty('subflowId');
+  });
+});
+
 describe('flowToSpec — resilience', () => {
   it('handles a bare flow with no properties', () => {
     const flow: Flow = {

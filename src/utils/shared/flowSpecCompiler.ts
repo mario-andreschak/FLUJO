@@ -47,6 +47,8 @@ import { findBindings } from './mcpBinding';
 export const MAX_SUBFLOW_DEPTH = 3;
 /** Hard maximum number of flows a single compile/generate may produce (root + descendants). */
 export const MAX_GENERATED_FLOWS = 8;
+/** Sanity ceiling for a process node's `maxTurns` override (no hard runtime cap exists). */
+export const MAX_PROCESS_MAX_TURNS = 1000;
 
 function clamp(value: number | undefined, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
@@ -79,12 +81,52 @@ export interface FlowSpecNode {
   model?: string;
   /** process only: MCP servers this step may use (each becomes an MCP node + mcp edge). */
   servers?: FlowSpecServerRef[];
+  /**
+   * process only: per-node cap on agentic turns (self-orchestrating tool loop). Clamped to
+   * [1, {@link MAX_PROCESS_MAX_TURNS}]. Unset ⇒ inherit the model's setting, then the system
+   * default (50). Exposing it is the pragmatic "retry until it passes" loop: one process node
+   * + a tool + a bounded maxTurns loops internally without a multi-node loop construct.
+   */
+  maxTurns?: number;
+  /** process only: drop the bound model's base/system prompt from the rendered prompt. */
+  excludeModelPrompt?: boolean;
+  /** process only: drop the start node's prompt from this step's rendered prompt. */
+  excludeStartNodePrompt?: boolean;
+  /** process only: suppress the hardcoded workflow/handoff guidance block. */
+  excludeSystemPrompt?: boolean;
+  /**
+   * process only: a step-level tool allowlist, independent of the per-MCP-node
+   * `servers[].tools` (enabledTools). Only these tool names are offered to the model.
+   */
+  allowedTools?: string[];
   /** process/subflow: what the step receives from the conversation. */
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
   /** process only, inputMode 'isolated': the replacement context. */
   isolatedPrompt?: string;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
+  /**
+   * subflow only (issue #102): fan out to SEVERAL existing child flows CONCURRENTLY (by
+   * name or id). The same resolved input (per `inputMode`) is fanned to every lane and the
+   * outputs are joined. Mutually exclusive with the single-child sources; precedence is
+   * flow > subflowSpec > parallelFlows > parallelSubflowSpecs > generateSubflow. This is
+   * about multiple CHILDREN, not multiple successors — a subflow node still has ONE
+   * outgoing edge.
+   */
+  parallelFlows?: string[];
+  /**
+   * subflow only (issue #102): fan out to several INLINE child FlowSpecs concurrently. Each
+   * is compiled into its own flow (honouring the depth/flow caps, like `subflowSpec`) and
+   * its id is added to the lane list. Prefer `parallelFlows` for large fan-outs to avoid the
+   * MAX_GENERATED_FLOWS / MAX_SUBFLOW_DEPTH caps.
+   */
+  parallelSubflowSpecs?: FlowSpec[];
+  /** subflow parallel: max lanes run at once (bounded pool). Clamped ≥1. Default runtime 4. */
+  concurrencyLimit?: number;
+  /** subflow parallel: string placed between joined lane outputs (child order). Default "\n\n". */
+  joinSeparator?: string;
+  /** subflow parallel: 'collect-all' (default; every lane runs, partials surfaced) | 'fail-fast'. */
+  errorStrategy?: 'fail-fast' | 'collect-all';
   /**
    * subflow only (issue #94): an INLINE child FlowSpec. The compiler compiles it into its
    * own flow and wires this node's subflowId to it. Mutually exclusive with `flow`
@@ -263,8 +305,10 @@ function resolveFlowRef(
   return byName ? byName.id : null;
 }
 
-/** A standard flow-control edge, shaped exactly like `createEdgeFromConnection`'s non-MCP branch. */
-function controlEdge(source: FlowNode, target: FlowNode, bidirectional?: boolean): Edge {
+/** A standard flow-control edge, shaped exactly like `createEdgeFromConnection`'s non-MCP branch.
+ * Exported so the auto-repair module (flowAutoRepair.ts) builds injected edges through the
+ * SAME factory — edge ids/handles stay pinned to the builder's originals, no third copy. */
+export function controlEdge(source: FlowNode, target: FlowNode, bidirectional?: boolean): Edge {
   const sourceHandle = `${source.type}-bottom`;
   const targetHandle = `${target.type}-top`;
   return {
@@ -428,6 +472,25 @@ export function compileFlowSpec(
             warn('invalid-output-mode', `Node "${key}": outputMode "${String(specNode.outputMode)}" is not valid on a process node (full-conversation | latest-message); omitted.`, key);
           }
         }
+
+        // maxTurns (1b): per-node agentic-turn cap. Clamp to a sane range; absent ⇒ inherit.
+        if (specNode.maxTurns !== undefined) {
+          if (typeof specNode.maxTurns === 'number' && !Number.isNaN(specNode.maxTurns)) {
+            properties.maxTurns = clamp(specNode.maxTurns, 1, MAX_PROCESS_MAX_TURNS, 1);
+          } else {
+            warn('invalid-max-turns', `Node "${key}": maxTurns "${String(specNode.maxTurns)}" is not a number; omitted.`, key);
+          }
+        }
+
+        // Prompt-composition flags (1c): copy through only when boolean.
+        if (typeof specNode.excludeModelPrompt === 'boolean') properties.excludeModelPrompt = specNode.excludeModelPrompt;
+        if (typeof specNode.excludeStartNodePrompt === 'boolean') properties.excludeStartNodePrompt = specNode.excludeStartNodePrompt;
+        if (typeof specNode.excludeSystemPrompt === 'boolean') properties.excludeSystemPrompt = specNode.excludeSystemPrompt;
+
+        // allowedTools (1d): step-level tool allowlist (strings only).
+        if (Array.isArray(specNode.allowedTools)) {
+          properties.allowedTools = specNode.allowedTools.filter((t) => typeof t === 'string' && t);
+        }
       } else if (type === 'subflow') {
         resolveSubflowTarget(specNode, key, depth, childAncestors, properties);
         if (specNode.inputMode !== undefined) {
@@ -589,8 +652,12 @@ export function compileFlowSpec(
   }
 
   /**
-   * Resolve a subflow node's target into `properties.subflowId`, honouring the precedence
-   * flow (existing) > subflowSpec (inline child) > generateSubflow (generator-only).
+   * Resolve a subflow node's target, honouring the precedence
+   *   flow (single existing) > subflowSpec (single inline child) >
+   *   parallelFlows (fan-out to existing) > parallelSubflowSpecs (fan-out to inline) >
+   *   generateSubflow (generator-only).
+   * Single-child sources set `properties.subflowId`; the parallel sources set
+   * `properties.parallelSubflowIds` (issue #102) plus the tuning fields.
    */
   function resolveSubflowTarget(
     specNode: FlowSpecNode,
@@ -599,15 +666,19 @@ export function compileFlowSpec(
     ancestorNames: string[],
     properties: Record<string, any>
   ): void {
+    const hasParallelFlows = Array.isArray(specNode.parallelFlows) && specNode.parallelFlows.length > 0;
+    const hasParallelSpecs = Array.isArray(specNode.parallelSubflowSpecs) && specNode.parallelSubflowSpecs.length > 0;
     const present = [
       specNode.flow !== undefined && specNode.flow !== null ? 'flow' : null,
       specNode.subflowSpec !== undefined && specNode.subflowSpec !== null ? 'subflowSpec' : null,
+      hasParallelFlows ? 'parallelFlows' : null,
+      hasParallelSpecs ? 'parallelSubflowSpecs' : null,
       specNode.generateSubflow !== undefined && specNode.generateSubflow !== null ? 'generateSubflow' : null,
     ].filter(Boolean);
     if (present.length > 1) {
       warn(
         'subflow-multiple-sources',
-        `Node "${key}": a subflow node should have only one of "flow", "subflowSpec", or "generateSubflow"; applying precedence flow > subflowSpec > generateSubflow.`,
+        `Node "${key}": a subflow node should have only one target source ("flow", "subflowSpec", "parallelFlows", "parallelSubflowSpecs", or "generateSubflow"); applying precedence flow > subflowSpec > parallelFlows > parallelSubflowSpecs > generateSubflow.`,
         key
       );
     }
@@ -645,6 +716,67 @@ export function compileFlowSpec(
       return;
     }
 
+    // --- Parallel fan-out to EXISTING flows (issue #102) --------------------
+    if (hasParallelFlows) {
+      const laneIds: string[] = [];
+      for (const ref of specNode.parallelFlows!) {
+        if (typeof ref !== 'string' || !ref) {
+          error('parallel-flow-invalid', `Node "${key}": a "parallelFlows" entry is missing or not a string.`, key);
+          continue;
+        }
+        // Per-lane cycle guard, mirroring the single-child `flow` path.
+        if (ancestorNames.some((n) => n.toLowerCase() === ref.toLowerCase())) {
+          error('subflow-cycle', `Node "${key}": parallel flow "${ref}" refers to an ancestor flow, which would create a cycle.`, key);
+          continue;
+        }
+        const resolved = resolveFlowRef(ref, [...(context.flows ?? []), ...bundleRefs]);
+        if (resolved) {
+          if (!laneIds.includes(resolved)) laneIds.push(resolved);
+        } else {
+          error('parallel-flow-unresolved', `Node "${key}": parallel flow "${ref}" does not match any existing flow (by id or name).`, key);
+        }
+      }
+      if (laneIds.length > 0) {
+        properties.parallelSubflowIds = laneIds;
+        applyParallelTuning(specNode, properties);
+      } else {
+        error('parallel-empty', `Node "${key}": "parallelFlows" resolved to no runnable lanes.`, key);
+      }
+      return;
+    }
+
+    // --- Parallel fan-out to INLINE child specs (issue #102) ---------------
+    if (hasParallelSpecs) {
+      const laneIds: string[] = [];
+      for (const childSpec of specNode.parallelSubflowSpecs!) {
+        if (!childSpec || typeof childSpec !== 'object') {
+          error('parallel-spec-invalid', `Node "${key}": a "parallelSubflowSpecs" entry is not a FlowSpec object.`, key);
+          continue;
+        }
+        if (depth + 1 > maxDepth) {
+          error('subflow-too-deep', `Node "${key}": nested subflows may not go deeper than ${maxDepth} level(s); a parallel inline subflow was not compiled.`, key);
+          continue;
+        }
+        if (flowCount >= maxFlows) {
+          error('subflow-too-many', `Node "${key}": compiling a parallel inline subflow would exceed the maximum of ${maxFlows} flows in one bundle; it was not compiled.`, key);
+          continue;
+        }
+        const childFlow = compileLevel(childSpec, depth + 1, ancestorNames);
+        if (childFlow) {
+          laneIds.push(childFlow.id);
+        } else {
+          error('subflow-child-empty', `Node "${key}": a "parallelSubflowSpecs" entry produced no usable flow.`, key);
+        }
+      }
+      if (laneIds.length > 0) {
+        properties.parallelSubflowIds = laneIds;
+        applyParallelTuning(specNode, properties);
+      } else {
+        error('parallel-empty', `Node "${key}": "parallelSubflowSpecs" produced no runnable lanes.`, key);
+      }
+      return;
+    }
+
     if (specNode.generateSubflow !== undefined && specNode.generateSubflow !== null) {
       error(
         'subflow-generate-unsupported',
@@ -654,7 +786,28 @@ export function compileFlowSpec(
       return;
     }
 
-    error('subflow-missing-flow', `Node "${key}": subflow nodes need a "flow" (existing flow), a "subflowSpec" (inline child), or "generateSubflow".`, key);
+    error('subflow-missing-flow', `Node "${key}": subflow nodes need a "flow" (existing flow), a "subflowSpec" (inline child), "parallelFlows"/"parallelSubflowSpecs" (concurrent children), or "generateSubflow".`, key);
+  }
+
+  /** Map the parallel tuning fields onto the subflow node's properties (issue #102). */
+  function applyParallelTuning(specNode: FlowSpecNode, properties: Record<string, any>): void {
+    if (specNode.concurrencyLimit !== undefined) {
+      if (typeof specNode.concurrencyLimit === 'number' && !Number.isNaN(specNode.concurrencyLimit)) {
+        properties.concurrencyLimit = Math.max(1, Math.floor(specNode.concurrencyLimit));
+      } else {
+        warn('invalid-concurrency-limit', `Node "${specNode.key}": concurrencyLimit "${String(specNode.concurrencyLimit)}" is not a number; using the runtime default.`, specNode.key);
+      }
+    }
+    if (typeof specNode.joinSeparator === 'string') {
+      properties.joinSeparator = specNode.joinSeparator;
+    }
+    if (specNode.errorStrategy !== undefined) {
+      if (specNode.errorStrategy === 'fail-fast' || specNode.errorStrategy === 'collect-all') {
+        properties.errorStrategy = specNode.errorStrategy;
+      } else {
+        warn('invalid-error-strategy', `Node "${specNode.key}": errorStrategy "${String(specNode.errorStrategy)}" is not valid (fail-fast | collect-all); using collect-all.`, specNode.key);
+      }
+    }
   }
 }
 
@@ -720,10 +873,25 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) specNode.isolatedPrompt = props.isolatedPrompt;
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
+      if (typeof props.maxTurns === 'number' && props.maxTurns > 0) specNode.maxTurns = props.maxTurns;
+      if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
+      if (props.excludeStartNodePrompt === true) specNode.excludeStartNodePrompt = true;
+      if (props.excludeSystemPrompt === true) specNode.excludeSystemPrompt = true;
+      if (Array.isArray(props.allowedTools) && props.allowedTools.length > 0) {
+        specNode.allowedTools = props.allowedTools.filter((t: unknown): t is string => typeof t === 'string' && !!t);
+      }
       const servers = serversByProcess.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
-      if (typeof props.subflowId === 'string' && props.subflowId) specNode.flow = props.subflowId;
+      // Parallel fan-out (issue #102) takes precedence over the single-child target.
+      if (Array.isArray(props.parallelSubflowIds) && props.parallelSubflowIds.length > 0) {
+        specNode.parallelFlows = props.parallelSubflowIds.filter((id: unknown): id is string => typeof id === 'string' && !!id);
+        if (typeof props.concurrencyLimit === 'number' && props.concurrencyLimit > 0) specNode.concurrencyLimit = props.concurrencyLimit;
+        if (typeof props.joinSeparator === 'string') specNode.joinSeparator = props.joinSeparator;
+        if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;
+      } else if (typeof props.subflowId === 'string' && props.subflowId) {
+        specNode.flow = props.subflowId;
+      }
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;

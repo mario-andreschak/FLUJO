@@ -916,3 +916,208 @@ describe('compileFlowSpec — nested subflows (bundle)', () => {
     expect(inner.data.properties!.subflowId).toBe('flow-1');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tier 1 DSL-surface fixes (FlowSpec DSL gaps plan)
+// ---------------------------------------------------------------------------
+
+// A context with several existing flows for parallel fan-out lanes.
+const parallelContext: CompileContext = {
+  ...context,
+  flows: [
+    { id: 'flow-1', name: 'Summarizer' },
+    { id: 'flow-tests', name: 'run_tests' },
+    { id: 'flow-lint', name: 'run_lint_typecheck' },
+    { id: 'flow-sec', name: 'security_eval' },
+  ],
+};
+
+function subflowWrap(subNode: Partial<FlowSpec['nodes'][number]>): FlowSpec {
+  return {
+    nodes: [
+      { key: 's', type: 'start' },
+      { key: 'gate', type: 'subflow', ...(subNode as any) },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [
+      { from: 's', to: 'gate' },
+      { from: 'gate', to: 'f' },
+    ],
+  };
+}
+
+describe('compileFlowSpec — parallel fan-out (1a)', () => {
+  it('parallelFlows resolves each lane to an existing id; sets parallelSubflowIds, no subflowId', () => {
+    const spec = subflowWrap({
+      parallelFlows: ['run_tests', 'run_lint_typecheck', 'security_eval'],
+      concurrencyLimit: 2,
+      joinSeparator: '\n\n---\n\n',
+      errorStrategy: 'fail-fast',
+    });
+    const { flow, errorCount } = compileFlowSpec(spec, parallelContext);
+    expect(errorCount).toBe(0);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.parallelSubflowIds).toEqual(['flow-tests', 'flow-lint', 'flow-sec']);
+    expect(gate.data.properties).not.toHaveProperty('subflowId');
+    expect(gate.data.properties!.concurrencyLimit).toBe(2);
+    expect(gate.data.properties!.joinSeparator).toBe('\n\n---\n\n');
+    expect(gate.data.properties!.errorStrategy).toBe('fail-fast');
+  });
+
+  it('resolves lanes by id as well as name and de-duplicates', () => {
+    const { flow } = compileFlowSpec(
+      subflowWrap({ parallelFlows: ['flow-tests', 'run_tests', 'security_eval'] }),
+      parallelContext
+    );
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.parallelSubflowIds).toEqual(['flow-tests', 'flow-sec']);
+  });
+
+  it('errors on an unresolved lane', () => {
+    const { issues } = compileFlowSpec(subflowWrap({ parallelFlows: ['run_tests', 'nope'] }), parallelContext);
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'parallel-flow-unresolved', severity: 'error' }));
+  });
+
+  it('errors when a lane refers to an ancestor (cycle) while keeping the others', () => {
+    // Compile a parent whose inline child fans out to the parent by name.
+    const spec: FlowSpec = {
+      name: 'quality_gate',
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'child',
+          type: 'subflow',
+          subflowSpec: {
+            nodes: [
+              { key: 'cs', type: 'start' },
+              { key: 'fanout', type: 'subflow', parallelFlows: ['run_tests', 'quality_gate'] },
+              { key: 'cf', type: 'finish' },
+            ],
+            edges: [
+              { from: 'cs', to: 'fanout' },
+              { from: 'fanout', to: 'cf' },
+            ],
+          },
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'child' },
+        { from: 'child', to: 'f' },
+      ],
+    };
+    const { issues } = compileFlowSpec(spec, parallelContext, { maxDepth: 2 });
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-cycle', severity: 'error' }));
+  });
+
+  it('inline parallelSubflowSpecs compile into bundle children and set the lane ids', () => {
+    const spec = subflowWrap({
+      parallelSubflowSpecs: [leafSpec('lane_a'), leafSpec('lane_b')],
+    });
+    const result = compileFlowSpec(spec, parallelContext, { maxDepth: 2 });
+    expect(result.errorCount).toBe(0);
+    // root + 2 lane children
+    expect(result.flows).toHaveLength(3);
+    const gate = result.flow!.nodes.find((n) => n.type === 'subflow')!;
+    const laneIds = gate.data.properties!.parallelSubflowIds as string[];
+    expect(laneIds).toHaveLength(2);
+    const childIds = result.flows.filter((fl) => fl !== result.flow).map((fl) => fl.id);
+    expect(laneIds.sort()).toEqual(childIds.sort());
+  });
+
+  it('inline parallel lanes honour the maxFlows cap', () => {
+    const spec = subflowWrap({
+      parallelSubflowSpecs: [leafSpec(), leafSpec(), leafSpec()],
+    });
+    // root(1) + 2 children == cap 3; the third lane cannot be compiled.
+    const result = compileFlowSpec(spec, parallelContext, { maxDepth: 2, maxFlows: 3 });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'subflow-too-many', severity: 'error' }));
+    const gate = result.flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect((gate.data.properties!.parallelSubflowIds as string[]).length).toBe(2);
+  });
+
+  it('clamps concurrencyLimit to >= 1 and warns on a non-number', () => {
+    const { flow } = compileFlowSpec(
+      subflowWrap({ parallelFlows: ['run_tests'], concurrencyLimit: 0 }),
+      parallelContext
+    );
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.concurrencyLimit).toBe(1);
+
+    const bad = compileFlowSpec(
+      subflowWrap({ parallelFlows: ['run_tests'], concurrencyLimit: 'lots' as any }),
+      parallelContext
+    );
+    expect(bad.issues).toContainEqual(expect.objectContaining({ code: 'invalid-concurrency-limit', severity: 'warning' }));
+  });
+
+  it('precedence flow > parallelFlows: uses the single flow and warns', () => {
+    const { flow, issues } = compileFlowSpec(
+      subflowWrap({ flow: 'Summarizer', parallelFlows: ['run_tests'] }),
+      parallelContext
+    );
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-multiple-sources', severity: 'warning' }));
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.subflowId).toBe('flow-1');
+    expect(gate.data.properties).not.toHaveProperty('parallelSubflowIds');
+  });
+
+  it('a parallel subflow with a single outgoing edge still validates clean', () => {
+    const { flow } = compileFlowSpec(
+      subflowWrap({ parallelFlows: ['run_tests', 'run_lint_typecheck'] }),
+      parallelContext
+    );
+    const validation = validateFlow(flow!, { models: context.models });
+    expect(validation.issues.map((i) => i.code)).not.toContain('subflow-multiple-outgoing');
+    expect(validation.isRunnable).toBe(true);
+  });
+});
+
+describe('compileFlowSpec — process maxTurns / prompt flags / allowedTools (1b–1d)', () => {
+  const procWrap = (over: Partial<FlowSpec['nodes'][number]>): FlowSpec => ({
+    nodes: [
+      { key: 's', type: 'start' },
+      { key: 'p', type: 'process', model: 'model-abc', ...(over as any) },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [
+      { from: 's', to: 'p' },
+      { from: 'p', to: 'f' },
+    ],
+  });
+  const proc = (flow: NonNullable<ReturnType<typeof compileFlowSpec>['flow']>) =>
+    flow.nodes.find((n) => n.type === 'process')!;
+
+  it('maps and clamps maxTurns', () => {
+    expect(proc(compileFlowSpec(procWrap({ maxTurns: 20 }), context).flow!).data.properties!.maxTurns).toBe(20);
+    expect(proc(compileFlowSpec(procWrap({ maxTurns: 0 }), context).flow!).data.properties!.maxTurns).toBe(1);
+    expect(proc(compileFlowSpec(procWrap({ maxTurns: 999999 }), context).flow!).data.properties!.maxTurns).toBe(1000);
+  });
+
+  it('warns and omits a non-numeric maxTurns', () => {
+    const { flow, issues } = compileFlowSpec(procWrap({ maxTurns: 'many' as any }), context);
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'invalid-max-turns', severity: 'warning' }));
+    expect(proc(flow!).data.properties).not.toHaveProperty('maxTurns');
+  });
+
+  it('copies the prompt-composition flags only when boolean', () => {
+    const { flow } = compileFlowSpec(
+      procWrap({ excludeModelPrompt: true, excludeStartNodePrompt: false, excludeSystemPrompt: true }),
+      context
+    );
+    const p = proc(flow!).data.properties!;
+    expect(p.excludeModelPrompt).toBe(true);
+    expect(p.excludeStartNodePrompt).toBe(false);
+    expect(p.excludeSystemPrompt).toBe(true);
+  });
+
+  it('copies allowedTools, dropping non-string entries', () => {
+    const { flow } = compileFlowSpec(procWrap({ allowedTools: ['read_file', '', 42 as any, 'write_file'] }), context);
+    expect(proc(flow!).data.properties!.allowedTools).toEqual(['read_file', 'write_file']);
+  });
+
+  it('absent Tier-1 fields leave properties byte-for-byte unchanged', () => {
+    const p = proc(compileFlowSpec(procWrap({ prompt: 'x' }), context).flow!).data.properties!;
+    expect(p).toEqual({ promptTemplate: 'x', boundModel: 'model-abc' });
+  });
+});

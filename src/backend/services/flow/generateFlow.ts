@@ -43,6 +43,7 @@ import {
   MAX_GENERATED_FLOWS,
 } from '@/utils/shared/flowSpecCompiler';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
+import { repairFlowSpec, RepairChange } from '@/utils/shared/flowAutoRepair';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
@@ -570,7 +571,25 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
       state.contextDirty = false;
     }
 
-    const compiled = compileFlowSpec(spec, context.compile, { maxDepth, maxFlows: MAX_GENERATED_FLOWS });
+    // Forgiving generation: deterministically add a missing start/finish and chain
+    // disconnected steps in author order BEFORE compiling, so common wiring omissions the
+    // model makes don't burn its repair budget (recurses into inline subflow children). Best
+    // effort — a repair failure just compiles the spec as-is.
+    let specToCompile: FlowSpec = spec;
+    let repairChanges: RepairChange[] = [];
+    try {
+      const repaired = repairFlowSpec(spec);
+      if (repaired.changes.length > 0) {
+        specToCompile = repaired.spec;
+        repairChanges = repaired.changes;
+        log.info(`Attempt ${attempts}: auto-repair adjusted the spec (${repairChanges.length} change(s))`);
+      }
+    } catch (err) {
+      log.warn('Auto-repair of the generated spec failed; compiling the spec as-is', err);
+    }
+    const repairIssues = repairChanges.map((c) => ({ severity: 'warning' as const, code: c.code, message: c.message }));
+
+    const compiled = compileFlowSpec(specToCompile, context.compile, { maxDepth, maxFlows: MAX_GENERATED_FLOWS });
     if (!compiled.flow) {
       messages.push(
         { role: 'assistant', content: raw },
@@ -591,9 +610,10 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
         serverTools: context.compile.serverTools,
       }),
     }));
-    // One merged result across the WHOLE bundle (compile issues + every flow's validation)
-    // drives the repair loop and the caller's error/warning counts.
-    const validation = mergeIssues(compiled.issues, {
+    // One merged result across the WHOLE bundle (auto-repair changes + compile issues + every
+    // flow's validation) drives the repair loop and the caller's error/warning counts. The
+    // auto-repair warnings tell the reviewer what wiring was added for them.
+    const validation = mergeIssues([...repairIssues, ...compiled.issues], {
       issues: perFlow.flatMap((p) => p.validation.issues),
       errorCount: 0,
       warningCount: 0,
@@ -834,4 +854,55 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
     attempts,
     installedServers: state.installedServers,
   };
+}
+
+// ---------------------------------------------------------------------------
+// AI-supported auto-repair (the "ai" mode of the flow repair feature)
+// ---------------------------------------------------------------------------
+
+export interface RepairFlowAIInput {
+  /** The flow to repair — the current (possibly unsaved) canvas state. */
+  flow: Flow;
+  /** Id of the configured model that will do the repairing. */
+  modelId: string;
+  /** Let the repairer install MCP servers if a fix needs a missing capability (opt-in). */
+  allowInstall?: boolean;
+  /** Repair rounds after the first attempt (default 1, capped at 2). */
+  maxRepairs?: number;
+}
+
+/**
+ * AI-supported flow repair: the model counterpart to the deterministic {@link autoRepairFlow}
+ * (in flowAutoRepair.ts). Where the static repair connects things geometrically, this reuses
+ * the whole {@link improveFlow} seam (model resolve → flowToSpec → prompt → compile → bounded
+ * repair, preserving node ids/positions) with a change request SYNTHESIZED from the flow's own
+ * structural problems plus the same top-to-bottom = sequential / same-row = parallel intent
+ * the static planner follows. It never touches node prompts/models/servers — only wiring.
+ */
+export async function repairFlowWithAI(input: RepairFlowAIInput): Promise<GenerateFlowResult> {
+  const flow = input?.flow;
+  if (!flow || typeof flow !== 'object' || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
+    return { success: false, error: 'A valid flow to repair is required', statusCode: 400 };
+  }
+  if (!input?.modelId || typeof input.modelId !== 'string') {
+    return { success: false, error: 'A repair model id is required', statusCode: 400 };
+  }
+
+  // Structural checks need no model/server context, so they run here to sharpen the request.
+  const structural = validateFlow(flow);
+  const known = structural.issues.length > 0 ? `\n\nKnown problems to fix:\n${issueLines(structural.issues)}` : '';
+  const description =
+    `Repair this flow's wiring so it is runnable, WITHOUT changing any node's prompt, model, or servers:\n` +
+    `- add a Start node if one is missing, connected to the first step;\n` +
+    `- add a Finish node if one is missing, connected from the last step;\n` +
+    `- connect any disconnected process/subflow nodes.\n` +
+    `Read node placement as intent: nodes stacked top-to-bottom are sequential steps, and nodes on the same horizontal line are parallel branches under a shared parent above them.${known}`;
+
+  return improveFlow({
+    flow,
+    description,
+    modelId: input.modelId,
+    ...(input.allowInstall !== undefined ? { allowInstall: input.allowInstall } : {}),
+    ...(input.maxRepairs !== undefined ? { maxRepairs: input.maxRepairs } : {}),
+  });
 }

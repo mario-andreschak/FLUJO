@@ -296,6 +296,34 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
+
+    // --- Fan-out target: a single child (subflowId) OR parallel lanes (parallelSubflowIds).
+    // The single-outgoing-edge rule above is about SUCCESSORS and is unchanged; this is about
+    // CHILDREN. Only ADD the parallel acceptance path — never regress single-child subflows.
+    const props = node.data?.properties ?? {};
+    const subflowId = typeof props.subflowId === 'string' && props.subflowId ? props.subflowId : undefined;
+    const parallelIds = Array.isArray(props.parallelSubflowIds)
+      ? props.parallelSubflowIds.filter((id: unknown): id is string => typeof id === 'string' && !!id)
+      : [];
+    if (subflowId && parallelIds.length > 0) {
+      add(
+        'error',
+        'subflow-both-targets',
+        `Subflow node "${getNodeLabel(node)}" sets both a single "subflowId" and "parallelSubflowIds"; use one or the other.`,
+        node
+      );
+    }
+    if (parallelIds.length > 0) {
+      const limit = props.concurrencyLimit;
+      if (typeof limit === 'number' && limit < 1) {
+        add(
+          'warning',
+          'subflow-concurrency-limit',
+          `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
+          node
+        );
+      }
+    }
   }
 
   // --- Dangling tool/resource pills in Process prompts ---

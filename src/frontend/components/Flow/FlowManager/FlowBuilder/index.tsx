@@ -2,12 +2,15 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { styled } from '@mui/material/styles';
-import { 
-  Box, 
-  Button, 
-  TextField, 
-  Paper, 
-  Typography, 
+import {
+  Box,
+  Button,
+  ButtonGroup,
+  Menu,
+  MenuItem,
+  TextField,
+  Paper,
+  Typography,
   Divider,
   IconButton,
   Tooltip,
@@ -57,8 +60,19 @@ import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import HealingIcon from '@mui/icons-material/Healing';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
+import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
 import { Collapse } from '@mui/material';
+
+/** Pre-filled instruction for AI-supported repair (mirrors the backend repairFlowWithAI). */
+const AI_REPAIR_DESCRIPTION =
+  "Repair this flow's wiring so it is runnable, without changing any node's prompt, model, or servers: " +
+  'add a Start node if one is missing (connected to the first step), add a Finish node if one is missing ' +
+  '(connected from the last step), and connect any disconnected process/subflow nodes. Read node placement ' +
+  'as intent: nodes stacked top-to-bottom are sequential steps, and nodes on the same horizontal line are ' +
+  'parallel branches under a shared parent above them.';
 
 const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -147,6 +161,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [improveNotice, setImproveNotice] = useState<
     { severity: 'success' | 'info' | 'warning'; message: string } | null
   >(null);
+  // Auto-repair: the dropdown menu anchor, and the description the AI-Improve dialog is
+  // pre-seeded with when the user chooses "Repair with AI".
+  const [repairMenuAnchor, setRepairMenuAnchor] = useState<null | HTMLElement>(null);
+  const [improveInitialDescription, setImproveInitialDescription] = useState('');
   
   // History for undo/redo functionality
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -440,6 +458,48 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       });
     }
   }, [filterInvalidEdges]);
+
+  // Static auto-repair: deterministically add a missing Start/Finish and connect
+  // disconnected nodes, reading the current canvas layout as intent (vertical = sequential,
+  // same row = parallel). Runs entirely client-side (no model), applied as an unsaved,
+  // undoable change just like AI-Improve. No-op flows report "nothing to repair".
+  const handleRepairStatic = useCallback(() => {
+    setRepairMenuAnchor(null);
+    const currentFlow: Flow = {
+      id: initialFlow?.id || '',
+      name: flowName,
+      description: flowDescription,
+      nodes,
+      edges,
+    };
+    const { flow: repaired, changes } = autoRepairFlow(currentFlow);
+    if (changes.length === 0) {
+      setImproveNotice({ severity: 'info', message: 'Nothing to repair — the flow is already wired up.' });
+      return;
+    }
+    log.info(`Applying static auto-repair to the canvas (${changes.length} change(s))`);
+    setNodes(repaired.nodes || []);
+    setEdges(filterInvalidEdges(repaired.edges || []));
+    setHasUnsavedChanges(true);
+    const added = changes.filter((c) => c.code === 'auto-added-start' || c.code === 'auto-added-finish').length;
+    const wired = changes.length - added;
+    const parts: string[] = [];
+    if (changes.some((c) => c.code === 'auto-added-start')) parts.push('added a Start node');
+    if (changes.some((c) => c.code === 'auto-added-finish')) parts.push('added a Finish node');
+    if (wired > 0) parts.push(`connected ${wired} step(s)`);
+    setImproveNotice({
+      severity: 'success',
+      message: `Repaired the flow — ${parts.join(', ')}. Review the changes (Undo reverts them), then Save to keep them.`,
+    });
+  }, [initialFlow, flowName, flowDescription, nodes, edges, filterInvalidEdges]);
+
+  // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
+  // it, so model selection / install opt-in / result handling are all reused.
+  const handleRepairWithAI = useCallback(() => {
+    setRepairMenuAnchor(null);
+    setImproveInitialDescription(AI_REPAIR_DESCRIPTION);
+    setImproveDialogOpen(true);
+  }, []);
 
   // Handle copy flow
   const handleCopyFlow = useCallback((flowToCopy: Flow, newName: string) => {
@@ -811,12 +871,38 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               </span>
             </Tooltip>
 
+            <Tooltip title="Add a missing Start/Finish and connect disconnected nodes">
+              <ButtonGroup variant="outlined" color="primary" disabled={nodes.length === 0}>
+                <Button onClick={handleRepairStatic} startIcon={<HealingIcon />}>
+                  Repair
+                </Button>
+                <Button
+                  size="small"
+                  onClick={(e) => setRepairMenuAnchor(e.currentTarget)}
+                  aria-label="Repair options"
+                >
+                  <ArrowDropDownIcon />
+                </Button>
+              </ButtonGroup>
+            </Tooltip>
+            <Menu
+              anchorEl={repairMenuAnchor}
+              open={!!repairMenuAnchor}
+              onClose={() => setRepairMenuAnchor(null)}
+            >
+              <MenuItem onClick={handleRepairStatic}>Repair automatically (no model)</MenuItem>
+              <MenuItem onClick={handleRepairWithAI}>Repair with AI…</MenuItem>
+            </Menu>
+
             {initialFlow && (
               <>
                 <Button
                   variant="outlined"
                   color="secondary"
-                  onClick={() => setImproveDialogOpen(true)}
+                  onClick={() => {
+                    setImproveInitialDescription('');
+                    setImproveDialogOpen(true);
+                  }}
                   startIcon={<AutoFixHighIcon />}
                   data-tour="improve-flow"
                 >
@@ -949,6 +1035,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           edges,
         }}
         onImproved={handleImproved}
+        initialDescription={improveInitialDescription}
       />
       
       {/* Dialog for Copy/Rename/Unsaved Changes */}
