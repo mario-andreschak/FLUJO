@@ -180,6 +180,69 @@ describe('terminal', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('timedOut');
   });
+
+  it('kills the whole process tree on timeout (a grandchild does not survive)', async () => {
+    // Regression for #106: the shell wrapper's descendants must be killed too, not
+    // left orphaned. A node process spawns a NON-detached grandchild that records its
+    // pid and stays alive; both outlive the 2s timeout unless the tree is killed.
+    const pidFile = path.join(os.tmpdir(), `flujo-tree-${Date.now()}-${Math.random().toString(36).slice(2)}.pid`);
+    (process.env as Record<string, string | undefined>).FLUJO_PIDFILE = pidFile;
+
+    const isAlive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === 'EPERM';
+      }
+    };
+    const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+    // Payload uses single quotes only, so it wraps cleanly in the double-quoted -e arg
+    // across both cmd.exe and /bin/sh; it contains no $ or backticks.
+    const payload =
+      `const cp=require('child_process'),fs=require('fs');` +
+      `const c=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});` +
+      `fs.writeFileSync(process.env.FLUJO_PIDFILE,String(c.pid));` +
+      `setInterval(()=>{},1000);`;
+    const command = `node -e "${payload}"`;
+
+    let grandchildPid: number | undefined;
+    try {
+      const r = await internalCallTool(makeService(), 'terminal', { command, timeout: 2 });
+      expect(text(r)).toContain('timedOut');
+
+      // Wait for the recorded grandchild pid to appear, then read it.
+      const readStart = Date.now();
+      while (Date.now() - readStart < 4000) {
+        try {
+          const raw = (await fsp.readFile(pidFile, 'utf8')).trim();
+          if (raw) {
+            grandchildPid = Number(raw);
+            break;
+          }
+        } catch {
+          /* not written yet */
+        }
+        await sleep(150);
+      }
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+
+      // The tree-kill (SIGTERM group / taskkill /T) needs a moment to propagate.
+      const killStart = Date.now();
+      while (isAlive(grandchildPid as number) && Date.now() - killStart < 8000) {
+        await sleep(200);
+      }
+      expect(isAlive(grandchildPid as number)).toBe(false);
+    } finally {
+      delete (process.env as Record<string, string | undefined>).FLUJO_PIDFILE;
+      // Belt-and-suspenders: if the assertion above failed, don't leak the grandchild.
+      if (grandchildPid && isAlive(grandchildPid)) {
+        try { process.kill(grandchildPid, 'SIGKILL'); } catch { /* ignore */ }
+      }
+      await fsp.rm(pidFile, { force: true });
+    }
+  }, 30000);
 });
 
 describe('authoring tool routing', () => {

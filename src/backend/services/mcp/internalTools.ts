@@ -28,6 +28,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
+import { killProcessTree } from '@/utils/process/killProcessTree';
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
@@ -932,22 +933,31 @@ async function runTerminal(args: Record<string, unknown>): Promise<CallToolResul
     };
 
     let child;
+    // POSIX: spawn detached so the shell wrapper is a process-group leader and
+    // killProcessTree can signal the whole group on timeout. Windows uses
+    // taskkill /T by pid, so no detached flag is needed there.
+    const detached = process.platform !== 'win32';
     try {
-      child = spawn(command, { cwd, shell: true, env: process.env });
+      child = spawn(command, { cwd, shell: true, env: process.env, detached });
     } catch (err) {
       resolve(textResult({ error: `Failed to start command: ${err instanceof Error ? err.message : String(err)}`, cwd }, true));
       return;
     }
 
+    // On timeout, kill the ENTIRE process tree (not just the shell wrapper) so
+    // grandchildren the shell launched are not left orphaned/running. Keep the
+    // returned escalation-cleanup so finish() can cancel the pending SIGKILL.
+    let cancelEscalation: (() => void) | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill(); } catch { /* already gone */ }
+      cancelEscalation = killProcessTree(child);
     }, timeoutMs);
 
     const finish = (result: CallToolResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cancelEscalation?.();
       resolve(result);
     };
 

@@ -11,6 +11,7 @@ import { processPathLikeArgument } from '@/utils/mcp'
 import { isSafeRepoUrl, isSafeBranchName, buildRepoCommand } from '@/utils/git/validation';
 import { getAppDir, getDataDir } from '@/utils/paths';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
+import { killProcessTree } from '@/utils/process/killProcessTree';
 
 const log = createLogger('app/api/git/route');
 
@@ -366,15 +367,21 @@ function streamCommandInRepo(
       let settled = false;
       let buffer = '';
 
+      // POSIX: detached so the shell wrapper leads its own process group and
+      // killProcessTree can signal the whole group on abort (Windows uses taskkill /T).
       const child = spawn(finalCommand, {
         cwd: savePath,
         shell: true,
         env: { ...process.env, ...env },
+        detached: process.platform !== 'win32',
       });
 
+      let cancelEscalation: (() => void) | undefined;
       const onAbort = () => {
-        log.debug(`Client aborted ${actionName} stream, killing child [${requestId}]`);
-        try { child.kill(); } catch { /* already gone */ }
+        log.debug(`Client aborted ${actionName} stream, killing process tree [${requestId}]`);
+        // Kill the whole tree, not just the shell wrapper, so a long install/build
+        // the shell spawned is not left orphaned when the client disconnects.
+        cancelEscalation = killProcessTree(child);
       };
       signal.addEventListener('abort', onAbort, { once: true });
 
@@ -382,6 +389,7 @@ function streamCommandInRepo(
         if (settled) return;
         settled = true;
         signal.removeEventListener('abort', onAbort);
+        cancelEscalation?.();
         emit({ type: 'result', success: result.success, error: result.error, commandOutput: buffer });
         resolve();
       };
