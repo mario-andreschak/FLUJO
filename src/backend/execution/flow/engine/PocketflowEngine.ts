@@ -1,4 +1,4 @@
-import { Flow as PocketFlow, BaseNode } from '../temp_pocket';
+import { Flow as PocketFlow, BaseNode } from '../pocketflow';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from '../FlowConverter';
 import { createLogger } from '@/utils/logger';
@@ -9,7 +9,7 @@ import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './Fl
 const log = createLogger('backend/execution/flow/engine/PocketflowEngine');
 
 /**
- * FlowEngine backed by the embedded PocketFlow framework (temp_pocket.ts).
+ * FlowEngine backed by the embedded PocketFlow framework (pocketflow.ts).
  * All knowledge of PocketFlow's graph/node model lives here; everything above
  * it (FlowExecutor, routes, UI) talks only to the FlowEngine interface.
  */

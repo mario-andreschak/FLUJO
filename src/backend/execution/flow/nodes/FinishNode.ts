@@ -1,5 +1,5 @@
 // Local implementation of PocketFlow for debugging
-import { BaseNode } from '../temp_pocket';
+import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import { SharedState, FinishNodeParams, FinishNodePrepResult, FinishNodeExecResult, FINAL_RESPONSE_ACTION } from '../types'; // Import FINAL_RESPONSE_ACTION
 import { FEATURES } from '@/config/features'; // Import feature flags

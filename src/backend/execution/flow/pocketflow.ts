@@ -1,7 +1,7 @@
 import cloneDeep from "lodash/cloneDeep";
 import { createLogger } from '@/utils/logger';
 
-const log = createLogger('backend/execution/flow/temp_pocket');
+const log = createLogger('backend/execution/flow/pocketflow');
 
 export const DEFAULT_ACTION = "default"; // Default action for 
 
@@ -21,10 +21,10 @@ export abstract class BaseNode {
     log.debug(`setParams called with params`, { params });
     
     // Add verbose logging of the input parameters
-    log.verbose('setParams input', JSON.stringify({
+    log.verbose('setParams input', {
       params,
       node_params
-    }));
+    });
     
     this.flow_params = params;
     if (node_params) {
@@ -34,10 +34,10 @@ export abstract class BaseNode {
     log.debug(`setParams finished. flow_params count`, { flow_params: this.flow_params?.length, node_params: this.node_params?.length });
     
     // Add verbose logging of the updated state
-    log.verbose('setParams result', JSON.stringify({
+    log.verbose('setParams result', {
       flow_params: this.flow_params,
       node_params: this.node_params
-    }));
+    });
   }
 
     public clone(): BaseNode {
@@ -170,12 +170,12 @@ export abstract class RetryNode extends BaseNode {
     log.debug(`execWrapper called with prepResult`, { prepResult });
     
     // Add verbose logging of the input parameters
-    log.verbose('RetryNode execWrapper input', JSON.stringify({
+    log.verbose('RetryNode execWrapper input', {
       prepResult,
       node_params,
       maxRetries: this.maxRetries,
       intervalMs: this.intervalMs
-    }));
+    });
     
     for (let i = 0; i < this.maxRetries; i++) {
       try {
@@ -183,18 +183,18 @@ export abstract class RetryNode extends BaseNode {
         log.debug(`execWrapper finished successfully. Result`, { result });
         
         // Add verbose logging of the successful result
-        log.verbose('RetryNode execWrapper success result', JSON.stringify(result));
+        log.verbose('RetryNode execWrapper success result', result);
         
         return result;
       } catch (error) {
         log.warn(`Retry attempt ${i+1} failed`, { error });
         
         // Add verbose logging of the retry attempt
-        log.verbose('RetryNode execWrapper retry attempt', JSON.stringify({
+        log.verbose('RetryNode execWrapper retry attempt', {
           attempt: i + 1,
           maxRetries: this.maxRetries,
           error: error instanceof Error ? error.message : String(error)
-        }));
+        });
         
         await new Promise(resolve => setTimeout(resolve, this.intervalMs));
       }
@@ -203,9 +203,9 @@ export abstract class RetryNode extends BaseNode {
     log.error(`Max retries reached after ${this.maxRetries} attempts`);
     
     // Add verbose logging of the max retries error
-    log.verbose('RetryNode execWrapper max retries reached', JSON.stringify({
+    log.verbose('RetryNode execWrapper max retries reached', {
       maxRetries: this.maxRetries
-    }));
+    });
     
     throw new Error("Max retries reached after " + this.maxRetries + " attempts");
   }
@@ -241,9 +241,9 @@ export class Flow extends BaseNode {
     log.error(`Flow node does not support direct execution`);
     
     // Add verbose logging of the error
-    log.verbose('Flow execCore error', JSON.stringify({
+    log.verbose('Flow execCore error', {
       error: "Flow node does not support direct execution"
-    }));
+    });
     
     throw new Error("Flow node does not support direct execution");
   }
@@ -252,15 +252,15 @@ export class Flow extends BaseNode {
     log.debug(`Flow prep called with sharedState`, { sharedState });
     
     // Add verbose logging of the input parameters
-    log.verbose('Flow prep input', JSON.stringify({
+    log.verbose('Flow prep input', {
       sharedState,
       node_params
-    }));
+    });
     
     log.debug(`Flow prep finished. Returning empty object`);
     
     // Add verbose logging of the result
-    log.verbose('Flow prep result', JSON.stringify({}));
+    log.verbose('Flow prep result', {});
     
     return {}; // Pass through the shared state to exec_core
   }
@@ -269,16 +269,16 @@ export class Flow extends BaseNode {
     log.debug(`Flow post called with prepResult, execResult, and sharedState`, { prepResult, execResult, sharedState });
     
     // Add verbose logging of the input parameters
-    log.verbose('Flow post input', JSON.stringify({
+    log.verbose('Flow post input', {
       prepResult,
       execResult,
       node_params
-    }));
+    });
     
     log.debug(`Flow post finished. Returning DEFAULT_ACTION`);
     
     // Add verbose logging of the result
-    log.verbose('Flow post result', JSON.stringify({ action: DEFAULT_ACTION }));
+    log.verbose('Flow post result', { action: DEFAULT_ACTION });
     
     return DEFAULT_ACTION;
   }

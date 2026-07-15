@@ -1,5 +1,5 @@
 // Local implementation of PocketFlow for debugging
-import { BaseNode } from '../temp_pocket';
+import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import { MCPHandler } from '../handlers/MCPHandler';
 import { encodeToolName } from '../handlers/toolNamespace';

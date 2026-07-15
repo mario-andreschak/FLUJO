@@ -1,5 +1,5 @@
 // Local implementation of PocketFlow for debugging
-import { Flow, BaseNode } from './temp_pocket';
+import { Flow, BaseNode } from './pocketflow';
 import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';
 import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode } from './nodes';
 import { createLogger } from '@/utils/logger';

@@ -1,4 +1,4 @@
-import { BaseNode } from '../temp_pocket';
+import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import {
   SharedState,
