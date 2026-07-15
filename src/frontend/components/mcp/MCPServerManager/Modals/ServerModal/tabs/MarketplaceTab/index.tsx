@@ -53,8 +53,17 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import CloudIcon from '@mui/icons-material/Cloud';
 import ClearIcon from '@mui/icons-material/Clear';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import StarIcon from '@mui/icons-material/Star';
+import DownloadIcon from '@mui/icons-material/Download';
 
 const PAGE_SIZE = 30;
+
+/** Compact human count: 1200 → "1.2k", 1_500_000 → "1.5M". */
+const formatCount = (n: number): string => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(n);
+};
 
 const MarketplaceTab: React.FC<TabProps> = ({
   onClose,
@@ -368,6 +377,24 @@ const MarketplaceTab: React.FC<TabProps> = ({
                             {server.description || 'No description provided.'}
                           </Typography>
                           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+                            {typeof result.quality?.stars === 'number' && (
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                icon={<StarIcon />}
+                                label={formatCount(result.quality.stars)}
+                                title={`${result.quality.stars.toLocaleString()} GitHub stars`}
+                              />
+                            )}
+                            {typeof result.quality?.weeklyDownloads === 'number' && (
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                icon={<DownloadIcon />}
+                                label={`${formatCount(result.quality.weeklyDownloads)}/wk`}
+                                title={`${result.quality.weeklyDownloads.toLocaleString()} npm downloads last week`}
+                              />
+                            )}
                             {renderOptionChips(server)}
                             {server.version && (
                               <Chip size="small" variant="outlined" label={`v${server.version}`} />

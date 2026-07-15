@@ -32,8 +32,15 @@ import {
   missingRequiredInputs,
   resolvedPlanFrom,
   verificationStatusOf,
+  QualitySummary,
 } from '@/utils/mcp/registry';
 import { mcpService } from '@/backend/services/mcp';
+import { enrichAndRank } from '@/backend/services/mcp/quality/orchestrator';
+import { ServerCandidate, ScoredCandidate } from '@/backend/services/mcp/quality/types';
+import { GITHUB_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/githubStars';
+import { NPM_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/npmDownloads';
+import { REGISTRY_STATUS_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/registryStatus';
+import { loadQualitySettings } from '@/backend/services/mcp/quality/settings';
 
 const log = createLogger('backend/services/mcp/registryInstall');
 
@@ -54,28 +61,63 @@ export interface RegistrySearchHit {
   installable: boolean;
   /** Required env vars / headers with no default — must be provided to install. */
   requiredEnv: string[];
+  /** Quality ranking signals; absent only if enrichment was fully skipped. */
+  quality?: QualitySummary;
+}
+
+/** Build a ServerCandidate (what the quality layer scores) from a registry result. */
+function toCandidate(result: RegistryServerResult): ServerCandidate {
+  return {
+    registryName: result.server.name,
+    server: result.server,
+    verificationStatus: verificationStatusOf(result),
+  };
+}
+
+/** Pull a compact, UI-friendly quality summary out of a scored candidate. */
+function qualityFromScored(scored: ScoredCandidate): QualitySummary {
+  const evidenceOf = (id: string) => scored.signals.find((s) => s.providerId === id)?.evidence;
+  const gh = evidenceOf(GITHUB_PROVIDER_ID);
+  const npm = evidenceOf(NPM_PROVIDER_ID);
+  const status = evidenceOf(REGISTRY_STATUS_PROVIDER_ID);
+  return {
+    score: scored.score,
+    ...(typeof gh?.stars === 'number' ? { stars: gh.stars } : {}),
+    ...(typeof npm?.weeklyDownloads === 'number' ? { weeklyDownloads: npm.weeklyDownloads } : {}),
+    ...(typeof status?.status === 'string' ? { status: status.status } : {}),
+  };
 }
 
 /**
- * Search the public MCP registry. NOTE: the registry matches the SEARCH TERM
- * against server NAMES only (substring), not descriptions — callers should try
- * several short terms ("voice", "tts", "speech") rather than sentences.
+ * Search the public MCP registry, RANKED by blended quality (GitHub stars +
+ * recency, npm downloads, registry status) so the best/most-working servers come
+ * first — headless callers pick from the top, humans see the good ones up front.
+ *
+ * NOTE: the registry matches the SEARCH TERM against server NAMES only
+ * (substring), not descriptions — callers should try several short terms
+ * ("voice", "tts", "speech") rather than sentences.
  */
 export async function searchRegistry(
   query: string,
   limit = DEFAULT_SEARCH_LIMIT
 ): Promise<RegistrySearchHit[]> {
+  const results = await fetchRegistryResults(query, limit);
+  const ranked = await enrichAndRank(query, results.map(toCandidate));
+  return ranked.map((sc) => toSearchHit(sc.candidate.server, sc));
+}
+
+/** Raw registry list fetch (no ranking), shared by search + resolve paths. */
+async function fetchRegistryResults(query: string, limit: number): Promise<RegistryServerResult[]> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
   url.searchParams.set('version', 'latest');
   url.searchParams.set('limit', String(Math.min(Math.max(limit, 1), 30)));
   if (query) url.searchParams.set('search', query);
 
   const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS)) as RegistryListResponse;
-  const results = Array.isArray(data?.servers) ? data.servers : [];
-  return results.map((r) => toSearchHit(r.server));
+  return Array.isArray(data?.servers) ? data.servers : [];
 }
 
-function toSearchHit(server: RegistryServer): RegistrySearchHit {
+function toSearchHit(server: RegistryServer, scored?: ScoredCandidate): RegistrySearchHit {
   const options = getInstallOptions(server);
   const best = options[0];
   return {
@@ -84,7 +126,38 @@ function toSearchHit(server: RegistryServer): RegistrySearchHit {
     ...(server.description ? { description: server.description } : {}),
     installable: options.length > 0,
     requiredEnv: best ? missingRequiredInputs(best) : [],
+    ...(scored ? { quality: qualityFromScored(scored) } : {}),
   };
+}
+
+/**
+ * Rank a page of raw registry results by blended quality and annotate each with
+ * its `quality` summary — for the Marketplace proxy so the browser gets the same
+ * ranking + badges the headless path uses. `quality` is attached only to results
+ * the layer actually enriched (non-empty signals); the rest keep registry order
+ * after the ranked ones. Best-effort: on any failure the input is returned as-is.
+ */
+export async function rankRegistryResults(
+  query: string,
+  results: RegistryServerResult[]
+): Promise<RegistryServerResult[]> {
+  try {
+    const scored = await enrichAndRank(query, results.map(toCandidate));
+    const byName = new Map(results.map((r) => [r.server.name, r]));
+    const ranked: RegistryServerResult[] = [];
+    for (const sc of scored) {
+      const original = byName.get(sc.candidate.server.name);
+      if (!original) continue;
+      ranked.push(
+        sc.signals.length > 0
+          ? { ...original, quality: qualityFromScored(sc) }
+          : original // not enriched → don't fabricate a quality summary
+      );
+    }
+    return ranked.length === results.length ? ranked : results;
+  } catch {
+    return results;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +181,12 @@ export interface InstallResult {
    * the actual-install path — so any caller can preview/log what would run.
    */
   plan?: ResolvedInstallPlan;
+  /**
+   * True when the server was installed, connected, but the works-gate rejected
+   * it (it exposed zero tools or failed to start) and it was rolled back. The
+   * caller should try a different server rather than treat this as a config bug.
+   */
+  worksGateRejected?: boolean;
   error?: string;
 }
 
@@ -117,6 +196,12 @@ export interface InstallOptions {
    * `installed` is false and `plan` is populated; the server is not saved.
    */
   resolveOnly?: boolean;
+  /**
+   * Works-gate: after connecting, reject (and roll back) a server that exposes
+   * zero tools / failed to start. Defaults to the mcpQuality `worksGate` setting;
+   * pass false to force it off for a specific install.
+   */
+  worksGate?: boolean;
 }
 
 /**
@@ -213,11 +298,136 @@ export async function installRegistryServer(
   // one-shot reconnect if the first call races the handshake (cold npx/uvx/docker
   // downloads happen inside this connect, so this can take a while).
   const { tools, error } = await mcpService.listServerTools(serverName);
+  const toolList = (tools ?? []).map((t) => ({ name: t.name, ...(t.description ? { description: t.description } : {}) }));
+
+  // Works-gate: a freshly-installed server that failed to start or exposes zero
+  // tools is useless (and often "trash" from the registry). Roll back what WE
+  // just added and tell the caller to try another — never leave a dead server
+  // configured. Only applies to servers this call created (the already-existed
+  // path above is left untouched).
+  const gate = options?.worksGate ?? (await loadQualitySettings()).worksGate;
+  if (gate && toolList.length === 0) {
+    log.warn(`installRegistryServer: "${serverName}" exposed no tools${error ? ` (${error})` : ''}; rolling back (works-gate)`);
+    try {
+      await mcpService.deleteServerConfig(serverName);
+    } catch (rollbackErr) {
+      log.error(`installRegistryServer: rollback of "${serverName}" failed`, rollbackErr);
+    }
+    return {
+      installed: false,
+      worksGateRejected: true,
+      serverName,
+      plan,
+      error: error
+        ? `"${server.name}" failed to start: ${error}`
+        : `"${server.name}" connected but exposed no tools — rejected by the works-gate. Try a different server.`,
+    };
+  }
+
   return {
     installed: true,
     serverName,
     plan,
-    tools: (tools ?? []).map((t) => ({ name: t.name, ...(t.description ? { description: t.description } : {}) })),
+    tools: toolList,
     ...(error ? { error } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Capability-based headless install (ranked best→worst with the works-gate)
+// ---------------------------------------------------------------------------
+
+export interface BestInstallAttempt {
+  name: string;
+  score: number;
+  reason: string;
+}
+
+export interface BestInstallResult extends InstallResult {
+  /** Candidates tried/skipped before the winner (or before giving up), best-first. */
+  attempts?: BestInstallAttempt[];
+}
+
+export interface BestInstallOptions {
+  /** How many installable candidates to actually attempt. Default 3. */
+  maxAttempts?: number;
+  /** Minimum composite score to attempt. Defaults to the mcpQuality `minScore`. */
+  minScore?: number;
+  /**
+   * Audit hook invoked after each attempt with its plan + result, so a caller
+   * (e.g. the authoring tool) can record every spawn to the SEP-1024 audit log.
+   */
+  onAttempt?: (plan: ResolvedInstallPlan | undefined, res: InstallResult) => Promise<void> | void;
+}
+
+/**
+ * Install the BEST WORKING server for a capability, unattended: search the
+ * registry, rank by blended quality, then walk best→worst installing with the
+ * works-gate on — the first candidate that boots with a non-empty tool list
+ * wins; ones that need unavailable env, aren't installable, or fail the gate are
+ * skipped. This is the fully-headless "give me a working X" entry (vs
+ * installRegistryServer, which installs a specific named entry).
+ */
+export async function installBestForCapability(
+  query: string,
+  envOverrides?: Record<string, string>,
+  options?: BestInstallOptions
+): Promise<BestInstallResult> {
+  if (!query || typeof query !== 'string') {
+    return { installed: false, error: 'A capability search query is required' };
+  }
+
+  let results: RegistryServerResult[];
+  try {
+    results = await fetchRegistryResults(query, 10);
+  } catch (err) {
+    return { installed: false, error: `Registry lookup failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const ranked = await enrichAndRank(query, results.map(toCandidate));
+  const settings = await loadQualitySettings();
+  const threshold = options?.minScore ?? settings.minScore;
+  const maxAttempts = options?.maxAttempts ?? 3;
+
+  const attempts: BestInstallAttempt[] = [];
+  let tried = 0;
+  for (const sc of ranked) {
+    const name = sc.candidate.registryName;
+    // ranked is score-desc: once below threshold, everything after is too.
+    if (sc.score < threshold) {
+      attempts.push({ name, score: sc.score, reason: `below minScore ${threshold}` });
+      break;
+    }
+    // Don't spend an attempt on entries FLUJO can't run at all.
+    if (getInstallOptions(sc.candidate.server).length === 0) {
+      attempts.push({ name, score: sc.score, reason: 'no supported install method' });
+      continue;
+    }
+    if (tried >= maxAttempts) break;
+    tried += 1;
+
+    const res = await installRegistryServer(name, envOverrides, { worksGate: true });
+    if (options?.onAttempt) {
+      try {
+        await options.onAttempt(res.plan, res);
+      } catch (auditErr) {
+        log.error('installBestForCapability: onAttempt hook failed', auditErr);
+      }
+    }
+    if (res.installed) {
+      return { ...res, attempts };
+    }
+    const reason = res.needsEnv?.length
+      ? `needs env: ${res.needsEnv.join(', ')}`
+      : res.worksGateRejected
+        ? 'works-gate rejected (no tools / failed to start)'
+        : res.error ?? 'install failed';
+    attempts.push({ name, score: sc.score, reason });
+  }
+
+  return {
+    installed: false,
+    attempts,
+    error: `No working server found for "${query}" among the top ${tried} installable candidate(s).`,
   };
 }

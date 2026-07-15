@@ -27,7 +27,7 @@ import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
-import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { searchRegistry, installRegistryServer, installBestForCapability } from '@/backend/services/mcp/registryInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { isVerifiedStatus } from '@/utils/mcp/registry';
@@ -40,6 +40,7 @@ export const AUTHORING_TOOL_NAMES = [
   'create_flow',
   'search_mcp_marketplace',
   'install_mcp_server',
+  'install_best_mcp_server',
 ] as const;
 
 export function isAuthoringTool(name: string): boolean {
@@ -105,6 +106,26 @@ export function authoringToolDefinitions(): Tool[] {
           },
         },
         required: ['name'],
+      },
+    },
+    {
+      name: 'install_best_mcp_server',
+      description:
+        'Install the BEST WORKING MCP server for a capability, unattended — the recommended way to acquire a capability when you don\'t already have a specific server name. Searches the registry, RANKS candidates by blended quality (GitHub stars + recent activity, npm weekly downloads, registry status), then installs best→worst until one actually boots and exposes tools (the "works-gate"): candidates that need unavailable keys, can\'t be installed, or start with zero tools are skipped automatically. Same consent/audit rules and third-party-code warning as install_mcp_server. Returns the installed server name + its tools and the list of candidates tried, or needsEnv/consentRequired. Prefer this over search+install for headless self-improvement; use install_mcp_server only when you must pin an exact server.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          capability: {
+            type: 'string',
+            description: 'Short capability term matched against server names, e.g. "youtube", "email", "browser".',
+          },
+          env: {
+            type: 'object',
+            description: 'Optional env var values shared across attempted servers (e.g. an API key).',
+            additionalProperties: { type: 'string' },
+          },
+        },
+        required: ['capability'],
       },
     },
   ];
@@ -185,6 +206,54 @@ export async function authoringCallTool(
       await appendInstallAudit(
         planToAuditEntry(result.plan ?? resolved.plan, 'authoring-tool', decision, result.installed, result.error)
       );
+      return textResult(
+        { ...result, ...(verificationWarning ? { verificationWarning } : {}) },
+        !result.installed
+      );
+    }
+
+    if (toolName === 'install_best_mcp_server') {
+      const capability = typeof args?.capability === 'string' ? args.capability : '';
+      const env =
+        args?.env && typeof args.env === 'object' && !Array.isArray(args.env)
+          ? (args.env as Record<string, string>)
+          : undefined;
+      if (!capability) {
+        return textResult({ error: 'Provide a "capability" search term.' }, true);
+      }
+
+      // Consent for the authoring-tool caller is name-independent (it keys on
+      // trustBrainStem), so it can be decided once for the whole ranked walk.
+      const settings = await loadAutoInstallSettings();
+      const decision = decideInstallConsent({ caller: 'authoring-tool', settings, registryName: capability });
+
+      if (!decision.allowed) {
+        // Preview the top-ranked installable candidate's exact command so the
+        // caller can obtain approval — never spawn anything.
+        const hits = await searchRegistry(capability);
+        const top = hits.find((h) => h.installable);
+        const preview = top ? await installRegistryServer(top.name, env, { resolveOnly: true }) : null;
+        if (preview?.plan) {
+          await appendInstallAudit(planToAuditEntry(preview.plan, 'authoring-tool', decision, false));
+        }
+        return textResult({
+          installed: false,
+          consentRequired: true,
+          message: decision.message,
+          ...(preview?.plan ? { plan: preview.plan } : {}),
+        });
+      }
+
+      // Trusted: walk best→worst with the works-gate, auditing every spawn.
+      const result = await installBestForCapability(capability, env, {
+        onAttempt: async (plan, res) => {
+          if (plan) await appendInstallAudit(planToAuditEntry(plan, 'authoring-tool', decision, res.installed, res.error));
+        },
+      });
+      const verificationWarning =
+        result.installed && !isVerifiedStatus(result.plan?.verificationStatus)
+          ? `Installed an unverified / self-asserted registry entry (status: ${result.plan?.verificationStatus}).`
+          : undefined;
       return textResult(
         { ...result, ...(verificationWarning ? { verificationWarning } : {}) },
         !result.installed

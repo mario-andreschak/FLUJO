@@ -85,6 +85,22 @@ export interface RegistryServer {
   icons?: RegistryIcon[];
 }
 
+/**
+ * Compact quality summary attached to a search/listing result by the ranking
+ * layer (GitHub stars + recency, npm downloads, registry status). Present only
+ * on results the quality layer actually enriched; absent otherwise.
+ */
+export interface QualitySummary {
+  /** Blended 0..1 composite score the results are sorted by. */
+  score: number;
+  /** GitHub stars, when the repo was resolved. */
+  stars?: number;
+  /** npm last-week downloads, when the package was resolved. */
+  weeklyDownloads?: number;
+  /** Registry lifecycle status ('active' | 'unverified' | …). */
+  status?: string;
+}
+
 export interface RegistryServerResult {
   server: RegistryServer;
   _meta?: {
@@ -95,6 +111,8 @@ export interface RegistryServerResult {
       isLatest?: boolean;
     };
   };
+  /** Blended quality signals; set by the ranking layer, absent when not enriched. */
+  quality?: QualitySummary;
 }
 
 export interface RegistryListResponse {
