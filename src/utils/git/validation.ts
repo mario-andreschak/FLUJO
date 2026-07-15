@@ -47,3 +47,60 @@ export function isSafeBranchName(branch: unknown): boolean {
   if (/[\s\x00-\x1f]/.test(trimmed)) return false;
   return true;
 }
+
+/**
+ * Quote a single argument so a POSIX shell (/bin/sh) treats it as ONE literal
+ * token: wrap the whole value in single quotes and escape any embedded single
+ * quote as the classic `'\''` sequence (close-quote, escaped-quote, reopen).
+ * Inside single quotes nothing is special, so `;`, `|`, `&`, `` ` ``, `$(...)`,
+ * `>`, `<` etc. are all neutralized.
+ */
+export function posixQuoteArg(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Quote a single argument for Windows `cmd.exe` (what `execSync` / `spawn({shell:true})`
+ * use on win32, via `cmd /d /s /c`). Inside a double-quoted string cmd treats shell
+ * metacharacters (`&` `|` `<` `>` `^` `(` `)` etc.) literally, so wrapping the token in
+ * double quotes neutralizes them; embedded double quotes are doubled (`""`) so the value
+ * stays a single argument. (Caret-escaping is deliberately NOT applied here — inside a
+ * quoted token a caret would be inserted literally and corrupt the value.)
+ */
+export function windowsQuoteArg(arg: string): string {
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Platform-aware single-argument shell quoting. `platform` defaults to the current
+ * process platform but is injectable so both branches are unit-testable on any host.
+ */
+export function shellQuoteArg(arg: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? windowsQuoteArg(arg) : posixQuoteArg(arg);
+}
+
+/**
+ * Assemble the final shell command run by the /api/git command runners.
+ *
+ * The base `command` is treated as an intentional (possibly compound, e.g.
+ * `npm install && npm run build`) shell string and is passed through UN-quoted so those
+ * commands keep working exactly as before. Each non-empty appended arg is shell-quoted
+ * via {@link shellQuoteArg} so a metacharacter in an arg reaches the child as one literal
+ * token instead of being interpreted by the shell. Shared by both the `execSync` and
+ * `spawn` runners so the quoting logic lives in one tested place.
+ */
+export function buildRepoCommand(
+  command: string,
+  args: string[] | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  let finalCommand = command || '';
+  if (args && args.length > 0) {
+    const validArgs = args.filter(arg => arg.trim() !== '');
+    if (validArgs.length > 0) {
+      const argsString = validArgs.map(arg => shellQuoteArg(arg, platform)).join(' ');
+      finalCommand = `${finalCommand} ${argsString}`;
+    }
+  }
+  return finalCommand;
+}

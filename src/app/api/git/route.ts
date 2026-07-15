@@ -8,7 +8,7 @@ import { createLogger } from '@/utils/logger';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
-import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
+import { isSafeRepoUrl, isSafeBranchName, buildRepoCommand } from '@/utils/git/validation';
 import { getAppDir, getDataDir } from '@/utils/paths';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 
@@ -195,24 +195,12 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
     await fs.access(savePath);
     log.debug(`Directory exists, proceeding [${requestId}]`);
     
-    // Use the command provided by the frontend
+    // Use the command provided by the frontend. The base command is an intentional
+    // (possibly compound) shell string passed through un-quoted; only the appended args
+    // are shell-quoted (see buildRepoCommand) so a metacharacter in an arg is treated as
+    // one literal token instead of being interpreted by the shell.
     log.debug(`Using ${actionName} command from frontend [${requestId}]`);
-    let finalCommand = command || '';
-    
-    // Append arguments if provided
-    if (args && args.length > 0) {
-      // Filter out empty arguments
-      const validArgs = args.filter(arg => arg.trim() !== '');
-      if (validArgs.length > 0) {
-        log.debug(`Appending ${validArgs.length} arguments to command [${requestId}]`);
-        // Join arguments with spaces, properly handling arguments with spaces
-        const argsString = validArgs.map(arg => {
-          // If argument contains spaces, wrap it in quotes
-          return arg.includes(' ') ? `"${arg}"` : arg;
-        }).join(' ');
-        finalCommand = `${finalCommand} ${argsString}`;
-      }
-    }
+    const finalCommand = buildRepoCommand(command || '', args);
     
     log.debug(`${actionName} command: ${finalCommand} [${requestId}]`);
     
@@ -367,15 +355,9 @@ function streamCommandInRepo(
       return;
     }
 
-    // Build the final command exactly as executeCommandInRepo does.
-    let finalCommand = command || '';
-    if (args && args.length > 0) {
-      const validArgs = args.filter(arg => arg.trim() !== '');
-      if (validArgs.length > 0) {
-        const argsString = validArgs.map(arg => (arg.includes(' ') ? `"${arg}"` : arg)).join(' ');
-        finalCommand = `${finalCommand} ${argsString}`;
-      }
-    }
+    // Build the final command exactly as executeCommandInRepo does (shared helper:
+    // base command un-quoted, each arg shell-quoted as one literal token).
+    const finalCommand = buildRepoCommand(command || '', args);
 
     log.info(`Streaming ${actionName} command: ${finalCommand} in ${savePath} [${requestId}]`);
     emit({ type: 'status', phase: 'running', message: `Executing: ${finalCommand}\n` });
@@ -521,6 +503,7 @@ export async function POST(request: NextRequest) {
         return executeCommandInRepo({
           savePath,
           command: installCommand,
+          env,
           actionName: 'Install',
           requestId
         });
@@ -532,6 +515,7 @@ export async function POST(request: NextRequest) {
         return streamCommandInRepo({
           savePath,
           command: installCommand,
+          env,
           actionName: 'Install',
           requestId
         }, request);
@@ -682,6 +666,7 @@ export async function POST(request: NextRequest) {
         return executeCommandInRepo({
           savePath,
           command: buildCommand || '',
+          env,
           actionName: 'Build',
           requestId
         });
@@ -694,6 +679,7 @@ export async function POST(request: NextRequest) {
         return streamCommandInRepo({
           savePath,
           command: buildCommand || '',
+          env,
           actionName: 'Build',
           requestId
         }, request);
