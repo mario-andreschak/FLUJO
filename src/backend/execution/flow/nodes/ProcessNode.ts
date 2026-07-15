@@ -24,6 +24,8 @@ import {
   ToolCallInfo
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
+import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
+import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -184,13 +186,20 @@ export class ProcessNode extends BaseNode {
 
     // Use the promptRenderer to build the complete prompt
     log.info('Using promptRenderer to build the complete prompt');
-    const completePrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
+    const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
       renderMode: 'rendered',
       includeConversationHistory: false,
       excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt
     });
+
+    // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
+    // scratchpad AFTER rendering. PromptRenderer is state-agnostic by design
+    // (it has no SharedState), so the substitution happens here where the vars
+    // are in scope. This is plaintext map lookup — NOT resolveGlobalVars (which
+    // decrypts `${global:VAR}` for tool args / API keys and never touches prompts).
+    const completePrompt = resolveRunVars(renderedPrompt, sharedState.variables);
 
     log.debug('Prompt rendered successfully', {
       completePromptLength: completePrompt.length,
@@ -305,10 +314,13 @@ export class ProcessNode extends BaseNode {
       log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
     }
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
+      // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
+      // like the system prompt) so an isolated step can pull captured state.
+      const isolatedPrompt = node_params?.properties?.isolatedPrompt;
       prepResult.wireMessages = scopeMessagesForInput(
         wireBase,
         inputMode,
-        node_params?.properties?.isolatedPrompt,
+        isolatedPrompt !== undefined ? resolveRunVars(isolatedPrompt, sharedState.variables) : isolatedPrompt,
       );
     }
 
@@ -599,6 +611,28 @@ export class ProcessNode extends BaseNode {
     return false; // No handoff tool call found
   }
 
+  /**
+   * The node's outgoing CONTROL edge ids (routing actions) in author order,
+   * for Tier 2b deterministic routing. Prefers the ordered list FlowConverter
+   * recorded on node_params; falls back to the successors map (same MCP-edge
+   * filter as processHandoffToolCalls) so the routing is correct even if the
+   * ordered list is somehow absent. Map iteration preserves insertion order,
+   * which is the edge author order.
+   */
+  private orderedControlEdges(node_params?: ProcessNodeParams): string[] {
+    const recorded = node_params?.orderedOutgoingEdges;
+    if (Array.isArray(recorded) && recorded.length > 0) return recorded;
+
+    const allActions = this.successors instanceof Map
+      ? Array.from(this.successors.keys())
+      : Object.keys(this.successors || {});
+    return allActions.filter(action =>
+      !action.includes('-mcpEdge') &&
+      !action.endsWith('mcpEdge') &&
+      !action.includes('-mcp')
+    );
+  }
+
   async post(
     prepResult: ProcessNodePrepResult,
     execResult: ProcessNodeExecResult,
@@ -632,6 +666,17 @@ export class ProcessNode extends BaseNode {
     } else {
        // Use the content from execResult which might include prefixes
        sharedState.lastResponse = execResult.content || '';
+    }
+
+    // Tier 2c (named variables): capture this node's final output into the
+    // run-scoped scratchpad so a later step can inject it via `${var:NAME}`.
+    // post() mutates the shared reference once per visit, so the value is visible
+    // to every later node's prep. Only on success — an errored node returns above.
+    const captureVariable = node_params?.properties?.captureVariable?.trim();
+    if (execResult.success && captureVariable) {
+      sharedState.variables = sharedState.variables ?? {};
+      sharedState.variables[captureVariable] = execResult.content ?? '';
+      log.info('Captured node output into run variable', { captureVariable, nodeId: node_params?.id });
     }
 
     // Update shared state with messages from execResult — WITHOUT the node's
@@ -682,6 +727,39 @@ export class ProcessNode extends BaseNode {
     if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
       log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION');
       return TOOL_CALL_ACTION; // Return tool call action
+    }
+
+    // --- Tier 2b: deterministic conditioned routing -------------------------
+    // GATED: only runs when this node has at least one conditioned outgoing edge.
+    // A node whose edges are all bare is byte-for-byte unchanged (model-decided
+    // handoff above; terminate on plain text below). Precedence: a model handoff
+    // tool call (handled above at :673) always wins; conditions decide otherwise.
+    const edgeConditions = node_params?.edgeConditions;
+    if (edgeConditions && Object.keys(edgeConditions).length > 0) {
+      const ordered = this.orderedControlEdges(node_params);
+
+      // First matching predicate wins, in author order.
+      for (const edgeId of ordered) {
+        const cond = edgeConditions[edgeId];
+        if (!cond) continue;
+        const text = selectConditionText(sharedState.messages, cond.target);
+        if (evaluateCondition(cond, text)) {
+          log.info('Deterministic edge condition matched; routing', { edgeId, kind: cond.kind });
+          return edgeId;
+        }
+      }
+
+      // No predicate matched → take the first BARE (predicate-less) edge as the
+      // default/fallback, if any.
+      const bare = ordered.find((edgeId) => !edgeConditions[edgeId]);
+      if (bare) {
+        log.info('No edge condition matched; routing to bare fallback edge', { edgeId: bare });
+        return bare;
+      }
+
+      // Conditioned node, nothing matched, no fallback → fall through and
+      // terminate (FINAL_RESPONSE_ACTION), same as an unmatched plain response.
+      log.info('Conditioned node: no predicate matched and no bare fallback; terminating');
     }
 
     // If no error, no handoff, and no other tool calls, it's a final response for this step

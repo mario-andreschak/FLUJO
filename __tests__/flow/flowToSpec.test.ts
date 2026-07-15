@@ -290,6 +290,82 @@ describe('flowToSpec — Tier 1 fields round-trip', () => {
     expect(gate2.data.properties!.parallelSubflowIds).toEqual(['flow-tests', 'flow-lint']);
     expect(gate2.data.properties).not.toHaveProperty('subflowId');
   });
+
+  it('serializes a map-over-list subflow back to flow + mapOverList + tuning', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'gate',
+          type: 'subflow',
+          flow: 'run_tests',
+          mapOverList: true,
+          itemSplit: 'lines',
+          sequential: true,
+          concurrencyLimit: 2,
+          joinSeparator: '\n--\n',
+          errorStrategy: 'fail-fast',
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'gate' },
+        { from: 'gate', to: 'f' },
+      ],
+    };
+    const flow1 = compileFlowSpec(spec, parallelContext).flow!;
+    const reSpec = flowToSpec(flow1);
+    const gate = reSpec.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.flow).toBe('flow-tests');
+    expect(gate.mapOverList).toBe(true);
+    expect(gate.itemSplit).toBe('lines');
+    expect(gate.sequential).toBe(true);
+    expect(gate.concurrencyLimit).toBe(2);
+    expect(gate.joinSeparator).toBe('\n--\n');
+    expect(gate.errorStrategy).toBe('fail-fast');
+    expect(gate.parallelFlows).toBeUndefined();
+
+    const flow2 = compileFlowSpec(reSpec, parallelContext).flow!;
+    const gate2 = flow2.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate2.data.properties).toEqual(flow1.nodes.find((n) => n.type === 'subflow')!.data.properties);
+  });
+});
+
+describe('flowToSpec — edge conditions (Tier 2b) round-trip', () => {
+  const cond = { kind: 'contains' as const, value: 'FAIL', ignoreCase: true };
+  const conditionedFlow: Flow = {
+    id: 'x',
+    name: 'conditioned',
+    nodes: [
+      { id: 's', type: 'start', position: { x: 0, y: 0 }, data: { label: 'Start', type: 'start', properties: {} } },
+      { id: 'p', type: 'process', position: { x: 0, y: 1 }, data: { label: 'P', type: 'process', properties: { boundModel: 'model-def', promptTemplate: 'x' } } },
+      { id: 'fix', type: 'process', position: { x: 0, y: 2 }, data: { label: 'Fix', type: 'process', properties: { boundModel: 'model-def', promptTemplate: 'y' } } },
+      { id: 'f', type: 'finish', position: { x: 0, y: 3 }, data: { label: 'End', type: 'finish', properties: {} } },
+    ],
+    edges: [
+      { id: 'e1', source: 's', target: 'p', data: { edgeType: 'standard' } },
+      { id: 'e2', source: 'p', target: 'fix', data: { edgeType: 'standard', condition: cond } },
+      { id: 'e3', source: 'p', target: 'f', data: { edgeType: 'standard' } },
+    ],
+  } as unknown as Flow;
+
+  it('emits condition only on the edge that has one', () => {
+    const spec = flowToSpec(conditionedFlow);
+    const conditioned = spec.edges.find((e) => e.from === 'p' && e.to === 'fix')!;
+    const bare = spec.edges.find((e) => e.from === 'p' && e.to === 'f')!;
+    expect(conditioned.condition).toEqual(cond);
+    expect(bare.condition).toBeUndefined();
+  });
+
+  it('survives a compile ∘ serialize round-trip', () => {
+    const spec = flowToSpec(conditionedFlow);
+    const { flow, errorCount } = compileFlowSpec(spec, context);
+    expect(errorCount).toBe(0);
+    // compileFlowSpec mints fresh node ids, so find the (single) conditioned edge by its data.
+    const conditioned = flow!.edges.filter((e) => (e.data as any)?.condition);
+    expect(conditioned).toHaveLength(1);
+    expect((conditioned[0].data as any).condition).toEqual(cond);
+  });
 });
 
 describe('flowToSpec — resilience', () => {

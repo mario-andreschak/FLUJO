@@ -271,6 +271,42 @@ describe('message emission (live view feed)', () => {
   });
 });
 
+describe('Tier 2c — named-variable seeding + persistence', () => {
+  it('seeds SharedState.variables from FlowRunInput.variables (values coerced to string)', async () => {
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'seed me',
+      mode: 'conversation',
+      variables: { plan: 'do X', count: 3, skip: null as unknown as string },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.variables).toEqual({ plan: 'do X', count: '3' }); // null skipped, number coerced
+  });
+
+  it('a top-level (conversation) run PERSISTS the variables map', async () => {
+    await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'persist vars',
+      mode: 'conversation',
+      variables: { keep: 'this' },
+    });
+
+    const last = persistedStates[persistedStates.length - 1];
+    expect(last.variables).toEqual({ keep: 'this' });
+  });
+
+  it('an ephemeral run persists nothing, so seeded variables never reach the store', async () => {
+    await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'ephemeral vars',
+      mode: 'ephemeral',
+      variables: { secretish: 'gone' },
+    });
+    expect(persistedStates.length).toBe(0);
+  });
+});
+
 describe('persistConversationState chokepoint (ephemeral policy)', () => {
   // The policy is enforced INSIDE the persist function, not at call sites, so
   // even persist paths outside the run loop (e.g. the Claude adapter's

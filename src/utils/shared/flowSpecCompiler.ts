@@ -38,6 +38,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
+import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
@@ -128,6 +129,19 @@ export interface FlowSpecNode {
   /** subflow parallel: 'collect-all' (default; every lane runs, partials surfaced) | 'fail-fast'. */
   errorStrategy?: 'fail-fast' | 'collect-all';
   /**
+   * subflow only (Tier 2a): run the SINGLE child flow (`flow` / `subflowSpec`) ONCE PER ITEM
+   * parsed from the resolved input, instead of once. Mutually exclusive with the parallel
+   * fan-out sources (`parallelFlows`/`parallelSubflowSpecs`). The per-item runs reuse the same
+   * bounded pool and joining, so `concurrencyLimit`/`joinSeparator`/`errorStrategy` apply.
+   */
+  mapOverList?: boolean;
+  /** subflow map-over-list: how to split the input into items — 'json-array' (default; parse a
+   *  JSON array, each element one item) or 'lines' (split on newlines, blank lines dropped). */
+  itemSplit?: 'json-array' | 'lines';
+  /** subflow map-over-list: run items one at a time in order (pool size 1) instead of
+   *  concurrently. Default false. */
+  sequential?: boolean;
+  /**
    * subflow only (issue #94): an INLINE child FlowSpec. The compiler compiles it into its
    * own flow and wires this node's subflowId to it. Mutually exclusive with `flow`
    * (precedence: flow > subflowSpec > generateSubflow).
@@ -148,6 +162,14 @@ export interface FlowSpecNode {
    *  off to this subflow may pass a `prompt` argument that overrides `prompt`
    *  (the authored default). Defaults to false. */
   allowCallerPrompt?: boolean;
+  /**
+   * process/subflow only (Tier 2c — named variables): save this step's final
+   * output into a run-scoped variable of this name. Any LATER step can inject it
+   * with `${var:NAME}` in its prompt / isolatedPrompt / subflow input, surviving
+   * `latest-message`/`isolated` scoping that would otherwise drop it from history.
+   * Run-scoped plaintext — NOT config or secrets (distinct from `${global:VAR}`).
+   */
+  captureVariable?: string;
 }
 
 export interface FlowSpecEdge {
@@ -157,6 +179,11 @@ export interface FlowSpecEdge {
   to: string;
   /** Handoff-back upgrade: traffic also flows to → from. */
   bidirectional?: boolean;
+  /** Tier 2b: a deterministic predicate over the last message. When set, the
+   *  engine takes this edge if the predicate matches (first matching outgoing
+   *  edge wins, in author order); a bare edge is the fallback. Only meaningful
+   *  on edges leaving a process node. */
+  condition?: EdgeCondition;
 }
 
 export interface FlowSpec {
@@ -307,8 +334,15 @@ function resolveFlowRef(
 
 /** A standard flow-control edge, shaped exactly like `createEdgeFromConnection`'s non-MCP branch.
  * Exported so the auto-repair module (flowAutoRepair.ts) builds injected edges through the
- * SAME factory — edge ids/handles stay pinned to the builder's originals, no third copy. */
-export function controlEdge(source: FlowNode, target: FlowNode, bidirectional?: boolean): Edge {
+ * SAME factory — edge ids/handles stay pinned to the builder's originals, no third copy.
+ * A `condition` (Tier 2b) is spread into `data` only when set, so a plain edge stays
+ * byte-for-byte identical to the builder's output (the flowSpecCompiler.test.ts pin). */
+export function controlEdge(
+  source: FlowNode,
+  target: FlowNode,
+  bidirectional?: boolean,
+  condition?: EdgeCondition
+): Edge {
   const sourceHandle = `${source.type}-bottom`;
   const targetHandle = `${target.type}-top`;
   return {
@@ -318,7 +352,11 @@ export function controlEdge(source: FlowNode, target: FlowNode, bidirectional?: 
     target: target.id,
     targetHandle,
     type: 'custom',
-    data: { edgeType: 'standard', ...(bidirectional ? { bidirectional: true } : {}) },
+    data: {
+      edgeType: 'standard',
+      ...(bidirectional ? { bidirectional: true } : {}),
+      ...(condition ? { condition } : {}),
+    },
     animated: true,
   } as Edge;
 }
@@ -491,6 +529,11 @@ export function compileFlowSpec(
         if (Array.isArray(specNode.allowedTools)) {
           properties.allowedTools = specNode.allowedTools.filter((t) => typeof t === 'string' && t);
         }
+
+        // captureVariable (Tier 2c): save this step's output into a named run var.
+        if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
+          properties.captureVariable = specNode.captureVariable.trim();
+        }
       } else if (type === 'subflow') {
         resolveSubflowTarget(specNode, key, depth, childAncestors, properties);
         if (specNode.inputMode !== undefined) {
@@ -517,6 +560,10 @@ export function compileFlowSpec(
         // Opt-in caller prompt (issue #96): only meaningful in isolated mode.
         if (typeof specNode.allowCallerPrompt === 'boolean') {
           properties.allowCallerPrompt = specNode.allowCallerPrompt;
+        }
+        // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
+        if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
+          properties.captureVariable = specNode.captureVariable.trim();
         }
       }
       // finish: no properties.
@@ -624,7 +671,47 @@ export function compileFlowSpec(
         warn('bidirectional-illegal', `Edge "${fromKey}" -> "${toKey}" cannot be bidirectional; downgraded to one-way.`);
         bidirectional = false;
       }
-      edges.push(controlEdge(source, target, bidirectional));
+
+      // Tier 2b: deterministic edge condition. Sanitize here so a bad predicate
+      // is dropped (warned) rather than carried into the runtime graph. Only
+      // process nodes route deterministically, so a condition on any other
+      // source is dropped with a warning (it would be silently ignored anyway).
+      let condition: EdgeCondition | undefined;
+      const rawCond = specEdge.condition;
+      if (rawCond && typeof rawCond === 'object') {
+        if (source.type !== 'process') {
+          warn(
+            'edge-condition-non-process',
+            `Edge "${fromKey}" -> "${toKey}" has a condition but leaves a ${source.type} node; conditions only route from process nodes and were dropped.`
+          );
+        } else if (!isValidConditionKind(rawCond.kind)) {
+          warn(
+            'edge-condition-kind',
+            `Edge "${fromKey}" -> "${toKey}" has an unknown condition kind "${String(rawCond.kind)}"; the condition was dropped.`
+          );
+        } else if (typeof rawCond.value !== 'string' || rawCond.value.length === 0) {
+          warn(
+            'edge-condition-value',
+            `Edge "${fromKey}" -> "${toKey}" has a condition with no "value"; the condition was dropped.`
+          );
+        } else {
+          if (rawCond.kind === 'regex' && !isRegexCompilable(rawCond.value)) {
+            warn(
+              'edge-condition-regex',
+              `Edge "${fromKey}" -> "${toKey}" has a regex condition that does not compile; it is kept but will never match at runtime.`
+            );
+          }
+          condition = {
+            kind: rawCond.kind,
+            value: rawCond.value,
+            ...(rawCond.target === 'last-message' ? { target: 'last-message' as const } : {}),
+            ...(rawCond.ignoreCase === true ? { ignoreCase: true } : {}),
+            ...(rawCond.negate === true ? { negate: true } : {}),
+          };
+        }
+      }
+
+      edges.push(controlEdge(source, target, bidirectional, condition));
     }
 
     // MCP edges after control edges (order is cosmetic; grouping aids debugging).
@@ -681,6 +768,43 @@ export function compileFlowSpec(
         `Node "${key}": a subflow node should have only one target source ("flow", "subflowSpec", "parallelFlows", "parallelSubflowSpecs", or "generateSubflow"); applying precedence flow > subflowSpec > parallelFlows > parallelSubflowSpecs > generateSubflow.`,
         key
       );
+    }
+
+    // Map-over-list (Tier 2a): a modifier on a SINGLE-child subflow that runs the
+    // child once per item. It is NOT a target source — it decorates `flow` /
+    // `subflowSpec` — so it is resolved here (stamped onto properties before the
+    // single-child branches below set subflowId) and is mutually exclusive with
+    // the parallel fan-out sources.
+    if (specNode.mapOverList === true) {
+      const hasSingleChild =
+        (specNode.flow !== undefined && specNode.flow !== null) ||
+        (specNode.subflowSpec !== undefined && specNode.subflowSpec !== null);
+      if (hasParallelFlows || hasParallelSpecs) {
+        error(
+          'subflow-map-and-parallel',
+          `Node "${key}": "mapOverList" runs a SINGLE child once per item and cannot be combined with "parallelFlows"/"parallelSubflowSpecs".`,
+          key
+        );
+      }
+      if (!hasSingleChild) {
+        error(
+          'subflow-map-no-child',
+          `Node "${key}": "mapOverList" needs a single child ("flow" or "subflowSpec") to run once per item.`,
+          key
+        );
+      } else {
+        properties.mapOverList = true;
+        if (specNode.itemSplit !== undefined) {
+          if (specNode.itemSplit === 'json-array' || specNode.itemSplit === 'lines') {
+            properties.itemSplit = specNode.itemSplit;
+          } else {
+            warn('invalid-item-split', `Node "${key}": itemSplit "${String(specNode.itemSplit)}" is not valid (json-array | lines); using json-array.`, key);
+          }
+        }
+        if (specNode.sequential === true) properties.sequential = true;
+        // Per-item runs reuse the parallel pool/join/error tuning.
+        applyParallelTuning(specNode, properties);
+      }
     }
 
     if (specNode.flow) {
@@ -880,6 +1004,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (Array.isArray(props.allowedTools) && props.allowedTools.length > 0) {
         specNode.allowedTools = props.allowedTools.filter((t: unknown): t is string => typeof t === 'string' && !!t);
       }
+      if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       const servers = serversByProcess.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
@@ -891,11 +1016,21 @@ export function flowToSpec(flow: Flow): FlowSpec {
         if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;
       } else if (typeof props.subflowId === 'string' && props.subflowId) {
         specNode.flow = props.subflowId;
+        // Map-over-list (Tier 2a): a single-child modifier — round-trip alongside `flow`.
+        if (props.mapOverList === true) {
+          specNode.mapOverList = true;
+          if (props.itemSplit === 'json-array' || props.itemSplit === 'lines') specNode.itemSplit = props.itemSplit;
+          if (props.sequential === true) specNode.sequential = true;
+          if (typeof props.concurrencyLimit === 'number' && props.concurrencyLimit > 0) specNode.concurrencyLimit = props.concurrencyLimit;
+          if (typeof props.joinSeparator === 'string') specNode.joinSeparator = props.joinSeparator;
+          if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;
+        }
       }
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
+      if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);
@@ -908,10 +1043,12 @@ export function flowToSpec(flow: Flow): FlowSpec {
     if ((e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp') continue;
     if (!e.source || !e.target) continue;
     if (mcpById.has(e.source) || mcpById.has(e.target)) continue;
+    const edgeData = e.data as { bidirectional?: boolean; condition?: EdgeCondition } | undefined;
     specEdges.push({
       from: e.source,
       to: e.target,
-      ...((e.data as { bidirectional?: boolean } | undefined)?.bidirectional ? { bidirectional: true } : {}),
+      ...(edgeData?.bidirectional ? { bidirectional: true } : {}),
+      ...(edgeData?.condition ? { condition: edgeData.condition } : {}),
     });
   }
 

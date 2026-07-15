@@ -13,6 +13,7 @@ import {
 import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -74,6 +75,46 @@ function latestUserMessage(sanitized: FlujoChatMessage[]): FlujoChatMessage[] {
     }
   }
   return sanitized;
+}
+
+/** Flatten a message's content down to plain text (map-over-list source). A
+ *  multimodal content array keeps only its text parts. */
+function messageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part === 'string' ? part : typeof (part as any)?.text === 'string' ? (part as any).text : ''))
+      .join('');
+  }
+  return '';
+}
+
+/**
+ * Split the resolved subflow input into per-item strings for map-over-list mode
+ * (Tier 2a). Each returned string becomes one child run's `prompt`.
+ *   - 'lines': split on newlines; whitespace-only lines are dropped; each
+ *     remaining line is trimmed into one item.
+ *   - 'json-array' (default): parse the input as a JSON array; each element is
+ *     one item (strings verbatim, objects/arrays re-stringified so the child
+ *     receives valid JSON). Anything that is not a JSON array (parse error or a
+ *     non-array value) yields NO items — the caller folds a clean "nothing to
+ *     map" result rather than guessing.
+ */
+function splitItems(text: string, mode: 'json-array' | 'lines'): string[] {
+  if (mode === 'lines') {
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((el) => (typeof el === 'string' ? el : JSON.stringify(el)));
 }
 
 /**
@@ -140,6 +181,9 @@ export class SubflowNode extends BaseNode {
     const parallelIds = (node_params?.properties?.parallelSubflowIds ?? []).filter(
       (id): id is string => typeof id === 'string' && id.trim() !== '',
     );
+    const mapOverList = node_params?.properties?.mapOverList === true;
+    const itemSplit = node_params?.properties?.itemSplit === 'lines' ? 'lines' : 'json-array';
+    const sequential = node_params?.properties?.sequential === true;
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
     // Back-compat: a promptTemplate saved before the explicit 'isolated' mode
     // existed used to override the history unconditionally. Preserve that by
@@ -192,11 +236,29 @@ export class SubflowNode extends BaseNode {
       prepResult.messages = inputMode === 'latest-message' ? latestUserMessage(sanitized) : sanitized;
     }
 
-    // Fan-out plan (issue #102): when parallelSubflowIds is non-empty the node
-    // runs several child flows concurrently (each fed the SAME resolved input
-    // above). Otherwise the single-child path (default) is completely unchanged.
-    // Child-flow display names are resolved best-effort for subflow:start
-    // attribution — never block the run on a name lookup.
+    // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
+    // scratchpad into the subflow's isolated input — the "later enhancement" the
+    // promptTemplate doc comment named. Only the isolated `inputText` is templated
+    // (the history paths carry the verbatim transcript). When mapOverList splits
+    // this text into items below, each item is already resolved.
+    if (prepResult.inputText !== undefined) {
+      prepResult.inputText = resolveRunVars(prepResult.inputText, sharedState.variables);
+    }
+
+    // Lane plan. The single decision point for both concurrency features: which
+    // (if any) lanes prep resolves. The fan-out (issue #102) and map-over-list
+    // (Tier 2a) branches both feed the SAME bounded pool / join / error strategy
+    // downstream in execParallel; the ONLY difference is how lanes are built and
+    // whether each lane carries its own input. Child-flow display names are
+    // resolved best-effort for subflow:start attribution — never block on a lookup.
+    if (mapOverList && parallelIds.length > 0) {
+      // Defensive: the compiler and validator forbid combining the two modes.
+      // If a hand-crafted node reaches here with both, keep the fan-out path
+      // byte-for-byte and ignore mapOverList (matches the compiler's precedence).
+      log.warn('SubflowNode sets both mapOverList and parallelSubflowIds; ignoring mapOverList (fan-out precedence)', {
+        nodeId: node_params?.id,
+      });
+    }
     if (parallelIds.length > 0) {
       const lanes: SubflowLanePlan[] = parallelIds.map((id) => ({ subflowId: id }));
       try {
@@ -216,6 +278,38 @@ export class SubflowNode extends BaseNode {
       }
       prepResult.lanes = lanes;
       prepResult.concurrencyLimit = Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
+      prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
+    } else if (mapOverList && subflowId) {
+      // Map-over-list (Tier 2a): run the SINGLE child flow once per item parsed
+      // from the resolved input. Isolated mode splits `inputText`; history modes
+      // split the LAST user message (via latestUserMessage) so the item source is
+      // a genuine instruction, not the whole transcript. Each item becomes its own
+      // lane input, overriding the shared runInput in execParallel.
+      const sourceText =
+        prepResult.inputText !== undefined
+          ? prepResult.inputText
+          : messageText(latestUserMessage(prepResult.messages ?? [])[0]?.content);
+      const items = splitItems(sourceText ?? '', itemSplit);
+      let subflowName: string | undefined;
+      try {
+        const { flowService } = await import('@/backend/services/flow/index');
+        const flow = await flowService.getFlow(subflowId);
+        if (flow?.name) subflowName = flow.name;
+      } catch {
+        /* attribution only */
+      }
+      prepResult.lanes = items.map((item, i) => ({
+        subflowId,
+        subflowName,
+        input: { prompt: item },
+        itemIndex: i,
+        itemCount: items.length,
+      }));
+      prepResult.mapOverList = true; // let execCore treat an EMPTY list as "nothing to map"
+      // `sequential` pins the pool to 1 (in-order, one item at a time) rather than
+      // adding a second execution path.
+      prepResult.concurrencyLimit = sequential ? 1 : Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
       prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
       prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
     } else if (subflowId) {
@@ -255,10 +349,17 @@ export class SubflowNode extends BaseNode {
       ? { messages: prepResult.messages }
       : { prompt: prepResult.inputText ?? '' };
 
-    // Fan-out / join (issue #102): run several child flows concurrently and join
-    // their outputs. Active only when prep resolved a lane plan.
+    // Lane execution: fan-out/join (issue #102) OR map-over-list (Tier 2a). Both
+    // resolve a lane plan in prep and run through the same bounded pool below.
     if (prepResult.lanes && prepResult.lanes.length > 0) {
       return this.execParallel(prepResult, runFlow, nodeRef, runInput);
+    }
+
+    // Map-over-list that resolved ZERO items: nothing to map. Fold a clean empty
+    // result and hand off — never fall through and run the child once.
+    if (prepResult.mapOverList) {
+      log.info('execCore() map-over-list resolved no items → nothing to map', { subflowId: prepResult.subflowId });
+      return { success: true, outputText: '', subStatus: 'completed', lanes: [] };
     }
 
     if (!prepResult.subflowId) {
@@ -342,18 +443,24 @@ export class SubflowNode extends BaseNode {
 
     const runLane = async (i: number): Promise<void> => {
       const lane = lanes[i];
+      // Map-over-list lanes carry an explicit item index/count; fan-out lanes use
+      // the plain lane position. Either way the live view separates concurrent
+      // runs by laneIndex/laneCount, so per-item runs are separable like fan-out.
       const emit = buildChildEmit(
         prepResult.emit,
         prepResult.showSteps,
         nodeRef,
         lane.subflowId,
         lane.subflowName,
-        { index: i, count: laneCount },
+        { index: lane.itemIndex ?? i, count: lane.itemCount ?? laneCount },
       );
       try {
+        // Map-over-list lanes carry their OWN input (one per item); fan-out lanes
+        // have none, so they fall back to the shared runInput — keeping the fan-out
+        // path byte-for-byte identical to before.
         const r = await runFlow({
           flowId: lane.subflowId,
-          ...runInput,
+          ...(lane.input ?? runInput),
           mode: 'ephemeral',
           flujo: true,
           requireApproval: false,
@@ -456,6 +563,17 @@ export class SubflowNode extends BaseNode {
     };
     sharedState.messages.push(assistantMessage);
     sharedState.lastResponse = outputText;
+
+    // Tier 2c (named variables): capture the child's folded output into the
+    // PARENT run's scratchpad so a later step can inject it via `${var:NAME}`.
+    // This is the supported capture path — a var set inside the ephemeral child
+    // run is discarded, so capture happens here on the parent's subflow node.
+    const captureVariable = node_params?.properties?.captureVariable?.trim();
+    if (captureVariable) {
+      sharedState.variables = sharedState.variables ?? {};
+      sharedState.variables[captureVariable] = outputText;
+      log.info('Captured subflow output into run variable', { captureVariable, nodeId: node_params?.id });
+    }
 
     // Hand off to the single linear successor, else end the flow.
     const actions = this.successors instanceof Map

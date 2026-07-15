@@ -163,3 +163,4 @@ deprecated-packages-report.md
 deprecated-packages.txt
 deprecation-report.md
 ISSUE_TRIAGE.md
+/.playwright-mcp
