@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { REGISTRY_ORIGIN, registryGetRaw } from '@/backend/utils/registryClient';
+import { rankRegistryResults } from '@/backend/services/mcp/registryInstall';
+import { RegistryServerResult } from '@/utils/mcp/registry';
 
 const log = createLogger('app/api/mcp-registry/route');
 
@@ -95,6 +97,14 @@ export async function GET(request: NextRequest) {
     }
 
     const body = JSON.parse(result.body);
+
+    // Rank + annotate the page by blended quality so the Marketplace shows the
+    // best/most-working servers first with star/download badges — the same
+    // ranking the headless install path uses. Best-effort; never blocks the
+    // listing. Cache the enriched body so repeat searches skip re-enrichment.
+    if (Array.isArray(body?.servers)) {
+      body.servers = await rankRegistryResults(search, body.servers as RegistryServerResult[]);
+    }
     setCached(cacheKey, body);
 
     return NextResponse.json({ success: true, ...body });
