@@ -50,6 +50,15 @@ export interface ExecutionEventBase {
    * child steps inside the parent conversation.
    */
   depth?: number;
+  /**
+   * Fan-out lane identity (issue #102). When a SubflowNode runs several child
+   * flows CONCURRENTLY, each lane's forwarded events carry its 0-based
+   * `laneIndex` and the total `laneCount`, so live-view / log consumers can keep
+   * the interleaved lanes separable. Absent for single-child subflows and
+   * top-level runs (so existing single-lane behavior is unchanged).
+   */
+  laneIndex?: number;
+  laneCount?: number;
 }
 
 export interface RunStartEvent extends ExecutionEventBase {

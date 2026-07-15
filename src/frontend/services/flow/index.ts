@@ -485,6 +485,9 @@ class FlowService {
           type: 'mcp',
           properties: {
             channels: 2,
+            // NOTE: this `mode: 'parallel'` is unrelated demo scaffolding for an MCP
+            // sample node — it is NOT the SubflowNode fan-out feature (issue #102),
+            // which is controlled by SubflowNodeProperties.parallelSubflowIds.
             mode: 'parallel'
           }
         }

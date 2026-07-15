@@ -158,6 +158,38 @@ export interface SubflowNodeProperties {
      *  prompt and their handoff tools stay parameter-less. Groundwork for
      *  running subflows as independent, callable workers. */
     allowCallerPrompt?: boolean;
+    /** Fan-out / join (issue #102): when this list has >=1 entry, the node runs
+     *  SEVERAL child flows CONCURRENTLY and joins their outputs, instead of the
+     *  single-`subflowId` path. Empty/absent => today's single-child behavior
+     *  (the default path is completely unchanged). The same resolved input
+     *  (per `inputMode`) is fanned out to every lane. */
+    parallelSubflowIds?: string[];
+    /** Max child flows run at once in parallel mode (bounded worker pool). Default 4. */
+    concurrencyLimit?: number;
+    /** String placed between joined lane outputs (child order) in parallel mode.
+     *  Default "\n\n". */
+    joinSeparator?: string;
+    /** Parallel error handling (issue #102):
+     *    - 'collect-all' (default): every lane runs to completion; successful
+     *      outputs are folded plus a marked failure summary; the node still
+     *      hands off to its successor (partial success is surfaced via `partial`).
+     *    - 'fail-fast': the first lane error fails the whole node (mirrors the
+     *      single-child ERROR_ACTION semantics) and no further lanes are started. */
+    errorStrategy?: 'fail-fast' | 'collect-all';
+}
+
+/** One resolved fan-out lane in a parallel SubflowNode plan (issue #102). */
+export interface SubflowLanePlan {
+    subflowId: string;
+    subflowName?: string;
+}
+
+/** The outcome of one fan-out lane (issue #102), kept in child order. */
+export interface SubflowLaneResult {
+    subflowId: string;
+    success: boolean;
+    outputText?: string;
+    error?: string;
 }
 
 // Type-specific node params
@@ -467,6 +499,15 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     subflowName?: string;
     /** Display name of this node (for subflow event attribution). */
     nodeName?: string;
+    /** Resolved fan-out plan (issue #102). Present only in parallel mode
+     *  (parallelSubflowIds non-empty); each entry is one concurrent child flow. */
+    lanes?: SubflowLanePlan[];
+    /** Bounded worker-pool size for parallel mode (default 4). */
+    concurrencyLimit?: number;
+    /** Separator used to join lane outputs in child order (default "\n\n"). */
+    joinSeparator?: string;
+    /** Error handling strategy for parallel mode (default 'collect-all'). */
+    errorStrategy?: 'fail-fast' | 'collect-all';
 }
 
 // Union type for all prep results
@@ -513,6 +554,10 @@ export interface SubflowNodeExecResult extends BaseExecResult {
     errorDetails?: ErrorDetails;
     /** The subflow run's terminal status (completed/error). */
     subStatus?: string;
+    /** Per-lane results in parallel mode (issue #102), in child order. */
+    lanes?: SubflowLaneResult[];
+    /** True when SOME (but not all) lanes succeeded under 'collect-all'. */
+    partial?: boolean;
 }
 
 // Union type for all exec results
