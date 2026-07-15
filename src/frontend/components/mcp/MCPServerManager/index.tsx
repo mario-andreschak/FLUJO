@@ -46,39 +46,15 @@ import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, alphaBucket, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import { ServerSortOption, deriveServerSortGroup, sortServers } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
-type SortOption = 'name-asc' | 'name-desc' | 'status-connected' | 'status-disconnected' | 'transport';
 type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'sse' | 'streamable';
 /** How server cards are folded into collapsible sections: off, by user folder (#71), or by the active sort key (#73). */
 type GroupMode = 'none' | 'folder' | 'sort';
-
-// Map the active sort key to a group bucket for a server (#73).
-function deriveServerSortGroup(server: any, sortOption: SortOption): { key: string; label: string } {
-  switch (sortOption) {
-    case 'name-asc':
-    case 'name-desc':
-      return alphaBucket(server.name);
-    case 'status-connected':
-    case 'status-disconnected': {
-      const s = server.status;
-      if (s === 'connected') return { key: 'status:connected', label: 'Connected' };
-      if (s === 'error') return { key: 'status:error', label: 'Error' };
-      if (s === 'requires_authentication') return { key: 'status:auth', label: 'Requires authentication' };
-      return { key: 'status:disconnected', label: 'Disconnected' };
-    }
-    case 'transport': {
-      const t = server.transport || 'unknown';
-      const labelMap: Record<string, string> = { stdio: 'Stdio', websocket: 'WebSocket', sse: 'SSE', streamable: 'Streamable HTTP' };
-      return { key: `transport:${t}`, label: labelMap[t] || t };
-    }
-    default:
-      return { key: 'all', label: 'All servers' };
-  }
-}
 
 interface ServerManagerProps {
   // Optional: notified when the add/edit modal opens/closes (kept for callers that care).
@@ -189,7 +165,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Toolbar state. The view preferences (#93) persist across navigation via
   // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useUiPreference<SortOption>('flujo-ui:mcp:sort', 'name-asc');
+  const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
   const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
   const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', 'none');
@@ -386,31 +362,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       });
     }
     
-    // Finally sort
-    return [...result].sort((a, b) => {
-      switch (sortOption) {
-        case 'name-asc':
-          return a.name.localeCompare(b.name);
-        case 'name-desc':
-          return b.name.localeCompare(a.name);
-        case 'status-connected':
-          if (a.status === 'connected' && b.status !== 'connected') return -1;
-          if (a.status !== 'connected' && b.status === 'connected') return 1;
-          return a.name.localeCompare(b.name);
-        case 'status-disconnected':
-          if (a.status === 'disconnected' && b.status !== 'disconnected') return -1;
-          if (a.status !== 'disconnected' && b.status === 'disconnected') return 1;
-          return a.name.localeCompare(b.name);
-        case 'transport':
-          const transportOrder = ['stdio', 'websocket', 'sse', 'streamable'];
-          const aIndex = transportOrder.indexOf(a.transport);
-          const bIndex = transportOrder.indexOf(b.transport);
-          if (aIndex !== bIndex) return aIndex - bIndex;
-          return a.name.localeCompare(b.name);
-        default:
-          return 0;
-      }
-    });
+    // Finally sort (shared helper — see utils/shared/serverGrouping.ts)
+    return sortServers(result, sortOption);
   }, [servers, searchTerm, sortOption, filterOption]);
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
@@ -484,7 +437,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setSortAnchorEl(null);
   };
 
-  const handleSortChange = (option: SortOption) => {
+  const handleSortChange = (option: ServerSortOption) => {
     setSortOption(option);
     handleSortMenuClose();
   };

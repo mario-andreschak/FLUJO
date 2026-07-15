@@ -34,7 +34,8 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, alphaBucket, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import { FlowSortOption, deriveFlowSortGroup, sortFlows } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
@@ -54,34 +55,8 @@ interface FlowDashboardProps {
   isLoading?: boolean;
 }
 
-type SortOption = 'name-asc' | 'name-desc' | 'newest' | 'oldest' | 'most-nodes' | 'least-nodes';
 /** How cards are grouped into collapsible sections: not at all, by user folder (#71), or by the active sort key (#73). */
 type GroupMode = 'none' | 'folder' | 'sort';
-
-// Node-count bucket for the "most/least nodes" sort (#73).
-function bucketNodeCount(count: number): { key: string; label: string } {
-  if (count === 0) return { key: 'nodes:0', label: '0 nodes' };
-  if (count <= 2) return { key: 'nodes:1-2', label: '1–2 nodes' };
-  if (count <= 5) return { key: 'nodes:3-5', label: '3–5 nodes' };
-  if (count <= 10) return { key: 'nodes:6-10', label: '6–10 nodes' };
-  return { key: 'nodes:11+', label: '11+ nodes' };
-}
-
-// Map the active sort key to a group bucket for a flow. Alphabetical sorts fold by
-// first letter; node-count sorts fold by size band; date sorts (which lack a real
-// timestamp on the Flow type) fall back to a single bucket.
-function deriveFlowSortGroup(flow: Flow, sortOption: SortOption): { key: string; label: string } {
-  switch (sortOption) {
-    case 'name-asc':
-    case 'name-desc':
-      return alphaBucket(flow.name);
-    case 'most-nodes':
-    case 'least-nodes':
-      return bucketNodeCount(flow.nodes.length);
-    default:
-      return { key: 'all', label: 'All flows' };
-  }
-}
 
 const FlowDashboard = ({
   flows,
@@ -98,7 +73,7 @@ const FlowDashboard = ({
   // Persisted view preferences (#93): survive navigating away and back. Search
   // is intentionally NOT persisted (session-scoped), and the transient menu
   // anchors stay ephemeral.
-  const [sortOption, setSortOption] = useUiPreference<SortOption>('flujo-ui:flows:sort', 'name-asc');
+  const [sortOption, setSortOption] = useUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
   const [viewMode, setViewMode] = useUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', 'none');
@@ -180,7 +155,7 @@ const FlowDashboard = ({
     setAnchorEl(null);
   };
   
-  const handleSortChange = (option: SortOption) => {
+  const handleSortChange = (option: FlowSortOption) => {
     setSortOption(option);
     handleSortMenuClose();
   };
@@ -215,27 +190,8 @@ const FlowDashboard = ({
       );
     }
     
-    // Then sort
-    return [...result].sort((a, b) => {
-      switch (sortOption) {
-        case 'name-asc':
-          return a.name.localeCompare(b.name);
-        case 'name-desc':
-          return b.name.localeCompare(a.name);
-        case 'most-nodes':
-          return b.nodes.length - a.nodes.length;
-        case 'least-nodes':
-          return a.nodes.length - b.nodes.length;
-        // For newest/oldest, we would need timestamps on the Flow type
-        // This is a placeholder using IDs which may not be timestamp-based
-        case 'newest':
-          return b.id.localeCompare(a.id);
-        case 'oldest':
-          return a.id.localeCompare(b.id);
-        default:
-          return 0;
-      }
-    });
+    // Then sort (shared helper — see utils/shared/flowGrouping.ts)
+    return sortFlows(result, sortOption);
   }, [flows, searchTerm, sortOption]);
 
   // Distinct folders currently in use, for the "Move to folder" picker.

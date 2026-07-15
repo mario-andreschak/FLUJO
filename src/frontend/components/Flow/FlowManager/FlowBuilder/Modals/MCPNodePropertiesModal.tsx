@@ -42,6 +42,10 @@ import { createLogger } from '@/utils/logger/index';
 const logger = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal');
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
+import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
+import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
+import { useCardPicker } from '@/frontend/hooks/useCardPicker';
+import { CardGroup } from '@/utils/shared/cardGrouping';
 
 interface MCPNodePropertiesModalProps {
   open: boolean;
@@ -70,6 +74,22 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
   // State for the selected server
   // State for tracking which servers are being retried
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
+
+  // Shared MCP picker view-model (#92): reuse the MCP Servers page's saved
+  // search/sort/folder settings so binding a server here matches that page.
+  const serverPicker = useCardPicker<any>('mcp', servers);
+
+  // Whole-list "reload connections" retry beside the picker (#92): the modal's
+  // retry is a list-level reload, so one control refreshes every server.
+  const [retryingAll, setRetryingAll] = useState(false);
+  const handleRetryAllServers = async () => {
+    setRetryingAll(true);
+    try {
+      await Promise.all(servers.map((s: any) => retryServer(s.name)));
+    } finally {
+      setTimeout(() => setRetryingAll(false), 500);
+    }
+  };
   
   // Get tools for the selected server using the hook
   const { 
@@ -258,6 +278,26 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
 
   const boundServer = nodeData.properties?.boundServer || '';
   const enabledTools = nodeData.properties?.enabledTools || [];
+
+  // Build the server-picker cells (#92). Each server card is a click target
+  // that binds the node; selection mirrors the RadioGroup this replaced.
+  const renderServerCard = (server: any) => (
+    <ServerCard
+      name={server.name}
+      status={(server.status as any) || 'disconnected'}
+      path={server.path || server.rootPath || ''}
+      enabled={!server.disabled}
+      transport={(server.transport as any) || 'stdio'}
+      pickerMode
+      selected={boundServer === server.name}
+      onClick={() => handleServerSelect(server.name)}
+    />
+  );
+  const toServerCell = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
+  const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
+    ? serverPicker.groups.map((g) => ({ ...g, items: g.items.map(toServerCell) }))
+    : null;
   // Tool call timeout: seconds; -1 = infinite; undefined = 5-minute default.
   const toolTimeout = nodeData.properties?.toolTimeout;
   const isTimeoutInfinite = toolTimeout === TOOL_CALL_TIMEOUT_INFINITE;
@@ -308,85 +348,39 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
             Bind to MCP Server
           </Typography>
           
-          {isLoadingServers ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CircularProgress size={20} />
-              <Typography color="text.secondary">Loading MCP servers...</Typography>
-            </Box>
-          ) : loadError ? (
-            <Typography color="error">{loadError}</Typography>
-          ) : servers.length === 0 ? (
-            <Typography color="text.secondary">No MCP servers available. Add some in the MCP Manager.</Typography>
-          ) : (
-            <>
-              <FormControl component="fieldset" fullWidth>
-                <RadioGroup
-                  value={boundServer}
-                  onChange={(e) => handleServerSelect(e.target.value)}
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+            <Tooltip title="Retry all server connections">
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={handleRetryAllServers}
+                  disabled={retryingAll || isLoadingServers}
                 >
-                  <Grid container spacing={2}>
-                    {servers.map((server) => (
-                      <Grid item xs={12} sm={6} key={server.name}>
-                        <Paper 
-                          elevation={1} 
-                          sx={{ 
-                            p: 2, 
-                            border: boundServer === server.name ? 2 : 0,
-                            borderColor: 'primary.main',
-                            opacity: server.status === 'connected' ? 1 : 0.6
-                          }}
-                        >
-                        <Box sx={{ display: 'flex', width: '100%', alignItems: 'flex-start' }}>
-                          <FormControlLabel
-                            value={server.name}
-                            control={<Radio />}
-                            label={
-                              <Box>
-                                <Typography variant="subtitle2">{server.name}</Typography>
-                                <Typography variant="caption" color="text.secondary" display="block">
-                                  {server.path}
-                                </Typography>
-                                <Typography 
-                                  variant="caption" 
-                                  color={
-                                    server.status === 'connected' ? 'success.main' : 
-                                    server.status === 'error' ? 'error.main' : 'text.secondary'
-                                  }
-                                >
-                                  Status: {server.status}
-                                </Typography>
-                              </Box>
-                            }
-                            sx={{ width: 'calc(100% - 40px)', m: 0 }}
-                          />
-                          <Tooltip title="Retry connection">
-                            <IconButton 
-                              size="small" 
-                              onClick={(e) => handleRetryServer(server.name, e)}
-                              disabled={retryingServers[server.name]}
-                              sx={{ mt: 1 }}
-                            >
-                              {retryingServers[server.name] ? (
-                                <CircularProgress size={16} />
-                              ) : (
-                                <RefreshIcon fontSize="small" />
-                              )}
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                        </Paper>
-                      </Grid>
-                    ))}
-                  </Grid>
-                </RadioGroup>
-                <FormHelperText>
-                  {boundServer ? 
-                    `This node will use the "${boundServer}" MCP server for processing.` : 
-                    "Select an MCP server to bind this node to."}
-                </FormHelperText>
-              </FormControl>
-            </>
-          )}
+                  {retryingAll ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+          <CardPickerGrid
+            isLoading={isLoadingServers}
+            error={loadError}
+            emptyMessage="No MCP servers available. Add some in the MCP Manager."
+            loadingMessage="Loading MCP servers…"
+            searchable
+            searchPlaceholder="Search servers…"
+            searchTerm={serverPicker.searchTerm}
+            onSearchChange={serverPicker.setSearchTerm}
+            columns={{ xs: 12, sm: 6 }}
+            items={serverPickerItems}
+            groups={serverPickerGroups}
+            collapsedKeys={serverPicker.collapsedKeys}
+            onToggleGroup={serverPicker.toggleGroup}
+          />
+          <FormHelperText>
+            {boundServer
+              ? `This node will use the "${boundServer}" MCP server for processing.`
+              : 'Select an MCP server to bind this node to.'}
+          </FormHelperText>
         </Box>
         
         {/* Description field - kept */}

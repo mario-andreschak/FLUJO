@@ -26,6 +26,11 @@ import OptionCard from './OptionCard';
 import SchedulePanel from './SchedulePanel';
 import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 import { intervalMsToCron } from '@/utils/shared/cron';
+import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
+import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
+import { useCardPicker } from '@/frontend/hooks/useCardPicker';
+import { CardGroup } from '@/utils/shared/cardGrouping';
 
 const log = createLogger('frontend/components/PlannedExecutions/WatchToolPanel');
 
@@ -40,13 +45,25 @@ interface ToolEntry {
   inputSchema?: Record<string, any>;
 }
 
+// Full server config (not just the name) so the card picker can render status,
+// transport and path, and reuse the MCP page's saved sort/folder settings (#92).
+interface ServerConfigLike {
+  name: string;
+  status?: string;
+  transport?: string;
+  rootPath?: string;
+  disabled?: boolean;
+  folder?: string;
+}
+
 /**
  * "Watch a tool" trigger editor: poll an MCP tool on an interval and run the
  * flow when the result changes or new items appear. The per-app integration
  * knowledge lives in the MCP server — FLUJO only supplies the polling.
  */
 const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
-  const [servers, setServers] = useState<string[]>([]);
+  const [servers, setServers] = useState<ServerConfigLike[]>([]);
+  const [serverPickerOpen, setServerPickerOpen] = useState(false);
   const [tools, setTools] = useState<ToolEntry[]>([]);
   const [loadingTools, setLoadingTools] = useState(false);
   const [argsText, setArgsText] = useState<string>(
@@ -65,11 +82,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
     mcpService.loadServerConfigs().then((configs: unknown) => {
       if (cancelled) return;
       if (Array.isArray(configs)) {
-        setServers(
-          configs
-            .filter((c: { disabled?: boolean }) => !c.disabled)
-            .map((c: { name: string }) => c.name)
-        );
+        setServers((configs as ServerConfigLike[]).filter((c) => !c.disabled));
       } else {
         log.warn('Failed to load MCP servers for watch-tool panel', configs);
         setServers([]);
@@ -159,25 +172,63 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
   const evaluate = config.evaluate;
   const selectedTool = tools.find(t => t.name === config.toolName);
 
+  // MCP server card picker (#92): mirrors the MCP Servers page layout + saved
+  // search/sort/folder settings instead of a plain dropdown.
+  const serverPicker = useCardPicker<ServerConfigLike>('mcp', servers);
+  const handlePickServer = (serverName: string) => {
+    onChange({ ...config, serverName, toolName: '' });
+    setServerPickerOpen(false);
+  };
+  const renderServerCard = (server: ServerConfigLike) => (
+    <ServerCard
+      name={server.name}
+      status={(server.status as any) || 'disconnected'}
+      path={server.rootPath || ''}
+      enabled={!server.disabled}
+      transport={(server.transport as any) || 'stdio'}
+      pickerMode
+      selected={config.serverName === server.name}
+      onClick={() => handlePickServer(server.name)}
+    />
+  );
+  const toServerCell = (server: ServerConfigLike): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
+  const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
+    ? serverPicker.groups.map((g) => ({ ...g, items: g.items.map(toServerCell) }))
+    : null;
+
   return (
     <Box sx={{ mt: 1 }}>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-        <FormControl sx={{ minWidth: 220, flex: 1 }} margin="normal">
-          <InputLabel id="watch-server-label">Server</InputLabel>
-          <Select
-            labelId="watch-server-label"
-            label="Server"
-            value={servers.includes(config.serverName) ? config.serverName : ''}
-            onChange={(e) => onChange({ ...config, serverName: e.target.value, toolName: '' })}
+        <Box sx={{ minWidth: 220, flex: 1, mt: 2, mb: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            Server
+          </Typography>
+          <Button
+            variant="outlined"
+            fullWidth
+            onClick={() => setServerPickerOpen(true)}
+            sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
           >
-            {servers.length === 0 && (
-              <MenuItem value="" disabled>No MCP servers configured</MenuItem>
-            )}
-            {servers.map(name => (
-              <MenuItem key={name} value={name}>{name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+            {config.serverName ? `${config.serverName} — change` : 'Choose an MCP server…'}
+          </Button>
+          <CardPickerDialog
+            open={serverPickerOpen}
+            onClose={() => setServerPickerOpen(false)}
+            title="Choose an MCP server"
+            description="Pick the server whose tool you want to watch."
+            emptyMessage="No MCP servers configured."
+            searchable
+            searchPlaceholder="Search servers…"
+            searchTerm={serverPicker.searchTerm}
+            onSearchChange={serverPicker.setSearchTerm}
+            columns={{ xs: 12, sm: 6 }}
+            items={serverPickerItems}
+            groups={serverPickerGroups}
+            collapsedKeys={serverPicker.collapsedKeys}
+            onToggleGroup={serverPicker.toggleGroup}
+          />
+        </Box>
 
         <FormControl sx={{ minWidth: 220, flex: 1 }} margin="normal" disabled={!config.serverName}>
           <InputLabel id="watch-tool-label">Tool</InputLabel>
