@@ -8,6 +8,7 @@ import {
   buildAppCsp,
   buildAppSrcDoc,
   extractAppHtml,
+  isValidCspSourceToken,
 } from '@/shared/utils/mcpApps';
 
 // MCP Apps (SEP-1865, #97) — pure helpers for Phase 1 read-only rendering.
@@ -94,6 +95,56 @@ describe('buildAppCsp', () => {
     const csp = buildAppCsp({ connectDomains: ['  https://a.com  ', '', '   '] });
     expect(csp).toContain('connect-src https://a.com');
   });
+
+  it('neutralizes CSP directive injection via a malicious connect domain', () => {
+    const csp = buildAppCsp({ connectDomains: ['example.com; frame-src *'] });
+    // The malicious token is dropped, so connect-src collapses to the secure default.
+    expect(csp).toContain("connect-src 'none'");
+    // No injected/duplicated frame-src widening; frame-src stays default-deny.
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).not.toContain('frame-src *');
+    expect(csp).not.toContain('example.com');
+    // Exactly one frame-src directive (no injected duplicate).
+    expect(csp.match(/frame-src/g)).toHaveLength(1);
+  });
+
+  it('neutralizes a connect-src widening injection attempt', () => {
+    const csp = buildAppCsp({ connectDomains: ['https://a.com; connect-src *'] });
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).not.toContain('connect-src *');
+    // Exactly one connect-src directive.
+    expect(csp.match(/connect-src/g)).toHaveLength(1);
+  });
+
+  it('drops server-supplied CSP keywords and wildcard sources', () => {
+    const csp = buildAppCsp({
+      connectDomains: ["'unsafe-inline'", 'data:', 'blob:', '*', "'unsafe-eval'"],
+    });
+    expect(csp).toContain("connect-src 'none'");
+  });
+
+  it('rejects http/ws and credentialed/path URLs, keeping the boundary strict', () => {
+    const csp = buildAppCsp({
+      connectDomains: [
+        'http://insecure.example.com',
+        'ws://insecure.example.com',
+        'https://user:pass@example.com',
+        'https://example.com/path',
+      ],
+    });
+    expect(csp).toContain("connect-src 'none'");
+  });
+
+  it('accepts a valid https wildcard subdomain across resource directives', () => {
+    const csp = buildAppCsp({ resourceDomains: ['https://*.cdn.example.com'] });
+    expect(csp).toContain("script-src 'unsafe-inline' https://*.cdn.example.com");
+    expect(csp).toContain('img-src data: blob: https://*.cdn.example.com');
+  });
+
+  it('accepts a wss connect domain with a port', () => {
+    const csp = buildAppCsp({ connectDomains: ['wss://realtime.example.com:8443'] });
+    expect(csp).toContain('connect-src wss://realtime.example.com:8443');
+  });
 });
 
 describe('buildAppSrcDoc', () => {
@@ -109,6 +160,46 @@ describe('buildAppSrcDoc', () => {
     expect(doc).toContain('<!DOCTYPE html>');
     expect(doc).toContain('http-equiv="Content-Security-Policy"');
     expect(doc).toContain('<div>hello</div>');
+  });
+
+  it('inserts the CSP meta verbatim (no $-substitution) and preserves $ in <head> attributes', () => {
+    // A <head> whose attributes contain regex-replacement specials ($&, $1, $$).
+    // A string-based replacement could mangle these; the function replacer must
+    // round-trip both the attributes and the (server-derived) CSP meta verbatim.
+    const html = '<html><head data-token="$&$1$$">x</head></html>';
+    const doc = buildAppSrcDoc(html);
+    expect(doc).toContain('<head data-token="$&$1$$">');
+    // The CSP meta appears exactly as buildAppCsp produced it.
+    const expectedMeta = `<meta http-equiv="Content-Security-Policy" content="${buildAppCsp()}">`;
+    expect(doc).toContain(expectedMeta);
+  });
+});
+
+describe('isValidCspSourceToken', () => {
+  it('accepts the fixed keyword sources and valid https/wss origins', () => {
+    expect(isValidCspSourceToken("'self'")).toBe(true);
+    expect(isValidCspSourceToken("'none'")).toBe(true);
+    expect(isValidCspSourceToken('https://example.com')).toBe(true);
+    expect(isValidCspSourceToken('https://*.cdn.example.com')).toBe(true);
+    expect(isValidCspSourceToken('https://example.com:8443')).toBe(true);
+    expect(isValidCspSourceToken('wss://realtime.example.com')).toBe(true);
+  });
+
+  it('rejects injection payloads, forbidden keywords, wildcards and weak schemes', () => {
+    expect(isValidCspSourceToken('example.com; frame-src *')).toBe(false);
+    expect(isValidCspSourceToken("'unsafe-inline'")).toBe(false);
+    expect(isValidCspSourceToken('data:')).toBe(false);
+    expect(isValidCspSourceToken('*')).toBe(false);
+    expect(isValidCspSourceToken('https://*')).toBe(false);
+    expect(isValidCspSourceToken('http://insecure.example.com')).toBe(false);
+    expect(isValidCspSourceToken('ws://insecure.example.com')).toBe(false);
+    expect(isValidCspSourceToken('https://user:pass@example.com')).toBe(false);
+    expect(isValidCspSourceToken('https://example.com/path')).toBe(false);
+    expect(isValidCspSourceToken('https://example.com$')).toBe(false);
+    expect(isValidCspSourceToken('https://ex ample.com')).toBe(false);
+    expect(isValidCspSourceToken('https://exa mple.com')).toBe(false);
+    expect(isValidCspSourceToken(undefined)).toBe(false);
+    expect(isValidCspSourceToken(42)).toBe(false);
   });
 });
 

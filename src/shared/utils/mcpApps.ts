@@ -91,6 +91,38 @@ export function extractUiResourceUri(meta: unknown): string | undefined {
 }
 
 /**
+ * Strict per-token allow-list for a CSP source expression that originates from a
+ * SERVER-controlled `_meta.ui` domain list.
+ *
+ * Directives are later joined with `'; '` and sources within a directive with a
+ * space, so ANY token containing a CSP-special character (whitespace, `;`, `,`,
+ * quotes, `$`, backtick, `<`/`>`, parentheses, backslash, or an ASCII control
+ * char) could inject a brand-new directive/keyword and silently widen the policy
+ * — defeating the Phase-1 default-deny egress boundary the whole design rests
+ * on. We therefore accept ONLY:
+ *   - the exact quoted keywords `'self'` and `'none'`;
+ *   - `https://` or `wss://` origins of the form `scheme://[*.]host[:port]`
+ *     where `host` is one or more DNS labels (`[a-z0-9-]`, dot-separated), an
+ *     optional single `*.` wildcard prefix is allowed, and an optional `:port`
+ *     is 1–5 digits.
+ *
+ * Everything else — bare `*`, `'unsafe-inline'`, `'unsafe-eval'`, `data:`,
+ * `blob:`, `http:`/`ws:` (incl. localhost), URLs with credentials/paths/queries
+ * — is rejected. Invalid tokens are dropped SILENTLY; this module is
+ * deliberately framework-free and side-effect-free (no logging), and a rejected
+ * token is NEVER replaced by a wildcard.
+ */
+export function isValidCspSourceToken(token: unknown): boolean {
+  if (typeof token !== 'string') return false;
+  if (token === "'self'" || token === "'none'") return true;
+  // Defence-in-depth: reject any control char or CSP-special char outright.
+  // (control chars, space, DEL and any non-ASCII are caught by the printable
+  // complement; the second class rejects CSP/HTML/regex-special printables.)
+  if (/[^\x21-\x7e]/.test(token) || /[;,'"`$<>\\()]/.test(token)) return false;
+  return /^(?:https|wss):\/\/(?:\*\.)?(?:[a-z0-9-]+\.)*[a-z0-9-]+(?::\d{1,5})?$/i.test(token);
+}
+
+/**
  * Build the Content-Security-Policy string for the sandboxed app iframe from a
  * resource's `_meta.ui` block. Default-deny: with no domains declared the app
  * gets `default-src 'none'` plus inline scripts/styles (needed for a self-
@@ -101,16 +133,16 @@ export function extractUiResourceUri(meta: unknown): string | undefined {
  * iframe document (belt-and-suspenders alongside the `sandbox` attribute).
  */
 export function buildAppCsp(meta?: UIResourceMeta | null): string {
-  const clean = (domains?: string[]): string =>
+  const cleanDomains = (domains?: string[]): string =>
     (domains || [])
       .map((d) => (typeof d === 'string' ? d.trim() : ''))
-      .filter(Boolean)
+      .filter((d) => d !== '' && isValidCspSourceToken(d))
       .join(' ');
 
-  const connect = clean(meta?.connectDomains);
-  const resource = clean(meta?.resourceDomains);
-  const frame = clean(meta?.frameDomains);
-  const baseUri = clean(meta?.baseUriDomains);
+  const connect = cleanDomains(meta?.connectDomains);
+  const resource = cleanDomains(meta?.resourceDomains);
+  const frame = cleanDomains(meta?.frameDomains);
+  const baseUri = cleanDomains(meta?.baseUriDomains);
 
   const directives: string[] = [
     "default-src 'none'",
@@ -137,7 +169,12 @@ export function buildAppCsp(meta?: UIResourceMeta | null): string {
 export function buildAppSrcDoc(html: string, meta?: UIResourceMeta | null): string {
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${buildAppCsp(meta)}">`;
   if (/<head[\s>]/i.test(html)) {
-    return html.replace(/<head([^>]*)>/i, `<head$1>${cspMeta}`);
+    // Use a FUNCTION replacer so the (server-derived) `cspMeta` is inserted
+    // verbatim: a plain string replacement would let `$`-sequences ($$, $&,
+    // $1, etc.) in `cspMeta` be interpreted by String.prototype.replace and
+    // fail to round-trip. The replacer also re-emits the captured <head>
+    // attributes (`attrs`) intact.
+    return html.replace(/<head([^>]*)>/i, (_m, attrs) => `<head${attrs}>${cspMeta}`);
   }
   return `<!DOCTYPE html><html><head><meta charset="utf-8">${cspMeta}</head><body>${html}</body></html>`;
 }
