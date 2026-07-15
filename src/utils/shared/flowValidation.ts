@@ -17,6 +17,8 @@
  * checks that need them are simply skipped when absent.
  */
 import { findBindings } from './mcpBinding';
+import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
+import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -67,7 +69,7 @@ export interface VEdge {
   id?: string;
   source: string;
   target: string;
-  data?: { edgeType?: string; bidirectional?: boolean } | null;
+  data?: { edgeType?: string; bidirectional?: boolean; condition?: EdgeCondition } | null;
 }
 export interface VFlow {
   id?: string;
@@ -313,6 +315,27 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
+
+    // --- Map-over-list (Tier 2a): runs the SINGLE child once per item. It needs a
+    // resolvable single subflowId and is mutually exclusive with the parallel
+    // fan-out lanes. This mirrors the subflow-both-targets shape.
+    const mapOverList = props.mapOverList === true;
+    if (mapOverList && parallelIds.length > 0) {
+      add(
+        'error',
+        'subflow-map-and-parallel',
+        `Subflow node "${getNodeLabel(node)}" combines "mapOverList" with "parallelSubflowIds"; map-over-list runs a single child once per item and cannot be combined with parallel fan-out.`,
+        node
+      );
+    }
+    if (mapOverList && !subflowId && parallelIds.length === 0) {
+      add(
+        'error',
+        'subflow-map-no-child',
+        `Subflow node "${getNodeLabel(node)}" has "mapOverList" but no child flow ("subflowId"); select a flow to run once per item.`,
+        node
+      );
+    }
     if (parallelIds.length > 0) {
       const limit = props.concurrencyLimit;
       if (typeof limit === 'number' && limit < 1) {
@@ -322,6 +345,127 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
           node
         );
+      }
+    }
+  }
+
+  // --- Tier 2b: deterministic edge conditions ---
+  // A condition lets the engine route on the last message (first matching
+  // outgoing edge wins, a bare edge is the fallback). Only process nodes route
+  // this way, so a condition anywhere else is an error; and a conditioned node
+  // with no bare fallback can dead-end when nothing matches (advisory).
+  {
+    const nodesById = new Map(nodes.map((n) => [n.id, n]));
+    const conditionedSources = new Set<string>();
+    for (const edge of edges) {
+      if (isMcpEdge(edge)) continue;
+      const condition = edge.data?.condition;
+      if (!condition || typeof condition !== 'object') continue;
+
+      const sourceNode = nodesById.get(edge.source);
+      const sourceType = sourceNode ? getNodeType(sourceNode) : 'unknown';
+      if (sourceType !== 'process') {
+        add(
+          'error',
+          'edge-condition-non-process',
+          `An edge leaving ${sourceType === 'unknown' ? 'an unknown' : `the ${sourceType}`} node "${sourceNode ? getNodeLabel(sourceNode) : edge.source}" has a routing condition, but only process nodes can route on a condition.`,
+          sourceNode ?? undefined
+        );
+        continue;
+      }
+
+      conditionedSources.add(edge.source);
+
+      if (!isValidConditionKind(condition.kind)) {
+        add(
+          'warning',
+          'edge-condition-kind',
+          `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge whose condition kind "${String(condition.kind)}" is unknown; it will never match.`,
+          sourceNode!
+        );
+      } else if (typeof condition.value !== 'string' || condition.value.length === 0) {
+        add(
+          'warning',
+          'edge-condition-value',
+          `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge condition with no "value"; it will never match.`,
+          sourceNode!
+        );
+      } else if (condition.kind === 'regex' && !isRegexCompilable(condition.value)) {
+        add(
+          'warning',
+          'edge-condition-regex',
+          `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge with a regex condition that does not compile; it will never match.`,
+          sourceNode!
+        );
+      }
+    }
+
+    // A conditioned node with no bare (predicate-less) outgoing edge dead-ends
+    // whenever no predicate matches. A bidirectional edge pointing AT the node
+    // gives it a bare reverse route, which counts as a fallback.
+    for (const nodeId of conditionedSources) {
+      const node = nodesById.get(nodeId);
+      if (!node) continue;
+      const hasBareFallback = edges.some((e) => {
+        if (isMcpEdge(e)) return false;
+        if (e.source === nodeId) return !e.data?.condition;
+        if (e.target === nodeId && e.data?.bidirectional) return true; // reverse route is bare
+        return false;
+      });
+      if (!hasBareFallback) {
+        add(
+          'warning',
+          'edge-condition-no-fallback',
+          `Process node "${getNodeLabel(node)}" has conditioned outgoing edges but no bare fallback edge; if no condition matches, the flow ends here.`,
+          node
+        );
+      }
+    }
+  }
+
+  // --- Tier 2c: named variables (${var:NAME} + captureVariable) ---
+  // Advisory only — never blocks a run. A var can also be seeded from
+  // FlowRunInput.variables (caller-supplied), so an "uncaptured" reference is a
+  // likely typo/ordering bug, not proof of breakage.
+  {
+    // Every variable name some node captures via captureVariable.
+    const capturedNames = new Set<string>();
+    for (const node of nodes) {
+      const capture = node.data?.properties?.captureVariable;
+      if (typeof capture === 'string' && capture.trim()) {
+        const name = capture.trim();
+        capturedNames.add(name);
+        if (!isValidRunVarName(name)) {
+          add(
+            'warning',
+            'capture-var-name',
+            `${getNodeType(node) === 'subflow' ? 'Subflow' : 'Process'} node "${getNodeLabel(node)}" captures into "${name}", which is not a valid variable name (letters, digits, _ and - only, not starting with a digit); it will be awkward to reference with \${var:...}.`,
+            node
+          );
+        }
+      }
+    }
+
+    // Any ${var:NAME} reference to a name nothing in the flow captures.
+    const referenceFields = ['promptTemplate', 'isolatedPrompt'] as const;
+    const warnedRefs = new Set<string>();
+    for (const node of nodes) {
+      const props = node.data?.properties ?? {};
+      for (const field of referenceFields) {
+        const text = (props as Record<string, unknown>)[field];
+        if (typeof text !== 'string' || !text) continue;
+        for (const name of referencedRunVars(text)) {
+          if (capturedNames.has(name)) continue;
+          const dedupeKey = `${node.id}:${name}`;
+          if (warnedRefs.has(dedupeKey)) continue;
+          warnedRefs.add(dedupeKey);
+          add(
+            'warning',
+            'var-ref-uncaptured',
+            `${getNodeLabel(node)} references \${var:${name}} but no step in this flow captures "${name}" (via captureVariable). It resolves to empty unless supplied as a run input — check for a typo or a step ordered after this one.`,
+            node
+          );
+        }
       }
     }
   }

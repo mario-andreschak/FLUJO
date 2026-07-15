@@ -2,6 +2,7 @@ import { Connection, Edge } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { mcpEdgeOptions } from '../types';
 import { getConnectionError, isMcpHandle } from './connectionRules';
+import { EdgeCondition } from '@/utils/shared/edgeConditions';
 
 /** A subflow node's outgoing flow-control paths: standard edges it is the
  * source of, plus bidirectional edges pointing at it (whose reverse
@@ -78,7 +79,8 @@ export function validateConnection(
  */
 export function createEdgeFromConnection(
   params: Connection,
-  nodes: FlowNode[]
+  nodes: FlowNode[],
+  condition?: EdgeCondition
 ): Edge {
   // Get the source and target nodes
   const sourceNode = nodes.find(node => node.id === params.source) as FlowNode | undefined;
@@ -113,11 +115,14 @@ export function createEdgeFromConnection(
       style: mcpEdgeOptions.style
     } as Edge;
   } else {
+    // A `condition` (Tier 2b) is spread into `data` only when supplied, so a
+    // plain flow-control edge stays byte-for-byte what it was — and identical to
+    // the compiler's controlEdge output (pinned by flowSpecCompiler.test.ts).
     return {
       id: edgeId,
       ...params,
       type: 'custom',
-      data: { edgeType: 'standard' },
+      data: { edgeType: 'standard', ...(condition ? { condition } : {}) },
       animated: true
     } as Edge;
   }

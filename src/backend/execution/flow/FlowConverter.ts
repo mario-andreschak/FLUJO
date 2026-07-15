@@ -104,12 +104,32 @@ export class FlowConverter {
           // Add the successor with the action
           sourceNode.addSuccessor(targetNode, action);
 
+          // Tier 2b: retain a deterministic edge condition (dropped everywhere
+          // else) into the SOURCE node's params, keyed by this edge's action —
+          // the same string ProcessNode.post returns to route. `orderedOutgoingEdges`
+          // records author order so "first matching edge wins" / "bare fallback"
+          // are well-defined. Kept in node_params (deep-cloned with the node), which
+          // post() already has in scope, so no orchestration change is needed.
+          sourceNode.node_params.orderedOutgoingEdges = sourceNode.node_params.orderedOutgoingEdges || [];
+          sourceNode.node_params.orderedOutgoingEdges.push(action);
+          const condition = (edge.data as { condition?: unknown } | undefined)?.condition;
+          if (condition && typeof condition === 'object') {
+            sourceNode.node_params.edgeConditions = sourceNode.node_params.edgeConditions || {};
+            sourceNode.node_params.edgeConditions[action] = condition;
+            log.info(`Retained edge condition for routing`, { edgeId: action, source: edge.source });
+          }
+
           // A bidirectional edge is one connector carrying both transitions:
           // register the reverse successor under a derived action so the
           // target can hand back to the source.
           if ((edge.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
-            targetNode.addSuccessor(sourceNode, `${action}__reverse`);
-            log.info(`Connected nodes (bidirectional): ${edge.target} -> ${edge.source} with action: ${action}__reverse`);
+            const reverseAction = `${action}__reverse`;
+            targetNode.addSuccessor(sourceNode, reverseAction);
+            // The reverse back-edge is a bare successor the TARGET owns — record it
+            // in author order so a conditioned target can use it as a fallback.
+            targetNode.node_params.orderedOutgoingEdges = targetNode.node_params.orderedOutgoingEdges || [];
+            targetNode.node_params.orderedOutgoingEdges.push(reverseAction);
+            log.info(`Connected nodes (bidirectional): ${edge.target} -> ${edge.source} with action: ${reverseAction}`);
           }
 
           // Log the connection for debugging

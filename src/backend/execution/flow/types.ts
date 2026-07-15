@@ -2,6 +2,7 @@ import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import OpenAI from 'openai';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
@@ -91,6 +92,13 @@ export interface ProcessNodeProperties {
      * the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
      */
     maxTurns?: number;
+    /** Tier 2c (named variables): when set, this node writes its final output
+     *  (the model's assistant text) into `SharedState.variables[captureVariable]`
+     *  in post(). Any later step can inject it with `${var:NAME}` in its prompt /
+     *  isolatedPrompt, surviving `latest-message`/`isolated` scoping that would
+     *  otherwise drop it from the visible history. Run-scoped, plaintext — NOT a
+     *  secret (distinct from `${global:VAR}`). */
+    captureVariable?: string;
 }
 
 // FinishNode specific properties
@@ -176,12 +184,41 @@ export interface SubflowNodeProperties {
      *    - 'fail-fast': the first lane error fails the whole node (mirrors the
      *      single-child ERROR_ACTION semantics) and no further lanes are started. */
     errorStrategy?: 'fail-fast' | 'collect-all';
+    /** Map-over-list (Tier 2a): run `subflowId` ONCE PER ITEM parsed from the
+     *  resolved input, instead of once. Mutually exclusive with
+     *  `parallelSubflowIds` (fan-out). Empty/absent => today's behavior. The
+     *  per-item runs reuse the parallel worker pool / join / error strategy, so
+     *  `concurrencyLimit`, `joinSeparator`, and `errorStrategy` apply unchanged. */
+    mapOverList?: boolean;
+    /** Map-over-list: how to split the resolved input into items:
+     *    - 'json-array' (default): parse the input as a JSON array; each element
+     *      becomes one item (objects/arrays are re-stringified for the child).
+     *    - 'lines': split on newlines; blank lines are dropped; each line is one item. */
+    itemSplit?: 'json-array' | 'lines';
+    /** Map-over-list: run items one at a time in order instead of through the
+     *  concurrent pool. Implemented by pinning the pool to size 1, so no second
+     *  execution path exists. Default false (concurrent, bounded by concurrencyLimit). */
+    sequential?: boolean;
+    /** Tier 2c (named variables): when set, this node writes the subflow's final
+     *  output (the folded `outputText`) into `SharedState.variables[captureVariable]`
+     *  in post(). Capture happens on the PARENT's subflow node in the CURRENT run —
+     *  a var set INSIDE an ephemeral child run is discarded, not smuggled up. Any
+     *  later step injects it with `${var:NAME}`. Run-scoped, plaintext. */
+    captureVariable?: string;
 }
 
-/** One resolved fan-out lane in a parallel SubflowNode plan (issue #102). */
+/** One resolved lane in a SubflowNode plan: a fan-out child (issue #102) or a
+ *  map-over-list per-item run (Tier 2a). */
 export interface SubflowLanePlan {
     subflowId: string;
     subflowName?: string;
+    /** Map-over-list: this lane's OWN input, overriding the node's shared
+     *  runInput. Absent for fan-out lanes, which all share one input. */
+    input?: { prompt: string } | { messages: FlujoChatMessage[] };
+    /** Map-over-list: 0-based item index, for attribution / live-view labels. */
+    itemIndex?: number;
+    /** Map-over-list: total item count, paired with `itemIndex`. */
+    itemCount?: number;
 }
 
 /** The outcome of one fan-out lane (issue #102), kept in child order. */
@@ -199,6 +236,21 @@ export interface StartNodeParams extends BaseNodeParams<StartNodeProperties> {
 
 export interface ProcessNodeParams extends BaseNodeParams<ProcessNodeProperties> {
     type: 'process';
+    /**
+     * Tier 2b (deterministic conditions on edges): predicates carried off this
+     * node's outgoing control edges, keyed by edge id (the same string used as
+     * the routing action / successor key). Populated by FlowConverter from
+     * `edge.data.condition`; read by ProcessNode.post to auto-route on the last
+     * message. Absent/empty ⇒ the node routes exactly as before (model-decided
+     * handoff, terminate on plain text).
+     */
+    edgeConditions?: Record<string, EdgeCondition>;
+    /**
+     * Tier 2b: this node's outgoing CONTROL edge ids in author order (MCP edges
+     * excluded), so "first matching edge wins" and "the bare fallback edge" are
+     * deterministic. Populated alongside `edgeConditions`.
+     */
+    orderedOutgoingEdges?: string[];
 }
 
 export interface FinishNodeParams extends BaseNodeParams<FinishNodeProperties> {
@@ -267,6 +319,18 @@ export interface SharedState {
     flowSnapshot?: Flow;
     // Last response from the model
     lastResponse?: string | Record<string, unknown>;
+    /**
+     * Tier 2c (named variables): a run-scoped scratchpad of string values a node
+     * can CAPTURE (`captureVariable`) and any later step can INJECT via
+     * `${var:NAME}` in its prompt / isolatedPrompt / subflow input. Seeded from
+     * FlowRunInput.variables at run start. Persists with the conversation for a
+     * top-level run (plain serializable field), and dies with an ephemeral child
+     * run (never written back to the parent — see SubflowNode capture gotcha).
+     * Plaintext and run-scoped: NOT config and NOT secrets (distinct from
+     * `${global:VAR}`, which is storage-backed, encrypted, and never on the
+     * prompt path). Resolved by resolveRunVars.ts.
+     */
+    variables?: Record<string, string>;
     // MCP context for tool handling
     mcpContext?: MCPContext;
     // Current node ID for stateful execution
@@ -499,9 +563,14 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     subflowName?: string;
     /** Display name of this node (for subflow event attribution). */
     nodeName?: string;
-    /** Resolved fan-out plan (issue #102). Present only in parallel mode
-     *  (parallelSubflowIds non-empty); each entry is one concurrent child flow. */
+    /** Resolved lane plan. Present in parallel fan-out mode (issue #102,
+     *  parallelSubflowIds non-empty) or map-over-list mode (Tier 2a); each entry
+     *  is one child run. Fed to the same bounded worker pool either way. */
     lanes?: SubflowLanePlan[];
+    /** True when prep resolved this node in map-over-list mode (Tier 2a). Lets
+     *  execCore treat an EMPTY `lanes` as a clean "nothing to map" result rather
+     *  than falling through to the single-child path. */
+    mapOverList?: boolean;
     /** Bounded worker-pool size for parallel mode (default 4). */
     concurrencyLimit?: number;
     /** Separator used to join lane outputs in child order (default "\n\n"). */

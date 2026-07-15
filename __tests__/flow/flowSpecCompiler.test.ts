@@ -222,6 +222,87 @@ describe('compileFlowSpec — edge shapes match createEdgeFromConnection exactly
 });
 
 // ---------------------------------------------------------------------------
+// Tier 2b — deterministic edge conditions
+// ---------------------------------------------------------------------------
+
+describe('compileFlowSpec — edge conditions (Tier 2b)', () => {
+  const condSpec = (edge: Partial<FlowSpec['edges'][number]>): FlowSpec => ({
+    nodes: [
+      { key: 's', type: 'start' },
+      { key: 'p', type: 'process', model: 'model-def', prompt: 'x' },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [
+      { from: 's', to: 'p' },
+      { from: 'p', to: 'f', ...edge } as FlowSpec['edges'][number],
+    ],
+  });
+
+  // The compiler mints fresh uuids for node ids, so resolve edges by node TYPE.
+  const processId = (flow: any) => flow.nodes.find((n: any) => n.type === 'process').id;
+  const startId = (flow: any) => flow.nodes.find((n: any) => n.type === 'start').id;
+
+  it('emits a valid condition into edge.data.condition', () => {
+    const cond = { kind: 'contains' as const, value: 'FAIL', ignoreCase: true };
+    const { flow, errorCount } = compileFlowSpec(condSpec({ condition: cond }), context);
+    expect(errorCount).toBe(0);
+    const edge = flow!.edges.find((e) => e.source === processId(flow))!;
+    expect((edge.data as any).condition).toEqual(cond);
+  });
+
+  it('condition on a valid process edge is byte-for-byte what the builder would create', () => {
+    const cond = { kind: 'regex' as const, value: 'PASS' };
+    const { flow } = compileFlowSpec(condSpec({ condition: cond }), context);
+    const compiled = flow!.edges.find((e) => e.source === processId(flow))!;
+    const nodes = flow!.nodes.map((n) => ({ ...n })) as FlowNode[];
+    const built = createEdgeFromConnection(
+      {
+        source: compiled.source,
+        sourceHandle: compiled.sourceHandle!,
+        target: compiled.target,
+        targetHandle: compiled.targetHandle!,
+      },
+      nodes,
+      cond
+    );
+    expect(compiled).toEqual(built);
+  });
+
+  it('drops an unknown condition kind with a warning', () => {
+    const { flow, issues } = compileFlowSpec(condSpec({ condition: { kind: 'switch' as any, value: 'x' } }), context);
+    expect(issues.some((i) => i.code === 'edge-condition-kind')).toBe(true);
+    const edge = flow!.edges.find((e) => e.source === processId(flow))!;
+    expect((edge.data as any).condition).toBeUndefined();
+  });
+
+  it('drops a condition on a non-process source edge with a warning', () => {
+    // A condition on the start->process edge — start nodes never route on conditions.
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'p', type: 'process', model: 'model-def', prompt: 'x' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p', condition: { kind: 'contains', value: 'x' } },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, context);
+    expect(issues.some((i) => i.code === 'edge-condition-non-process')).toBe(true);
+    const edge = flow!.edges.find((e) => e.source === startId(flow))!;
+    expect((edge.data as any).condition).toBeUndefined();
+  });
+
+  it('keeps a bad regex condition but warns it will never match', () => {
+    const { flow, issues } = compileFlowSpec(condSpec({ condition: { kind: 'regex', value: '[bad' } }), context);
+    expect(issues.some((i) => i.code === 'edge-condition-regex')).toBe(true);
+    const edge = flow!.edges.find((e) => e.source === processId(flow))!;
+    expect((edge.data as any).condition).toEqual({ kind: 'regex', value: '[bad' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Reference resolution
 // ---------------------------------------------------------------------------
 
@@ -1069,6 +1150,79 @@ describe('compileFlowSpec — parallel fan-out (1a)', () => {
     );
     const validation = validateFlow(flow!, { models: context.models });
     expect(validation.issues.map((i) => i.code)).not.toContain('subflow-multiple-outgoing');
+    expect(validation.isRunnable).toBe(true);
+  });
+});
+
+describe('compileFlowSpec — map-over-list (Tier 2a)', () => {
+  it('mapOverList decorates a single child: subflowId set, mapOverList + tuning copied', () => {
+    const spec = subflowWrap({
+      flow: 'run_tests',
+      mapOverList: true,
+      itemSplit: 'lines',
+      sequential: true,
+      concurrencyLimit: 3,
+      joinSeparator: '\n--\n',
+      errorStrategy: 'fail-fast',
+    });
+    const { flow, errorCount } = compileFlowSpec(spec, parallelContext);
+    expect(errorCount).toBe(0);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.subflowId).toBe('flow-tests');
+    expect(gate.data.properties!.mapOverList).toBe(true);
+    expect(gate.data.properties!.itemSplit).toBe('lines');
+    expect(gate.data.properties!.sequential).toBe(true);
+    expect(gate.data.properties!.concurrencyLimit).toBe(3);
+    expect(gate.data.properties!.joinSeparator).toBe('\n--\n');
+    expect(gate.data.properties!.errorStrategy).toBe('fail-fast');
+    expect(gate.data.properties).not.toHaveProperty('parallelSubflowIds');
+  });
+
+  it('defaults: itemSplit/sequential omitted when unset (runtime defaults apply)', () => {
+    const { flow } = compileFlowSpec(subflowWrap({ flow: 'run_tests', mapOverList: true }), parallelContext);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.mapOverList).toBe(true);
+    expect(gate.data.properties).not.toHaveProperty('itemSplit');
+    expect(gate.data.properties).not.toHaveProperty('sequential');
+  });
+
+  it('warns on an invalid itemSplit and omits it', () => {
+    const { flow, issues } = compileFlowSpec(
+      subflowWrap({ flow: 'run_tests', mapOverList: true, itemSplit: 'csv' as any }),
+      parallelContext
+    );
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'invalid-item-split', severity: 'warning' }));
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties).not.toHaveProperty('itemSplit');
+  });
+
+  it('errors when mapOverList is combined with parallelFlows', () => {
+    const { issues } = compileFlowSpec(
+      subflowWrap({ mapOverList: true, parallelFlows: ['run_tests', 'run_lint_typecheck'] }),
+      parallelContext
+    );
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-map-and-parallel', severity: 'error' }));
+  });
+
+  it('errors when mapOverList has no single child to map', () => {
+    const { issues } = compileFlowSpec(subflowWrap({ mapOverList: true }), parallelContext);
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-map-no-child', severity: 'error' }));
+  });
+
+  it('works with an inline subflowSpec child', () => {
+    const spec = subflowWrap({ mapOverList: true, subflowSpec: leafSpec('mapped_child') });
+    const result = compileFlowSpec(spec, parallelContext, { maxDepth: 2 });
+    expect(result.errorCount).toBe(0);
+    const gate = result.flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.mapOverList).toBe(true);
+    expect(typeof gate.data.properties!.subflowId).toBe('string');
+  });
+
+  it('a map-over-list subflow validates clean (single outgoing edge)', () => {
+    const { flow } = compileFlowSpec(subflowWrap({ flow: 'run_tests', mapOverList: true }), parallelContext);
+    const validation = validateFlow(flow!, { models: context.models });
+    expect(validation.issues.map((i) => i.code)).not.toContain('subflow-map-and-parallel');
+    expect(validation.issues.map((i) => i.code)).not.toContain('subflow-map-no-child');
     expect(validation.isRunnable).toBe(true);
   });
 });

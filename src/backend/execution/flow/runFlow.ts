@@ -71,7 +71,8 @@ export interface FlowRunInput {
   prompt?: string;
   /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
   processNodeId?: string;
-  /** Named inputs for templates / StartNode. Accepted but not yet injected (v1.1). */
+  /** Named inputs seeded onto SharedState.variables (Tier 2c) at run start.
+   *  Values are coerced to string; any node can inject them via `${var:NAME}`. */
   variables?: Record<string, unknown>;
 
   /** 'ephemeral' runs in transient state and never writes to the conversations/*
@@ -252,7 +253,23 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       updatedAt: Date.now(),
       debugMode: flujodebug,
       executionTrace: (flujodebug && FEATURES.ENABLE_EXECUTION_TRACKER) ? [] : undefined,
+      // Tier 2c: the run-scoped named-variable scratchpad starts empty and is
+      // seeded from FlowRunInput.variables just below.
+      variables: {},
     };
+  }
+
+  // Tier 2c (named variables): wire the dormant FlowRunInput.variables field onto
+  // the state so `${var:NAME}` can inject caller-provided inputs from the first
+  // node. Values are coerced to string (the scratchpad is string-only). A fresh
+  // state has `variables: {}` from the literal above; a resumed state keeps its
+  // persisted vars and only merges any new caller-supplied ones.
+  if (input.variables && typeof input.variables === 'object') {
+    sharedState.variables = sharedState.variables ?? {};
+    for (const [key, value] of Object.entries(input.variables)) {
+      if (value === undefined || value === null) continue;
+      sharedState.variables[key] = typeof value === 'string' ? value : String(value);
+    }
   }
 
   // The conversation's approval setting (single source of truth).

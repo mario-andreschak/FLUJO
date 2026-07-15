@@ -49,6 +49,17 @@ describe('createEdgeFromConnection', () => {
     expect(std.type).toBe('custom');
     expect((std.data as any).edgeType).toBe('standard');
   });
+
+  it('omits condition by default (byte-identical to the compiler for a plain edge)', () => {
+    const std = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), nodes);
+    expect(std.data).toEqual({ edgeType: 'standard' });
+  });
+
+  it('carries a Tier 2b condition into data when supplied (kept in sync with controlEdge)', () => {
+    const cond = { kind: 'contains' as const, value: 'FAIL' };
+    const std = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), nodes, cond);
+    expect(std.data).toEqual({ edgeType: 'standard', condition: cond });
+  });
 });
 
 describe('getReplacedEdgeIds', () => {

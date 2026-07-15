@@ -176,6 +176,52 @@ describe('validateFlow — subflow single outgoing path', () => {
     expect(codes(r)).toContain('subflow-concurrency-limit');
     expect(r.isRunnable).toBe(true); // warning only
   });
+
+  it('accepts a map-over-list subflow (mapOverList + subflowId) with a single outgoing edge', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { subflowId: 'x', mapOverList: true } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).not.toContain('subflow-map-and-parallel');
+    expect(codes(r)).not.toContain('subflow-map-no-child');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('errors when mapOverList is combined with parallelSubflowIds', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { mapOverList: true, parallelSubflowIds: ['a'] } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-map-and-parallel');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('errors when mapOverList has no child flow (no subflowId)', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { mapOverList: true } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-map-no-child');
+    expect(r.isRunnable).toBe(false);
+  });
 });
 
 describe('validateFlow — model binding', () => {
@@ -349,6 +395,93 @@ describe('validateFlow — dangling tool pills', () => {
     };
     const r = validateFlow(flow, { models: [{ id: 'm1' }] });
     expect(codes(r)).not.toContain('tool-pill-disconnected');
+  });
+});
+
+describe('validateFlow — edge conditions (Tier 2b)', () => {
+  const models = [{ id: 'm1' }];
+  const condEdge = (source: string, target: string, condition: any): VEdge => ({
+    id: `${source}-${target}`,
+    source,
+    target,
+    data: { edgeType: 'standard', condition },
+  });
+
+  it('errors on a condition leaving a non-process node', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode()],
+      edges: [condEdge('start', 'p', { kind: 'contains', value: 'x' }), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).toContain('edge-condition-non-process');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('warns when a conditioned node has no bare fallback edge', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode()],
+      edges: [edge('start', 'p'), condEdge('p', 'finish', { kind: 'contains', value: 'FAIL' })],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).toContain('edge-condition-no-fallback');
+    // Advisory only — still runnable.
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('does not warn when a bare fallback edge exists', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), processNode('fix', { boundModel: 'm1' }), finishNode()],
+      edges: [
+        edge('start', 'p'),
+        condEdge('p', 'fix', { kind: 'contains', value: 'FAIL' }),
+        edge('p', 'finish'),
+      ],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).not.toContain('edge-condition-no-fallback');
+  });
+
+  it('treats a bidirectional back-edge as a bare fallback', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('a', { boundModel: 'm1' }), processNode('b', { boundModel: 'm1' }), finishNode()],
+      edges: [
+        edge('start', 'a'),
+        // a <-> b bidirectional gives `a` a bare reverse route from b, but the
+        // conditioned edge is a->finish; `a` also gets a->b forward. Put the
+        // condition on a->finish and rely on a<->b as the bare fallback for `a`.
+        biEdge('b', 'a'),
+        condEdge('a', 'finish', { kind: 'contains', value: 'FAIL' }),
+        edge('a', 'b'),
+      ],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).not.toContain('edge-condition-no-fallback');
+  });
+
+  it('warns on a regex condition that does not compile (kept, never matches)', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), processNode('q', { boundModel: 'm1' }), finishNode()],
+      edges: [
+        edge('start', 'p'),
+        condEdge('p', 'q', { kind: 'regex', value: '[bad' }),
+        edge('p', 'finish'),
+      ],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).toContain('edge-condition-regex');
+  });
+
+  it('warns on an unknown condition kind', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), processNode('q', { boundModel: 'm1' }), finishNode()],
+      edges: [
+        edge('start', 'p'),
+        condEdge('p', 'q', { kind: 'switch', value: 'x' }),
+        edge('p', 'finish'),
+      ],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).toContain('edge-condition-kind');
   });
 });
 

@@ -32,6 +32,7 @@ NODE TYPES:
     "outputMode": "full-conversation" | "latest-message",              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
     "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (50)
     "allowedTools": ["tool_a"],                                        // optional; step-level tool allowlist (independent of servers[].tools)
+    "captureVariable": "NAME",                                         // optional; save this step's output into a run variable other steps inject with \${var:NAME}
     "excludeModelPrompt": true|false,                                   // optional; drop the model's base prompt
     "excludeStartNodePrompt": true|false,                              // optional; drop the start node's prompt for this step
     "excludeSystemPrompt": true|false }                                // optional; drop the workflow/handoff guidance block
@@ -40,15 +41,22 @@ NODE TYPES:
     "subflowSpec": { ...a nested FlowSpec... },     // define a brand-new child flow INLINE (compiled into its own flow and wired automatically), OR fan out concurrently:
     "parallelFlows": ["flow_a", "flow_b"],          // run several EXISTING child flows CONCURRENTLY, same input to each, outputs joined; OR:
     "parallelSubflowSpecs": [ { ...FlowSpec... } ], // run several INLINE child flows concurrently
-    "concurrencyLimit": 4,                          // optional (parallel only), default 4
-    "joinSeparator": "\\n\\n---\\n\\n",              // optional (parallel only), string between joined lane outputs, default "\\n\\n"
-    "errorStrategy": "collect-all" | "fail-fast",   // optional (parallel only), default collect-all
+    "mapOverList": true | false,                    // optional; run the SINGLE child ("flow"/"subflowSpec") ONCE PER ITEM parsed from the input; mutually exclusive with parallelFlows/parallelSubflowSpecs
+    "itemSplit": "json-array" | "lines",            // optional (mapOverList only), how to split the input into items, default json-array
+    "sequential": true | false,                     // optional (mapOverList only), run items one at a time in order instead of concurrently, default false
+    "concurrencyLimit": 4,                          // optional (parallel / mapOverList), default 4
+    "joinSeparator": "\\n\\n---\\n\\n",              // optional (parallel / mapOverList), string between joined lane outputs, default "\\n\\n"
+    "errorStrategy": "collect-all" | "fail-fast",   // optional (parallel / mapOverList), default collect-all
     "inputMode": "full-history" | "latest-message" | "isolated",
     "allowCallerPrompt": true | false,             // optional, only with inputMode "isolated"; when true a routing step may pass a "prompt" via its handoff tool that overrides the subflow's "prompt" (default)
+    "captureVariable": "NAME",                     // optional; save the subflow's output into a run variable other steps inject with \${var:NAME}
     "outputMode": "steps" | "final-only" }
 - { "key": "...", "type": "finish", "label": "..." }
 
-EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false }
+EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false,
+         "condition": { "kind": "contains"|"regex"|"equals", "value": "...",
+                        "target": "last-assistant"|"last-message",  // optional, default last-assistant
+                        "ignoreCase": true|false, "negate": true|false } }   // condition optional; process-node edges only
 
 RULES:
 1. Exactly ONE start node; at least one finish node reachable from it.
@@ -56,6 +64,9 @@ RULES:
 3. A process step uses MCP tools ONLY via its "servers" list — never emit nodes of type "mcp".
 4. Do not embed \${tool:...} or \${resource:...} references in prompts — tools are wired through "servers".
 5. Branching: give a process node multiple outgoing edges; its model decides where to hand off at runtime. "bidirectional": true lets the target hand back to the source (agent <-> agent).
+5b. Deterministic routing: give a process node's outgoing edges a "condition" to route WITHOUT the model — the engine takes the first outgoing edge whose predicate matches the last message (default the step's own last assistant message), and a bare (condition-less) edge is the fallback. Use this for reliable data-driven branches (e.g. output contains "FAIL" -> fix step, else -> publish) instead of relying on a small model to emit a handoff. Only process-node edges may carry a condition. Without any condition on a node, that node keeps model-decided handoff (rule 5). If the model still calls a handoff tool, that wins over the condition.
 6. A subflow node may have only ONE outgoing edge. Give it EITHER a "flow" (naming an existing flow) OR a "subflowSpec" (an inline nested FlowSpec that becomes its own child flow) — not both. A "subflowSpec" may itself contain subflow nodes with their own "subflowSpec" (bounded nesting), so you can author whole multi-level flows in one object.
 7. A subflow node may instead fan out to SEVERAL child flows CONCURRENTLY via "parallelFlows" (existing flows) or "parallelSubflowSpecs" (inline). The same input is sent to every lane and their outputs are joined. This is about multiple CHILDREN, not successors — the single-outgoing-edge rule (rule 6) still holds. Prefer "parallelFlows" for large fan-outs.
-8. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.`;
+8. A subflow node may instead run its SINGLE child flow ONCE PER ITEM via "mapOverList": true. The input is split into items by "itemSplit" ("json-array" default, or "lines"), each item is sent to its own child run, and the per-item outputs are joined (same pool/tuning as parallel). Use "sequential": true to run items in order. Mutually exclusive with "parallelFlows"/"parallelSubflowSpecs".
+9. Named variables (scratchpad): a step can save its output with "captureVariable": "NAME" (process or subflow) and any LATER step injects it with \${var:NAME} inside its "prompt" / "isolatedPrompt" / subflow prompt. This survives "latest-message"/"isolated" scoping, unlike conversation history — use it to carry a todo list, a file path, a diff, or a captured result across steps that don't share history. \${var:NAME} is run-scoped and plaintext; it is DISTINCT from \${global:VAR} (configured secrets/config, resolved only for tool args). Capture a subflow's output on the PARENT subflow node — a variable set inside a child flow is not visible to the parent.
+10. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.`;
