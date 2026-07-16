@@ -192,6 +192,7 @@ export class GeminiAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
+    signal,
   }: CompletionInput): Promise<CompletionResult> {
     // Raise the per-request timeout (SDK default is short relative to a long
     // agentic turn) via httpOptions; see shared timeouts config.
@@ -213,6 +214,8 @@ export class GeminiAdapter implements CompletionAdapter {
         temperature,
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
+        // The abort signal (Stop button) cancels the in-flight HTTP request.
+        ...(signal ? { abortSignal: signal } : {}),
       },
     });
 

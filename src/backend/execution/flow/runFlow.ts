@@ -988,6 +988,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   } catch (loopError) {
     log.error(`Unhandled error during execution loop for conv ${effectiveConvId}`, { loopError });
+    if (currentAction !== ERROR_ACTION && runCancelled()) {
+      // A cancellation can surface as a thrown error (the model-call watch
+      // aborts the in-flight provider request, which throws out of the step).
+      // Report it as the standard cancellation outcome, not a provider failure.
+      sharedState.status = 'error';
+      sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+      currentAction = ERROR_ACTION;
+    }
     if (currentAction !== ERROR_ACTION) {
       const modelDetails = (loopError as any)?.details;
       sharedState.lastResponse = {
@@ -1004,6 +1012,16 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       };
       currentAction = ERROR_ACTION;
     }
+  }
+
+  // A cancellation that lands while the final step is completing (or one the
+  // provider ignored) must not let the run report 'completed' — Stop means
+  // stop, even when the model's answer won the race.
+  if (currentAction !== ERROR_ACTION && runCancelled()) {
+    log.info(`Cancellation flag set at run end for conv ${effectiveConvId}; reporting cancelled instead of '${sharedState.status}'.`);
+    sharedState.status = 'error';
+    sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+    currentAction = ERROR_ACTION;
   }
 
   // Reconcile status with the terminal action BEFORE the final persist.

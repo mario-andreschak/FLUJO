@@ -7,6 +7,7 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import StopCircleIcon from '@mui/icons-material/StopCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
@@ -145,6 +146,18 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
     );
   });
 
+
+/** The backend reports a user Stop as a model error coded 'cancelled' with the
+ *  message "Execution cancelled by user." (mapped to a 500 by the OpenAI-shaped
+ *  route). Recognise it from any error shape the SDK/REST layers throw so a
+ *  deliberate Stop is never surfaced as a provider failure. */
+const CANCELLED_MESSAGE_RE = /cancelled by user|execution cancelled/i;
+const isCancellationError = (err: unknown): boolean => {
+  const anyErr = err as { code?: unknown; error?: { code?: unknown }; message?: unknown; body?: { error?: unknown } };
+  if (anyErr?.code === 'cancelled' || anyErr?.error?.code === 'cancelled') return true;
+  const texts = [anyErr?.message, typeof anyErr?.body?.error === 'string' ? anyErr.body.error : undefined];
+  return texts.some(t => typeof t === 'string' && CANCELLED_MESSAGE_RE.test(t));
+};
 
 const Chat: React.FC = () => {
   // --- State Management ---
@@ -319,6 +332,22 @@ const Chat: React.FC = () => {
   // Conversations whose DELETE is in flight: a list refresh racing the delete
   // must not re-add them to the sidebar.
   const pendingDeleteIdsRef = useRef<Set<string>>(new Set());
+  // Conversations the user just Stopped. A cancelled run ends server-side as
+  // status 'error' with the message "Execution cancelled by user.", and the
+  // in-flight completion promise rejects into the generic catch — which would
+  // otherwise flash a scary "API Error: 500 Model execution failed" banner for
+  // what was a deliberate Stop. This marker lets the send/edit/respond catches
+  // suppress that, and drives a neutral "stopped" banner instead. Cleared when a
+  // fresh run starts on the conversation (run:start / a new send).
+  const stoppedConversationIdsRef = useRef<Set<string>>(new Set());
+  // Mirror in state so the render reacts (a ref mutation alone wouldn't).
+  const [stoppedConversationIds, setStoppedConversationIds] = useState<Set<string>>(new Set());
+  const markConversationStopped = useCallback((conversationId: string, stopped: boolean) => {
+    if (!conversationId) return;
+    if (stopped) stoppedConversationIdsRef.current.add(conversationId);
+    else stoppedConversationIdsRef.current.delete(conversationId);
+    setStoppedConversationIds(new Set(stoppedConversationIdsRef.current));
+  }, []);
 
   // --- Stick-to-bottom (chat autoscroll) ---
   // The messages area (rendered below) is the single scroll container. We keep it
@@ -854,7 +883,10 @@ const Chat: React.FC = () => {
       case 'run:start':
         setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
-        if (event.conversationId) patchConversationStatus(event.conversationId, 'running');
+        if (event.conversationId) {
+          patchConversationStatus(event.conversationId, 'running');
+          markConversationStopped(event.conversationId, false); // a new run clears the prior Stop notice
+        }
         break;
       case 'message': {
         const incoming = event.message as ChatMessage;
@@ -980,7 +1012,7 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning, patchConversationStatus]);
+  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning, patchConversationStatus, markConversationStopped]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -1408,8 +1440,16 @@ const Chat: React.FC = () => {
       if (data.status === 'error') {
          // Handle OpenAI compatible error structure
          const errorMessage = data.error?.message || data.lastResponse?.error || 'Unknown error during execution';
-         setError(errorMessage);
-         log.error('API Response/Polling: Execution resulted in error', { conversationId, error: data.error || data.lastResponse });
+         // A user Stop ends the run as a cancellation error: present it neutrally
+         // (the "stopped" banner) rather than flashing a red failure.
+         if (CANCELLED_MESSAGE_RE.test(errorMessage) || stoppedConversationIdsRef.current.has(conversationId)) {
+           markConversationStopped(conversationId, true);
+           setError(null);
+           log.info('API Response/Polling: Execution cancelled by user', { conversationId });
+         } else {
+           setError(errorMessage);
+           log.error('API Response/Polling: Execution resulted in error', { conversationId, error: data.error || data.lastResponse });
+         }
       }
       // Fetch final state one last time for completed/error?
       fetchDetailedConversation(conversationId);
@@ -1641,6 +1681,21 @@ const Chat: React.FC = () => {
       }
 
     } catch (err: unknown) {
+      // A user Stop cancels the in-flight completion, which rejects here. That is
+      // not a failure to surface — the run already ended cleanly as cancelled,
+      // and a neutral "stopped" banner covers it. Suppress the scary error path.
+      if (isCancellationError(err) || stoppedConversationIdsRef.current.has(conversation.id)) {
+        log.info('Chat completion cancelled by user', { conversationId: conversation.id });
+        success = false;
+        stopPolling();
+        setIsLoading(false);
+        setLoadingConversationId(null);
+        markConvRunning(conversation.id, false);
+        closeEventStream();
+        setError(null);
+        markConversationStopped(conversation.id, true);
+        return success;
+      }
       log.error('Error calling chat completions API:', err);
       success = false; // API call failed
 
@@ -1802,8 +1857,14 @@ const Chat: React.FC = () => {
         handleApiResponse(responseData, updatedDetailedConv.id);
 
       } catch (err) {
-        log.error('Error sending edited message:', err);
-        setError(err instanceof Error ? err.message : 'Failed to send edited message');
+        const cancelled = isCancellationError(err) || stoppedConversationIdsRef.current.has(updatedDetailedConv.id);
+        if (cancelled) {
+          log.info('Edited-message run cancelled by user', { conversationId: updatedDetailedConv.id });
+          markConversationStopped(updatedDetailedConv.id, true);
+        } else {
+          log.error('Error sending edited message:', err);
+          setError(err instanceof Error ? err.message : 'Failed to send edited message');
+        }
         setIsLoading(false);
         setLoadingConversationId(null);
         markConvRunning(updatedDetailedConv.id, false);
@@ -1876,6 +1937,13 @@ const Chat: React.FC = () => {
       handleApiResponse(data, currentConversationId);
 
     } catch (err) {
+      if (isCancellationError(err) || stoppedConversationIdsRef.current.has(currentConversationId)) {
+        log.info('Tool-response resume cancelled by user', { conversationId: currentConversationId });
+        markConversationStopped(currentConversationId, true);
+        setIsLoading(false);
+        markConvRunning(currentConversationId, false);
+        return;
+      }
       log.error(`Error sending tool response (${action})`, { conversationId: currentConversationId, toolCallId, err });
       let errorMessage = `Failed to ${action} tool call.`;
       if (err instanceof ChatApiError) {
@@ -2012,9 +2080,11 @@ const Chat: React.FC = () => {
     setIsLoading(false);
     setLoadingConversationId(null);
     markConvRunning(currentConversationId, false);
+    markConversationStopped(currentConversationId, true); // present the end as a Stop, not an error
     setDebugSessionActive(false);
     closeEventStream();
     setPendingToolCalls(null);
+    setError(null); // a deliberate Stop is not an error to surface
 
     try {
       await chatService.cancel(currentConversationId);
@@ -2038,6 +2108,7 @@ const Chat: React.FC = () => {
       return;
     }
     log.info('Stopping background conversation', { conversationId });
+    markConversationStopped(conversationId, true);
     try {
       await chatService.cancel(conversationId);
       markConvRunning(conversationId, false);
@@ -2098,6 +2169,15 @@ const Chat: React.FC = () => {
     ((isLoading && loadingConversationId === currentConversationId) ||
       (!!currentConversationId && runningConvs.has(currentConversationId)) ||
       currentConversationSummary?.status === 'running');
+
+  // The viewed conversation was just Stopped by the user (this session). Its
+  // server status is 'error' with the cancellation message, but we present it
+  // as a neutral "stopped" state rather than a failure. Client-local: on reload
+  // a stopped run reads as a plain error (no dedicated 'cancelled' status).
+  const viewedConversationStopped =
+    !viewedConversationRunning &&
+    !!currentConversationId &&
+    stoppedConversationIds.has(currentConversationId);
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
@@ -2254,10 +2334,39 @@ const Chat: React.FC = () => {
                 </Box>
               )}
 
+              {/* Stopped banner: the user pressed Stop. The run ends server-side
+                  as an error (cancellation), but that is not a failure to the
+                  user, so present it neutrally with a Retry (re-runs from the
+                  last node). Only for this session's Stop (see
+                  viewedConversationStopped). */}
+              {!isLoading && !isDebugPaused && viewedConversationStopped && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                  <Alert
+                    icon={<StopCircleIcon fontSize="inherit" />}
+                    severity="info"
+                    variant="outlined"
+                    sx={{ borderRadius: 2, py: 0.5, alignItems: 'center' }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => sendToChatCompletions(detailedConversation)}
+                      >
+                        Resume
+                      </Button>
+                    }
+                  >
+                    Conversation stopped
+                  </Alert>
+                </Box>
+              )}
+
               {/* Error banner: the run ended in an error state. Guarded by !error
                   so it doesn't duplicate the transient error Alert shown right
-                  after a live failure; this one persists across reloads. */}
-              {!isLoading && !isDebugPaused && !error && currentConversationSummary?.status === 'error' && (
+                  after a live failure; this one persists across reloads. Not shown
+                  for a user Stop (viewedConversationStopped owns that case). */}
+              {!isLoading && !isDebugPaused && !error && !viewedConversationStopped && currentConversationSummary?.status === 'error' && (
                 <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
                   <Alert
                     icon={<ErrorOutlineIcon fontSize="inherit" />}

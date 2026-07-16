@@ -31,6 +31,11 @@ const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
 );
 
+// How often the in-flight-completion cancellation watch polls the conversation's
+// isCancelled flag. The flag lives in process memory (set by the cancel route),
+// so polling is cheap; 250ms keeps Stop feeling immediate.
+const CANCEL_POLL_MS = 250;
+
 export class ModelHandler {
   /**
    * MCP Apps (#97): resolve a tool result's linked `ui://` UI resource, honoring
@@ -137,6 +142,24 @@ export class ModelHandler {
       retryAfter: meta?.retry_after_seconds != null ? String(meta.retry_after_seconds) : undefined,
       providerError: body,
     };
+  }
+
+  /**
+   * Whether the conversation (or any ancestor, for subflow children) has been
+   * cancelled. Read from the live in-memory states — the same source the run
+   * loop's own guard uses — via lazy requires to avoid the static import cycle
+   * (FlowExecutor -> ProcessNode -> ModelHandler). Best-effort: any failure
+   * reads as "not cancelled".
+   */
+  private static isConversationCancelled(conversationId: string): boolean {
+    try {
+      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const { isCancelledByAncestry } = require('@/backend/execution/flow/cancellation');
+      return isCancelledByAncestry(conversationId, FlowExecutor.conversationStates);
+    } catch (err) {
+      log.warn(`Cancellation check failed for conversation ${conversationId}`, { err });
+      return false;
+    }
   }
 
   /**
@@ -256,6 +279,14 @@ export class ModelHandler {
         }
       : undefined;
 
+    // Cancellation watch for the in-flight provider call: pressing Stop sets the
+    // conversation's isCancelled flag (own or an ancestor's, for subflow
+    // children); generateCompletion polls this and aborts the call mid-stream
+    // instead of letting the current model turn run to completion.
+    const shouldAbort = conversationId
+      ? () => ModelHandler.isConversationCancelled(conversationId)
+      : undefined;
+
     // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
     // scoped its input (latest-message / isolated); otherwise it sees the full
     // `messages`. `finalMessages` below is always built from `messages`, so the
@@ -265,6 +296,7 @@ export class ModelHandler {
       maxTurns: effectiveMaxTurns,
       requestToolApproval,
       onTranscriptMessage,
+      shouldAbort,
     });
 
     if (!response.success) {
@@ -394,6 +426,8 @@ export class ModelHandler {
         args: Record<string, unknown>;
       }) => Promise<boolean>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
+      /** Polled while the provider call is in flight; true aborts it (Stop). */
+      shouldAbort?: () => boolean;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -403,6 +437,20 @@ export class ModelHandler {
       messages,
       tools
     }));
+
+    // Cancellation plumbing: the watch (below) polls opts.shouldAbort while the
+    // provider call is in flight and fires this controller, which every adapter
+    // forwards to its SDK's abort mechanism. Declared outside the try so the
+    // catch can distinguish a user cancellation from a genuine provider error.
+    const abortController = new AbortController();
+    let cancelWatch: ReturnType<typeof setInterval> | undefined;
+    const stopCancelWatch = () => {
+      if (cancelWatch) {
+        clearInterval(cancelWatch);
+        cancelWatch = undefined;
+      }
+    };
+
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
@@ -481,18 +529,51 @@ export class ModelHandler {
       // --- Log the exact request being sent ---
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
+      // Start the cancellation watch just before the (possibly long) provider
+      // call. A Stop pressed at any point during the call aborts it within
+      // CANCEL_POLL_MS instead of waiting for the turn to finish.
+      if (opts?.shouldAbort) {
+        if (opts.shouldAbort()) {
+          abortController.abort();
+        } else {
+          const watch = () => {
+            if (opts.shouldAbort!()) {
+              log.info('Cancellation detected mid-completion; aborting the provider call.', { modelId });
+              abortController.abort();
+              stopCancelWatch();
+            }
+          };
+          cancelWatch = setInterval(watch, CANCEL_POLL_MS);
+          // Never keep the process alive just for the watch.
+          cancelWatch.unref?.();
+        }
+      }
+      if (abortController.signal.aborted) {
+        return {
+          success: false,
+          error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
+        };
+      }
+
       // Make the API request through the selected adapter.
-      const { completion: chatCompletion, transcript } = await adapter.createCompletion({
-        model,
-        apiKey: decryptedApiKey,
-        messages: apiMessages,
-        tools: sanitizedTools,
-        temperature,
-        toolNameMap: opts?.toolNameMap,
-        maxTurns: opts?.maxTurns,
-        requestToolApproval: opts?.requestToolApproval,
-        onTranscriptMessage: opts?.onTranscriptMessage,
-      });
+      let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
+      let transcript: FlujoChatMessage[] | undefined;
+      try {
+        ({ completion: chatCompletion, transcript } = await adapter.createCompletion({
+          model,
+          apiKey: decryptedApiKey,
+          messages: apiMessages,
+          tools: sanitizedTools,
+          temperature,
+          toolNameMap: opts?.toolNameMap,
+          maxTurns: opts?.maxTurns,
+          requestToolApproval: opts?.requestToolApproval,
+          onTranscriptMessage: opts?.onTranscriptMessage,
+          signal: abortController.signal,
+        }));
+      } finally {
+        stopCancelWatch();
+      }
 
       // --- Log the raw response received ---
       log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: chatCompletion }); // Use debug level
@@ -566,6 +647,20 @@ export class ModelHandler {
 
       return result;
     } catch (error) {
+      stopCancelWatch();
+
+      // A user cancellation aborted the in-flight call: whatever error shape the
+      // SDK threw (OpenAI APIUserAbortError, DOMException AbortError, the Agent
+      // SDK's teardown error, ...), report it as a clean cancellation — not a
+      // provider failure.
+      if (abortController.signal.aborted) {
+        log.info('Provider call aborted by user cancellation.', { modelId });
+        return {
+          success: false,
+          error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
+        };
+      }
+
       // --- Log the raw error object caught ---
       log.error('[ModelHandler.generateCompletion] Caught error during OpenAI API call', { rawError: error });
 

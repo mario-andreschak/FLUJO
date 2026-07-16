@@ -18,6 +18,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
+    signal,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({
       apiKey,
@@ -41,9 +42,11 @@ export class OpenAiAdapter implements CompletionAdapter {
       toolCount: tools?.length || 0,
     });
 
-    // No `stream: true`, so the SDK resolves to a ChatCompletion.
+    // No `stream: true`, so the SDK resolves to a ChatCompletion. The abort
+    // signal (Stop button) cancels the in-flight HTTP request.
     const completion = (await openai.chat.completions.create(
-      requestParams
+      requestParams,
+      signal ? { signal } : undefined
     )) as OpenAI.Chat.Completions.ChatCompletion;
     return { completion };
   }

@@ -54,6 +54,15 @@ export interface CompletionInput {
     args: Record<string, unknown>;
   }) => Promise<boolean>;
   /**
+   * Cancellation signal for the in-flight provider call. Wired by ModelHandler
+   * to the conversation's isCancelled flag (own or ancestor), so pressing Stop
+   * interrupts the call mid-stream instead of waiting for the current model
+   * turn to finish. Request/response adapters pass it to their SDK's per-request
+   * abort option; the self-orchestrating adapter (Claude subscription) chains it
+   * onto the AbortController that owns its whole agentic loop.
+   */
+  signal?: AbortSignal;
+  /**
    * Optional live sink for self-orchestrating adapters (Claude subscription)
    * that run their own agentic loop inside a single createCompletion call. It is
    * called as each assistant/tool message is produced, so the execution layer

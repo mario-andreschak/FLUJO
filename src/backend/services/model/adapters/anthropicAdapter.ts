@@ -196,6 +196,7 @@ export class AnthropicAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
+    signal,
   }: CompletionInput): Promise<CompletionResult> {
     const client = new Anthropic({
       apiKey,
@@ -225,7 +226,8 @@ export class AnthropicAdapter implements CompletionAdapter {
       hasSystem: Boolean(system),
     });
 
-    const resp = await client.messages.create(params);
+    // The abort signal (Stop button) cancels the in-flight HTTP request.
+    const resp = await client.messages.create(params, signal ? { signal } : undefined);
     return { completion: toChatCompletion(model.name, resp) };
   }
 }

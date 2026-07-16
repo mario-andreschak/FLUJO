@@ -174,6 +174,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
+    signal,
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
@@ -185,6 +186,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const usedNames = new Set<string>();
     let handoffCall: { name: string; args: Record<string, unknown> } | null = null;
     const abortController = new AbortController();
+    // Chain the caller's cancellation signal (Stop button) onto the controller
+    // that owns the whole agentic loop — this is the largest otherwise
+    // un-interruptible window (the SDK can run tools/turns for a long time).
+    // A handoff abort is intentional and handled separately (handoffCall set).
+    const onExternalAbort = () => abortController.abort();
+    if (signal?.aborted) {
+      abortController.abort();
+    } else {
+      signal?.addEventListener('abort', onExternalAbort, { once: true });
+    }
 
     // The conversation messages produced by this run, in order. Each is given a
     // stable id and streamed live as it is recorded; the same array is returned
@@ -393,8 +404,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // concatenated text at the end (it would duplicate in the UI).
     let streamedText = false;
 
-    try {
+    // The message loop, extracted so an external cancellation can race it: the
+    // SDK does NOT reliably throw when its abortController fires mid-turn — the
+    // iterator often just ends "normally" (no result message) after draining,
+    // which previously made a cancelled run look like a completed one built
+    // from partial text. Racing the loop against the signal both surfaces the
+    // cancellation AND returns within the cancel-poll cadence instead of
+    // waiting out the subprocess teardown.
+    const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // Once cancelled, stop recording/streaming anything the detached loop
+        // may still drain out of the dying subprocess.
+        if (signal?.aborted) break;
         // A handoff was requested by the tool handler (which runs between the
         // assistant turn that called it and the next turn). Stop here — BEFORE
         // accumulating any further turn — so the model can't narrate post-handoff
@@ -439,9 +460,41 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
         }
       }
+    };
+
+    try {
+      if (signal) {
+        // Race the loop against cancellation. If the signal fires first we throw
+        // immediately (ModelHandler maps it to 'cancelled'); the SDK's own abort
+        // (chained via onExternalAbort) tears the subprocess down in the
+        // background, and the detached loop's guard above keeps it from
+        // recording anything more. Its eventual settle is explicitly swallowed.
+        let onAbort: (() => void) | undefined;
+        const cancelPromise = new Promise<never>((_, reject) => {
+          onAbort = () => reject(new Error('Claude subscription run cancelled by user.'));
+          signal.addEventListener('abort', onAbort!, { once: true });
+        });
+        const loopPromise = messageLoop();
+        try {
+          await Promise.race([loopPromise, cancelPromise]);
+        } finally {
+          if (onAbort) signal.removeEventListener('abort', onAbort);
+          loopPromise.catch(() => { /* late teardown rejection — already handled */ });
+        }
+        // The probe-observed SDK behavior: an aborted query can END the loop
+        // normally (no throw, no result). Never let that read as success.
+        if (signal.aborted && !handoffCall) {
+          throw new Error('Claude subscription run cancelled by user.');
+        }
+      } else {
+        await messageLoop();
+      }
     } catch (err) {
-      // A handoff aborts the run on purpose; only genuine errors propagate.
+      // A handoff aborts the run on purpose; only genuine errors (including an
+      // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
       if (!handoffCall) throw err;
+    } finally {
+      signal?.removeEventListener('abort', onExternalAbort);
     }
 
     const finalText = resultText || accumulatedText;
