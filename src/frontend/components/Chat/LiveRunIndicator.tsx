@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Typography } from '@mui/material';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 
 /** Live execution stats, driven by the SSE event stream while a run is active. */
 export interface LiveRunStats {
@@ -15,6 +16,11 @@ interface LiveRunIndicatorProps {
   liveStats: LiveRunStats | null;
   onStop: () => void;
   stopDisabled?: boolean;
+  /** The run is parked at a tool-approval prompt: swap the spinner (which would
+   *  falsely suggest activity next to the Approve/Reject buttons) for a static
+   *  pause icon, and drop the elapsed/stall caption — but keep Stop reachable,
+   *  since the run is still alive and holding the conversation. */
+  awaitingApproval?: boolean;
 }
 
 /**
@@ -26,7 +32,7 @@ interface LiveRunIndicatorProps {
  * only while the viewed conversation is running, so the interval's lifecycle
  * is simply this component's lifecycle.
  */
-const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled }) => {
+const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval }) => {
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
   useEffect(() => {
@@ -36,14 +42,20 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
 
   const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
   const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
-  const stuck = !!liveStats && sinceLast >= 60;
+  const stuck = !awaitingApproval && !!liveStats && sinceLast >= 60;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
+        {awaitingApproval ? (
+          <PauseCircleOutlineIcon fontSize="small" color="warning" />
+        ) : (
+          <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
+        )}
         <Typography variant="body2" color="textSecondary">
-          {liveStats?.activeNode ? `Running: ${liveStats.activeNode}` : 'Working…'}
+          {awaitingApproval
+            ? 'Waiting for tool approval'
+            : liveStats?.activeNode ? `Running: ${liveStats.activeNode}` : 'Working…'}
         </Typography>
         <Button
           variant="outlined"
@@ -55,10 +67,12 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
           Stop
         </Button>
       </Box>
-      <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
-        {(liveStats?.totalTokens ?? 0).toLocaleString()} tokens · {elapsed}s elapsed
-        {stuck ? ` · no activity for ${sinceLast}s — may be stuck` : ''}
-      </Typography>
+      {!awaitingApproval && (
+        <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
+          {(liveStats?.totalTokens ?? 0).toLocaleString()} tokens · {elapsed}s elapsed
+          {stuck ? ` · no activity for ${sinceLast}s — may be stuck` : ''}
+        </Typography>
+      )}
     </Box>
   );
 };

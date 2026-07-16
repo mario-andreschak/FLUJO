@@ -17,6 +17,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import BoltIcon from '@mui/icons-material/Bolt';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import StopCircleIcon from '@mui/icons-material/StopCircle';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 
 interface ChatHistoryProps {
@@ -24,6 +25,10 @@ interface ChatHistoryProps {
   currentConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
+  /** Stop the run of a conversation that is running or awaiting tool approval.
+   *  Rendered as a stop button on those list items — including background
+   *  conversations, which otherwise have no reachable Stop at all. */
+  onStopConversation?: (id: string) => void;
   onNewConversation: () => void;
   /** Start a Quick Chat (model + optional MCP servers, no saved flow) — issue #61. */
   onQuickChat?: () => void;
@@ -37,6 +42,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   currentConversationId,
   onSelectConversation,
   onDeleteConversation,
+  onStopConversation,
   onNewConversation,
   onQuickChat,
   onCollapse
@@ -126,30 +132,53 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         ) : (
           conversations
             .sort((a, b) => b.updatedAt - a.updatedAt) // Sort by most recent
-            .map((conversation) => (
-              <ListItem 
+            .map((conversation) => {
+              // Any conversation whose run is still alive — executing or holding
+              // tool calls (awaiting approval) — gets a stop button, so a run can
+              // be stopped without first switching to its conversation.
+              const stoppable =
+                !!onStopConversation &&
+                (conversation.status === 'running' || conversation.status === 'awaiting_tool_approval');
+              return (
+              <ListItem
                 key={conversation.id}
                 disablePadding
                 secondaryAction={
-                  <IconButton 
-                    edge="end" 
-                    aria-label="delete"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteConversation(conversation.id);
-                    }}
-                  >
-                    <DeleteIcon />
-                  </IconButton>
+                  <>
+                    {stoppable && (
+                      <Tooltip title="Stop this run">
+                        <IconButton
+                          edge="end"
+                          aria-label="stop run"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onStopConversation(conversation.id);
+                          }}
+                        >
+                          <StopCircleIcon color="error" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    <IconButton
+                      edge="end"
+                      aria-label="delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteConversation(conversation.id);
+                      }}
+                    >
+                      <DeleteIcon />
+                    </IconButton>
+                  </>
                 }
                 sx={{
                   opacity: conversation.id === currentConversationId ? 1 : 0.7,
                 }}
               >
-                <ListItemButton 
+                <ListItemButton
                   selected={conversation.id === currentConversationId}
                   onClick={() => onSelectConversation(conversation.id)}
-                  sx={{ pr: 7 }} // Make room for the delete button
+                  sx={{ pr: stoppable ? 12 : 7 }} // Make room for the action buttons
                 >
                   <ListItemText 
                     primary={
@@ -182,7 +211,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                   />
                 </ListItemButton>
               </ListItem>
-            ))
+              );
+            })
         )}
       </List>
     </>

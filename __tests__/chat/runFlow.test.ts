@@ -199,6 +199,44 @@ describe('runFlow keystone', () => {
     expect(FlowExecutor.executeStep as jest.Mock).not.toHaveBeenCalled();
   });
 
+  it("resets a pre-created conversation's undefined status to 'running' for its first run", async () => {
+    // The create route seeds conversations with status undefined; without the
+    // reset, the whole FIRST run reported undefined to the list route — the
+    // sidebar never showed the running dot / stop button for it.
+    const convId = 'conv-fresh-status-1';
+    conversationStates.set(convId, {
+      trackingInfo: { executionId: 'e-fresh', startTime: 1, nodeExecutionTracker: [] },
+      messages: [],
+      flowId: FLOW_ID,
+      conversationId: convId,
+      title: 'New Conversation',
+      createdAt: 1,
+      updatedAt: 1,
+      status: undefined,
+    } as unknown as SharedState);
+
+    const statusesDuringSteps: Array<string | undefined> = [];
+    const stub = FlowExecutor.executeStep as jest.Mock;
+    const impl = stub.getMockImplementation()!;
+    stub.mockImplementation(async (sharedState: any) => {
+      statusesDuringSteps.push(sharedState.status);
+      return impl(sharedState);
+    });
+    try {
+      const result = await runFlow({
+        flowId: FLOW_ID,
+        prompt: 'first run',
+        mode: 'conversation',
+        conversationId: convId,
+      });
+      expect(result.status).toBe('completed');
+      // While the run executed, the state said 'running' (what the list serves).
+      expect(statusesDuringSteps[0]).toBe('running');
+    } finally {
+      stub.mockImplementation(impl);
+    }
+  });
+
   it('a validator crash does not block the run (check is advisory infrastructure)', async () => {
     (validateFlowForRun as jest.Mock).mockRejectedValueOnce(new Error('validator exploded'));
 

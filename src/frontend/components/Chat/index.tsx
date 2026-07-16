@@ -2027,6 +2027,29 @@ const Chat: React.FC = () => {
     }
   };
 
+  // Stop ANY conversation's run (sidebar stop button) — not just the viewed
+  // one. For the viewed conversation, delegate to handleCancelRequest so the
+  // local live-run state (stream, polling, pending approvals) is torn down too;
+  // for a background conversation there is no local state to tear down, so
+  // just cancel server-side and refresh the sidebar statuses.
+  const handleStopConversation = async (conversationId: string) => {
+    if (conversationId === currentConversationId) {
+      await handleCancelRequest();
+      return;
+    }
+    log.info('Stopping background conversation', { conversationId });
+    try {
+      await chatService.cancel(conversationId);
+      markConvRunning(conversationId, false);
+      // Parked runs are finalized by the cancel route immediately; a live run
+      // flips on its next loop iteration — the list poll catches that.
+      await fetchConversations(undefined, { silent: true });
+    } catch (err) {
+      log.error('Error stopping background conversation', { conversationId, err });
+      setError('Failed to send cancel request to the server.');
+    }
+  };
+
   // Manually dismiss the debugger panel. Hides the split view and clears the
   // local debug state, then cancels the paused run so the conversation is not
   // left stuck in 'paused_debug' on the backend.
@@ -2060,10 +2083,16 @@ const Chat: React.FC = () => {
   // stick forever.
   // A parked run (awaiting approval / paused in the debugger) has its own UI —
   // the indicator must not sit next to the approval prompt with a spinner.
-  const viewedConversationParked =
+  // But the run is still alive while parked at an approval prompt, so Stop
+  // must stay reachable: that case renders the indicator in its spinner-less
+  // awaitingApproval variant instead of vanishing entirely. (paused_debug
+  // keeps its own Cancel in the debugger panel.)
+  const viewedConversationAwaitingApproval =
     currentConversationSummary?.status === 'awaiting_tool_approval' ||
-    currentConversationSummary?.status === 'paused_debug' ||
     !!pendingToolCalls;
+  const viewedConversationParked =
+    viewedConversationAwaitingApproval ||
+    currentConversationSummary?.status === 'paused_debug';
   const viewedConversationRunning =
     !viewedConversationParked &&
     ((isLoading && loadingConversationId === currentConversationId) ||
@@ -2118,6 +2147,7 @@ const Chat: React.FC = () => {
               currentConversationId={currentConversationId}
               onSelectConversation={setCurrentConversationId}
               onDeleteConversation={deleteConversation}
+              onStopConversation={handleStopConversation}
               onNewConversation={createNewConversation}
               onQuickChat={() => setQuickChatOpen(true)}
               onCollapse={toggleSidebarCollapsed}
@@ -2263,6 +2293,19 @@ const Chat: React.FC = () => {
               {viewedConversationRunning && !isDebugPaused && (
                 <LiveRunIndicator
                   liveStats={liveStats}
+                  onStop={handleCancelRequest}
+                  stopDisabled={!currentConversationId}
+                />
+              )}
+
+              {/* Parked at a tool-approval prompt: the run is still alive (and
+                  for agentic adapters, blocked mid-request), so keep Stop
+                  reachable next to the Approve/Reject prompt — spinner-less so
+                  it doesn't suggest activity while waiting on the user. */}
+              {!viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && (
+                <LiveRunIndicator
+                  liveStats={liveStats}
+                  awaitingApproval
                   onStop={handleCancelRequest}
                   stopDisabled={!currentConversationId}
                 />

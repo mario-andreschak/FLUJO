@@ -203,8 +203,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
 
     // --- Reset status if resuming a completed/errored conversation ---
-    if (stateSource !== 'new' && (sharedState.status === 'completed' || sharedState.status === 'error')) {
-      log.info(`Resuming completed/errored conversation ${effectiveConvId}. Resetting status to 'running'.`);
+    // Also covers status === undefined: a conversation created via the create
+    // route starts with NO status, and without this its whole FIRST run reports
+    // undefined to the list route — so the sidebar never showed the running dot
+    // / stop button for it (the SSE run:start patch was overwritten by the next
+    // list poll).
+    if (stateSource !== 'new' && (sharedState.status === 'completed' || sharedState.status === 'error' || sharedState.status === undefined)) {
+      log.info(`Resuming completed/errored/fresh conversation ${effectiveConvId}. Resetting status to 'running'.`);
       sharedState.status = 'running';
       sharedState.lastResponse = undefined;
       sharedState.isCancelled = false;
