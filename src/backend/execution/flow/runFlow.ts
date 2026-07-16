@@ -24,6 +24,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
 import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
+import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -92,7 +93,8 @@ export interface FlowRunInput {
   /** Live execution events. Defaults to the per-conversation ExecutionEventBus
    *  emitter (what the OpenAI/SSE path relies on). */
   emit?: EmitFn;
-  /** Nesting provenance / re-entrancy guards (subflows, sampling). Reserved. */
+  /** Conversation id of the spawning run (subflows). Recorded on the child's
+   *  SharedState so cancelling an ancestor stops this run too (issue #109). */
   parentRunId?: string;
   depth?: number;
 }
@@ -281,6 +283,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // conversations store. Never unset: an ephemeral run stays ephemeral.
   if (ephemeral) {
     sharedState.ephemeral = true;
+  }
+
+  // Record the spawning run's id so cancellation propagates down the run tree
+  // (issue #109): the loop guard below walks this chain, and cancelling the
+  // top conversation stops every descendant subflow at its next iteration.
+  if (input.parentRunId) {
+    sharedState.parentRunId = input.parentRunId;
   }
 
   // Subflow re-entrancy guard: record this run's depth and refuse to start if
@@ -554,6 +563,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
+  // Cancellation covers this run's own flag AND any ancestor's (issue #109): a
+  // subflow child has its own SharedState, so the parent's flag only reaches it
+  // through the parentRunId chain. Once an ancestor is found cancelled, the flag
+  // is copied onto this state so descendants (and later checks) short-circuit.
+  const runCancelled = (): boolean => {
+    if (sharedState.isCancelled) return true;
+    if (isCancelledByAncestry(sharedState.parentRunId, FlowExecutor.conversationStates)) {
+      sharedState.isCancelled = true;
+      return true;
+    }
+    return false;
+  };
+
   const singleStep = !!sharedState.debugMode && !continueDebug;
   const pauseForDebug = () => {
     sharedState.status = 'paused_debug';
@@ -575,7 +597,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           break;
         }
 
-        if (sharedState.isCancelled) {
+        if (runCancelled()) {
           log.info(`Cancellation flag detected for conv ${effectiveConvId}. Terminating execution.`);
           sharedState.status = 'error';
           sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
@@ -594,6 +616,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             // write resources — same policy as persistConversationState.
             conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
             node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+            shouldAbort: runCancelled,
           });
           if (!toolProcessingResult.success) {
             log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
@@ -743,6 +766,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+                  shouldAbort: runCancelled,
                 });
 
                 if (!toolProcessingResult.success) {
@@ -788,6 +812,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+                  shouldAbort: runCancelled,
                 });
 
                 if (!toolProcessingResult.success) {
@@ -1001,12 +1026,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
       }
     }
-    await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
+    await persistState(storageKey, sharedState); // chokepoint refuses ephemeral + deleted states
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
   }
-  FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+  // A conversation deleted mid-run must not be resurrected: the persist above is
+  // already refused by the tombstone; drop the in-memory state too instead of
+  // re-registering it (the DELETE handler kept it alive only so this run — and
+  // descendant subflows walking the ancestor chain — could observe the cancel).
+  if (isConversationDeleted(effectiveConvId)) {
+    FlowExecutor.conversationStates.delete(effectiveConvId);
+  } else {
+    FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+  }
 
   // An ephemeral run is transient: drop it from the in-memory map once it
   // reaches a terminal state so isolated/subflow runs don't accumulate.

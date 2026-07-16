@@ -7,6 +7,7 @@ import {
 } from '@/shared/types/execution/events';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
+import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 
@@ -123,6 +124,9 @@ function chainWrite(conversationId: string, content: string): Promise<void> {
  */
 function isPersistable(conversationId: string): boolean {
   try {
+    // A deleted conversation's in-flight run keeps emitting until its next
+    // cancellation check; those events must not re-create the just-deleted log.
+    if (isConversationDeleted(conversationId)) return false;
     // Lazy require to avoid a static import cycle (FlowExecutor → engine →
     // nodes → handlers → executionEventBus → this module).
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -171,6 +175,7 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
   if (state.ephemeral) return;
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return;
+  if (isConversationDeleted(conversationId)) return;
   const lines = raws
     .map((raw) => serialize({ ...raw, conversationId, seq: -1, timestamp: Date.now() } as ExecutionEvent))
     .join('');

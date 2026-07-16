@@ -1,6 +1,7 @@
 import { saveItem as saveItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
+import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
@@ -25,6 +26,13 @@ const log = createLogger('backend/execution/flow/persistConversationState');
 export function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
   if (state.ephemeral) {
     log.debug(`Refusing to persist ephemeral state (key ${key}); ephemeral runs never reach the conversations store.`);
+    return Promise.resolve();
+  }
+  // Deleted-conversation tombstone: a run that was in flight when its
+  // conversation was deleted must not re-write the file at its next run
+  // boundary (that resurrected deleted conversations in the sidebar).
+  if (isConversationDeleted(state.conversationId)) {
+    log.info(`Refusing to persist state for deleted conversation ${state.conversationId} (key ${key}).`);
     return Promise.resolve();
   }
   return saveItemBackend(key, { ...state, executionTrace: undefined, emit: undefined });

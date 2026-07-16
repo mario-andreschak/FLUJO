@@ -694,8 +694,28 @@ export class ModelHandler {
       }> = [];
 
       // Process each tool call
-      for (const toolCall of toolCalls) {
+      for (let callIndex = 0; callIndex < toolCalls.length; callIndex++) {
+        const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
+
+        // Cancellation check between tool calls (issue #109): a Stop pressed
+        // while an earlier tool in this batch ran must not start the next one.
+        // Every remaining call still gets a tool-result message so the
+        // transcript stays well-formed (each tool_call id answered) — the run
+        // loop terminates on its own cancellation guard right after.
+        if (input.shouldAbort?.()) {
+          log.info(`Cancellation detected before tool call ${name}; skipping the remaining ${toolCalls.length - callIndex} call(s).`);
+          for (const remaining of toolCalls.slice(callIndex)) {
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: "tool",
+              tool_call_id: remaining.id,
+              content: 'Execution cancelled by user before this tool call ran.',
+              timestamp: Date.now()
+            });
+          }
+          break;
+        }
 
         try {
           // Parse the arguments

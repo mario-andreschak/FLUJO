@@ -16,6 +16,7 @@ import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { writeRunResource } from '@/backend/services/runResources';
+import { isCancelledByAncestry } from '../cancellation';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -493,9 +494,21 @@ export class SubflowNode extends BaseNode {
       }
     };
 
+    // Cancellation guard for the pool (issue #109): once the parent run (or any
+    // ancestor) is cancelled, workers stop pulling NEW lanes. In-flight lanes
+    // terminate at their own runFlow cancellation guard (each child walks the
+    // same ancestor chain).
+    const { FlowExecutor } = await import('../FlowExecutor');
+    const parentChainCancelled = (): boolean =>
+      isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
+
     const worker = async (): Promise<void> => {
       for (;;) {
         if (aborted) return;
+        if (parentChainCancelled()) {
+          aborted = true;
+          return;
+        }
         const i = cursor++;
         if (i >= laneCount) return;
         await runLane(i);

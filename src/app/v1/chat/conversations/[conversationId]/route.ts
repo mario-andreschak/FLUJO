@@ -1,7 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs'; // Import fs promises
-import path from 'path'; // Import path
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
@@ -19,6 +17,8 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteRunResources } from '@/backend/services/runResources';
+import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
+import { deleteCollectionItem } from '@/utils/storage/backend';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -337,20 +337,41 @@ export async function DELETE(
     return NextResponse.json({ error: 'Missing conversationId parameter' }, { status: 400 });
   }
 
-  const conversationsDir = path.join(process.cwd(), 'db', 'conversations');
-  const filePath = path.join(conversationsDir, `${conversationId}.json`);
-  log.debug('Target file path for deletion', { requestId, filePath });
+  // Ids become file names; refuse anything that couldn't be a conversation id
+  // (also blocks path traversal through the URL parameter).
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(conversationId)) {
+    log.warn('Refusing DELETE for unsafe conversationId', { requestId });
+    return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 });
+  }
 
   try {
-    // Attempt to delete the file from storage
-    await fs.unlink(filePath);
-    log.info(`Successfully deleted conversation file from storage`, { requestId, conversationId });
+    // Tombstone FIRST: from here on, the persistence chokepoint and the
+    // conversation-log tap refuse this id, so an in-flight run can no longer
+    // re-write ("resurrect") the files we are about to remove. Rolled back in
+    // the catch below if the delete fails.
+    markConversationDeleted(conversationId);
 
-    // Also remove from in-memory state if it exists
-    if (FlowExecutor.conversationStates.has(conversationId)) {
-      FlowExecutor.conversationStates.delete(conversationId);
-      log.debug(`Removed conversation state from memory`, { requestId, conversationId });
+    // Stop any in-flight run and clean up the in-memory state. The running
+    // loop holds a closure reference to this same state object, so setting the
+    // flag reaches it. While the run is 'running' the entry must STAY in the
+    // map: descendant subflows walk it for ancestor cancellation, and runFlow's
+    // final cleanup drops it (tombstoned ids are never re-registered).
+    const inMemoryState = FlowExecutor.conversationStates.get(conversationId);
+    if (inMemoryState) {
+      inMemoryState.isCancelled = true;
+      if (inMemoryState.status !== 'running') {
+        FlowExecutor.conversationStates.delete(conversationId);
+      }
+      log.debug(`Cancelled and cleaned up in-memory conversation state`, { requestId, conversationId, status: inMemoryState.status });
     }
+
+    // Delete the state file through the storage layer: same path derivation as
+    // every writer (the old hand-built process.cwd() path missed the real file
+    // whenever FLUJO_DATA_DIR was set, so conversations "reappeared"), and the
+    // per-key write chain serializes the unlink behind any in-flight persist of
+    // the same conversation. A missing file is treated as already deleted.
+    await deleteCollectionItem('conversations', conversationId);
+    log.info(`Deleted conversation state from storage`, { requestId, conversationId });
 
     // A Quick-Chat (issue #61) carried its flow as an in-memory snapshot compiled
     // under the namespaced id quickchat-<conversationId>; evict that cache entry
@@ -367,28 +388,14 @@ export async function DELETE(
     return new Response(null, { status: 204 }); // Success, No Content
 
   } catch (error: any) {
+    // The conversation still exists (delete failed) — clear the tombstone so
+    // it isn't left permanently unpersistable/unloggable.
+    unmarkConversationDeleted(conversationId);
     log.error('Error deleting conversation', {
       requestId,
       conversationId,
-      filePath,
       error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error
     });
-
-    // If the error is file not found, it's arguably successful from the client's perspective
-    if (error.code === 'ENOENT') {
-      log.warn('Conversation file not found during delete, treating as success (already deleted).', { requestId, conversationId });
-       // Also remove from in-memory state just in case
-      if (FlowExecutor.conversationStates.has(conversationId)) {
-        FlowExecutor.conversationStates.delete(conversationId);
-        log.debug(`Removed potentially orphaned conversation state from memory`, { requestId, conversationId });
-      }
-      // The log may exist even when the state file is already gone.
-      await deleteConversationLog(conversationId);
-      // Run resources likewise.
-      await deleteRunResources(conversationId);
-      return new Response(null, { status: 204 }); // Success, No Content
-    }
-
     return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
   }
 }

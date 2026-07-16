@@ -469,6 +469,14 @@ export interface SharedState {
     runDepth?: number;
 
     /**
+     * Conversation id of the run that spawned this one (subflow child runs).
+     * Cancellation propagates DOWN the run tree through this link: runFlow's
+     * loop guard walks the ancestor chain and stops the child once any
+     * ancestor's isCancelled flag is set (issue #109). Unset for top-level runs.
+     */
+    parentRunId?: string;
+
+    /**
      * True for a transient run (subflow child, future scheduler runs): this
      * state must NEVER reach the conversations/* store, so it never appears in
      * the chat sidebar. The policy travels ON the state and is enforced inside

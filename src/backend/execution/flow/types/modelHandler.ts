@@ -87,6 +87,14 @@ export interface ToolCallProcessingInput {
   conversationId?: string;
   /** Process node driving these calls — recorded as resource lineage producer. */
   node?: NodeRef;
+  /**
+   * Cancellation probe, checked before EACH tool call in the batch: once it
+   * returns true, no further tool is started (remaining calls get synthetic
+   * "cancelled" results so the transcript stays well-formed). Wired by runFlow
+   * to the run's cancellation guard so Stop takes effect between tool calls,
+   * not only between loop iterations (issue #109).
+   */
+  shouldAbort?: () => boolean;
 }
 
 // Tool call processing result

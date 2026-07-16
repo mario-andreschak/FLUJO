@@ -8,6 +8,8 @@ import { Flow } from '@/shared/types/flow';
 import { saveItem } from '@/utils/storage/backend'; // Import saveItem directly
 import { getDataDir } from '@/utils/paths';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -16,6 +18,14 @@ const log = createLogger('app/v1/chat/conversations/route');
 // Define the structure for the list item returned by GET
 // Matches the frontend type now imported as FrontendConversationListItem
 interface ConversationListItem extends FrontendConversationListItem {}
+
+// Parsed-summary cache for the list GET, keyed by file name. The sidebar now
+// polls this endpoint every few seconds, and conversation files carry the FULL
+// message history — re-reading and JSON.parsing every file on every poll is
+// O(total bytes on disk). The summary only needs six small fields, so cache it
+// per file and invalidate on mtime/size change (every write is an atomic
+// replace, so a content change always moves the mtime).
+const listSummaryCache = new Map<string, { mtimeMs: number; size: number; item: ConversationListItem }>();
 
 // Define the expected structure for the POST request body
 interface CreateConversationPayload {
@@ -56,15 +66,43 @@ export async function GET() {
       const conversationIdFromFile = file.replace('.json', ''); // Extract ID from filename
 
       try {
-        const fileContent = await fs.readFile(filePath, 'utf-8');
-        const state = JSON.parse(fileContent) as SharedState;
+        // Summary from disk, via the mtime/size cache (see listSummaryCache).
+        const stats = await fs.stat(filePath);
+        const cached = listSummaryCache.get(file);
+        let base: ConversationListItem;
+        if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+          base = cached.item;
+        } else {
+          const fileContent = await fs.readFile(filePath, 'utf-8');
+          const state = JSON.parse(fileContent) as SharedState;
 
-        // Basic validation and data extraction
-        const id = state.conversationId || conversationIdFromFile; // Prefer state ID, fallback to filename
-        const title = state.title || 'Untitled Conversation'; // Fallback title
-        const createdAt = state.createdAt || 0; // Fallback timestamp
-        const updatedAt = state.updatedAt || 0; // Fallback timestamp
-        const flowId = state.flowId || null; // Use null if missing
+          // Ensure ID consistency if possible
+          if (state.conversationId && state.conversationId !== conversationIdFromFile) {
+            log.warn(`Mismatch between filename ID (${conversationIdFromFile}) and state ID (${state.conversationId})`, { requestId, filePath });
+            // Decide which ID to trust - let's trust the state's ID if present
+          }
+
+          base = {
+            id: state.conversationId || conversationIdFromFile, // Prefer state ID, fallback to filename
+            title: state.title || 'Untitled Conversation',
+            flowId: state.flowId || null,
+            createdAt: state.createdAt || 0,
+            updatedAt: state.updatedAt || 0,
+            status: state.status,
+          };
+          listSummaryCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
+        }
+
+        // Live override: while a run is in flight the in-memory state is ahead
+        // of the snapshot on disk (which is only written at run boundaries) —
+        // without this, the sidebar of a resumed run reads the PREVIOUS
+        // terminal status until the next persist. Memory is never staler than
+        // disk here: every disk write comes from this same object.
+        const live = FlowExecutor.conversationStates.get(base.id);
+        let status = live?.status ?? base.status;
+        const title = live?.title ?? base.title;
+        const updatedAt = live?.updatedAt ?? base.updatedAt;
+
         // Reconcile a stale 'running' status. A conversation persists as
         // 'running' while a flow executes, but a process restart drops the
         // in-memory run (and its event channel) without flipping the stored
@@ -73,26 +111,12 @@ export async function GET() {
         // process has no live event channel for it, the run is dead: report it
         // as 'error' so the sidebar is honest and the client doesn't
         // auto-reattach to a run that will never emit again.
-        let status = state.status;
-        if (status === 'running' && executionEventBus.currentSeq(id) === 0) {
-          log.warn(`Conversation ${id} is 'running' with no live run; reporting as interrupted ('error').`, { requestId });
+        if (status === 'running' && executionEventBus.currentSeq(base.id) === 0) {
+          log.warn(`Conversation ${base.id} is 'running' with no live run; reporting as interrupted ('error').`, { requestId });
           status = 'error';
         }
 
-        // Ensure ID consistency if possible
-        if (state.conversationId && state.conversationId !== conversationIdFromFile) {
-          log.warn(`Mismatch between filename ID (${conversationIdFromFile}) and state ID (${state.conversationId})`, { requestId, filePath });
-          // Decide which ID to trust - let's trust the state's ID if present
-        }
-
-        return {
-          id,
-          title,
-          flowId,
-          createdAt,
-          updatedAt,
-          status
-        };
+        return { ...base, title, updatedAt, status };
       } catch (parseError) {
         log.error(`Error reading or parsing conversation file: ${file}`, { requestId, filePath, error: parseError });
         // Try getting file system time as a fallback for sorting?
@@ -114,6 +138,13 @@ export async function GET() {
     });
 
     const results = await Promise.all(conversationPromises);
+    // Drop cache entries for files that no longer exist (deleted conversations).
+    if (listSummaryCache.size > jsonFiles.length) {
+      const present = new Set(jsonFiles);
+      for (const key of listSummaryCache.keys()) {
+        if (!present.has(key)) listSummaryCache.delete(key);
+      }
+    }
     const validConversations = results.filter((conv): conv is ConversationListItem => conv !== null);
     log.debug(`Successfully processed ${validConversations.length} conversation files`, { requestId });
 
@@ -186,6 +217,9 @@ export async function POST(req: NextRequest) {
 
 
   const conversationId = payload.id;
+  // Explicitly creating a conversation under an id clears any deleted-id
+  // tombstone (which would otherwise silently block its persistence).
+  unmarkConversationDeleted(conversationId);
   const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
   const filePath = path.join(conversationsDir, `${conversationId}.json`);
 
