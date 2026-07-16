@@ -129,6 +129,22 @@ export interface ConversationListItem {
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
 }
 
+/** Field-wise list equality, so the periodic silent refresh can keep the
+ *  previous array identity (= no sidebar re-render) when nothing changed. */
+const sameConversationLists = (a: ConversationListItem[], b: ConversationListItem[]): boolean =>
+  a.length === b.length &&
+  a.every((x, i) => {
+    const y = b[i];
+    return (
+      x.id === y.id &&
+      x.title === y.title &&
+      x.flowId === y.flowId &&
+      x.status === y.status &&
+      x.createdAt === y.createdAt &&
+      x.updatedAt === y.updatedAt
+    );
+  });
+
 
 const Chat: React.FC = () => {
   // --- State Management ---
@@ -296,6 +312,13 @@ const Chat: React.FC = () => {
   useEffect(() => {
     currentConversationIdRef.current = currentConversationId;
   }, [currentConversationId]);
+  // Conversations that exist only in this client (a split that hasn't been sent
+  // yet): the periodic list refresh must not wipe them, and detail fetches for
+  // them would 404. Ids drop out as soon as the backend starts returning them.
+  const localOnlyConversationIdsRef = useRef<Set<string>>(new Set());
+  // Conversations whose DELETE is in flight: a list refresh racing the delete
+  // must not re-add them to the sidebar.
+  const pendingDeleteIdsRef = useRef<Set<string>>(new Set());
 
   // --- Stick-to-bottom (chat autoscroll) ---
   // The messages area (rendered below) is the single scroll container. We keep it
@@ -400,8 +423,23 @@ const Chat: React.FC = () => {
     let fetchedList: ConversationListItem[] = [];
     let fetchFailed = false;
     try {
-      fetchedList = (await chatService.listConversations()).sort((a, b) => b.updatedAt - a.updatedAt);
-      setConversationList(fetchedList);
+      fetchedList = (await chatService.listConversations())
+        // Never re-add a conversation whose DELETE is still in flight.
+        .filter(c => !pendingDeleteIdsRef.current.has(c.id))
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      // Anything the backend returns is no longer client-only.
+      for (const c of fetchedList) localOnlyConversationIdsRef.current.delete(c.id);
+      setConversationList(prev => {
+        // Preserve client-only conversations (an unsent split) — the server
+        // list can't contain them yet.
+        const localOnly = prev.filter(c => localOnlyConversationIdsRef.current.has(c.id));
+        const next = localOnly.length > 0
+          ? [...localOnly, ...fetchedList].sort((a, b) => b.updatedAt - a.updatedAt)
+          : fetchedList;
+        // Keep the previous array identity when nothing changed, so the
+        // periodic silent refresh doesn't re-render the sidebar for no reason.
+        return sameConversationLists(prev, next) ? prev : next;
+      });
       log.info(`Fetched ${fetchedList.length} conversations for the list`);
     } catch (err) {
       fetchFailed = true;
@@ -424,7 +462,10 @@ const Chat: React.FC = () => {
       const idToSelect = selectIdAfterFetch !== undefined ? selectIdAfterFetch : currentConversationIdRef.current;
 
       const liveSelection = currentConversationIdRef.current;
-      if (idToSelect && fetchedList.some(c => c.id === idToSelect)) {
+      // Client-only conversations (unsent splits) count as existing too.
+      const idExists = (id: string) =>
+        fetchedList.some(c => c.id === id) || localOnlyConversationIdsRef.current.has(id);
+      if (idToSelect && idExists(idToSelect)) {
          // If the intended ID exists in the new list, ensure it's selected
          if (idToSelect !== liveSelection) {
             log.debug(`Setting currentConversationId to ${idToSelect} after fetch/operation.`);
@@ -438,8 +479,9 @@ const Chat: React.FC = () => {
             setCurrentConversationId(mostRecentId);
          }
       } else {
-         // No conversations left
-         if (liveSelection !== null) {
+         // No backend conversations left. Don't clear a selection pointing at a
+         // client-only conversation (an unsent split).
+         if (liveSelection !== null && !localOnlyConversationIdsRef.current.has(liveSelection)) {
             log.debug('No conversations available after fetch/operation, clearing selection.');
             setCurrentConversationId(null);
          }
@@ -454,8 +496,34 @@ const Chat: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty array ensures this runs only once on mount
 
+  // Keep the sidebar live. New conversations (another tab, the scheduler, API
+  // clients) and status changes only exist server-side, and the SSE streams are
+  // per-conversation — so the LIST needs a lightweight poll. Silent: no
+  // spinner, selection untouched, and the list state keeps its identity when
+  // nothing changed. Paused while the tab is hidden; refreshed immediately on
+  // return to the tab.
+  useEffect(() => {
+    const LIST_POLL_MS = 5000;
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fetchConversations(undefined, { silent: true });
+    };
+    const interval = setInterval(tick, LIST_POLL_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [fetchConversations]);
+
   // Fetch detailed conversation when ID changes
   const fetchDetailedConversation = useCallback(async (id: string) => {
+    // Client-only conversations (an unsent split) don't exist on the backend;
+    // fetching would 404 and clobber the locally-set detailed view.
+    if (localOnlyConversationIdsRef.current.has(id)) {
+      log.debug('Skipping detail fetch for client-only conversation', { conversationId: id });
+      return;
+    }
     log.debug('Fetching detailed conversation', { conversationId: id });
     setIsLoadingDetails(true);
     setDetailsError(null);
@@ -483,7 +551,15 @@ const Chat: React.FC = () => {
       setConversationList(prevList =>
         prevList.map(c =>
           c.id === id
-            ? { ...c, title: conversation.title, flowId: conversation.flowId, updatedAt: conversation.updatedAt }
+            ? {
+                ...c,
+                title: conversation.title,
+                flowId: conversation.flowId,
+                updatedAt: conversation.updatedAt,
+                // Status too — without it the sidebar dot for the viewed
+                // conversation stayed stale (e.g. 'running' after completion).
+                status: conversation.status ?? c.status,
+              }
             : c
         ).sort((a, b) => b.updatedAt - a.updatedAt)
       );
@@ -727,6 +803,21 @@ const Chat: React.FC = () => {
     }
   }, []);
 
+  // Patch one conversation's sidebar status in place. No re-sort: a status
+  // change alone must not reshuffle the list; identity is kept when unchanged.
+  const patchConversationStatus = useCallback(
+    (conversationId: string, status: ConversationListItem['status']) => {
+      setConversationList(prev => {
+        const idx = prev.findIndex(c => c.id === conversationId);
+        if (idx === -1 || prev[idx].status === status) return prev;
+        const next = [...prev];
+        next[idx] = { ...next[idx], status };
+        return next;
+      });
+    },
+    []
+  );
+
   // Apply a single execution event from the SSE stream to local UI state.
   const applyExecutionEvent = useCallback((event: ExecutionEvent) => {
     // Ordered dedupe: ignore anything we've already applied (e.g. replayed on
@@ -763,6 +854,7 @@ const Chat: React.FC = () => {
       case 'run:start':
         setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
+        if (event.conversationId) patchConversationStatus(event.conversationId, 'running');
         break;
       case 'message': {
         const incoming = event.message as ChatMessage;
@@ -847,13 +939,17 @@ const Chat: React.FC = () => {
         if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
           setPendingToolCalls(event.pendingToolCalls || []);
         }
+        if (event.conversationId) patchConversationStatus(event.conversationId, 'awaiting_tool_approval');
         break;
       case 'breakpoint:hit':
       case 'run:paused':
         // Flip the UI to paused; the awaited POST response carries the full
         // debugState (trace + current node) and populates the debugger panel.
         setIsLoading(false);
-        if (event.conversationId) markConvRunning(event.conversationId, false);
+        if (event.conversationId) {
+          markConvRunning(event.conversationId, false);
+          patchConversationStatus(event.conversationId, 'paused_debug');
+        }
         setIsDebugPaused(true);
         break;
       case 'run:done':
@@ -861,7 +957,10 @@ const Chat: React.FC = () => {
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
         setIsLoading(false);
         setLoadingConversationId(null);
-        if (event.conversationId) markConvRunning(event.conversationId, false);
+        if (event.conversationId) {
+          markConvRunning(event.conversationId, false);
+          patchConversationStatus(event.conversationId, event.status);
+        }
         closeEventStream();
         // Only refresh the view if this run is the one being viewed (a
         // background run must not hijack the displayed conversation).
@@ -881,7 +980,7 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning]);
+  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning, patchConversationStatus]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -946,6 +1045,23 @@ const Chat: React.FC = () => {
     const previousSelectionId = currentConversationId;
     const previousList = conversationList;
 
+    // Shield the optimistic removal from a list refresh racing the DELETE.
+    // The id stays in the set after a successful delete on purpose: a LIST
+    // response that was already in flight when the delete started can resolve
+    // AFTER the DELETE and would otherwise re-add the row for one poll cycle.
+    pendingDeleteIdsRef.current.add(conversationId);
+    const wasLocalOnly = localOnlyConversationIdsRef.current.delete(conversationId);
+
+    // Drop this client's live tracking of the conversation (stream, indicator,
+    // input gating). The backend cancels any in-flight run as part of DELETE.
+    if (loadingConversationIdRef.current === conversationId) {
+      closeEventStream();
+      setIsLoading(false);
+      setLoadingConversationId(null);
+      setLiveStats(null);
+    }
+    markConvRunning(conversationId, false);
+
     // Optimistic UI update for the list
     const updatedList = previousList.filter((conv) => conv.id !== conversationId);
     setConversationList(updatedList);
@@ -975,7 +1091,10 @@ const Chat: React.FC = () => {
     } catch (err) {
       log.error('Error deleting conversation:', { conversationId, err });
       setError(`Failed to delete conversation ${conversationId}. Please try again.`);
-      // Revert optimistic UI update
+      // Revert optimistic UI update — including the shields, so the restored
+      // conversation is fetchable/pollable again.
+      pendingDeleteIdsRef.current.delete(conversationId);
+      if (wasLocalOnly) localOnlyConversationIdsRef.current.add(conversationId);
       setConversationList(previousList);
       setCurrentConversationId(previousSelectionId);
       // Optionally call fetchConversations() again to ensure sync despite error?
@@ -1364,6 +1483,13 @@ const Chat: React.FC = () => {
     setIsLoading(true); // Set loading true for the API call itself
     setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
     markConvRunning(conversation.id, true);
+    // Sending is what creates a client-only conversation (an unsent split) on
+    // the backend — runFlow persists its initial state at run start — so from
+    // here on it is real: detail fetches and list refreshes may treat it
+    // normally. Restored in the catch below: if the send fails before the
+    // backend persisted anything, the split must stay client-only or the next
+    // list poll would silently wipe it.
+    const wasLocalOnly = localOnlyConversationIdsRef.current.delete(conversation.id);
     // Seed live stats immediately so the indicator shows 0 tokens / 0s right away.
     setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
     // Subscribe to live events BEFORE issuing the (blocking) POST so no early
@@ -1547,6 +1673,9 @@ const Chat: React.FC = () => {
       setLoadingConversationId(null);
       markConvRunning(conversation.id, false);
       closeEventStream();
+      // The send failed — if the conversation was client-only (unsent split),
+      // re-shield it so the list poll doesn't wipe it before a retry.
+      if (wasLocalOnly) localOnlyConversationIdsRef.current.add(conversation.id);
 
     } finally {
       // Don't set isLoading false here if polling might still be needed
@@ -1712,6 +1841,9 @@ const Chat: React.FC = () => {
        createdAt: newSplitConversation.createdAt,
        updatedAt: newSplitConversation.updatedAt,
     };
+    // Client-only until the first message is sent: shields it from list
+    // refreshes and skips the (would-404) detail fetch.
+    localOnlyConversationIdsRef.current.add(newId);
     setConversationList(prevList => [newSummary, ...prevList].sort((a, b) => b.updatedAt - a.updatedAt));
     setCurrentConversationId(newId); // Select the new split conversation
     // The useEffect for currentConversationId will fetch details, but we can set it directly
@@ -1917,6 +2049,27 @@ const Chat: React.FC = () => {
   // paused), so it doesn't flicker shut while a step/continue is executing.
   const debugPanelOpen = (debugSessionActive || isDebugPaused) && !!debugState && !!currentConversationId;
 
+  // The viewed conversation counts as running when THIS client started or
+  // re-attached to the run (isLoading/loadingConversationId/runningConvs) OR
+  // when the server says so (sidebar status — kept fresh by the list poll, the
+  // detail fetch, and run events). The status fallback is what keeps the live
+  // indicator + Stop button visible for runs this client didn't start or lost
+  // track of (page remount, failed re-attach) — previously the button simply
+  // vanished for those, leaving no way to stop the run. The backend list route
+  // self-heals a stale 'running' (dead process) to 'error', so this can't
+  // stick forever.
+  // A parked run (awaiting approval / paused in the debugger) has its own UI —
+  // the indicator must not sit next to the approval prompt with a spinner.
+  const viewedConversationParked =
+    currentConversationSummary?.status === 'awaiting_tool_approval' ||
+    currentConversationSummary?.status === 'paused_debug' ||
+    !!pendingToolCalls;
+  const viewedConversationRunning =
+    !viewedConversationParked &&
+    ((isLoading && loadingConversationId === currentConversationId) ||
+      (!!currentConversationId && runningConvs.has(currentConversationId)) ||
+      currentConversationSummary?.status === 'running');
+
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
       {/* Collapsed state: a slim always-visible affordance to bring the sidebar
@@ -2102,10 +2255,12 @@ const Chat: React.FC = () => {
               )}
 
               {/* Live execution indicator (progress, active node, tokens, stop).
-                  Only shown for the conversation actually running, so a background
-                  run does not display its status in a different conversation. Owns
-                  its own 1s tick so the rest of the tree doesn't re-render. */}
-              {isLoading && loadingConversationId === currentConversationId && (
+                  Shown whenever the VIEWED conversation is running — including
+                  runs this client didn't start (see viewedConversationRunning) —
+                  but never for background runs in other conversations, and never
+                  while the debugger owns the pause UI. Owns its own 1s tick so
+                  the rest of the tree doesn't re-render. */}
+              {viewedConversationRunning && !isDebugPaused && (
                 <LiveRunIndicator
                   liveStats={liveStats}
                   onStop={handleCancelRequest}
