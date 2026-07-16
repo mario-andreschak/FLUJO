@@ -29,6 +29,12 @@ import { createLogger } from '@/utils/logger';
 import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent } from '@/shared/types/execution/events'; // Live execution events (SSE)
+import {
+  LiveActivity,
+  EMPTY_LIVE_ACTIVITY,
+  pruneLiveActivity,
+  resourceActivityKey,
+} from '@/utils/shared/liveActivity';
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
@@ -269,6 +275,10 @@ const Chat: React.FC = () => {
 
   // Live execution stats, driven by the SSE event stream while a run is active.
   const [liveStats, setLiveStats] = useState<LiveRunStats | null>(null);
+  // Live node/resource activity (Tier 3): which nodes/artifacts the run is
+  // touching RIGHT NOW, for canvas highlighting in the debugger. Entries decay
+  // by age (LIVE_HIGHLIGHT_TTL_MS); pruned on each event application.
+  const [liveActivity, setLiveActivity] = useState<LiveActivity>(EMPTY_LIVE_ACTIVITY);
   // Breakpoint node IDs for the visual debugger (mirrors server state).
   const [breakpoints, setBreakpoints] = useState<string[]>([]);
   // Which conversation currently has an active run (so the live indicator only
@@ -734,9 +744,25 @@ const Chat: React.FC = () => {
         lastEventAt: Date.now(),
       }));
 
+    // Live node-activity map for canvas highlighting (Tier 3). Kept separate
+    // from liveStats: liveStats is a text summary, this is per-node state.
+    const touchActivity = (mutate: (draft: LiveActivity) => void) =>
+      setLiveActivity(prev => {
+        const now = Date.now();
+        const draft: LiveActivity = {
+          byNode: { ...prev.byNode },
+          byResource: { ...prev.byResource },
+          byResourceName: { ...prev.byResourceName },
+          resourceVersion: prev.resourceVersion,
+        };
+        mutate(draft);
+        return pruneLiveActivity(draft, now);
+      });
+
     switch (event.type) {
       case 'run:start':
         setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
+        setLiveActivity(EMPTY_LIVE_ACTIVITY);
         break;
       case 'message': {
         const incoming = event.message as ChatMessage;
@@ -767,7 +793,37 @@ const Chat: React.FC = () => {
         break;
       case 'node:enter':
         touch({ activeNode: event.node?.nodeName || event.node?.nodeId || null });
+        if (event.node?.nodeId) {
+          const nodeId = event.node.nodeId;
+          touchActivity(draft => { draft.byNode[nodeId] = { kind: 'active', ts: Date.now() }; });
+        }
         break;
+      case 'resource:read':
+      case 'resource:write': {
+        // Light up both the acting node (if attributed) and the resource
+        // artifact itself (matched by server+uri or run-artifact name in the
+        // canvas). resource:write also bumps resourceVersion so the run-data
+        // panel refetches.
+        const kind = event.type === 'resource:read' ? 'read' as const : 'write' as const;
+        touchActivity(draft => {
+          const now = Date.now();
+          if (event.node?.nodeId) {
+            draft.byNode[event.node.nodeId] = {
+              kind: kind === 'read' ? 'resource-read' : 'resource-write',
+              ts: now,
+            };
+          }
+          if (event.server && event.uri) {
+            draft.byResource[resourceActivityKey(event.server, event.uri)] = { kind, ts: now };
+          }
+          if (event.name) {
+            draft.byResourceName[event.name] = { kind, ts: now };
+          }
+          if (kind === 'write') draft.resourceVersion = draft.resourceVersion + 1;
+        });
+        touch({});
+        break;
+      }
       case 'tool:call':
         touch({ activeNode: event.name });
         break;
@@ -802,6 +858,7 @@ const Chat: React.FC = () => {
         break;
       case 'run:done':
         setLiveStats(null);
+        setLiveActivity(EMPTY_LIVE_ACTIVITY);
         setIsLoading(false);
         setLoadingConversationId(null);
         if (event.conversationId) markConvRunning(event.conversationId, false);
@@ -2158,6 +2215,7 @@ const Chat: React.FC = () => {
               <DebuggerCanvas
                 debugState={debugState}
                 conversationId={currentConversationId}
+                liveActivity={liveActivity}
                 onStep={handleDebugStep}
                 onStepOver={handleStepOver}
                 onContinue={handleDebugContinue}

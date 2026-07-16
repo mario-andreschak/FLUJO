@@ -17,8 +17,10 @@ import { flowService } from '@/frontend/services/flow'; // Import flow service
 import { createLogger } from '@/utils/logger';
 
 // Import custom nodes and edges if needed for display (might need adaptation for read-only)
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
-import { CustomEdge, MCPEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
+import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
+import { LiveActivity, LIVE_HIGHLIGHT_TTL_MS, resourceActivityKey } from '@/utils/shared/liveActivity';
+import RunResourcesPanel from './RunResourcesPanel';
 
 // Import Canvas components if needed (or create simplified versions)
 // import { CanvasControls } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/components/CanvasControls';
@@ -37,6 +39,10 @@ interface DebuggerCanvasProps {
   breakpoints?: string[]; // Node IDs with active breakpoints
   onToggleBreakpoint?: (nodeId: string) => void; // Toggle a breakpoint on node click
   onClose?: () => void; // Callback to dismiss/hide the debugger panel
+  /** Live node/resource activity from the SSE stream (Tier 3): highlights the
+   *  node currently executing and the artifacts being read/written, fading
+   *  over LIVE_HIGHLIGHT_TTL_MS. Absent ⇒ trace-driven highlighting only. */
+  liveActivity?: LiveActivity;
 }
 
 // Define node types for React Flow display. Every builder node type must be
@@ -50,13 +56,18 @@ const nodeTypes = {
   finish: FinishNode,
   mcp: MCPNode,
   subflow: SubflowNode,
+  resource: ResourceNode,
 };
 
 // Define edge types
 const edgeTypes = {
   custom: CustomEdge,
   mcpEdge: MCPEdge,
+  resourceEdge: ResourceEdge,
 };
+
+// Teal, matching RESOURCE_COLOR in CustomNodes.
+const RESOURCE_HIGHLIGHT = '#009688';
 
 // Styled component for the main container
 const DebuggerContainer = styled(Paper)(({ theme }) => ({
@@ -118,6 +129,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   breakpoints,
   onToggleBreakpoint,
   onClose,
+  liveActivity,
 }) => {
   const theme = useTheme();
   // Initialize step index safely, defaulting to -1 if no trace
@@ -255,27 +267,82 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
 
-  // Derived nodes for display: highlight the inspected step's node (warning) and
-  // mark breakpoint nodes (error). Computed, not stateful, to avoid render loops.
+  // Decay repaint (Tier 3 live highlighting): while any live-activity entry is
+  // younger than the TTL, a low-frequency interval bumps `now` so highlights
+  // fade out; it self-stops once everything has aged out.
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!liveActivity) return;
+    const hasYoung = () => {
+      const t = Date.now();
+      return [
+        ...Object.values(liveActivity.byNode),
+        ...Object.values(liveActivity.byResource),
+        ...Object.values(liveActivity.byResourceName),
+      ].some(entry => t - entry.ts < LIVE_HIGHLIGHT_TTL_MS);
+    };
+    if (!hasYoung()) return;
+    const interval = setInterval(() => {
+      setNow(Date.now());
+      if (!hasYoung()) clearInterval(interval);
+    }, 350);
+    return () => clearInterval(interval);
+  }, [liveActivity]);
+
+  // Resolve a node's live activity: process/subflow nodes match by node id;
+  // resource nodes ALSO match by their artifact identity (server+uri for
+  // static, runName for run artifacts) since most resource events carry the
+  // artifact, not a node id.
+  const liveActivityFor = useCallback((node: Node): { kind: 'active' | 'resource-read' | 'resource-write'; ts: number } | null => {
+    if (!liveActivity) return null;
+    const byNode = liveActivity.byNode[node.id];
+    if (byNode && now - byNode.ts < LIVE_HIGHLIGHT_TTL_MS) return byNode;
+    const data = node.data as { type?: string; properties?: Record<string, unknown> } | undefined;
+    if ((data?.type ?? node.type) !== 'resource') return null;
+    const props = (data?.properties ?? {}) as Record<string, unknown>;
+    const entry = props.scope === 'run'
+      ? (typeof props.runName === 'string' ? liveActivity.byResourceName[props.runName] : undefined)
+      : (typeof props.boundServer === 'string' && typeof props.uri === 'string'
+          ? liveActivity.byResource[resourceActivityKey(props.boundServer, props.uri)]
+          : undefined);
+    if (entry && now - entry.ts < LIVE_HIGHLIGHT_TTL_MS) {
+      return { kind: entry.kind === 'read' ? 'resource-read' : 'resource-write', ts: entry.ts };
+    }
+    return null;
+  }, [liveActivity, now]);
+
+  // Derived nodes for display: highlight the inspected step's node (warning),
+  // live activity (primary/teal, fading by age), and breakpoint nodes (error).
+  // Precedence: debug step > live activity > breakpoint. Computed, not
+  // stateful, to avoid render loops.
   const displayNodes = useMemo(() => {
     const highlightId = currentStepData?.nodeId;
     return nodes.map((node: Node) => {
       const isCurrent = node.id === highlightId;
       const isBreakpoint = breakpoints?.includes(node.id);
+      const live = isCurrent ? null : liveActivityFor(node);
+      const liveOpacity = live ? Math.max(0.25, 1 - (now - live.ts) / LIVE_HIGHLIGHT_TTL_MS) : 0;
+      const liveColor = live?.kind === 'active' ? theme.palette.primary.main : RESOURCE_HIGHLIGHT;
       return {
         ...node,
         style: {
           ...node.style,
           border: isCurrent
             ? `2px solid ${theme.palette.warning.main}`
-            : isBreakpoint
-              ? `2px dashed ${theme.palette.error.main}`
-              : (node.style?.border as string | undefined),
-          boxShadow: isCurrent ? `0 0 10px ${theme.palette.warning.light}` : undefined,
+            : live
+              ? `2px solid ${liveColor}`
+              : isBreakpoint
+                ? `2px dashed ${theme.palette.error.main}`
+                : (node.style?.border as string | undefined),
+          boxShadow: isCurrent
+            ? `0 0 10px ${theme.palette.warning.light}`
+            : live
+              ? `0 0 ${live.kind === 'resource-write' ? 14 : 10}px ${liveColor}${Math.round(liveOpacity * 255).toString(16).padStart(2, '0')}`
+              : undefined,
         },
       };
     });
-  }, [nodes, currentStepData, breakpoints, theme]);
+  }, [nodes, currentStepData, breakpoints, theme, liveActivityFor, now]);
 
   // Removed duplicated handleNextStep definition
 
@@ -460,6 +527,21 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           ) : (
             <Typography variant="body2" color="textSecondary">Select a step from the trace.</Typography>
           )}
+
+          {/* Run data (Tier 3): the run-scoped resources captured so far —
+              auto-captured tool results, captureResource outputs, links.
+              Refetches whenever a resource:write arrives (resourceVersion). */}
+          <Accordion defaultExpanded sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+              <Typography variant="caption">Run Data</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ p: 0 }}>
+              <RunResourcesPanel
+                conversationId={conversationId}
+                refreshToken={liveActivity?.resourceVersion}
+              />
+            </AccordionDetails>
+          </Accordion>
         </InspectorPanel>
         )}
       </ContentArea>
