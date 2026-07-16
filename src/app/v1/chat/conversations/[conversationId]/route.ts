@@ -18,6 +18,7 @@ import { ConversationListItem } from '@/frontend/components/Chat'; // Import for
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { quickChatFlowId } from '@/utils/shared/quickChat';
+import { deleteRunResources } from '@/backend/services/runResources';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -360,6 +361,9 @@ export async function DELETE(
     // Remove the append-only conversation log alongside the state (idempotent).
     await deleteConversationLog(conversationId);
 
+    // Remove the conversation's run-scoped resources (Tier 3; idempotent).
+    await deleteRunResources(conversationId);
+
     return new Response(null, { status: 204 }); // Success, No Content
 
   } catch (error: any) {
@@ -380,6 +384,8 @@ export async function DELETE(
       }
       // The log may exist even when the state file is already gone.
       await deleteConversationLog(conversationId);
+      // Run resources likewise.
+      await deleteRunResources(conversationId);
       return new Response(null, { status: 204 }); // Success, No Content
     }
 

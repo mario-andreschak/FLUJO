@@ -588,7 +588,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           const pendingCalls = sharedState.debugPendingToolCalls;
           sharedState.debugPendingToolCalls = undefined;
           log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
-          const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap, emit });
+          const toolProcessingResult = await ModelHandler.processToolCalls({
+            toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap, emit,
+            // Run-resource auto-capture: ephemeral (subflow-child) runs never
+            // write resources — same policy as persistConversationState.
+            conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+            node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+          });
           if (!toolProcessingResult.success) {
             log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
             sharedState.lastResponse = { success: false, error: 'Tool processing failed', errorDetails: toolProcessingResult.error };
@@ -733,7 +739,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 break;
               } else {
                 log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
-                const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit });
+                const toolProcessingResult = await ModelHandler.processToolCalls({
+                  toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit,
+                  conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                  node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+                });
 
                 if (!toolProcessingResult.success) {
                   log.error(`Internal tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
@@ -774,7 +784,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
               if (internalTools.length > 0) {
                 log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);
-                const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit });
+                const toolProcessingResult = await ModelHandler.processToolCalls({
+                  toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit,
+                  conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                  node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+                });
 
                 if (!toolProcessingResult.success) {
                   log.error(`[flujo=false] Internal tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });

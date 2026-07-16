@@ -14,6 +14,8 @@ import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
+import { writeRunResource } from '@/backend/services/runResources';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -242,7 +244,13 @@ export class SubflowNode extends BaseNode {
     // (the history paths carry the verbatim transcript). When mapOverList splits
     // this text into items below, each item is already resolved.
     if (prepResult.inputText !== undefined) {
-      prepResult.inputText = resolveRunVars(prepResult.inputText, sharedState.variables);
+      // Tier 3: `${res:NAME}` named run resources resolve here too (after vars).
+      prepResult.inputText = await resolveRunResourceRefs(
+        resolveRunVars(prepResult.inputText, sharedState.variables),
+        sharedState.ephemeral ? undefined : sharedState.conversationId,
+        sharedState.emit,
+        node_params?.id ? { nodeId: node_params.id, nodeType: 'subflow' } : undefined
+      );
     }
 
     // Lane plan. The single decision point for both concurrency features: which
@@ -573,6 +581,44 @@ export class SubflowNode extends BaseNode {
       sharedState.variables = sharedState.variables ?? {};
       sharedState.variables[captureVariable] = outputText;
       log.info('Captured subflow output into run variable', { captureVariable, nodeId: node_params?.id });
+    }
+
+    // Tier 3: also store the folded output as a NAMED run-scoped resource on
+    // the PARENT run (like captureVariable above — the ephemeral child's store
+    // writes are disabled, so this is the supported capture path).
+    const captureResource = node_params?.properties?.captureResource?.trim();
+    if (captureResource && sharedState.conversationId && !sharedState.ephemeral) {
+      try {
+        const written = await writeRunResource({
+          conversationId: sharedState.conversationId,
+          name: captureResource,
+          mimeType: 'text/markdown',
+          kind: 'text',
+          data: { text: outputText },
+          producedBy: {
+            source: 'capture',
+            nodeId: node_params?.id,
+            nodeName: node_params?.properties?.name,
+          },
+        });
+        if ('skipped' in written) {
+          log.warn('captureResource skipped by store cap', { captureResource, reason: written.skipped });
+        } else {
+          sharedState.emit?.({
+            type: 'resource:write',
+            node: { nodeId: node_params?.id ?? 'unknown', nodeName: node_params?.properties?.name, nodeType: 'subflow' },
+            server: 'flujo',
+            uri: written.uri,
+            name: captureResource,
+            mimeType: written.mimeType,
+            size: written.size,
+            source: 'capture',
+          });
+          log.info('Captured subflow output into run resource', { captureResource, uri: written.uri, nodeId: node_params?.id });
+        }
+      } catch (error) {
+        log.error('captureResource failed; continuing run', error);
+      }
     }
 
     // Hand off to the single linear successor, else end the flow.

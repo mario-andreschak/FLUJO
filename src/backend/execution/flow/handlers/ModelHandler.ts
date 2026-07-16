@@ -19,6 +19,9 @@ import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
+import { getRunResourceSettings } from '@/backend/services/runResources';
+import { captureToolResult } from '@/backend/services/runResources/capture';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
@@ -660,7 +663,7 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    const { toolCalls, toolNameMap, emit } = input;
+    const { toolCalls, toolNameMap, emit, conversationId, node } = input;
 
     // Add verbose logging of the input
     log.verbose('processToolCalls input', input);
@@ -768,9 +771,52 @@ export class ModelHandler {
             })
           );
 
+          // Tier 3 data flow: auto-capture binary/large tool results as
+          // run-scoped resources. The capture may rewrite the result (binary
+          // items become URI stubs — base64 in a tool message costs context
+          // and helps no model); everything captured is announced as a
+          // resource:write event carrying the producing toolCallId (the stable
+          // lineage key — runFlow rewrites tool-MESSAGE ids afterwards).
+          // Capture never breaks the run: on any failure the original result
+          // is kept untouched.
+          let effectiveData = result.data;
+          if (result.success && conversationId) {
+            try {
+              const settings = await getRunResourceSettings();
+              if (settings.autoCaptureEnabled) {
+                const outcome = await captureToolResult({
+                  conversationId,
+                  server: serverName,
+                  toolName,
+                  toolCallId: id,
+                  nodeId: node?.nodeId,
+                  result: result.data as CallToolResult,
+                  settings,
+                });
+                effectiveData = outcome.result;
+                for (const entry of outcome.captured) {
+                  emit?.({
+                    type: 'resource:write',
+                    node,
+                    server: 'flujo',
+                    uri: entry.uri,
+                    name: entry.name,
+                    mimeType: entry.mimeType,
+                    size: entry.size,
+                    source: 'tool-result',
+                    toolCallId: id,
+                  });
+                }
+              }
+            } catch (error) {
+              log.error('Run-resource auto-capture failed; keeping original tool result', error);
+              effectiveData = result.data;
+            }
+          }
+
           // Format the result
           const resultContent = result.success
-            ? JSON.stringify(result.data)
+            ? JSON.stringify(effectiveData)
             : `Error: ${result.error}`;
 
           // The full result reaches the conversation as the tool message below;

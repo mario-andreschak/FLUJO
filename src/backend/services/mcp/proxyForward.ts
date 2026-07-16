@@ -15,7 +15,7 @@
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { isLocked } from '@/utils/encryption/lockGate';
-import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool, CallToolResult, Resource, ResourceTemplate, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('backend/services/mcp/proxyForward');
 
@@ -127,4 +127,56 @@ export async function proxyCallTool(
     content: [{ type: 'text', text: `Error: ${result.error ?? 'Unknown error'}` }],
     isError: true,
   };
+}
+
+/**
+ * Forward a `resources/list` to the downstream server (Tier 3: for the internal
+ * "flujo" server this surfaces the run-scoped resources to external clients).
+ * Same lock gate → connect → list → throw-on-error shape as proxyListTools.
+ */
+export async function proxyListResources(serverName: string): Promise<{ resources: Resource[] }> {
+  if (await isLocked()) {
+    throw new Error(LOCKED_MESSAGE);
+  }
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.listServerResources(serverName);
+  if (result.error) {
+    throw new Error(`Failed to list resources for '${serverName}': ${result.error}`);
+  }
+  return { resources: (result.resources ?? []) as Resource[] };
+}
+
+/** Forward a `resources/templates/list` to the downstream server. */
+export async function proxyListResourceTemplates(serverName: string): Promise<{ resourceTemplates: ResourceTemplate[] }> {
+  if (await isLocked()) {
+    throw new Error(LOCKED_MESSAGE);
+  }
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.listServerResourceTemplates(serverName);
+  if (result.error) {
+    throw new Error(`Failed to list resource templates for '${serverName}': ${result.error}`);
+  }
+  return { resourceTemplates: (result.resourceTemplates ?? []) as ResourceTemplate[] };
+}
+
+/** Forward a `resources/read` to the downstream server. */
+export async function proxyReadResource(serverName: string, uri: string): Promise<ReadResourceResult> {
+  if (await isLocked()) {
+    throw new Error(LOCKED_MESSAGE);
+  }
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.readResource(serverName, uri);
+  if (!result.success || !result.data) {
+    throw new Error(`Failed to read resource '${uri}' from '${serverName}': ${result.error ?? 'unknown error'}`);
+  }
+  return result.data as ReadResourceResult;
 }

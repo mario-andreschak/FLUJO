@@ -50,6 +50,8 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
   'usage',
   'subflow:start',
   'subflow:done',
+  'resource:read',
+  'resource:write',
   'error',
 ]);
 

@@ -17,13 +17,22 @@
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { toReqRes, toFetchResponse } from 'fetch-to-node';
 import {
   isServerExposed,
   isLocalRequest,
   proxyListTools,
   proxyCallTool,
+  proxyListResources,
+  proxyListResourceTemplates,
+  proxyReadResource,
 } from '@/backend/services/mcp/proxyForward';
 import { createLogger } from '@/utils/logger';
 
@@ -43,11 +52,19 @@ function jsonError(status: number, message: string): Response {
 function buildProxyServer(serverName: string): Server {
   const server = new Server(
     { name: `flujo-proxy-${serverName}`, version: PROXY_VERSION },
-    { capabilities: { tools: {} } },
+    // The resources capability must be declared or SDK clients won't issue
+    // resources/* requests at all (Tier 3: the internal "flujo" server serves
+    // run-scoped resources; other exposed servers get passthrough).
+    { capabilities: { tools: {}, resources: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, () => proxyListTools(serverName));
   server.setRequestHandler(CallToolRequestSchema, (req) =>
     proxyCallTool(serverName, req.params.name, (req.params.arguments ?? {}) as Record<string, unknown>),
+  );
+  server.setRequestHandler(ListResourcesRequestSchema, () => proxyListResources(serverName));
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, () => proxyListResourceTemplates(serverName));
+  server.setRequestHandler(ReadResourceRequestSchema, (req) =>
+    proxyReadResource(serverName, req.params.uri),
   );
   return server;
 }

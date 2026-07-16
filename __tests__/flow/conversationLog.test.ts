@@ -95,6 +95,24 @@ describe('conversation log store', () => {
     expect(events?.map((e) => e.type)).toEqual(['message']);
   });
 
+  it('persists resource:read / resource:write events (Tier 3 lineage)', async () => {
+    const convId = 'conv-store-resources';
+    FlowExecutor.conversationStates.set(convId, makeState(convId));
+
+    appendFromBus({
+      type: 'resource:write', conversationId: convId, seq: 0, timestamp: 1,
+      server: 'flujo', uri: `flujo://run/${convId}/r1`, source: 'tool-result', toolCallId: 'c1',
+    } as ExecutionEvent);
+    appendFromBus({
+      type: 'resource:read', conversationId: convId, seq: 1, timestamp: 2,
+      server: 'flujo', uri: `flujo://run/${convId}/r1`, source: 'pill',
+    } as ExecutionEvent);
+    await flushConversationLog(convId);
+
+    const events = await readConversationLog(convId);
+    expect(events?.map((e) => e.type)).toEqual(['resource:write', 'resource:read']);
+  });
+
   it('REFUSES to persist events for an ephemeral state (policy chokepoint)', async () => {
     const convId = 'conv-store-ephemeral';
     FlowExecutor.conversationStates.set(convId, makeState(convId, true));

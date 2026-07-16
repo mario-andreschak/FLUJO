@@ -1180,7 +1180,9 @@ export class MCPService {
     lister: (client: Client | undefined, serverName: string) => Promise<T>,
     emptyResult: T
   ): Promise<T> {
-    // The built-in internal server publishes tools only — no resources, no prompts.
+    // The built-in internal server never goes through client machinery. Its
+    // resources are short-circuited in listServerResources/-Templates BEFORE
+    // this method; anything else that reaches here (prompts) is empty.
     if (await this.isInternalServer(serverName)) {
       return emptyResult;
     }
@@ -1224,6 +1226,12 @@ export class MCPService {
    */
   async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
     log.debug(`listServerResources: Entering method for server ${serverName}`);
+    // The built-in internal server publishes RUN-SCOPED resources in-process
+    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern.
+    if (await this.isInternalServer(serverName)) {
+      const { internalListResources } = await import('./internalResources');
+      return internalListResources();
+    }
     return this.listWithReconnect(serverName, listResources, { resources: [] });
   }
 
@@ -1232,6 +1240,10 @@ export class MCPService {
    */
   async listServerResourceTemplates(serverName: string): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
     log.debug(`listServerResourceTemplates: Entering method for server ${serverName}`);
+    if (await this.isInternalServer(serverName)) {
+      const { internalListResourceTemplates } = await import('./internalResources');
+      return internalListResourceTemplates();
+    }
     return this.listWithReconnect(serverName, listResourceTemplates, { resourceTemplates: [] });
   }
 
@@ -1240,6 +1252,12 @@ export class MCPService {
    */
   async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
     log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
+    // Run-scoped resources are served in-process by the internal server —
+    // this also makes `${resource:flujo__flujo://run/...}` pills work.
+    if (await this.isInternalServer(serverName)) {
+      const { internalReadResource } = await import('./internalResources');
+      return internalReadResource(uri);
+    }
     const client = this.getClient(serverName);
     if (!client) {
       log.warn(`readResource: Client not found for ${serverName}`);

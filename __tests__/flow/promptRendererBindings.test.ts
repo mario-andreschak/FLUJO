@@ -104,6 +104,53 @@ describe('PromptRenderer binding resolution', () => {
     expect(result).toContain('could not be read');
     expect(result).toContain('not found');
   });
+
+  it('invokes onResourceRead once per successfully resolved resource pill (Tier 3)', async () => {
+    getFlowMock.mockResolvedValue(flowWith('${resource:files__file:///a.txt}'));
+    readResourceMock.mockResolvedValue({
+      success: true,
+      data: { contents: [{ uri: 'file:///a.txt', mimeType: 'text/plain', text: 'FILE BODY' }] },
+    });
+    const onResourceRead = jest.fn();
+
+    await promptRenderer.renderPrompt('flow-1', 'node-1', { onResourceRead });
+
+    expect(onResourceRead).toHaveBeenCalledTimes(1);
+    expect(onResourceRead).toHaveBeenCalledWith({
+      server: 'files',
+      uri: 'file:///a.txt',
+      mimeType: 'text/plain',
+      size: 'FILE BODY'.length,
+    });
+  });
+
+  it('does not invoke onResourceRead for failed reads, and a throwing observer never breaks rendering', async () => {
+    getFlowMock.mockResolvedValue(flowWith('${resource:files__file:///missing} and ${resource:files__file:///ok}'));
+    readResourceMock
+      .mockResolvedValueOnce({ success: false, error: 'not found' })
+      .mockResolvedValueOnce({ success: true, data: { contents: [{ uri: 'file:///ok', text: 'OK' }] } });
+    const onResourceRead = jest.fn(() => { throw new Error('observer bug'); });
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1', { onResourceRead });
+
+    expect(onResourceRead).toHaveBeenCalledTimes(1); // only the successful read
+    expect(result).toContain('OK'); // rendering survived the throwing observer
+  });
+
+  it('renders binary blobs as an actionable reference instead of silently omitting them', async () => {
+    getFlowMock.mockResolvedValue(flowWith('${resource:files__file:///img.png}'));
+    readResourceMock.mockResolvedValue({
+      success: true,
+      data: { contents: [{ uri: 'file:///img.png', mimeType: 'image/png', blob: 'QUJDRA==' }] },
+    });
+
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+
+    expect(result).not.toContain('QUJDRA=='); // never inline base64
+    expect(result).toContain('image/png');
+    expect(result).toContain('file:///img.png'); // the model can read it back via MCP
+    expect(result).toContain('resources/read');
+  });
 });
 
 // A flow whose target node exposes configurable exclusion flags (issue #67).

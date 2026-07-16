@@ -26,6 +26,8 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
+import { writeRunResource } from '@/backend/services/runResources';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -191,7 +193,16 @@ export class ProcessNode extends BaseNode {
       includeConversationHistory: false,
       excludeModelPrompt,
       excludeStartNodePrompt,
-      excludeSystemPrompt
+      excludeSystemPrompt,
+      // Tier 3: announce each resource pill the renderer resolves as a live
+      // resource:read event, attributed to this node. The renderer itself
+      // stays state-agnostic — it just calls back.
+      onResourceRead: (info) => sharedState.emit?.({
+        type: 'resource:read',
+        node: { nodeId },
+        source: 'pill',
+        ...info,
+      }),
     });
 
     // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
@@ -199,7 +210,14 @@ export class ProcessNode extends BaseNode {
     // (it has no SharedState), so the substitution happens here where the vars
     // are in scope. This is plaintext map lookup — NOT resolveGlobalVars (which
     // decrypts `${global:VAR}` for tool args / API keys and never touches prompts).
-    const completePrompt = resolveRunVars(renderedPrompt, sharedState.variables);
+    // Tier 3: then inject `${res:NAME}` named run resources (after vars, no
+    // recursion — see resolveRunResourceRefs).
+    const completePrompt = await resolveRunResourceRefs(
+      resolveRunVars(renderedPrompt, sharedState.variables),
+      sharedState.ephemeral ? undefined : sharedState.conversationId,
+      sharedState.emit,
+      { nodeId }
+    );
 
     log.debug('Prompt rendered successfully', {
       completePromptLength: completePrompt.length,
@@ -316,11 +334,20 @@ export class ProcessNode extends BaseNode {
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
       // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
       // like the system prompt) so an isolated step can pull captured state.
+      // Tier 3: `${res:NAME}` likewise.
       const isolatedPrompt = node_params?.properties?.isolatedPrompt;
+      const resolvedIsolatedPrompt = isolatedPrompt !== undefined
+        ? await resolveRunResourceRefs(
+            resolveRunVars(isolatedPrompt, sharedState.variables),
+            sharedState.ephemeral ? undefined : sharedState.conversationId,
+            sharedState.emit,
+            { nodeId }
+          )
+        : isolatedPrompt;
       prepResult.wireMessages = scopeMessagesForInput(
         wireBase,
         inputMode,
-        isolatedPrompt !== undefined ? resolveRunVars(isolatedPrompt, sharedState.variables) : isolatedPrompt,
+        resolvedIsolatedPrompt,
       );
     }
 
@@ -677,6 +704,46 @@ export class ProcessNode extends BaseNode {
       sharedState.variables = sharedState.variables ?? {};
       sharedState.variables[captureVariable] = execResult.content ?? '';
       log.info('Captured node output into run variable', { captureVariable, nodeId: node_params?.id });
+    }
+
+    // Tier 3 (resource-tracked data flow): also store the output as a NAMED
+    // run-scoped resource with lineage, addressable by `${res:NAME}` and via
+    // the internal "flujo" MCP server. Ephemeral (subflow-child) runs never
+    // write resources — same policy as persistConversationState. Capture must
+    // never break the run: failures log and move on.
+    const captureResource = node_params?.properties?.captureResource?.trim();
+    if (execResult.success && captureResource && sharedState.conversationId && !sharedState.ephemeral) {
+      try {
+        const written = await writeRunResource({
+          conversationId: sharedState.conversationId,
+          name: captureResource,
+          mimeType: 'text/markdown',
+          kind: 'text',
+          data: { text: execResult.content ?? '' },
+          producedBy: {
+            source: 'capture',
+            nodeId: node_params?.id,
+            nodeName: node_params?.properties?.name,
+          },
+        });
+        if ('skipped' in written) {
+          log.warn('captureResource skipped by store cap', { captureResource, reason: written.skipped });
+        } else {
+          sharedState.emit?.({
+            type: 'resource:write',
+            node: { nodeId: node_params?.id ?? 'unknown', nodeName: node_params?.properties?.name, nodeType: 'process' },
+            server: 'flujo',
+            uri: written.uri,
+            name: captureResource,
+            mimeType: written.mimeType,
+            size: written.size,
+            source: 'capture',
+          });
+          log.info('Captured node output into run resource', { captureResource, uri: written.uri, nodeId: node_params?.id });
+        }
+      } catch (error) {
+        log.error('captureResource failed; continuing run', error);
+      }
     }
 
     // Update shared state with messages from execResult — WITHOUT the node's

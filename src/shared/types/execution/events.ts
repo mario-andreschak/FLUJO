@@ -28,6 +28,8 @@ export type ExecutionEventType =
   | 'message:removed'
   | 'subflow:start'
   | 'subflow:done'
+  | 'resource:read'
+  | 'resource:write'
   | 'breakpoint:hit'
   | 'error';
 
@@ -179,6 +181,40 @@ export interface SubflowDoneEvent extends ExecutionEventBase {
   subflowId: string;
   status: 'completed' | 'error';
 }
+/**
+ * A resource was read during execution. `source` says through which mechanism:
+ * a `${resource:...}` prompt pill, a `${res:NAME}` run-resource reference, a
+ * consume-edge resource NODE (in which case `node` is the resource node so the
+ * canvas can light it up), or an MCP resources/read served by the internal
+ * "flujo" server.
+ */
+export interface ResourceReadEvent extends ExecutionEventBase {
+  type: 'resource:read';
+  node?: NodeRef;
+  server: string;
+  uri: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  source: 'pill' | 'res-ref' | 'node' | 'mcp-read';
+}
+/**
+ * A resource was written to the run-scoped store: a tool result auto-captured
+ * (`tool-result`, carries the producing `toolCallId` — stable across runFlow's
+ * tool-message id rewrite), a node's `captureResource` output (`capture`), or
+ * an MCP-app write (`mcp-app`, reserved).
+ */
+export interface ResourceWriteEvent extends ExecutionEventBase {
+  type: 'resource:write';
+  node?: NodeRef;
+  server: string;
+  uri: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  source: 'tool-result' | 'capture' | 'mcp-app';
+  toolCallId?: string;
+}
 export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';
   node: NodeRef;
@@ -208,6 +244,8 @@ export type ExecutionEvent =
   | MessageRemovedEvent
   | SubflowStartEvent
   | SubflowDoneEvent
+  | ResourceReadEvent
+  | ResourceWriteEvent
   | BreakpointHitEvent
   | ErrorEvent;
 

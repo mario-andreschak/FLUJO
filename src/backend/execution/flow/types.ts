@@ -99,6 +99,13 @@ export interface ProcessNodeProperties {
      *  otherwise drop it from the visible history. Run-scoped, plaintext — NOT a
      *  secret (distinct from `${global:VAR}`). */
     captureVariable?: string;
+    /** Tier 3 (resource-tracked data flow): when set, this node's final output is
+     *  ALSO stored as a named run-scoped resource (flujo://run/<conv>/…) with
+     *  lineage, via the run-resource store. Later steps inject it with
+     *  `${res:NAME}`; external MCP clients read it via the internal "flujo"
+     *  server. The big/structured sibling of `captureVariable` (which stays the
+     *  right tool for short strings). */
+    captureResource?: string;
 }
 
 // FinishNode specific properties
@@ -205,6 +212,10 @@ export interface SubflowNodeProperties {
      *  a var set INSIDE an ephemeral child run is discarded, not smuggled up. Any
      *  later step injects it with `${var:NAME}`. Run-scoped, plaintext. */
     captureVariable?: string;
+    /** Tier 3: store the subflow's folded output as a named run-scoped resource
+     *  (see ProcessNodeProperties.captureResource). Capture happens on the
+     *  PARENT's subflow node in the current run, like captureVariable. */
+    captureResource?: string;
 }
 
 /** One resolved lane in a SubflowNode plan: a fan-out child (issue #102) or a

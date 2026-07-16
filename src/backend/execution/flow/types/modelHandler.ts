@@ -4,7 +4,7 @@ import {
   ToolCallInfo
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
-import { EmitFn } from '@/shared/types/execution/events';
+import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 
 // Input for model call
 export interface ModelCallInput {
@@ -78,6 +78,15 @@ export interface ToolCallProcessingInput {
    * long-running tools.
    */
   emit?: EmitFn;
+  /**
+   * Conversation that owns this run's run-scoped resources. When present (and
+   * auto-capture is enabled), binary/large tool results are stored as
+   * flujo://run/<conversationId>/… resources with lineage. Absent ⇒ no capture
+   * (e.g. ephemeral subflow-child runs, or legacy call sites).
+   */
+  conversationId?: string;
+  /** Process node driving these calls — recorded as resource lineage producer. */
+  node?: NodeRef;
 }
 
 // Tool call processing result

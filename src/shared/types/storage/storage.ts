@@ -15,7 +15,8 @@ export enum StorageKey {
   SPOTLIGHT_SERVERS = 'spotlight_servers',
   PLANNED_EXECUTIONS = 'planned_executions',
   MCP_AUTO_INSTALL_SETTINGS = 'mcp_auto_install_settings',
-  MCP_QUALITY_SETTINGS = 'mcp_quality_settings'
+  MCP_QUALITY_SETTINGS = 'mcp_quality_settings',
+  RUN_RESOURCE_SETTINGS = 'run_resource_settings'
 }
 
 export const StorageKeys = {
@@ -33,6 +34,7 @@ export const StorageKeys = {
   PLANNED_EXECUTIONS: StorageKey.PLANNED_EXECUTIONS,
   MCP_AUTO_INSTALL_SETTINGS: StorageKey.MCP_AUTO_INSTALL_SETTINGS,
   MCP_QUALITY_SETTINGS: StorageKey.MCP_QUALITY_SETTINGS,
+  RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
 } as const;
 
 /**

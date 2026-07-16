@@ -12,6 +12,14 @@ export interface PromptRenderOptions {
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
   excludeSystemPrompt?: boolean; // Override node's excludeSystemPrompt setting (hardcoded # GENERAL INFORMATION block)
+  /**
+   * Called once per successfully resolved `${resource:...}` pill. The renderer
+   * stays state-agnostic (no SharedState/EmitFn here); run-time callers
+   * (ProcessNode.prep) forward this to the run's event stream as a
+   * resource:read event, while design-time renders (the prompt-renderer API
+   * route) pass nothing and stay silent.
+   */
+  onResourceRead?: (info: { server: string; uri: string; mimeType?: string; size?: number }) => void;
 }
 
 export class PromptRenderer {
@@ -119,7 +127,7 @@ export class PromptRenderer {
     }
 
     // 4. Resolve binding pills: tool pills per renderMode, resource pills always inlined
-    completePrompt = await this.resolveBindings(completePrompt, renderMode, functionCallingSchema);
+    completePrompt = await this.resolveBindings(completePrompt, renderMode, functionCallingSchema, options?.onResourceRead);
 
     // 5. Add placeholder for conversation history if requested
     if (includeConversationHistory) {
@@ -299,7 +307,8 @@ export class PromptRenderer {
   private async resolveBindings(
     prompt: string,
     renderMode: 'raw' | 'rendered',
-    functionCallingSchema?: string | null
+    functionCallingSchema?: string | null,
+    onResourceRead?: PromptRenderOptions['onResourceRead']
   ): Promise<string> {
     renderMode = 'raw'; // for now, keep tool pills raw (resources still always resolve)
 
@@ -318,7 +327,7 @@ export class PromptRenderer {
       cursor = m.index + m.fullMatch.length;
 
       if (m.kind === 'resource') {
-        result += await this.renderResourceBinding(m.server, m.name);
+        result += await this.renderResourceBinding(m.server, m.name, onResourceRead);
       } else if (renderMode === 'raw') {
         // Leave the readable tool pill in place for the model to reference.
         result += m.fullMatch;
@@ -396,13 +405,28 @@ export class PromptRenderer {
    * Resolve a resource pill into its contents, inlined as a clearly-delimited block.
    * On failure, emits a visible note rather than leaving the meaningless raw pill.
    */
-  private async renderResourceBinding(serverName: string, uri: string): Promise<string> {
+  private async renderResourceBinding(
+    serverName: string,
+    uri: string,
+    onResourceRead?: PromptRenderOptions['onResourceRead']
+  ): Promise<string> {
     for (let retryCount = 0; retryCount < 3; retryCount++) {
       try {
         if (await this.ensureConnected(serverName)) {
           const result = await mcpService.readResource(serverName, uri);
           if (result.success && result.data) {
             const text = this.formatResourceContents(result.data);
+            try {
+              const first = (result.data as { contents?: Array<{ mimeType?: string; text?: string; blob?: string }> })?.contents?.[0];
+              onResourceRead?.({
+                server: serverName,
+                uri,
+                mimeType: first?.mimeType,
+                size: typeof first?.text === 'string' ? first.text.length
+                  : typeof first?.blob === 'string' ? Math.floor(first.blob.length * 3 / 4)
+                  : undefined,
+              });
+            } catch { /* observers must never break rendering */ }
             return `\n[Resource ${uri} (from ${serverName})]:\n${text}\n`;
           }
           log.warn(`Failed to read resource ${uri} from ${serverName}: ${result.error}`);
@@ -425,7 +449,12 @@ export class PromptRenderer {
     return contents
       .map((c: any) => {
         if (typeof c.text === 'string') return c.text;
-        if (typeof c.blob === 'string') return `[binary ${c.mimeType || 'data'} omitted]`;
+        if (typeof c.blob === 'string') {
+          // Don't inline base64, but keep the reference actionable: the model
+          // can read the bytes back through MCP resources/read if it needs them.
+          const kb = Math.round((c.blob.length * 3 / 4) / 1024);
+          return `[binary ${c.mimeType || 'data'} (~${kb} KB)${c.uri ? ` at ${c.uri}` : ''} — not inlined; readable via MCP resources/read]`;
+        }
         return JSON.stringify(c);
       })
       .join('\n\n');

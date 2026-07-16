@@ -95,7 +95,7 @@ const writeChains = new Map<string, Promise<unknown>>();
 // Monotonic counter to keep temp file names unique within this process.
 let tmpCounter = 0;
 
-async function writeFileAtomic(filePath: string, data: string): Promise<void> {
+export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
   const dirPath = path.dirname(filePath);
   await fs.mkdir(dirPath, { recursive: true });
   // Temp file lives next to the target (same filesystem) so rename is atomic.
@@ -225,7 +225,7 @@ const getCollectionItemPath = (collection: string, id: string) =>
 // Run a task serialized behind any in-flight write for the same chain key, so
 // concurrent saves/deletes of the SAME item can't interleave their
 // temp-file/rename/unlink steps. Different keys still run concurrently.
-function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Promise<T> {
+export function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Promise<T> {
   const previous = writeChains.get(chainKey) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior task's error is surfaced to its own caller */ })

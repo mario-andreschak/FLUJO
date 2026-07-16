@@ -33,6 +33,7 @@ NODE TYPES:
     "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (50)
     "allowedTools": ["tool_a"],                                        // optional; step-level tool allowlist (independent of servers[].tools)
     "captureVariable": "NAME",                                         // optional; save this step's output into a run variable other steps inject with \${var:NAME}
+    "captureResource": "NAME",                                         // optional; ALSO save this step's output as a tracked run resource other steps inject with \${res:NAME} (see rule 9b)
     "excludeModelPrompt": true|false,                                   // optional; drop the model's base prompt
     "excludeStartNodePrompt": true|false,                              // optional; drop the start node's prompt for this step
     "excludeSystemPrompt": true|false }                                // optional; drop the workflow/handoff guidance block
@@ -50,6 +51,7 @@ NODE TYPES:
     "inputMode": "full-history" | "latest-message" | "isolated",
     "allowCallerPrompt": true | false,             // optional, only with inputMode "isolated"; when true a routing step may pass a "prompt" via its handoff tool that overrides the subflow's "prompt" (default)
     "captureVariable": "NAME",                     // optional; save the subflow's output into a run variable other steps inject with \${var:NAME}
+    "captureResource": "NAME",                     // optional; ALSO save the subflow's output as a tracked run resource (\${res:NAME}, rule 9b)
     "outputMode": "steps" | "final-only" }
 - { "key": "...", "type": "finish", "label": "..." }
 
@@ -69,4 +71,5 @@ RULES:
 7. A subflow node may instead fan out to SEVERAL child flows CONCURRENTLY via "parallelFlows" (existing flows) or "parallelSubflowSpecs" (inline). The same input is sent to every lane and their outputs are joined. This is about multiple CHILDREN, not successors — the single-outgoing-edge rule (rule 6) still holds. Prefer "parallelFlows" for large fan-outs.
 8. A subflow node may instead run its SINGLE child flow ONCE PER ITEM via "mapOverList": true. The input is split into items by "itemSplit" ("json-array" default, or "lines"), each item is sent to its own child run, and the per-item outputs are joined (same pool/tuning as parallel). Use "sequential": true to run items in order. Mutually exclusive with "parallelFlows"/"parallelSubflowSpecs".
 9. Named variables (scratchpad): a step can save its output with "captureVariable": "NAME" (process or subflow) and any LATER step injects it with \${var:NAME} inside its "prompt" / "isolatedPrompt" / subflow prompt. This survives "latest-message"/"isolated" scoping, unlike conversation history — use it to carry a todo list, a file path, a diff, or a captured result across steps that don't share history. \${var:NAME} is run-scoped and plaintext; it is DISTINCT from \${global:VAR} (configured secrets/config, resolved only for tool args). Capture a subflow's output on the PARENT subflow node — a variable set inside a child flow is not visible to the parent.
+9b. Run resources (tracked data): "captureResource": "NAME" (process or subflow) ALSO saves the step's output as a run-scoped RESOURCE — an addressable artifact (flujo://run/... URI) with lineage (which step produced it, which steps read it), readable via the built-in "flujo" MCP server. A later step injects it with \${res:NAME} exactly like \${var:NAME}. Prefer "captureVariable" for short strings; use "captureResource" when the output is a large document/report/dataset worth tracking, or when other tools/agents should be able to read it back. Large or binary MCP tool results (screenshots, files) are auto-captured as run resources without any spec field.
 10. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.`;

@@ -170,6 +170,14 @@ export interface FlowSpecNode {
    * Run-scoped plaintext — NOT config or secrets (distinct from `${global:VAR}`).
    */
   captureVariable?: string;
+  /**
+   * process/subflow only (Tier 3 — resource-tracked data flow): ALSO save this
+   * step's final output as a named run-scoped RESOURCE (flujo://run/… with
+   * producedBy/readBy lineage, readable via the internal "flujo" MCP server).
+   * Later steps inject it with `${res:NAME}`. Use `captureVariable` for short
+   * strings; `captureResource` for big/structured artifacts worth tracking.
+   */
+  captureResource?: string;
 }
 
 export interface FlowSpecEdge {
@@ -534,6 +542,10 @@ export function compileFlowSpec(
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
           properties.captureVariable = specNode.captureVariable.trim();
         }
+        // captureResource (Tier 3): save this step's output as a named run resource.
+        if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
+          properties.captureResource = specNode.captureResource.trim();
+        }
       } else if (type === 'subflow') {
         resolveSubflowTarget(specNode, key, depth, childAncestors, properties);
         if (specNode.inputMode !== undefined) {
@@ -564,6 +576,10 @@ export function compileFlowSpec(
         // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
           properties.captureVariable = specNode.captureVariable.trim();
+        }
+        // captureResource (Tier 3): save the folded output as a named run resource.
+        if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
+          properties.captureResource = specNode.captureResource.trim();
         }
       }
       // finish: no properties.
@@ -1005,6 +1021,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
         specNode.allowedTools = props.allowedTools.filter((t: unknown): t is string => typeof t === 'string' && !!t);
       }
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
+      if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       const servers = serversByProcess.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
@@ -1031,6 +1048,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
+      if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);
