@@ -420,7 +420,7 @@ function formatFlowDefinition(flow: Flow): Record<string, unknown> {
     return {
       from: edge.source,
       to: edge.target,
-      type: data?.edgeType === 'mcp' ? 'mcp' : 'control',
+      type: data?.edgeType === 'mcp' ? 'mcp' : data?.edgeType === 'resource' ? 'resource' : 'control',
       ...(data?.bidirectional ? { bidirectional: true } : {}),
     };
   });

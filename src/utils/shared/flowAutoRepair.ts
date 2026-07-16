@@ -97,7 +97,8 @@ const controlHandles = (type: string) => ({ source: `${type}-bottom`, target: `$
  * Purely geometric + degree-based; callers translate the plan into their own vocabulary.
  */
 function planRepair(nodes: PlanNode[], existing: PlanEdge[]): RepairPlan {
-  const controlNodes = nodes.filter((n) => n.type !== 'mcp' && typeof n.id === 'string');
+  // MCP and resource nodes are attachments, never part of control flow.
+  const controlNodes = nodes.filter((n) => n.type !== 'mcp' && n.type !== 'resource' && typeof n.id === 'string');
   const byId = new Map(controlNodes.map((n) => [n.id, n]));
 
   // --- degrees over control edges (bidirectional counts both directions) ---
@@ -328,8 +329,9 @@ const NEW_NODE_GAP = 150;
 function nodeType(n: FlowNode): string {
   return (n.data?.type as string | undefined) ?? (n.type as string | undefined) ?? 'unknown';
 }
-function isMcpEdge(e: Edge): boolean {
-  return (e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp';
+function isAttachmentEdgeLocal(e: Edge): boolean {
+  const t = (e.data as { edgeType?: string } | undefined)?.edgeType;
+  return t === 'mcp' || t === 'resource';
 }
 
 function makeStartNode(position: { x: number; y: number }): FlowNode {
@@ -365,10 +367,10 @@ export function autoRepairFlow(flow: Flow): RepairResult {
   const changes: RepairChange[] = [];
 
   const planNodes: PlanNode[] = nodes
-    .filter((n) => nodeType(n) !== 'mcp')
+    .filter((n) => nodeType(n) !== 'mcp' && nodeType(n) !== 'resource')
     .map((n) => ({ id: n.id, type: nodeType(n), x: n.position?.x ?? 0, y: n.position?.y ?? 0 }));
   const planEdges: PlanEdge[] = edges
-    .filter((e) => !isMcpEdge(e))
+    .filter((e) => !isAttachmentEdgeLocal(e))
     .map((e) => ({ from: e.source, to: e.target, bidirectional: (e.data as { bidirectional?: boolean } | undefined)?.bidirectional === true }));
   const plan = planRepair(planNodes, planEdges);
 

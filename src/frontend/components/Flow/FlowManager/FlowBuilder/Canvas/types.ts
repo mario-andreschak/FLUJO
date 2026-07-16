@@ -65,6 +65,20 @@ export const defaultEdgeOptions = {
   },
 };
 
+// Resource edge options (Tier 3) — DIRECTIONAL arrow (direction encodes the
+// consume/produce role), teal to match the resource node, no animation.
+export const resourceEdgeOptions = {
+  type: 'resourceEdge',
+  animated: false,
+  style: { stroke: '#009688', strokeWidth: 2 },
+  markerEnd: {
+    type: MarkerType.ArrowClosed,
+    width: 20,
+    height: 20,
+    color: '#009688',
+  },
+};
+
 // MCP edge options - bi-directional arrows without animation
 export const mcpEdgeOptions = {
   type: 'mcpEdge',

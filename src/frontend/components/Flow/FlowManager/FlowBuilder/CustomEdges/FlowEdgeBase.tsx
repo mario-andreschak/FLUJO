@@ -87,8 +87,13 @@ const EdgePath = styled(BaseEdge)({
 });
 
 interface FlowEdgeBaseProps extends EdgeProps {
-  variant: 'standard' | 'mcp';
+  variant: 'standard' | 'mcp' | 'resource';
 }
+
+/** Resource (data-wiring, Tier 3) edges are teal — matches RESOURCE_COLOR in
+ * CustomNodes and resourceEdgeOptions in Canvas/types.ts. */
+const RESOURCE_EDGE_COLOR = '#009688';
+const RESOURCE_EDGE_COLOR_SELECTED = '#4DB6AC';
 
 interface DragState {
   /** Index of the waypoint being dragged within the working array. */
@@ -154,8 +159,11 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   const waypoints = previewWaypoints ?? storedWaypoints;
   const bidirectional = variant === 'standard' && !!edgeData?.bidirectional;
 
-  const sourcePos = sourcePosition || (variant === 'mcp' ? Position.Left : Position.Bottom);
-  const targetPos = targetPosition || (variant === 'mcp' ? Position.Right : Position.Top);
+  // Attachment (mcp/resource) edges run sideways by default; flow control runs
+  // top-to-bottom.
+  const sideways = variant === 'mcp' || variant === 'resource';
+  const sourcePos = sourcePosition || (sideways ? Position.Left : Position.Bottom);
+  const targetPos = targetPosition || (sideways ? Position.Right : Position.Top);
 
   // Without waypoints the edge keeps ReactFlow's default smoothstep route;
   // with waypoints it becomes an orthogonal polyline through them.
@@ -187,7 +195,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     controlsPoint = { x: labelX, y: labelY };
   }
 
-  const animationClass = variant === 'mcp'
+  const animationClass = sideways
     ? ''
     : bidirectional
       ? 'animated-both'
@@ -200,6 +208,8 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     strokeWidth: selected ? 3 : 2,
     stroke: variant === 'mcp'
       ? (selected ? theme.palette.info.light : theme.palette.info.main)
+      : variant === 'resource'
+      ? (selected ? RESOURCE_EDGE_COLOR_SELECTED : RESOURCE_EDGE_COLOR)
       : (selected ? theme.palette.primary.main : theme.palette.text.secondary),
     // Give each animated edge a slightly different (deterministic) speed so
     // overlapping siblings on the same handle drift out of phase. Inline

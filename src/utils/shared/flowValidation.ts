@@ -88,9 +88,24 @@ export function getNodeLabel(node: VNode): string {
   return node.data?.label || node.id;
 }
 
-/** MCP (tool-wiring) edges are tagged edgeType 'mcp'; everything else is flow control. */
+/** MCP (tool-wiring) edges are tagged edgeType 'mcp'. */
 export function isMcpEdge(edge: VEdge): boolean {
   return edge.data?.edgeType === 'mcp';
+}
+
+/** Resource (data-wiring, Tier 3) edges are tagged edgeType 'resource'. */
+export function isResourceEdge(edge: VEdge): boolean {
+  return edge.data?.edgeType === 'resource';
+}
+
+/**
+ * Attachment edges (mcp/resource) are configuration wiring, not flow control.
+ * Every control-flow discrimination below must use THIS predicate, not
+ * isMcpEdge alone — a resource edge misread as a control edge corrupts
+ * reachability, subflow outgoing counting and condition routing.
+ */
+export function isAttachmentEdge(edge: VEdge): boolean {
+  return isMcpEdge(edge) || isResourceEdge(edge);
 }
 
 /**
@@ -119,8 +134,8 @@ export function mcpServersConnectedToProcess(
   return servers;
 }
 
-/** Build adjacency (source -> targets) over flow-control (non-mcp) edges only.
- * Bidirectional edges connect both ways. */
+/** Build adjacency (source -> targets) over flow-control (non-attachment) edges
+ * only. Bidirectional edges connect both ways. */
 function buildControlAdjacency(edges: VEdge[]): Map<string, string[]> {
   const adj = new Map<string, string[]>();
   const add = (from: string, to: string) => {
@@ -128,7 +143,7 @@ function buildControlAdjacency(edges: VEdge[]): Map<string, string[]> {
     adj.get(from)!.push(to);
   };
   for (const edge of edges) {
-    if (isMcpEdge(edge)) continue;
+    if (isAttachmentEdge(edge)) continue;
     add(edge.source, edge.target);
     if (edge.data?.bidirectional) add(edge.target, edge.source);
   }
@@ -252,6 +267,88 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     }
   }
 
+  // --- Resource nodes (Tier 3: data artifacts in the graph) ---
+  // A resource node is a config holder like an MCP node. Edge direction
+  // encodes role: resource → process = the step CONSUMES the artifact;
+  // process → resource = the step PRODUCES it (run scope only).
+  const resourceNodes = nodes.filter((n) => getNodeType(n) === 'resource');
+  for (const node of resourceNodes) {
+    const props = node.data?.properties ?? {};
+    const scope = props.scope === 'run' ? 'run' : 'mcp';
+    const boundServer = typeof props.boundServer === 'string' ? props.boundServer : '';
+    const uri = typeof props.uri === 'string' ? props.uri : '';
+    const runName = typeof props.runName === 'string' ? props.runName.trim() : '';
+
+    if (scope === 'mcp' && (!boundServer || !uri)) {
+      add(
+        'warning',
+        'resource-missing-binding',
+        `Resource node "${getNodeLabel(node)}" has no ${!boundServer ? 'server' : 'resource URI'} bound; connected steps will receive nothing.`,
+        node
+      );
+    }
+    if (scope === 'run' && !runName) {
+      add(
+        'warning',
+        'resource-missing-binding',
+        `Resource node "${getNodeLabel(node)}" is a run artifact with no name; give it a name so steps can produce/consume it.`,
+        node
+      );
+    }
+    if (scope === 'run' && runName && !isValidRunVarName(runName)) {
+      add(
+        'warning',
+        'resource-run-name',
+        `Resource node "${getNodeLabel(node)}" is named "${runName}", which is not a valid artifact name (letters, digits, _ and - only, not starting with a digit); it will be awkward to reference with \${res:...}.`,
+        node
+      );
+    }
+
+    if (scope === 'mcp' && boundServer && haveServers && !serverByName.has(boundServer)) {
+      add(
+        'warning',
+        'resource-server-missing',
+        `Resource node "${getNodeLabel(node)}" is bound to server "${boundServer}", which isn't in your current MCP server list.`,
+        node
+      );
+    }
+
+    const touching = edges.filter(
+      (e) => isResourceEdge(e) && (e.source === node.id || e.target === node.id)
+    );
+    if (touching.length === 0) {
+      add('warning', 'resource-node-unconnected', `Resource node "${getNodeLabel(node)}" is not connected to any Process node.`, node);
+    }
+
+    // Produce edges (process → resource) are only meaningful for run artifacts:
+    // a static MCP resource cannot be written by a step.
+    const produceEdges = touching.filter((e) => e.target === node.id);
+    if (scope === 'mcp' && produceEdges.length > 0) {
+      add(
+        'error',
+        'resource-produce-static',
+        `Resource node "${getNodeLabel(node)}" is a static MCP resource, but a step writes INTO it. Only run artifacts (scope "run") can be produced by a step — flip the edge or make this a run artifact.`,
+        node
+      );
+    }
+    if (scope === 'run' && produceEdges.length > 1) {
+      add(
+        'warning',
+        'resource-multiple-producers',
+        `Resource node "${getNodeLabel(node)}" is produced by ${produceEdges.length} steps; the last writer wins. Consider one producer per artifact.`,
+        node
+      );
+    }
+    if (scope === 'run' && produceEdges.length === 0 && touching.length > 0) {
+      add(
+        'warning',
+        'resource-consumed-never-produced',
+        `Resource node "${getNodeLabel(node)}" is consumed but no step in this flow produces it; it resolves to nothing unless an earlier run captured it.`,
+        node
+      );
+    }
+  }
+
   // --- Connectivity / runnability ---
   if (startNodes.length > 0) {
     const adj = buildControlAdjacency(edges);
@@ -287,7 +384,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   for (const node of subflowNodes) {
     const outgoing = edges.filter(
       (e) =>
-        !isMcpEdge(e) &&
+        !isAttachmentEdge(e) &&
         (e.source === node.id || (e.target === node.id && !!e.data?.bidirectional))
     );
     if (outgoing.length > 1) {
@@ -358,7 +455,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
     const conditionedSources = new Set<string>();
     for (const edge of edges) {
-      if (isMcpEdge(edge)) continue;
+      if (isAttachmentEdge(edge)) continue;
       const condition = edge.data?.condition;
       if (!condition || typeof condition !== 'object') continue;
 
@@ -407,7 +504,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       const node = nodesById.get(nodeId);
       if (!node) continue;
       const hasBareFallback = edges.some((e) => {
-        if (isMcpEdge(e)) return false;
+        if (isAttachmentEdge(e)) return false;
         if (e.source === nodeId) return !e.data?.condition;
         if (e.target === nodeId && e.data?.bidirectional) return true; // reverse route is bare
         return false;

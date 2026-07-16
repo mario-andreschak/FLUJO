@@ -71,8 +71,11 @@ export interface FlowSpecServerRef {
 export interface FlowSpecNode {
   /** Spec-local handle other nodes' edges refer to. Must be unique. */
   key: string;
-  /** 'mcp' is deliberately NOT accepted — servers are attached via `servers`. */
-  type: 'start' | 'process' | 'finish' | 'subflow';
+  /** 'mcp' is deliberately NOT accepted — servers are attached via `servers`.
+   *  'resource' (Tier 3) is a data artifact: an edge resource→process means the
+   *  step READS it; process→resource means the step's output is SAVED to it
+   *  (run artifacts only). */
+  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource';
   label?: string;
   /** Free-text description; lands on FlowNode.data.description (wins verbatim in handoff synthesis). */
   description?: string;
@@ -104,6 +107,13 @@ export interface FlowSpecNode {
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
   /** process only, inputMode 'isolated': the replacement context. */
   isolatedPrompt?: string;
+  /** resource only: the MCP server publishing a STATIC resource (with `uri`). */
+  server?: string;
+  /** resource only: the static resource's URI (or uriTemplate) on `server`. */
+  uri?: string;
+  /** resource only: name of a RUN artifact (mutually exclusive with server/uri) —
+   *  produced by a step via a process→resource edge, injectable via \${res:NAME}. */
+  runName?: string;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
@@ -274,6 +284,10 @@ const MCP_Y_SPACING = 150;
 const MCP_EDGE_MARKER = { type: 'arrowclosed' as const, width: 20, height: 20, color: '#1976d2' };
 const MCP_EDGE_STYLE = { stroke: '#1976d2', strokeWidth: 2 };
 
+/** Mirror of Canvas/types.ts `resourceEdgeOptions` (Tier 3) — directional, teal. */
+const RESOURCE_EDGE_MARKER = { type: 'arrowclosed' as const, width: 20, height: 20, color: '#009688' };
+const RESOURCE_EDGE_STYLE = { stroke: '#009688', strokeWidth: 2 };
+
 const VALID_INPUT_MODES = new Set(['full-history', 'latest-message', 'isolated']);
 const VALID_OUTPUT_MODES = new Set(['steps', 'final-only']);
 const VALID_PROCESS_OUTPUT_MODES = new Set(['full-conversation', 'latest-message']);
@@ -366,6 +380,27 @@ export function controlEdge(
       ...(condition ? { condition } : {}),
     },
     animated: true,
+  } as Edge;
+}
+
+/** A resource data-wiring edge (Tier 3), shaped exactly like
+ * `createEdgeFromConnection`'s resource branch. Direction is preserved from
+ * the spec: resource→process = the step consumes; process→resource = the step
+ * produces. Handles follow the side each endpoint plays. */
+function resourceEdge(source: FlowNode, target: FlowNode): Edge {
+  const sourceHandle = source.type === 'resource' ? 'resource-out' : 'process-right-resource';
+  const targetHandle = target.type === 'resource' ? 'resource-in' : 'process-left-resource';
+  return {
+    id: `${source.id}:${sourceHandle}->${target.id}:${targetHandle}`,
+    source: source.id,
+    sourceHandle,
+    target: target.id,
+    targetHandle,
+    type: 'resourceEdge',
+    data: { edgeType: 'resource' },
+    animated: false,
+    markerEnd: { ...RESOURCE_EDGE_MARKER },
+    style: { ...RESOURCE_EDGE_STYLE },
   } as Edge;
 }
 
@@ -471,7 +506,7 @@ export function compileFlowSpec(
         );
         continue;
       }
-      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow') {
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource') {
         error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
         continue;
       }
@@ -581,6 +616,28 @@ export function compileFlowSpec(
         if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
           properties.captureResource = specNode.captureResource.trim();
         }
+      } else if (type === 'resource') {
+        // Tier 3: a data artifact. Run artifact (runName) OR static MCP
+        // resource (server + uri) — runName wins when both are present.
+        const runName = typeof specNode.runName === 'string' ? specNode.runName.trim() : '';
+        const server = typeof specNode.server === 'string' ? specNode.server.trim() : '';
+        const uri = typeof specNode.uri === 'string' ? specNode.uri.trim() : '';
+        if (runName) {
+          properties.scope = 'run';
+          properties.runName = runName;
+          if (server || uri) {
+            warn('resource-both-bindings', `Node "${key}": a resource node is EITHER a run artifact ("runName") or a static MCP resource ("server"+"uri"); kept the run artifact.`, key);
+          }
+        } else {
+          properties.scope = 'mcp';
+          if (server) properties.boundServer = server;
+          if (uri) properties.uri = uri;
+          if (!server || !uri) {
+            warn('resource-missing-binding', `Node "${key}": a static resource node needs both "server" and "uri" (or a "runName" for a run artifact).`, key);
+          } else if (!knownServers.has(server)) {
+            warn('server-unknown', `Node "${key}": MCP server "${server}" is not configured in FLUJO.`, key);
+          }
+        }
       }
       // finish: no properties.
 
@@ -664,6 +721,34 @@ export function compileFlowSpec(
       }
       if (source === target) {
         error('edge-self-loop', `Edge "${fromKey}" -> "${toKey}": a node cannot connect to itself.`);
+        continue;
+      }
+      // Tier 3: an edge touching a resource node is DATA wiring, not flow
+      // control. Legality mirrors getConnectionError: resource ↔ process only.
+      // Direction is meaning (resource→process = consume, process→resource =
+      // produce), so it is preserved verbatim; conditions/bidirectional don't
+      // apply to data wiring and are dropped with a warning.
+      if (source.type === 'resource' || target.type === 'resource') {
+        const resourcePair =
+          (source.type === 'resource' && target.type === 'process') ||
+          (source.type === 'process' && target.type === 'resource');
+        if (!resourcePair) {
+          error('resource-edge-invalid', `Edge "${fromKey}" -> "${toKey}": resource nodes connect only to process nodes.`);
+          continue;
+        }
+        if (specEdge.condition) {
+          warn('resource-edge-condition', `Edge "${fromKey}" -> "${toKey}": conditions do not apply to resource wiring; dropped.`);
+        }
+        if (specEdge.bidirectional === true) {
+          warn('resource-edge-bidirectional', `Edge "${fromKey}" -> "${toKey}": resource wiring is directional (read vs write); "bidirectional" was ignored — add the opposite edge explicitly if the step both reads and writes.`);
+        }
+        const pairKey = `${fromKey}->${toKey}`;
+        if (seenControlPairs.has(pairKey)) {
+          warn('edge-duplicate', `Edge "${fromKey}" -> "${toKey}" appears more than once; kept the first.`);
+          continue;
+        }
+        seenControlPairs.add(pairKey);
+        edges.push(resourceEdge(source, target));
         continue;
       }
       // Same legality rules as the builder's getConnectionError for flow control.
@@ -997,7 +1082,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
   for (const node of nodes) {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow') continue;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource') continue;
     const props = (node.data?.properties ?? {}) as Record<string, any>;
     const specNode: FlowSpecNode = {
       key: node.id,
@@ -1049,6 +1134,14 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
+    } else if (type === 'resource') {
+      // Tier 3: round-trip the binding so AI-Improve never drops resource nodes.
+      if (props.scope === 'run' && typeof props.runName === 'string' && props.runName) {
+        specNode.runName = props.runName;
+      } else {
+        if (typeof props.boundServer === 'string' && props.boundServer) specNode.server = props.boundServer;
+        if (typeof props.uri === 'string' && props.uri) specNode.uri = props.uri;
+      }
     }
     // finish: no properties to carry.
     specNodes.push(specNode);
@@ -1111,12 +1204,18 @@ function layout(
 ): void {
   const controlAdj = new Map<string, string[]>();
   for (const e of edges) {
-    if ((e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp') continue;
+    const t = (e.data as { edgeType?: string } | undefined)?.edgeType;
+    if (t === 'mcp' || t === 'resource') continue; // attachments are not flow control
     if (!controlAdj.has(e.source)) controlAdj.set(e.source, []);
     controlAdj.get(e.source)!.push(e.target);
   }
 
-  const specNodes = [...nodesByKey.values()];
+  // Resource nodes are satellites like MCP nodes: excluded from the layered
+  // layout and parked beside the process node they touch (left side,
+  // mirroring MCP on the right).
+  const allSpecNodes = [...nodesByKey.values()];
+  const resourceSpecNodes = allSpecNodes.filter((n) => n.type === 'resource');
+  const specNodes = allSpecNodes.filter((n) => n.type !== 'resource');
   const roots = specNodes.filter((n) => n.type === 'start');
   const bfsRoots = roots.length > 0 ? roots : specNodes.slice(0, 1);
   const depths = new Map<string, number>();
@@ -1166,6 +1265,41 @@ function layout(
       x: processNode.position.x + MCP_X_OFFSET,
       y: processNode.position.y + idx * MCP_Y_SPACING,
     };
+  }
+
+  // Resource nodes: to the LEFT of the first process node they touch, stacked.
+  // A pinned position (improve round-trip) wins; an unattached resource node
+  // falls back to the bottom row like any unreachable node.
+  const nodeById = new Map(allSpecNodes.map((n) => [n.id, n]));
+  const resourceCounters = new Map<string, number>();
+  let unattachedCol = 0;
+  for (const rNode of resourceSpecNodes) {
+    const key = keyByNodeId.get(rNode.id);
+    const pinned = positions && key ? positions[key] : undefined;
+    if (pinned && typeof pinned.x === 'number' && typeof pinned.y === 'number') {
+      rNode.position = { x: pinned.x, y: pinned.y };
+      continue;
+    }
+    const touching = edges.find(
+      (e) =>
+        (e.data as { edgeType?: string } | undefined)?.edgeType === 'resource' &&
+        (e.source === rNode.id || e.target === rNode.id)
+    );
+    const partnerId = touching ? (touching.source === rNode.id ? touching.target : touching.source) : undefined;
+    const partner = partnerId ? nodeById.get(partnerId) : undefined;
+    if (partner) {
+      const idx = resourceCounters.get(partner.id) ?? 0;
+      resourceCounters.set(partner.id, idx + 1);
+      rNode.position = {
+        x: partner.position.x - MCP_X_OFFSET,
+        y: partner.position.y + idx * MCP_Y_SPACING,
+      };
+    } else {
+      let maxY = 0;
+      for (const n of specNodes) maxY = Math.max(maxY, n.position.y);
+      rNode.position = { x: BASE_X + unattachedCol * X_SPACING, y: maxY + Y_SPACING };
+      unattachedCol++;
+    }
   }
 }
 

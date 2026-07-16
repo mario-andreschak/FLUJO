@@ -1,7 +1,7 @@
 import { Connection, Edge } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
-import { mcpEdgeOptions } from '../types';
-import { getConnectionError, isMcpHandle } from './connectionRules';
+import { mcpEdgeOptions, resourceEdgeOptions } from '../types';
+import { getConnectionError, isMcpHandle, isResourceHandle, isAttachmentEdge } from './connectionRules';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 
 /** A subflow node's outgoing flow-control paths: standard edges it is the
@@ -13,9 +13,9 @@ function subflowOutgoingEdges(
   edges: Edge[],
   exceptOtherNodeId?: string
 ): Edge[] {
-  const isMcp = (e: Edge) => (e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp';
   return edges.filter(e => {
-    if (isMcp(e)) return false;
+    // Attachment (mcp/resource) edges are config wiring, not flow control.
+    if (isAttachmentEdge(e)) return false;
     if (e.source === subflowId) return e.target !== exceptOtherNodeId;
     if (e.target === subflowId && (e.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
       return e.source !== exceptOtherNodeId;
@@ -97,11 +97,22 @@ export function createEdgeFromConnection(
     isMcpHandle(sourceHandle) ||
     isMcpHandle(targetHandle);
 
+  // A resource (data-wiring, Tier 3) edge links a Resource node or uses
+  // resource handles. Direction encodes role: resource→process = consume,
+  // process→resource = produce.
+  const isResourceConnection =
+    !isMCPConnection && (
+      sourceNode?.type === 'resource' ||
+      targetNode?.type === 'resource' ||
+      isResourceHandle(sourceHandle) ||
+      isResourceHandle(targetHandle)
+    );
+
   // The id includes the handles so two edges between the same node pair via
   // different handles never collide (colliding ids break React keys and make
   // deleting one edge remove both).
   const edgeId = `${params.source}:${sourceHandle}->${params.target}:${targetHandle}`;
-  
+
   // Create the edge with the appropriate type and options
   if (isMCPConnection) {
     return {
@@ -113,6 +124,16 @@ export function createEdgeFromConnection(
       markerEnd: mcpEdgeOptions.markerEnd,
       markerStart: mcpEdgeOptions.markerStart,
       style: mcpEdgeOptions.style
+    } as Edge;
+  } else if (isResourceConnection) {
+    return {
+      id: edgeId,
+      ...params,
+      type: 'resourceEdge',
+      data: { edgeType: 'resource' },
+      animated: false,
+      markerEnd: resourceEdgeOptions.markerEnd,
+      style: resourceEdgeOptions.style
     } as Edge;
   } else {
     // A `condition` (Tier 2b) is spread into `data` only when supplied, so a
@@ -158,6 +179,10 @@ export function canConvertToBidirectional(
  *   there must be exactly one per node pair regardless of which side or
  *   handle it was drawn from, so re-connecting on the other side moves the
  *   edge instead of doubling it.
+ * - A resource edge (Tier 3) is unique per pair PER DIRECTION: a step may
+ *   both consume (resource → process) and produce (process → resource) the
+ *   same artifact, so a read edge and a write edge coexist — but two edges
+ *   in the same direction collapse to one.
  * - A flow-control edge is unique per direction (source -> target).
  *
  * @param newEdge The edge about to be added
@@ -165,7 +190,9 @@ export function canConvertToBidirectional(
  * @returns The ids of existing edges to remove before adding the new one
  */
 export function getReplacedEdgeIds(newEdge: Edge, edges: Edge[]): string[] {
-  const isMcp = (e: Edge) => (e.data as { edgeType?: string } | undefined)?.edgeType === 'mcp';
+  const edgeTypeOf = (e: Edge) => (e.data as { edgeType?: string } | undefined)?.edgeType;
+  const isMcp = (e: Edge) => edgeTypeOf(e) === 'mcp';
+  const isResource = (e: Edge) => edgeTypeOf(e) === 'resource';
   return edges
     .filter(e => {
       if (e.id === newEdge.id) return true;
@@ -174,7 +201,10 @@ export function getReplacedEdgeIds(newEdge: Edge, edges: Edge[]): string[] {
           ((e.source === newEdge.source && e.target === newEdge.target) ||
             (e.source === newEdge.target && e.target === newEdge.source));
       }
-      return !isMcp(e) && e.source === newEdge.source && e.target === newEdge.target;
+      if (isResource(newEdge)) {
+        return isResource(e) && e.source === newEdge.source && e.target === newEdge.target;
+      }
+      return !isMcp(e) && !isResource(e) && e.source === newEdge.source && e.target === newEdge.target;
     })
     .map(e => e.id);
 }

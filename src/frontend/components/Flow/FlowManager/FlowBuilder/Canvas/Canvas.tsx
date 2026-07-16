@@ -21,9 +21,9 @@ import { styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode } from '../CustomNodes';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, RESOURCE_COLOR } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
-import { CustomEdge, MCPEdge } from '../CustomEdges';
+import { CustomEdge, MCPEdge, ResourceEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
@@ -64,11 +64,13 @@ const nodeTypes = {
   finish: FinishNode,
   mcp: MCPNode,
   subflow: SubflowNode,
+  resource: ResourceNode,
 };
 
 const edgeTypes = {
   custom: CustomEdge,
   mcpEdge: MCPEdge,
+  resourceEdge: ResourceEdge,
 };
 
 // NodeSelectionModal component
@@ -116,6 +118,11 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       label: 'Subflow Node',
       description: 'Run another flow',
     },
+    {
+      type: 'resource',
+      label: 'Resource Node',
+      description: 'A data artifact steps read or write',
+    },
   ];
 
   // Filter node types based on validation
@@ -132,6 +139,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.info.main, borderRadius: '50%' }}></div>;
       case 'subflow':
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.warning.main, borderRadius: '50%' }}></div>;
+      case 'resource':
+        return <div style={{ width: 24, height: 24, backgroundColor: RESOURCE_COLOR, borderRadius: '50%' }}></div>;
       default:
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
     }
@@ -175,6 +184,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
                     ? theme.palette.success.main
                     : node.type === 'subflow'
                     ? theme.palette.warning.main
+                    : node.type === 'resource'
+                    ? RESOURCE_COLOR
                     : theme.palette.info.main
                 }`,
                 cursor: 'pointer',
@@ -526,7 +537,8 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       if (fromNode.type === 'subflow' && fromHandle.type === 'source') {
         const hasOutgoing = edges.some(e => {
           const data = e.data as { edgeType?: string; bidirectional?: boolean } | undefined;
-          if (data?.edgeType === 'mcp') return false;
+          // Attachment (mcp/resource) edges are config wiring, not successors.
+          if (data?.edgeType === 'mcp' || data?.edgeType === 'resource') return false;
           return e.source === fromNode.id || (e.target === fromNode.id && !!data?.bidirectional);
         });
         if (hasOutgoing) {
@@ -579,7 +591,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       const sourceNode = sourceNodeId ? findNodeById(sourceNodeId, nodes) : undefined;
 
       if (sourceNode && sourceHandleId) {
-        const targetHandle = defaultTargetHandleFor(nodeType);
+        const targetHandle = defaultTargetHandleFor(nodeType, sourceHandleId);
 
         // Create a connection from the source node to the new node
         const connection = {

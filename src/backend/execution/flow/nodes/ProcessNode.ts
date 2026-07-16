@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
+import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs } from '../buildNodeContext';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
@@ -212,12 +213,25 @@ export class ProcessNode extends BaseNode {
     // decrypts `${global:VAR}` for tool args / API keys and never touches prompts).
     // Tier 3: then inject `${res:NAME}` named run resources (after vars, no
     // recursion — see resolveRunResourceRefs).
-    const completePrompt = await resolveRunResourceRefs(
+    let completePrompt = await resolveRunResourceRefs(
       resolveRunVars(renderedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
       { nodeId }
     );
+
+    // Tier 3: resource NODES wired to this step (consume role) inject their
+    // contents as a "## Resources" block — the graph-visible sibling of
+    // resource pills. Reads never break the run (failures render as notes).
+    const resourceNodes = node_params?.properties?.resourceNodes || [];
+    if (resourceNodes.length > 0) {
+      const resourceBlock = await ResourceHandler.processResourceNodes({
+        resourceNodes,
+        conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+        emit: sharedState.emit,
+      });
+      completePrompt += resourceBlock;
+    }
 
     log.debug('Prompt rendered successfully', {
       completePromptLength: completePrompt.length,

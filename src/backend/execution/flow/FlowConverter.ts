@@ -1,7 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { Flow, BaseNode } from './pocketflow';
 import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';
-import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode } from './nodes';
+import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode } from './nodes';
 import { createLogger } from '@/utils/logger';
 import {
   NodeParams,
@@ -14,7 +14,8 @@ import {
   ProcessNodeProperties,
   MCPNodeProperties,
   FinishNodeProperties,
-  SubflowNodeProperties
+  SubflowNodeProperties,
+  ResourceNodeProperties
 } from './types';
 
 // Create a logger instance for this file
@@ -94,6 +95,65 @@ export class FlowConverter {
             log.warn(`Invalid MCP connection: ${edge.id}. Could not find Process and MCP nodes.`, {
                 sourceNodeType: sourceNode.constructor.name,
                 targetNodeType: targetNode.constructor.name
+            });
+          }
+        } else if (edge.data?.edgeType === 'resource') {
+          // Tier 3: a resource edge is DATA wiring, never a successor.
+          // Direction encodes role: resource→process = the step CONSUMES the
+          // artifact; process→resource = the step PRODUCES it. Fold the
+          // resource node onto the process node's params like mcpNodes; a
+          // produce edge onto a run artifact additionally derives
+          // captureResource (unless the step set one explicitly).
+          log.info(`Handling resource connection: ${edge.id} (${edge.source} -> ${edge.target})`);
+
+          let processNode: BaseNode | undefined;
+          let resourceNode: BaseNode | undefined;
+          let role: 'consume' | 'produce' | undefined;
+
+          if (sourceNode instanceof ResourceNode && targetNode instanceof ProcessNode) {
+            resourceNode = sourceNode;
+            processNode = targetNode;
+            role = 'consume';
+          } else if (sourceNode instanceof ProcessNode && targetNode instanceof ResourceNode) {
+            processNode = sourceNode;
+            resourceNode = targetNode;
+            role = 'produce';
+          }
+
+          if (processNode && resourceNode && role) {
+            if (!processNode.node_params.properties) {
+              processNode.node_params.properties = {};
+            }
+            if (!processNode.node_params.properties.resourceNodes) {
+              processNode.node_params.properties.resourceNodes = [];
+            }
+            const resourceProps = (resourceNode.node_params.properties ?? {}) as ResourceNodeProperties;
+            processNode.node_params.properties.resourceNodes.push({
+              id: resourceNode.node_params.id,
+              role,
+              properties: resourceProps,
+            });
+
+            // Produce edge onto a run artifact ⇒ the step's output is captured
+            // under the artifact's name. An explicit captureResource wins.
+            if (role === 'produce' && resourceProps.scope === 'run' && resourceProps.runName
+                && !processNode.node_params.properties.captureResource) {
+              processNode.node_params.properties.captureResource = resourceProps.runName;
+              log.info(`Derived captureResource from produce edge`, {
+                processNodeId: processNode.node_params.id,
+                runName: resourceProps.runName,
+              });
+            }
+
+            log.info(`Stored resource node in Process node properties`, {
+              processNodeId: processNode.node_params.id,
+              resourceNodeId: resourceNode.node_params.id,
+              role,
+            });
+          } else {
+            log.warn(`Invalid resource connection: ${edge.id}. Could not find Process and Resource nodes.`, {
+              sourceNodeType: sourceNode.constructor.name,
+              targetNodeType: targetNode.constructor.name
             });
           }
         } else {
@@ -254,6 +314,15 @@ export class FlowConverter {
           label: node.data.label,
           type: 'subflow',
           properties: node.data.properties as SubflowNodeProperties || { name: node.data.label }
+        };
+        break;
+      case 'resource':
+        pocketNode = new ResourceNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'resource',
+          properties: node.data.properties as ResourceNodeProperties || { name: node.data.label }
         };
         break;
       default:

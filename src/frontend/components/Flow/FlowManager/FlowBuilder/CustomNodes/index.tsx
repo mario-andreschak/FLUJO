@@ -17,14 +17,36 @@ import ChatIcon from '@mui/icons-material/Chat';
 import SettingsIcon from '@mui/icons-material/Settings';
 import OutputIcon from '@mui/icons-material/Output';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import DescriptionIcon from '@mui/icons-material/Description';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import type { NodeType } from '@/frontend/types/flow/flow';
+
+// Resource nodes (Tier 3) use a teal literal — the MUI palette slots are all
+// taken (secondary=process, success=finish, info=mcp, warning=subflow) and the
+// start node set the hex-literal precedent.
+export const RESOURCE_COLOR = '#009688';
+const RESOURCE_COLOR_LIGHT = '#4DB6AC';
+
+// One authority for per-type node colors instead of five repeated ternary
+// chains. `main` styles borders/icons; `light` styles the header divider.
+const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
+  start: { main: () => '#795548', light: () => '#A1887F' }, // Brown
+  process: { main: (t) => t.palette.secondary.main, light: (t) => t.palette.secondary.light },
+  finish: { main: (t) => t.palette.success.main, light: (t) => t.palette.success.light },
+  mcp: { main: (t) => t.palette.info.main, light: (t) => t.palette.info.light },
+  subflow: { main: (t) => t.palette.warning.main, light: (t) => t.palette.warning.light },
+  resource: { main: () => RESOURCE_COLOR, light: () => RESOURCE_COLOR_LIGHT },
+};
+
+const nodeMainColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
+const nodeLightColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).light(theme);
 
 const NodeContainer = styled(Paper, {
   shouldForwardProp: (prop) => !['nodeType', 'selected'].includes(prop as string),
-})<{ 
-  nodeType: 'start' | 'process' | 'finish' | 'mcp' | 'subflow';
-  selected?: boolean; 
+})<{
+  nodeType: NodeType;
+  selected?: boolean;
 }>(({ theme, nodeType, selected }) => ({
   padding: theme.spacing(1.5),
   // Fixed (not min) width so every node is the same size: with equal widths and
@@ -33,53 +55,23 @@ const NodeContainer = styled(Paper, {
   width: '200px',
   borderRadius: '8px',
   backgroundColor: theme.palette.background.paper,
-  border: `2px solid ${
-    nodeType === 'start'
-      ? '#795548' // Brown color hex value
-      : nodeType === 'process'
-      ? theme.palette.secondary.main
-      : nodeType === 'finish'
-      ? theme.palette.success.main
-      : nodeType === 'mcp'
-      ? theme.palette.info.main
-      : theme.palette.warning.main
-  }`,
+  border: `2px solid ${nodeMainColor(nodeType, theme)}`,
   boxShadow: selected
-    ? `0 0 0 2px ${theme.palette.primary.main}, 0 3px 10px rgba(0,0,0,0.2)` 
+    ? `0 0 0 2px ${theme.palette.primary.main}, 0 3px 10px rgba(0,0,0,0.2)`
     : theme.shadows[2],
   transition: 'all 0.2s ease',
   '&:hover': {
-    boxShadow: `0 0 0 1px ${
-      nodeType === 'start'
-        ? '#795548' // Brown color hex value
-        : nodeType === 'process'
-        ? theme.palette.secondary.main
-        : nodeType === 'finish'
-        ? theme.palette.success.main
-        : nodeType === 'mcp'
-        ? theme.palette.info.main
-        : theme.palette.warning.main
-    }, 0 3px 10px rgba(0,0,0,0.1)`
+    boxShadow: `0 0 0 1px ${nodeMainColor(nodeType, theme)}, 0 3px 10px rgba(0,0,0,0.1)`
   }
 }));
 
 const NodeHeader = styled(Box, {
   shouldForwardProp: (prop) => prop !== 'nodeType',
-})<{ nodeType: 'start' | 'process' | 'finish' | 'mcp' | 'subflow' }>(({ theme, nodeType }) => ({
+})<{ nodeType: NodeType }>(({ theme, nodeType }) => ({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  borderBottom: `1px solid ${
-    nodeType === 'start'
-      ? '#A1887F' // Lighter brown color for header border
-      : nodeType === 'process'
-      ? theme.palette.secondary.light
-      : nodeType === 'finish'
-      ? theme.palette.success.light
-      : nodeType === 'mcp'
-      ? theme.palette.info.light
-      : theme.palette.warning.light
-  }`,
+  borderBottom: `1px solid ${nodeLightColor(nodeType, theme)}`,
   marginBottom: theme.spacing(1),
   paddingBottom: theme.spacing(0.5),
 }));
@@ -103,10 +95,10 @@ const PropertyRow = styled(Box)(({ theme }) => ({
 }));
 
 interface CustomNodeProps extends NodeProps {
-  nodeType: 'start' | 'process' | 'finish' | 'mcp' | 'subflow';
+  nodeType: NodeType;
 }
 
-const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp' | 'subflow') => {
+const getNodeIcon = (type: NodeType) => {
   switch (type) {
     case 'start':
       return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
@@ -118,27 +110,15 @@ const getNodeIcon = (type: 'start' | 'process' | 'finish' | 'mcp' | 'subflow') =
       return <SettingsIcon color="info" />;
     case 'subflow':
       return <AccountTreeIcon sx={{ color: 'warning.main' }} />;
+    case 'resource':
+      // Same icon vocabulary as the resource browser (ServerResources.tsx).
+      return <DescriptionIcon sx={{ color: RESOURCE_COLOR }} />;
     default:
       return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
   }
 };
 
-export const getNodeColor = (type: 'start' | 'process' | 'finish' | 'mcp' | 'subflow', theme: any) => {
-  switch (type) {
-    case 'start':
-      return '#795548'; // Brown color hex value
-    case 'process':
-      return theme.palette.secondary.main;
-    case 'finish':
-      return theme.palette.success.main;
-    case 'mcp':
-      return theme.palette.info.main;
-    case 'subflow':
-      return theme.palette.warning.main;
-    default:
-      return '#795548'; // Brown color hex value
-  }
-};
+export const getNodeColor = (type: NodeType, theme: any) => nodeMainColor(type, theme);
 
 // Custom handle styles for different connection types
 const getMCPHandleStyle = (theme: any) => ({
@@ -161,6 +141,15 @@ const getProcessHandleStyle = (theme: any) => ({
 
 const getMCPConnectionHandleStyle = (theme: any) => ({
   backgroundColor: theme.palette.primary.main,
+  borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
+  width: 16,
+  height: 16,
+  borderRadius: 8,
+  borderWidth: 2
+});
+
+const getResourceHandleStyle = (theme: any) => ({
+  backgroundColor: RESOURCE_COLOR,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,
   height: 16,
@@ -214,37 +203,75 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
         </>
       );
     } else if (nodeType === 'process') {
-      // Process nodes have two types of connectors:
+      // Process nodes have three types of connectors:
       // - Top/bottom: Connect to Entry, Finish, and other Process nodes
-      // - Left/right: Connect ONLY to MCP nodes
+      // - Left/right at 30%: Connect ONLY to MCP nodes
+      // - Left/right at 70%: Connect ONLY to Resource nodes (Tier 3)
+      // (Edges reference handle IDS, so nudging the mcp handles to 30% is
+      // purely cosmetic and never breaks existing flows.)
       return (
         <>
           {/* Standard process flow connectors (top/bottom) */}
-          <Handle 
+          <Handle
             id="process-top"
-            type="target" 
-            position={Position.Top} 
-            style={getProcessHandleStyle(theme)} 
+            type="target"
+            position={Position.Top}
+            style={getProcessHandleStyle(theme)}
           />
-          <Handle 
+          <Handle
             id="process-bottom"
-            type="source" 
-            position={Position.Bottom} 
-            style={getProcessHandleStyle(theme)} 
+            type="source"
+            position={Position.Bottom}
+            style={getProcessHandleStyle(theme)}
           />
-          
-          {/* MCP connection connectors (left/right) */}
-          <Handle 
+
+          {/* MCP connection connectors (left/right, upper) */}
+          <Handle
             id="process-left-mcp"
-            type="source" 
-            position={Position.Left} 
-            style={getMCPConnectionHandleStyle(theme)} 
+            type="source"
+            position={Position.Left}
+            style={{ ...getMCPConnectionHandleStyle(theme), top: '30%' }}
           />
-          <Handle 
+          <Handle
             id="process-right-mcp"
-            type="source" 
-            position={Position.Right} 
-            style={getMCPConnectionHandleStyle(theme)} 
+            type="source"
+            position={Position.Right}
+            style={{ ...getMCPConnectionHandleStyle(theme), top: '30%' }}
+          />
+
+          {/* Resource connection connectors (left/right, lower). Left is the
+              consume INPUT (resource-out → here); right is the produce OUTPUT
+              (here → resource-in). */}
+          <Handle
+            id="process-left-resource"
+            type="target"
+            position={Position.Left}
+            style={{ ...getResourceHandleStyle(theme), top: '70%' }}
+          />
+          <Handle
+            id="process-right-resource"
+            type="source"
+            position={Position.Right}
+            style={{ ...getResourceHandleStyle(theme), top: '70%' }}
+          />
+        </>
+      );
+    } else if (nodeType === 'resource') {
+      // Resource nodes (Tier 3): data flows out of the right handle into a
+      // consuming step, and into the left handle from a producing step.
+      return (
+        <>
+          <Handle
+            id="resource-in"
+            type="target"
+            position={Position.Left}
+            style={getResourceHandleStyle(theme)}
+          />
+          <Handle
+            id="resource-out"
+            type="source"
+            position={Position.Right}
+            style={getResourceHandleStyle(theme)}
           />
         </>
       );
@@ -376,4 +403,8 @@ export const MCPNode = memo(function MCPNode(props: NodeProps) {
 
 export const SubflowNode = memo(function SubflowNode(props: NodeProps) {
   return <CustomNode {...props} nodeType="subflow" selected={props.selected} />;
+});
+
+export const ResourceNode = memo(function ResourceNode(props: NodeProps) {
+  return <CustomNode {...props} nodeType="resource" selected={props.selected} />;
 });

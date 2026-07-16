@@ -55,6 +55,7 @@ import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
 import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
+import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
@@ -153,6 +154,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [startModalOpen, setStartModalOpen] = useState(false);
   const [finishModalOpen, setFinishModalOpen] = useState(false);
   const [subflowModalOpen, setSubflowModalOpen] = useState(false);
+  const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
 
   // AI-Improve (issue #99): the dialog that revises the current flow, plus a transient
@@ -688,6 +690,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setStartModalOpen(false);
     setFinishModalOpen(false);
     setSubflowModalOpen(false);
+    setResourceModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, []);
@@ -751,6 +754,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setFinishModalOpen(true);
     } else if (node.data.type === 'subflow') {
       setSubflowModalOpen(true);
+    } else if (node.data.type === 'resource') {
+      setResourceModalOpen(true);
     } else {
       setProcessModalOpen(true);
     }
@@ -1021,6 +1026,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         onClose={() => setSubflowModalOpen(false)}
         onSave={handleNodeUpdate}
         flowId={initialFlow?.id}
+      />
+
+      <ResourceNodePropertiesModal
+        open={resourceModalOpen}
+        node={nodeToEdit}
+        onClose={() => setResourceModalOpen(false)}
+        onSave={handleNodeUpdate}
       />
 
       {/* AI-Improve dialog (issue #99): revises the CURRENT canvas state (incl. unsaved edits). */}

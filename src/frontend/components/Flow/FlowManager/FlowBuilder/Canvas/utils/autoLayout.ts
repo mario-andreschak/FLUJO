@@ -35,8 +35,18 @@ function nodeSize(node: FlowNode): { width: number; height: number } {
   return { width, height };
 }
 
+function edgeTypeOf(edge: Edge): string | undefined {
+  return (edge.data as { edgeType?: string } | undefined)?.edgeType;
+}
 function isMcpEdge(edge: Edge): boolean {
-  return (edge.data as { edgeType?: string } | undefined)?.edgeType === 'mcp';
+  return edgeTypeOf(edge) === 'mcp';
+}
+function isResourceEdge(edge: Edge): boolean {
+  return edgeTypeOf(edge) === 'resource';
+}
+/** Attachment (mcp/resource) edges are config wiring, not flow control. */
+function isAttachmentEdge(edge: Edge): boolean {
+  return isMcpEdge(edge) || isResourceEdge(edge);
 }
 
 /**
@@ -73,7 +83,10 @@ export function computeAutoLayout(
   } = options;
 
   const mcpNodes = nodes.filter(n => n.type === 'mcp');
-  const flowNodes = nodes.filter(n => n.type !== 'mcp');
+  // Resource nodes (Tier 3) are satellites like MCP nodes — parked beside
+  // their process node (left side, mirroring MCP on the right).
+  const resourceNodes = nodes.filter(n => n.type === 'resource');
+  const flowNodes = nodes.filter(n => n.type !== 'mcp' && n.type !== 'resource');
 
   // Nothing meaningful to arrange.
   if (flowNodes.length <= 1) {
@@ -87,7 +100,7 @@ export function computeAutoLayout(
   flowNodes.forEach(n => adjacency.set(n.id, new Set<string>()));
 
   for (const edge of edges) {
-    if (isMcpEdge(edge)) continue;
+    if (isAttachmentEdge(edge)) continue;
     if (edge.source === edge.target) continue;
     if (!flowIds.has(edge.source) || !flowIds.has(edge.target)) continue;
     adjacency.get(edge.source)!.add(edge.target);
@@ -150,40 +163,49 @@ export function computeAutoLayout(
     along += maxAlongSize + rankSep;
   }
 
-  // Map each MCP node to the single flow node it is wired to (first such edge
-  // wins), then park it to the right and stack siblings downward.
-  const mcpIds = new Set(mcpNodes.map(n => n.id));
-  const mcpParent = new Map<string, string>();
-  for (const edge of edges) {
-    if (!isMcpEdge(edge)) continue;
-    const sourceIsMcp = mcpIds.has(edge.source);
-    const targetIsMcp = mcpIds.has(edge.target);
-    let mcpId: string | undefined;
-    let flowId: string | undefined;
-    if (sourceIsMcp && !targetIsMcp) {
-      mcpId = edge.source;
-      flowId = edge.target;
-    } else if (targetIsMcp && !sourceIsMcp) {
-      mcpId = edge.target;
-      flowId = edge.source;
+  // Map each satellite (MCP / resource) node to the single flow node it is
+  // wired to (first such edge wins), then park it beside that node and stack
+  // siblings downward. MCP nodes go right; resource nodes mirror to the left.
+  const parkSatellites = (
+    satellites: FlowNode[],
+    isSatelliteEdge: (e: Edge) => boolean,
+    offsetX: number
+  ) => {
+    const satIds = new Set(satellites.map(n => n.id));
+    const parent = new Map<string, string>();
+    for (const edge of edges) {
+      if (!isSatelliteEdge(edge)) continue;
+      const sourceIsSat = satIds.has(edge.source);
+      const targetIsSat = satIds.has(edge.target);
+      let satId: string | undefined;
+      let flowId: string | undefined;
+      if (sourceIsSat && !targetIsSat) {
+        satId = edge.source;
+        flowId = edge.target;
+      } else if (targetIsSat && !sourceIsSat) {
+        satId = edge.target;
+        flowId = edge.source;
+      }
+      if (satId && flowId && positions.has(flowId) && !parent.has(satId)) {
+        parent.set(satId, flowId);
+      }
     }
-    if (mcpId && flowId && positions.has(flowId) && !mcpParent.has(mcpId)) {
-      mcpParent.set(mcpId, flowId);
-    }
-  }
 
-  const stackCount = new Map<string, number>();
-  for (const mcpNode of mcpNodes) {
-    const parentId = mcpParent.get(mcpNode.id);
-    if (!parentId) continue; // Unattached MCP node keeps its current position.
-    const parentPos = positions.get(parentId)!;
-    const index = stackCount.get(parentId) ?? 0;
-    stackCount.set(parentId, index + 1);
-    positions.set(mcpNode.id, {
-      x: parentPos.x + mcpOffsetX,
-      y: parentPos.y + index * mcpStackY,
-    });
-  }
+    const stackCount = new Map<string, number>();
+    for (const satNode of satellites) {
+      const parentId = parent.get(satNode.id);
+      if (!parentId) continue; // Unattached satellite keeps its current position.
+      const parentPos = positions.get(parentId)!;
+      const index = stackCount.get(parentId) ?? 0;
+      stackCount.set(parentId, index + 1);
+      positions.set(satNode.id, {
+        x: parentPos.x + offsetX,
+        y: parentPos.y + index * mcpStackY,
+      });
+    }
+  };
+  parkSatellites(mcpNodes, isMcpEdge, mcpOffsetX);
+  parkSatellites(resourceNodes, isResourceEdge, -mcpOffsetX);
 
   // Return a new array; only positions we computed are replaced.
   return nodes.map(node => {

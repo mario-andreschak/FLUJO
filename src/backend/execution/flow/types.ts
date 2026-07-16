@@ -86,6 +86,10 @@ export interface ProcessNodeProperties {
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
+    /** Tier 3: resource nodes wired to this step (derived from resource edges
+     *  by FlowConverter, like mcpNodes). Consumed ones are injected into the
+     *  prompt at prep; a produce one sets captureResource to its runName. */
+    resourceNodes?: ResourceNodeReference[];
     /**
      * Per-node override of the bound model's Max Turns cap (agentic turns for
      * self-orchestrating adapters). Unset/0 = inherit the model setting, then
@@ -276,8 +280,40 @@ export interface SubflowNodeParams extends BaseNodeParams<SubflowNodeProperties>
     type: 'subflow';
 }
 
+export interface ResourceNodeParams extends BaseNodeParams<ResourceNodeProperties> {
+    type: 'resource';
+}
+
 // Union type for all node params
-export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams;
+export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams;
+
+// Resource node (Tier 3) — a config-holder like the MCP node: it represents a
+// data artifact in the graph and is never executed. FlowConverter folds its
+// binding into the connected Process node's params (`resourceNodes`) exactly
+// like mcpNodes; resource edges never become successors.
+export interface ResourceNodeProperties {
+    name?: string;
+    /** 'mcp' = a static resource on an MCP server (boundServer + uri);
+     *  'run' = a run-scoped artifact steps produce/consume (runName). */
+    scope?: 'mcp' | 'run';
+    boundServer?: string;
+    /** Resource uri (or uriTemplate) on boundServer, scope 'mcp'. */
+    uri?: string;
+    mimeType?: string;
+    /** Artifact name for scope 'run' — the captureResource / ${res:NAME} name. */
+    runName?: string;
+}
+
+/** A resource node folded onto a Process node by FlowConverter (Tier 3). */
+export interface ResourceNodeReference {
+    /** The RESOURCE node's id — resource:read events carry it so the canvas
+     *  can light the resource node up, not just the process node. */
+    id: string;
+    /** 'consume' = resource→process edge (contents injected into the prompt);
+     *  'produce' = process→resource edge (output saved under runName). */
+    role: 'consume' | 'produce';
+    properties: ResourceNodeProperties;
+}
 
 // MCP Node Reference (used in ProcessNode)
 export interface MCPNodeReference {

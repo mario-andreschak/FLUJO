@@ -6,6 +6,8 @@
  */
 export {
   isMcpHandle,
+  isResourceHandle,
+  isAttachmentEdge,
   getConnectionError,
   defaultTargetHandleFor,
   validTargetTypesFor,

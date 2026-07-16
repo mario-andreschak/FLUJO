@@ -31,7 +31,7 @@ export interface Flow {
   input?: NodeType;
 }
 
-export type NodeType = 'start' | 'process' | 'finish' | 'mcp' | 'subflow';
+export type NodeType = 'start' | 'process' | 'finish' | 'mcp' | 'subflow' | 'resource';
 
 export interface FlowContextType {
   flows: Flow[];

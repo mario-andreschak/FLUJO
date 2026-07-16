@@ -137,10 +137,11 @@ const useHandoffTools = (
   function findConnectedNonMCPNodes(nodeId: string, allEdges: Edge[]) {
     const targets: string[] = [];
     for (const edge of allEdges) {
-      // Some edges might not have edgeType defined at all
-      const isMcpEdge = typeof edge.data?.edgeType === 'string' &&
-                        edge.data.edgeType.includes('mcp');
-      if (isMcpEdge) continue;
+      // Some edges might not have edgeType defined at all. Attachment edges
+      // (mcp tool wiring / resource data wiring) are not handoff targets.
+      const isAttachmentEdge = typeof edge.data?.edgeType === 'string' &&
+                        (edge.data.edgeType.includes('mcp') || edge.data.edgeType === 'resource');
+      if (isAttachmentEdge) continue;
       if (edge.source === nodeId) {
         targets.push(edge.target);
       } else if (edge.target === nodeId && (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional) {

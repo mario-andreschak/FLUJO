@@ -8,6 +8,8 @@ import { NodeType } from '@/frontend/types/flow/flow';
 import SettingsIcon from '@mui/icons-material/Settings';
 import OutputIcon from '@mui/icons-material/Output';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import DescriptionIcon from '@mui/icons-material/Description';
+import { RESOURCE_COLOR } from './CustomNodes';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -37,6 +39,8 @@ const NodeItem = styled(Paper, {
       ? theme.palette.success.main
       : nodeType === 'subflow'
       ? theme.palette.warning.main
+      : nodeType === 'resource'
+      ? RESOURCE_COLOR
       : theme.palette.info.main
   }`,
   boxShadow: theme.shadows[2],
@@ -50,6 +54,8 @@ const NodeItem = styled(Paper, {
         ? theme.palette.success.main
         : nodeType === 'subflow'
         ? theme.palette.warning.main
+        : nodeType === 'resource'
+        ? RESOURCE_COLOR
         : theme.palette.info.main
     }, 0 3px 10px rgba(0,0,0,0.1)`
   },
@@ -71,6 +77,8 @@ const NodeHeader = styled(Box, {
       ? theme.palette.success.light
       : nodeType === 'subflow'
       ? theme.palette.warning.light
+      : nodeType === 'resource'
+      ? '#4DB6AC' // RESOURCE_COLOR light
       : theme.palette.info.light
   }`,
   marginBottom: theme.spacing(1),
@@ -109,6 +117,11 @@ const nodeTypes: Array<{
     label: 'Subflow Node',
     description: 'Run another flow as a step',
   },
+  {
+    type: 'resource',
+    label: 'Resource Node',
+    description: 'A data artifact steps read or write',
+  },
 ];
 
 // Helper function to get the appropriate icon for each node type
@@ -122,6 +135,8 @@ const getNodeIcon = (type: NodeType) => {
       return <SettingsIcon color="info" />;
     case 'subflow':
       return <AccountTreeIcon color="warning" />;
+    case 'resource':
+      return <DescriptionIcon sx={{ color: RESOURCE_COLOR }} />;
     default:
       return <SettingsIcon color="secondary" />;
   }
