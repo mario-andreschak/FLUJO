@@ -520,3 +520,36 @@ describe('generateFlow — multi-level (issue #94)', () => {
     expect(result.flow.id).toBe(result.rootFlowId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Signal generation (issue #132)
+// ---------------------------------------------------------------------------
+
+describe('generateFlow — signals (issue #132)', () => {
+  const signalSpec = {
+    name: 'notify_flow',
+    description: 'Emits a review-blocked signal',
+    nodes: [
+      { key: 's', type: 'start', prompt: 'You coordinate a review.' },
+      { key: 'sig', type: 'signal', label: 'Notify', topic: 'review-blocked', payloadTemplate: 'blockers found' },
+      { key: 'f', type: 'finish' },
+    ],
+    edges: [
+      { from: 's', to: 'sig' },
+      { from: 'sig', to: 'f' },
+    ],
+  };
+
+  it('compiles a generated spec that emits a signal, with topic/payload preserved and no errors', async () => {
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(signalSpec)));
+    const result = await generateFlow({ description: 'notify when the review is blocked', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.validation.errorCount).toBe(0);
+
+    const signal = result.flow.nodes.find((n) => n.type === 'signal');
+    expect(signal).toBeDefined();
+    expect(signal!.data.properties!.topic).toBe('review-blocked');
+    expect(signal!.data.properties!.payloadTemplate).toBe('blockers found');
+  });
+});
