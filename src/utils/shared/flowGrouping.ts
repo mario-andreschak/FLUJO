@@ -38,6 +38,33 @@ export interface FlowGroupingItem {
   nodes: unknown[];
   /** Optional favorite flag (#120). Favorites float to the top of the list. */
   favorite?: boolean;
+  /** Optional server-managed creation time, epoch ms (#108). */
+  createdAt?: number;
+  /** Optional server-managed last-modified time, epoch ms (#108). */
+  updatedAt?: number;
+}
+
+/**
+ * The timestamp the date sorts/buckets read off a flow: last-modified time,
+ * falling back to creation time, then 0 for flows that carry neither (#108).
+ */
+export function flowTimestamp(flow: FlowGroupingItem): number {
+  return flow.updatedAt ?? flow.createdAt ?? 0;
+}
+
+/**
+ * Coarse recency bucket for the date sorts (#108). Uses rolling windows from
+ * `now` (injectable for deterministic tests). Flows with no timestamp fold into
+ * a dedicated "No date" bucket rather than being mislabelled as old.
+ */
+export function recencyBucket(ts: number, now: number = Date.now()): { key: string; label: string } {
+  if (!ts) return { key: 'recency:unknown', label: 'No date' };
+  const DAY = 24 * 60 * 60 * 1000;
+  const age = now - ts;
+  if (age < DAY) return { key: 'recency:today', label: 'Today' };
+  if (age < 7 * DAY) return { key: 'recency:week', label: 'This week' };
+  if (age < 30 * DAY) return { key: 'recency:month', label: 'This month' };
+  return { key: 'recency:older', label: 'Older' };
 }
 
 /** Node-count bucket for the "most/least nodes" sort (#73). */
@@ -51,8 +78,9 @@ export function bucketNodeCount(count: number): { key: string; label: string } {
 
 /**
  * Map the active sort key to a group bucket for a flow. Alphabetical sorts fold
- * by first letter; node-count sorts fold by size band; date sorts (which lack a
- * real timestamp on the Flow type) fall back to a single bucket.
+ * by first letter; node-count sorts fold by size band; date sorts fold into
+ * coarse recency buckets (Today / This week / This month / Older) from the
+ * flow's timestamp (#108).
  */
 export function deriveFlowSortGroup(
   flow: FlowGroupingItem,
@@ -65,14 +93,27 @@ export function deriveFlowSortGroup(
     case 'most-nodes':
     case 'least-nodes':
       return bucketNodeCount(flow.nodes.length);
+    case 'newest':
+    case 'oldest':
+      return recencyBucket(flowTimestamp(flow));
     default:
       return { key: 'all', label: 'All flows' };
   }
 }
 
 /**
- * Comparator for the active sort key. `newest`/`oldest` sort by id (the Flow
- * type has no real timestamp — preserved from the previous inline behaviour).
+ * A deterministic tiebreak so flows with equal (or missing) timestamps still
+ * sort in a stable, repeatable order: by name, then by id.
+ */
+function stableTiebreak(a: FlowGroupingItem, b: FlowGroupingItem): number {
+  return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
+
+/**
+ * Comparator for the active sort key. `newest`/`oldest` sort by the flow's real
+ * timestamp (`updatedAt ?? createdAt`), newest/oldest respectively, with a
+ * deterministic name-then-id tiebreak (#108). Flows lacking a timestamp use 0,
+ * so they sort last under "newest" and first under "oldest", always stably.
  */
 export function compareFlows(
   sortOption: FlowSortOption,
@@ -87,12 +128,14 @@ export function compareFlows(
         return b.nodes.length - a.nodes.length;
       case 'least-nodes':
         return a.nodes.length - b.nodes.length;
-      // For newest/oldest we would need timestamps on the Flow type; this
-      // placeholder uses IDs, which may not be timestamp-based.
-      case 'newest':
-        return b.id.localeCompare(a.id);
-      case 'oldest':
-        return a.id.localeCompare(b.id);
+      case 'newest': {
+        const delta = flowTimestamp(b) - flowTimestamp(a);
+        return delta !== 0 ? delta : stableTiebreak(a, b);
+      }
+      case 'oldest': {
+        const delta = flowTimestamp(a) - flowTimestamp(b);
+        return delta !== 0 ? delta : stableTiebreak(a, b);
+      }
       default:
         return 0;
     }

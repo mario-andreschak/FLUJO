@@ -30,6 +30,9 @@ jest.mock('@/utils/storage/backend', () => ({
     (collections[c] && id in collections[c]) ? collections[c][id] : fallback),
   deleteCollectionItem: jest.fn(async (c: string, id: string) => { if (collections[c]) delete collections[c][id]; }),
   listCollectionItems: jest.fn(async (c: string) => Object.values(collections[c] ?? {})),
+  // loadFlows backfills timestamps from file mtime (#108); model the stats API.
+  listCollectionItemsWithStats: jest.fn(async (c: string) =>
+    Object.values(collections[c] ?? {}).map((item) => ({ item, mtimeMs: 0 }))),
   assertSafeCollectionId: jest.fn((id: string) => {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
       throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);

@@ -10,7 +10,7 @@ import {
   saveCollectionItem,
   loadCollectionItem,
   deleteCollectionItem,
-  listCollectionItems,
+  listCollectionItemsWithStats,
   assertSafeCollectionId,
   migrateArrayFileToCollection,
 } from '@/utils/storage/backend';
@@ -49,6 +49,14 @@ declare global {
 // was a single db/flows.json array, migrated on first access). StorageKey.FLOWS
 // ('flows') doubles as the collection directory name and the legacy file's key.
 const FLOWS_COLLECTION: string = StorageKey.FLOWS;
+
+// Serialize a flow's *content* (everything except the server-managed
+// createdAt/updatedAt) for the version-archiving no-op check, so refreshing a
+// timestamp on save is never mistaken for a real edit (#108).
+function stripTimestamps(flow: Flow): string {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = flow;
+  return JSON.stringify(rest);
+}
 
 // Run the one-time migration from the legacy single-file array to per-flow
 // files. Guarded by a global promise so concurrent callers share one run; on
@@ -93,7 +101,20 @@ export class FlowService { // Add export keyword here
 
       log.debug('Loading flows from storage');
       await ensureFlowsMigrated();
-      const flows = await listCollectionItems<Flow>(FLOWS_COLLECTION);
+      // Backfill server-managed timestamps for legacy flows (#108): flows saved
+      // before createdAt/updatedAt existed have neither, so derive them from the
+      // file's mtime (mirroring the conversations route). Read-only/in-memory —
+      // the next real save persists the values; files are not rewritten here.
+      const raw = await listCollectionItemsWithStats<Flow>(FLOWS_COLLECTION);
+      const flows = raw.map(({ item, mtimeMs }) => {
+        if (item.createdAt != null && item.updatedAt != null) return item;
+        const ts = Math.floor(mtimeMs);
+        return {
+          ...item,
+          createdAt: item.createdAt ?? ts,
+          updatedAt: item.updatedAt ?? ts,
+        };
+      });
       this.flowsCache = flows;
       log.info('Loaded flows from storage', { count: flows.length });
       return flows;
@@ -183,9 +204,21 @@ export class FlowService { // Add export keyword here
       } catch (error) {
         log.debug(`saveFlow: could not read previous definition of ${flow.id} for versioning`, error);
       }
-      if (previous && JSON.stringify(previous) !== JSON.stringify(flow)) {
+      // Compare content ONLY (excluding the server-managed timestamps), so a
+      // save that merely refreshes updatedAt is not treated as a real edit and
+      // does not archive a spurious version.
+      if (previous && stripTimestamps(previous) !== stripTimestamps(flow)) {
         await archiveFlowVersion(previous);
       }
+
+      // Stamp server-managed timestamps (#108) authoritatively, so a client
+      // cannot forge them: createdAt is set once and preserved across saves;
+      // updatedAt is refreshed on every write. Mutating `flow` in place means
+      // the API routes (which return this object) hand the stamped values back
+      // to the caller/cache.
+      const now = Date.now();
+      flow.createdAt = previous?.createdAt ?? flow.createdAt ?? now;
+      flow.updatedAt = now;
 
       // Write only this flow's file (no whole-collection rewrite).
       await saveCollectionItem(FLOWS_COLLECTION, flow.id, flow);
@@ -314,10 +347,14 @@ export class FlowService { // Add export keyword here
       }
     };
     
-    // Create and return the new flow
+    // Create and return the new flow. createdAt/updatedAt are sensible defaults
+    // for the in-memory draft; saveFlow re-stamps them authoritatively (#108).
+    const now = Date.now();
     const flow = {
       id: uuidv4(),
       name,
+      createdAt: now,
+      updatedAt: now,
       nodes: [startNode],
       edges: [],
     };

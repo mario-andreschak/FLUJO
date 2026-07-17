@@ -27,6 +27,9 @@ jest.mock('@/utils/storage/backend', () => ({
   loadCollectionItem: jest.fn(async (_c: string, id: string, fallback: unknown) =>
     flowFiles.has(id) ? flowFiles.get(id) : fallback),
   listCollectionItems: jest.fn(async () => Array.from(flowFiles.values())),
+  // loadFlows backfills timestamps from file mtime (#108); model the stats API.
+  listCollectionItemsWithStats: jest.fn(async () =>
+    Array.from(flowFiles.values()).map((item) => ({ item, mtimeMs: 0 }))),
   deleteCollectionItem: jest.fn(async (_c: string, id: string) => { flowFiles.delete(id); }),
   assertSafeCollectionId: jest.fn(),
   migrateArrayFileToCollection: jest.fn(async () => 0),
@@ -42,7 +45,9 @@ import { POST as backupPost } from '@/app/api/backup/route';
 import { POST as restorePost } from '@/app/api/restore/route';
 
 const modelsData = [{ id: 'model-1', name: 'Test Model' }];
-const flowsData = [{ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [] }];
+// Flows now carry server-managed timestamps (#108); include them so loadFlows'
+// mtime backfill is a no-op and the backup zip round-trips exactly.
+const flowsData = [{ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000, updatedAt: 2000 }];
 
 const callBackup = (selections: unknown) => {
   const request = new Request('http://localhost:4200/api/backup', {
@@ -151,8 +156,15 @@ describe('backup → restore round-trip', () => {
     expect(await restoreResponse.json()).toEqual({ success: true });
 
     expect(saveItemMock).toHaveBeenCalledWith(StorageKey.MODELS, modelsData);
-    // Flows are restored one-file-per-flow via flowService.saveFlow.
-    expect(saveCollectionItemMock).toHaveBeenCalledWith(StorageKey.FLOWS, 'flow-1', flowsData[0]);
+    // Flows are restored one-file-per-flow via flowService.saveFlow, which
+    // stamps createdAt (preserved) / updatedAt (refreshed to now) authoritatively
+    // (#108), so assert on content and the preserved createdAt rather than exact
+    // equality with the fixture's updatedAt.
+    expect(saveCollectionItemMock).toHaveBeenCalledWith(
+      StorageKey.FLOWS,
+      'flow-1',
+      expect.objectContaining({ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000 }),
+    );
   });
 
   it('skips keys missing from the zip without failing the restore', async () => {

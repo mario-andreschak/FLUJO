@@ -408,9 +408,14 @@ class FlowService {
   createNewFlow(name: string = 'NewFlow'): Flow {
     log.debug('createNewFlow: Entering method', { name });
 
+    // createdAt/updatedAt are sensible defaults for the unsaved draft; the
+    // backend re-stamps them authoritatively on save (#108).
+    const now = Date.now();
     return {
       id: uuidv4(),
       name,
+      createdAt: now,
+      updatedAt: now,
       nodes: [this.createStartNode()],
       edges: [],
     };

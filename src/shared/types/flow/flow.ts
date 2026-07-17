@@ -33,6 +33,19 @@ export interface Flow {
    * on how the flow executes.
    */
   favorite?: boolean;
+  /**
+   * Server-managed creation time in epoch milliseconds (#108). Set once when a
+   * flow is first saved and preserved across subsequent saves. Optional so it
+   * stays out of the public FlowSpec authoring contract; legacy flows that
+   * predate this field are backfilled from the file's mtime on load.
+   */
+  createdAt?: number;
+  /**
+   * Server-managed last-modified time in epoch milliseconds (#108). Refreshed
+   * on every save. Used by the dashboard/card-picker "Newest/Oldest" sort
+   * (falls back to createdAt). Optional for the same reasons as createdAt.
+   */
+  updatedAt?: number;
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

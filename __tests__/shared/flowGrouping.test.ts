@@ -3,6 +3,8 @@ import {
   FlowSortOption,
   bucketNodeCount,
   deriveFlowSortGroup,
+  recencyBucket,
+  flowTimestamp,
   sortFlows,
   sortFlowsFavoritesFirst,
   compareFlows,
@@ -14,6 +16,8 @@ const flow = (partial: Partial<FlowGroupingItem> & { nodeCount?: number }): Flow
   name: partial.name ?? 'flow',
   nodes: partial.nodes ?? new Array(partial.nodeCount ?? 0).fill(null),
   favorite: partial.favorite,
+  createdAt: partial.createdAt,
+  updatedAt: partial.updatedAt,
 });
 
 describe('bucketNodeCount', () => {
@@ -41,9 +45,41 @@ describe('deriveFlowSortGroup', () => {
     expect(deriveFlowSortGroup(flow({ nodeCount: 12 }), 'least-nodes').key).toBe('nodes:11+');
   });
 
-  it('folds date sorts into a single bucket (no real timestamp on the type)', () => {
-    expect(deriveFlowSortGroup(flow({}), 'newest')).toEqual({ key: 'all', label: 'All flows' });
-    expect(deriveFlowSortGroup(flow({}), 'oldest')).toEqual({ key: 'all', label: 'All flows' });
+  it('folds date sorts into coarse recency buckets from the flow timestamp (#108)', () => {
+    const now = Date.now();
+    const HOUR = 60 * 60 * 1000;
+    const DAY = 24 * HOUR;
+    expect(deriveFlowSortGroup(flow({ updatedAt: now - HOUR }), 'newest').key).toBe('recency:today');
+    expect(deriveFlowSortGroup(flow({ updatedAt: now - 3 * DAY }), 'oldest').key).toBe('recency:week');
+    expect(deriveFlowSortGroup(flow({ updatedAt: now - 20 * DAY }), 'newest').key).toBe('recency:month');
+    expect(deriveFlowSortGroup(flow({ updatedAt: now - 100 * DAY }), 'newest').key).toBe('recency:older');
+  });
+
+  it('folds flows without a timestamp into the "No date" bucket under date sorts', () => {
+    expect(deriveFlowSortGroup(flow({}), 'newest')).toEqual({ key: 'recency:unknown', label: 'No date' });
+    expect(deriveFlowSortGroup(flow({}), 'oldest')).toEqual({ key: 'recency:unknown', label: 'No date' });
+  });
+});
+
+describe('flowTimestamp (#108)', () => {
+  it('prefers updatedAt, falls back to createdAt, then 0', () => {
+    expect(flowTimestamp(flow({ createdAt: 100, updatedAt: 200 }))).toBe(200);
+    expect(flowTimestamp(flow({ createdAt: 100 }))).toBe(100);
+    expect(flowTimestamp(flow({}))).toBe(0);
+  });
+});
+
+describe('recencyBucket (#108)', () => {
+  const now = 1_000_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+  it('maps ages onto the correct rolling window', () => {
+    expect(recencyBucket(now - 1000, now).key).toBe('recency:today');
+    expect(recencyBucket(now - 2 * DAY, now).key).toBe('recency:week');
+    expect(recencyBucket(now - 10 * DAY, now).key).toBe('recency:month');
+    expect(recencyBucket(now - 40 * DAY, now).key).toBe('recency:older');
+  });
+  it('returns the "No date" bucket for a missing (0) timestamp', () => {
+    expect(recencyBucket(0, now)).toEqual({ key: 'recency:unknown', label: 'No date' });
   });
 });
 
@@ -64,10 +100,43 @@ describe('sortFlows', () => {
     expect(sortFlows(flows, 'least-nodes').map((f) => f.id)).toEqual(['small', 'mid', 'big']);
   });
 
-  it('sorts newest/oldest by id (the placeholder ordering)', () => {
-    const flows = [flow({ id: 'b' }), flow({ id: 'a' }), flow({ id: 'c' })];
+  it('sorts newest/oldest by real timestamp (updatedAt), not by id (#108)', () => {
+    const flows = [
+      flow({ id: 'mid', updatedAt: 200 }),
+      flow({ id: 'new', updatedAt: 300 }),
+      flow({ id: 'old', updatedAt: 100 }),
+    ];
+    expect(sortFlows(flows, 'newest').map((f) => f.id)).toEqual(['new', 'mid', 'old']);
+    expect(sortFlows(flows, 'oldest').map((f) => f.id)).toEqual(['old', 'mid', 'new']);
+  });
+
+  it('falls back to createdAt when updatedAt is absent (#108)', () => {
+    const flows = [
+      flow({ id: 'b', createdAt: 200 }),
+      flow({ id: 'a', createdAt: 100 }),
+      flow({ id: 'c', updatedAt: 300 }),
+    ];
     expect(sortFlows(flows, 'newest').map((f) => f.id)).toEqual(['c', 'b', 'a']);
-    expect(sortFlows(flows, 'oldest').map((f) => f.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('sorts flows without any timestamp last under newest, first under oldest (#108)', () => {
+    const flows = [
+      flow({ id: 'has', updatedAt: 500 }),
+      flow({ id: 'none' }),
+    ];
+    expect(sortFlows(flows, 'newest').map((f) => f.id)).toEqual(['has', 'none']);
+    expect(sortFlows(flows, 'oldest').map((f) => f.id)).toEqual(['none', 'has']);
+  });
+
+  it('applies a deterministic name-then-id tiebreak for equal timestamps (#108)', () => {
+    const flows = [
+      flow({ id: 'z', name: 'Bravo', updatedAt: 100 }),
+      flow({ id: 'a', name: 'Bravo', updatedAt: 100 }),
+      flow({ id: 'm', name: 'Alpha', updatedAt: 100 }),
+    ];
+    // Equal timestamps → name A–Z, then id A–Z as the final tiebreak.
+    expect(sortFlows(flows, 'newest').map((f) => f.id)).toEqual(['m', 'a', 'z']);
+    expect(sortFlows(flows, 'oldest').map((f) => f.id)).toEqual(['m', 'a', 'z']);
   });
 
   it('does not mutate the input array', () => {

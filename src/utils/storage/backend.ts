@@ -345,6 +345,48 @@ export async function listCollectionItems<T>(collection: string): Promise<T[]> {
 }
 
 /**
+ * Like listCollectionItems, but also returns each file's last-modified time
+ * (mtimeMs, epoch ms). Used to backfill server-managed timestamps for legacy
+ * items that predate them (e.g. flows without createdAt/updatedAt — #108),
+ * mirroring how the conversations route derives times from file stats.
+ */
+export async function listCollectionItemsWithStats<T>(
+  collection: string,
+): Promise<Array<{ item: T; mtimeMs: number }>> {
+  const dirPath = getCollectionDir(collection);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+
+  const results: Array<{ item: T; mtimeMs: number }> = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    if (entry.includes('.tmp.') || entry.includes('.corrupted.') || entry.endsWith('.bak')) continue;
+    const filePath = path.join(dirPath, entry);
+    try {
+      const [content, stats] = await Promise.all([
+        fs.readFile(filePath, 'utf-8'),
+        fs.stat(filePath),
+      ]);
+      if (content.trim().length === 0) {
+        log.warn(`Collection item file ${filePath} is empty; skipping.`);
+        continue;
+      }
+      results.push({ item: JSON.parse(content) as T, mtimeMs: stats.mtimeMs });
+    } catch (error) {
+      log.error(`Failed to read collection item ${filePath}; skipping.`, error);
+    }
+  }
+  return results;
+}
+
+/**
  * One-time, idempotent migration from a single array file (db/<key>.json) to
  * per-item files (db/<collection>/<id>.json). Safe to call on every startup:
  *   - per-item files always WIN and are never overwritten (so a crash mid-run
