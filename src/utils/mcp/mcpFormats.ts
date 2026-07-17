@@ -48,3 +48,28 @@ export const MCP_FORMATS: McpFormat[] = [
 export function getMcpFormat(id: McpFormatId): McpFormat {
   return MCP_FORMATS.find((f) => f.id === id) ?? MCP_FORMATS[0];
 }
+
+/**
+ * Build a ready-to-paste, single-server MCP config JSON string for the
+ * "Copy MCP server JSON" button on a server card (#110). Reuses the shared
+ * exporter so the card's clipboard payload stays consistent with the bulk
+ * export and inherits any future format changes for free.
+ *
+ * When a full `serverConfig` is available we call the real exporter with a
+ * one-element array. For an *exposed* server the exporter emits only
+ * `{ type: 'http', url: <proxy-url> }` — no env vars, no headers, no secrets —
+ * which is exactly what belongs on the clipboard. When no config is passed
+ * (defensive fallback) we synthesise the same proxy-only shape from the name.
+ */
+export function buildSingleServerJson(
+  name: string,
+  serverConfig: MCPServerConfig | undefined,
+  proxyBaseUrl: string,
+  formatId: McpFormatId = 'claude',
+): string {
+  const base = (proxyBaseUrl || '').replace(/\/$/, '');
+  const cfg: ClaudeConfig = serverConfig
+    ? getMcpFormat(formatId).export([serverConfig], { proxyBaseUrl: base })
+    : { mcpServers: { [name]: { type: 'http', url: `${base}/mcp-proxy/${name}` } } };
+  return JSON.stringify(cfg, null, 2);
+}

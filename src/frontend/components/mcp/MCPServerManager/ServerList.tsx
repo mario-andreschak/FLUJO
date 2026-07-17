@@ -126,6 +126,7 @@ const ServerList: React.FC<ServerListProps> = ({
               folders={folders}
               onSetFolder={onServerSetFolder && !server.builtIn ? (f) => onServerSetFolder(server.name, f) : undefined}
               builtIn={server.builtIn}
+              serverConfig={server}
             />
           </Grid>
         );

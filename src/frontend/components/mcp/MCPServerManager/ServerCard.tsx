@@ -17,11 +17,14 @@ import KeyOffIcon from '@mui/icons-material/KeyOff';
 import PublicIcon from '@mui/icons-material/Public';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DataObjectIcon from '@mui/icons-material/DataObject';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 import Spinner from '@/frontend/components/shared/Spinner';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { mcpService } from '@/frontend/services/mcp';
+import { MCPServerConfig } from '@/shared/types/mcp';
+import { buildSingleServerJson } from '@/utils/mcp/mcpFormats';
 import TransportBadge from './TransportBadge';
 import ServerUpdateDialog from './ServerUpdateDialog';
 import { ServerUpdateInfo, shortSha } from './utils/serverUpdates';
@@ -82,6 +85,12 @@ interface ServerCardProps {
   folders?: string[]; // Existing folders on the surface, for the picker
   onSetFolder?: (folder: string | undefined) => void; // Assign/clear folder
   builtIn?: boolean; // FLUJO's built-in internal server: not editable/deletable, always on
+  /**
+   * Full server config, used to build a single-server, copy-to-clipboard MCP
+   * JSON via the shared exporter (#110). Optional: when absent the copy-JSON
+   * button falls back to the proxy-only shape derived from `name`.
+   */
+  serverConfig?: MCPServerConfig;
 }
 
 const ServerCard: React.FC<ServerCardProps> = ({
@@ -114,6 +123,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   folders = [],
   onSetFolder,
   builtIn = false,
+  serverConfig,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
@@ -179,6 +189,17 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const handleCopyProxyUrl = () => {
     navigator.clipboard.writeText(proxyUrl);
     setToastMessage('Endpoint URL copied to clipboard.');
+    setToastSeverity('success');
+    setShowToast(true);
+  };
+
+  // Copy a ready-to-paste, single-server MCP config JSON to the clipboard (#110).
+  // Scoped to the exposed/built-in blocks, whose exported shape is proxy-only
+  // (`{ type:'http', url }`) — so no env vars, headers or secrets ever leak.
+  const handleCopyServerJson = () => {
+    const base = typeof window !== 'undefined' ? window.location.origin : '';
+    navigator.clipboard.writeText(buildSingleServerJson(name, serverConfig, base));
+    setToastMessage('Server JSON copied to clipboard.');
     setToastSeverity('success');
     setShowToast(true);
   };
@@ -419,6 +440,11 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   <ContentCopyIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
+              <Tooltip title="Copy MCP server JSON">
+                <IconButton size="small" onClick={handleCopyServerJson}>
+                  <DataObjectIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
             </Box>
           </Box>
         )}
@@ -454,6 +480,11 @@ const ServerCard: React.FC<ServerCardProps> = ({
               <Tooltip title="Copy endpoint URL">
                 <IconButton size="small" onClick={handleCopyProxyUrl}>
                   <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Copy MCP server JSON">
+                <IconButton size="small" onClick={handleCopyServerJson}>
+                  <DataObjectIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             </Box>
