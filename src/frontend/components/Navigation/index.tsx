@@ -15,6 +15,7 @@ const navItems = [
   { name: 'MCP', path: '/mcp', tour: 'nav-mcp' },
   { name: 'Flows', path: '/flows', tour: 'nav-flows' },
   { name: 'Executions', path: '/executions', tour: 'nav-executions' },
+  { name: 'Waves', path: '/waves', tour: 'nav-waves' },
   { name: 'Chat', path: '/chat', tour: 'nav-chat' },
   { name: 'Docs', path: '/docs', tour: 'nav-docs' },
   { name: 'Settings', path: '/settings', tour: 'nav-settings' },
