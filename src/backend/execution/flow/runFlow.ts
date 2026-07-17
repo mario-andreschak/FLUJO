@@ -97,6 +97,15 @@ export interface FlowRunInput {
    *  SharedState so cancelling an ancestor stops this run too (issue #109). */
   parentRunId?: string;
   depth?: number;
+
+  /** Where this run originated (issue #113). Recorded on SharedState at run
+   *  start and surfaced read-only by GET /api/runs/active so a suspend-when-idle
+   *  orchestrator can tell scheduled runs apart from ad-hoc API/chat runs.
+   *  Optional/back-compat: omitted callers report an undefined source. */
+  source?: 'schedule' | 'chat' | 'api';
+  /** For scheduler-originated runs: the planned execution id that fired this
+   *  run (issue #113). Only meaningful when `source === 'schedule'`. */
+  plannedExecutionId?: string;
 }
 
 export interface FlowRunResult {
@@ -281,6 +290,16 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // The conversation's approval setting (single source of truth).
   sharedState.requireApproval = requireApproval;
+
+  // Tag the run's origin (issue #113) so GET /api/runs/active can distinguish
+  // scheduled fires from ad-hoc API/chat runs. Only overwrite when the caller
+  // supplied one, so a resumed run keeps the source it was first tagged with.
+  if (input.source) {
+    sharedState.source = input.source;
+  }
+  if (input.plannedExecutionId) {
+    sharedState.plannedExecutionId = input.plannedExecutionId;
+  }
 
   // The persistence policy travels ON the state: persistConversationState (the
   // single chokepoint) refuses ephemeral states, so no path — including

@@ -190,6 +190,7 @@ describe('flow- regression on /v1/chat/completions', () => {
       debug: true,
       continueDebug: false,
       userTurn: false,
+      source: 'api',
     });
     expect(generateChatCompletion).not.toHaveBeenCalled();
     expect(res.status).toBe(400); // flow_not_found behavior unchanged

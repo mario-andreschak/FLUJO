@@ -45,7 +45,11 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const result = await getSchedulerService().create(body);
     if (result.error || !result.execution) {
-      return json({ error: result.error ?? 'Failed to create planned execution' }, 400);
+      // A client-supplied id that collides with an existing execution is a
+      // conflict, not a bad request — mirror POST /api/flow's 409 so package
+      // appliers can distinguish "already installed" from "invalid" (issue #113).
+      const status = result.conflict ? 409 : 400;
+      return json({ error: result.error ?? 'Failed to create planned execution' }, status);
     }
     const validation = await validateFlowAdvisory(result.execution.flowId);
     return json({ execution: result.execution, validation }, 201);

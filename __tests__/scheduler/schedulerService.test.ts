@@ -326,16 +326,46 @@ describe('SchedulerService', () => {
     });
   });
 
-  it('accepts a client-supplied UUID id and rejects duplicates and non-UUIDs', async () => {
+  it('accepts a client-supplied UUID id and round-trips it', async () => {
     const id = 'a388f4f8-132c-44d8-a412-ed082456b029';
     const { execution } = await scheduler.create(scheduleInput({ id }));
     expect(execution?.id).toBe(id);
+  });
 
+  it('accepts a deterministic package-style id and round-trips it (issue #113)', async () => {
+    const id = 'pkg--demo';
+    const { execution, error } = await scheduler.create(scheduleInput({ id }));
+    expect(error).toBeUndefined();
+    expect(execution?.id).toBe(id);
+    // It really persisted under the deterministic id.
+    expect((await scheduler.get(id))?.id).toBe(id);
+  });
+
+  it('rejects a duplicate id with a conflict flag (issue #113)', async () => {
+    const id = 'pkg--demo';
+    await scheduler.create(scheduleInput({ id }));
     const dup = await scheduler.create(scheduleInput({ id }));
     expect(dup.error).toMatch(/already exists/);
+    expect(dup.conflict).toBe(true);
+  });
 
-    const bad = await scheduler.create(scheduleInput({ id: '../evil' }));
-    expect(bad.error).toMatch(/must be a UUID/);
+  it('rejects path-traversal / injection / oversized ids before any storage key is built (issue #113)', async () => {
+    const badIds = ['../../etc', 'a/b', 'a\\b', '..', '', 'a'.repeat(129), 'bad id', 'bad id'];
+    for (const id of badIds) {
+      const result = await scheduler.create(scheduleInput({ id }));
+      expect(result.execution).toBeUndefined();
+      expect(result.error).toMatch(/id must be/);
+    }
+    // Nothing was persisted for any of them.
+    expect(readFile()?.executions ?? []).toHaveLength(0);
+  });
+
+  it('tags a scheduler fire with source "schedule" and the planned execution id (issue #113)', async () => {
+    const { execution } = await scheduler.create(scheduleInput());
+    await scheduler.runNow(execution!.id);
+    const input = runFlowMock.mock.calls[0][0];
+    expect(input.source).toBe('schedule');
+    expect(input.plannedExecutionId).toBe(execution!.id);
   });
 
   it('generates a webhook token server-side when absent', async () => {

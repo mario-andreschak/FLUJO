@@ -82,6 +82,9 @@ async function processChatCompletionInternal(
     debug: flujodebug,
     continueDebug,
     userTurn,
+    // Tag origin so GET /api/runs/active can distinguish ad-hoc completions
+    // runs from scheduled fires (issue #113).
+    source: 'api',
   });
 
   // --- Flow not found → 400 (OpenAI invalid_request) ---

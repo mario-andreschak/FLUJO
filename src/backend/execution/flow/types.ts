@@ -477,6 +477,22 @@ export interface SharedState {
     parentRunId?: string;
 
     /**
+     * Where this run originated (issue #113): 'schedule' for a planned-execution
+     * fire, 'api' for an ad-hoc /v1/chat/completions call, 'chat' for the in-app
+     * chat UI. Set by runFlow from FlowRunInput.source at run start and surfaced
+     * read-only by GET /api/runs/active so a suspend-when-idle orchestrator can
+     * tell in-flight scheduled runs apart from ad-hoc ones. Undefined for legacy
+     * callers that don't tag a source.
+     */
+    source?: 'schedule' | 'chat' | 'api';
+
+    /**
+     * For scheduler-originated runs (source === 'schedule'): the planned
+     * execution id that fired this run (issue #113). Unset otherwise.
+     */
+    plannedExecutionId?: string;
+
+    /**
      * True for a transient run (subflow child, future scheduler runs): this
      * state must NEVER reach the conversations/* store, so it never appears in
      * the chat sidebar. The policy travels ON the state and is enforced inside
