@@ -5,7 +5,7 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
-import { saveItem } from '@/utils/storage/backend'; // Import saveItem directly
+import { saveCollectionItem, assertSafeCollectionId } from '@/utils/storage/backend';
 import { getDataDir } from '@/utils/paths';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
@@ -200,6 +200,16 @@ export async function POST(req: NextRequest) {
   if (!payload.id || typeof payload.id !== 'string') {
     return NextResponse.json({ error: 'Invalid request body: Missing or invalid "id" (string)' }, { status: 400 });
   }
+  // Path-traversal guard (issue #126): the id becomes a filesystem path, so an
+  // id like "../encryption_key" would escape db/conversations/ and overwrite an
+  // arbitrary .json file. Reject anything outside the safe id charset with 400.
+  try {
+    assertSafeCollectionId(payload.id);
+  } catch {
+    return NextResponse.json(
+      { error: 'Invalid request body: "id" must match ^[A-Za-z0-9_-]{1,64}$' },
+      { status: 400 });
+  }
   if (!payload.title || typeof payload.title !== 'string') {
     payload.title = 'New Conversation'; // Default title if missing
     log.warn('Missing title in payload, using default', { requestId, conversationId: payload.id });
@@ -262,12 +272,10 @@ export async function POST(req: NextRequest) {
       // Removed 'variables: {}' as it's not in SharedState type
     };
 
-    // Save the initial state using the imported saveItem function
-    // Note: saveItem expects StorageKey enum, but we are saving to a dynamic path.
-    // This suggests the storage utility might need adjustment or we bypass type safety here.
-    // Let's assume for now saveItem can handle this path structure, potentially needing a cast.
-    // TODO: Review storageService.saveItem signature and usage for dynamic paths.
-    await saveItem(`conversations/${conversationId}` as any, initialState); // Using 'as any' to bypass StorageKey type for now
+    // Save the initial state via the collection API, which validates the id
+    // intrinsically (assertSafeCollectionId) and resolves to the identical
+    // on-disk path (db/conversations/<id>.json) — no data migration required.
+    await saveCollectionItem('conversations', conversationId, initialState);
     log.info(`Successfully saved initial state for conversation`, { requestId, conversationId, filePath });
 
     // Prepare the response body (matching ConversationListItem)

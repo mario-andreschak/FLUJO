@@ -67,6 +67,12 @@ jest.mock('@/backend/execution/flow/persistConversationState', () => ({
 }));
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: jest.fn(async () => undefined),
+  // issue #126: persist/load choke points now validate the conversation id.
+  assertSafeCollectionId: (id: string) => {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+      throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);
+    }
+  },
 }));
 
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';

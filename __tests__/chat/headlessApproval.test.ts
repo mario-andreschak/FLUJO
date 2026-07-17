@@ -71,6 +71,12 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(async (_key: string, value: any) => {
     persistedStates.push(JSON.parse(JSON.stringify(value)));
   }),
+  // issue #126: persist/load choke points now validate the conversation id.
+  assertSafeCollectionId: (id: string) => {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+      throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);
+    }
+  },
 }));
 
 jest.mock('@/backend/services/flow/index', () => ({

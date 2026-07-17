@@ -1,4 +1,4 @@
-import { saveItem as saveItemBackend } from '@/utils/storage/backend';
+import { saveItem as saveItemBackend, assertSafeCollectionId } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
 import { isConversationDeleted } from './cancellation';
@@ -23,7 +23,16 @@ const log = createLogger('backend/execution/flow/persistConversationState');
  * an incremental persist path nobody remembered to guard wrote a subflow child
  * to disk. Do NOT add call-site `if (!ephemeral)` guards; they are redundant.
  */
-export function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
+export async function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
+  // Path-traversal guard (issue #126): the key/id becomes a filesystem path via
+  // getFilePath(), so an id like "../encryption_key" would escape db/conversations/
+  // and yield an arbitrary .json write. Validate the id embedded in the key AND
+  // state.conversationId before any write path (incl. the early returns below).
+  const CONV_PREFIX = 'conversations/';
+  const idFromKey = String(key).startsWith(CONV_PREFIX) ? String(key).slice(CONV_PREFIX.length) : String(key);
+  assertSafeCollectionId(idFromKey);
+  if (state.conversationId != null) assertSafeCollectionId(state.conversationId);
+
   if (state.ephemeral) {
     log.debug(`Refusing to persist ephemeral state (key ${key}); ephemeral runs never reach the conversations store.`);
     return Promise.resolve();

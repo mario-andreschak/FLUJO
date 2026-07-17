@@ -1,5 +1,5 @@
 import { FlowExecutor } from './FlowExecutor';
-import { loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { loadItem as loadItemBackend, assertSafeCollectionId } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
 import { recoverMessagesFromLog } from './conversationLog';
@@ -19,6 +19,15 @@ const log = createLogger('backend/execution/flow/loadConversationState');
  * read error as a hard 500 rather than "not found"), so it does not use this.
  */
 export async function loadConversationState(conversationId: string): Promise<SharedState | undefined> {
+  // Path-traversal guard (issue #126): the conversationId becomes a filesystem
+  // path via getFilePath(). Reject unsafe ids as "not found" to preserve the
+  // existing undefined-on-failure contract for callers.
+  try {
+    assertSafeCollectionId(conversationId);
+  } catch {
+    log.warn('Rejected unsafe conversationId on load', { conversationId });
+    return undefined;
+  }
   if (FlowExecutor.conversationStates.has(conversationId)) {
     log.debug('Loaded state from memory', { conversationId });
     return FlowExecutor.conversationStates.get(conversationId);
