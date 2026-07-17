@@ -22,8 +22,11 @@ import {
  * Mirrors the shape of `services/runResources` (global-backed cache, atomic
  * writes, per-scope write-chain, SAFE_ID path-traversal gate). The one genuinely
  * new concern versus run-scoped vars is CONCURRENCY across runs — two scheduled
- * pulses writing the same key must not corrupt the index — handled by
- * `runInWriteChain(chainKey(scope), ...)`.
+ * pulses writing the same scope must not corrupt the index. This is handled by
+ * `mutateIndex`, which runs the WHOLE read-modify-write inside a single
+ * `runInWriteChain(chainKey(scope), ...)` critical section, so no await boundary
+ * lets a concurrent writer to the same scope observe a stale base index (a lost
+ * update). Writes to DIFFERENT scopes still run in parallel (distinct keys).
  *
  * Deliberately dependency-light: this module must never import mcpService or
  * flow modules (both import THIS), to stay out of the internalTools import cycle.
@@ -119,11 +122,27 @@ async function loadIndex(scope: KvScopeId): Promise<KvEntry[]> {
   return entries;
 }
 
-async function saveIndex(scope: KvScopeId, entries: KvEntry[]): Promise<void> {
-  indexCache.set(scope, entries);
-  await runInWriteChain(chainKey(scope), async () => {
-    await fs.mkdir(scopeDir(scope), { recursive: true });
-    await writeFileAtomic(indexPath(scope), JSON.stringify(entries, null, 2));
+/**
+ * Run the ENTIRE read-modify-write inside one runInWriteChain(chainKey(scope))
+ * critical section. `loadIndex` happens INSIDE the chain, so two concurrent
+ * writers to the same scope are strictly serialized and neither can clobber the
+ * other's write (the lost-update bug). The mutator returns the new array plus a
+ * result value; when it returns the SAME array reference (a no-op) no disk
+ * write happens. Different scopes use different chain keys and stay parallel.
+ */
+async function mutateIndex<T>(
+  scope: KvScopeId,
+  mutator: (entries: KvEntry[]) => { next: KvEntry[]; result: T }
+): Promise<T> {
+  return runInWriteChain(chainKey(scope), async () => {
+    const entries = await loadIndex(scope);
+    const { next, result } = mutator(entries);
+    if (next !== entries) {
+      indexCache.set(scope, next);
+      await fs.mkdir(scopeDir(scope), { recursive: true });
+      await writeFileAtomic(indexPath(scope), JSON.stringify(next, null, 2));
+    }
+    return result;
   });
 }
 
@@ -161,35 +180,38 @@ export async function kvSet(
     return { skipped: 'size-cap' };
   }
 
-  const entries = await loadIndex(scope);
-  const existing = entries.find(e => e.name === name);
+  // The read (loadIndex), the cap checks that depend on the current index, and
+  // the compute of `next` all run INSIDE one per-scope critical section, so a
+  // concurrent writer to the same scope can never clobber this write.
+  return mutateIndex<KvSetResult>(scope, (entries) => {
+    const existing = entries.find(e => e.name === name);
 
-  if (!existing && entries.length >= settings.maxKeysPerScope) {
-    log.warn(`kv write skipped (keys ${entries.length} >= cap ${settings.maxKeysPerScope})`, { scope, name });
-    return { skipped: 'keys-cap' };
-  }
+    if (!existing && entries.length >= settings.maxKeysPerScope) {
+      log.warn(`kv write skipped (keys ${entries.length} >= cap ${settings.maxKeysPerScope})`, { scope, name });
+      return { next: entries, result: { skipped: 'keys-cap' } };
+    }
 
-  const usedBytes = entries.reduce((sum, e) => sum + (e === existing ? 0 : e.size), 0);
-  if (usedBytes + size > settings.maxScopeBytes) {
-    log.warn(`kv write skipped (scope budget ${usedBytes}+${size} > ${settings.maxScopeBytes})`, { scope, name });
-    return { skipped: 'scope-cap' };
-  }
+    const usedBytes = entries.reduce((sum, e) => sum + (e === existing ? 0 : e.size), 0);
+    if (usedBytes + size > settings.maxScopeBytes) {
+      log.warn(`kv write skipped (scope budget ${usedBytes}+${size} > ${settings.maxScopeBytes})`, { scope, name });
+      return { next: entries, result: { skipped: 'scope-cap' } };
+    }
 
-  const now = Date.now();
-  const entry: KvEntry = {
-    scope,
-    name,
-    value: str,
-    size,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    expiresAt: options?.expiresAt,
-  };
+    const now = Date.now();
+    const entry: KvEntry = {
+      scope,
+      name,
+      value: str,
+      size,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      expiresAt: options?.expiresAt,
+    };
 
-  const next = existing ? entries.map(e => (e === existing ? entry : e)) : [...entries, entry];
-  await saveIndex(scope, next);
-  log.debug(`Set kv ${scope}/${name}`, { size });
-  return entry;
+    const next = existing ? entries.map(e => (e === existing ? entry : e)) : [...entries, entry];
+    log.debug(`Set kv ${scope}/${name}`, { size });
+    return { next, result: entry };
+  });
 }
 
 /** Read a key's value, or undefined when absent/expired. */
@@ -209,9 +231,11 @@ export async function kvGet(scope: KvScopeId, name: string): Promise<string | un
 export async function kvDelete(scope: KvScopeId, name: string): Promise<void> {
   assertSafeScope(scope);
   assertSafeName(name);
-  const entries = await loadIndex(scope);
-  if (!entries.some(e => e.name === name)) return;
-  await saveIndex(scope, entries.filter(e => e.name !== name));
+  await mutateIndex<void>(scope, (entries) => {
+    // Same array reference on a no-op → mutateIndex writes nothing.
+    if (!entries.some(e => e.name === name)) return { next: entries, result: undefined };
+    return { next: entries.filter(e => e.name !== name), result: undefined };
+  });
 }
 
 /** All live entries on a board. */

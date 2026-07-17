@@ -137,10 +137,29 @@ async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
   return entries;
 }
 
-async function saveIndex(conversationId: string, entries: RunResourceEntry[]): Promise<void> {
-  indexCache.set(conversationId, entries);
-  await runInWriteChain(chainKey(conversationId), () =>
-    writeFileAtomic(indexPath(conversationId), JSON.stringify(entries, null, 2)));
+/**
+ * Run the ENTIRE read-modify-write inside one
+ * runInWriteChain(chainKey(conversationId)) critical section. `loadIndex`
+ * happens INSIDE the chain, so concurrent writers to the SAME conversation are
+ * strictly serialized and neither can clobber the other (the lost-update bug).
+ * The mutator may be async so it can write the payload file within the same
+ * critical section, keeping payload + index mutually consistent. When it
+ * returns the SAME array reference (a no-op) no index write happens. Different
+ * conversations use different chain keys and stay parallel.
+ */
+async function mutateIndex<T>(
+  conversationId: string,
+  mutator: (entries: RunResourceEntry[]) => Promise<{ next: RunResourceEntry[]; result: T }>
+): Promise<T> {
+  return runInWriteChain(chainKey(conversationId), async () => {
+    const entries = await loadIndex(conversationId);
+    const { next, result } = await mutator(entries);
+    if (next !== entries) {
+      indexCache.set(conversationId, next);
+      await writeFileAtomic(indexPath(conversationId), JSON.stringify(next, null, 2));
+    }
+    return result;
+  });
 }
 
 // --- Store API ---------------------------------------------------------------
@@ -183,56 +202,60 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
     return { skipped: 'size-cap' };
   }
 
-  const entries = await loadIndex(input.conversationId);
-
-  // Named overwrite: a repeated captureResource NAME replaces the previous
-  // entry (and its payload) so `${res:NAME}` is stable — mirrors the
-  // captureVariable last-write-wins semantics.
-  let replaced: RunResourceEntry | undefined;
-  if (input.name) {
-    replaced = entries.find(e => e.name === input.name);
-  }
-
-  const usedBytes = entries.reduce((sum, e) => sum + (e === replaced ? 0 : e.size), 0);
-  if (usedBytes + size > settings.maxConversationBytes) {
-    log.warn(`Run-resource write skipped (conversation budget ${usedBytes}+${size} > ${settings.maxConversationBytes})`, {
-      conversationId: input.conversationId, name: input.name, kind: input.kind,
-    });
-    return { skipped: 'conversation-cap' };
-  }
-
   const id = randomUUID();
-  const entry: RunResourceEntry = {
-    id,
-    uri: buildRunResourceUri(input.conversationId, id),
-    conversationId: input.conversationId,
-    name: input.name,
-    mimeType: input.mimeType,
-    size,
-    kind: input.kind,
-    encoding,
-    createdAt: Date.now(),
-    producedBy: input.producedBy,
-    origin: input.origin,
-    readBy: [],
-  };
+  let replacedToUnlink: RunResourceEntry | undefined;
 
-  if (payload) {
-    await fs.mkdir(conversationDir(input.conversationId), { recursive: true });
-    await fs.writeFile(payloadPath(input.conversationId, id), payload);
-  }
+  // The read (loadIndex), the conversation-byte cap check, the payload file
+  // write, and the index compute all run INSIDE one per-conversation critical
+  // section, so a concurrent writer to the same conversation can never clobber
+  // this write and the payload + index stay mutually consistent.
+  const result = await mutateIndex<WriteRunResourceResult>(input.conversationId, async (entries) => {
+    // Named overwrite: a repeated captureResource NAME replaces the previous
+    // entry (and its payload) so `${res:NAME}` is stable — mirrors the
+    // captureVariable last-write-wins semantics.
+    const replaced = input.name ? entries.find(e => e.name === input.name) : undefined;
 
-  const next = replaced ? entries.filter(e => e !== replaced) : entries.slice();
-  next.push(entry);
-  await saveIndex(input.conversationId, next);
+    const usedBytes = entries.reduce((sum, e) => sum + (e === replaced ? 0 : e.size), 0);
+    if (usedBytes + size > settings.maxConversationBytes) {
+      log.warn(`Run-resource write skipped (conversation budget ${usedBytes}+${size} > ${settings.maxConversationBytes})`, {
+        conversationId: input.conversationId, name: input.name, kind: input.kind,
+      });
+      return { next: entries, result: { skipped: 'conversation-cap' } };
+    }
 
-  if (replaced && replaced.size > 0) {
+    const entry: RunResourceEntry = {
+      id,
+      uri: buildRunResourceUri(input.conversationId, id),
+      conversationId: input.conversationId,
+      name: input.name,
+      mimeType: input.mimeType,
+      size,
+      kind: input.kind,
+      encoding,
+      createdAt: Date.now(),
+      producedBy: input.producedBy,
+      origin: input.origin,
+      readBy: [],
+    };
+
+    if (payload) {
+      await fs.mkdir(conversationDir(input.conversationId), { recursive: true });
+      await fs.writeFile(payloadPath(input.conversationId, id), payload);
+    }
+
+    const next = replaced ? entries.filter(e => e !== replaced) : entries.slice();
+    next.push(entry);
+    replacedToUnlink = replaced && replaced.size > 0 ? replaced : undefined;
+    log.debug(`Stored run resource ${entry.uri}`, { kind: entry.kind, size, name: entry.name });
+    return { next, result: entry };
+  });
+
+  if (replacedToUnlink) {
     // Best-effort: the replaced payload is already unreferenced by the index.
-    fs.unlink(payloadPath(input.conversationId, replaced.id)).catch(() => { /* may not exist */ });
+    fs.unlink(payloadPath(input.conversationId, replacedToUnlink.id)).catch(() => { /* may not exist */ });
   }
 
-  log.debug(`Stored run resource ${entry.uri}`, { kind: entry.kind, size, name: entry.name });
-  return entry;
+  return result;
 }
 
 export async function listRunResources(conversationId: string): Promise<RunResourceEntry[]> {
@@ -273,9 +296,10 @@ export async function findRunResourceByName(
 
 /**
  * Read a run resource by URI in MCP ReadResourceResult shape. Appends the
- * access to the entry's lineage (fire-and-forget persist). Returns null for
- * unknown URIs. Event emission is the CALLER's job — this module stays
- * dependency-light.
+ * access to the entry's lineage (awaited, best-effort persist routed through
+ * the per-conversation write chain so it can never clobber a concurrent write;
+ * a failed lineage write still never fails the read). Returns null for unknown
+ * URIs. Event emission is the CALLER's job — this module stays dependency-light.
  */
 export async function readRunResource(
   uri: string,
@@ -311,10 +335,21 @@ export async function readRunResource(
   }
 
   if (access) {
-    entry.readBy.push(access);
-    // Lineage persist is best-effort; a failed write must not fail the read.
-    saveIndex(parsed.conversationId, entries).catch(error =>
-      log.warn(`Failed to persist readBy for ${uri}`, error));
+    // Route the lineage append through the write chain and AWAIT it (no more
+    // fire-and-forget). Re-find the entry by id inside the critical section and
+    // build a fresh entry/array so the append is race-safe against concurrent
+    // writers. Wrapped in try/catch so a failed persist can never fail the read.
+    try {
+      await mutateIndex<void>(parsed.conversationId, async (entries) => {
+        const target = entries.find(e => e.id === parsed.id);
+        if (!target) return { next: entries, result: undefined };
+        const updated: RunResourceEntry = { ...target, readBy: [...target.readBy, access] };
+        return { next: entries.map(e => (e === target ? updated : e)), result: undefined };
+      });
+      entry.readBy.push(access);
+    } catch (error) {
+      log.warn(`Failed to persist readBy for ${uri}`, error);
+    }
   }
   return { entry, contents };
 }
