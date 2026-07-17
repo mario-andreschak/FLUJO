@@ -480,6 +480,9 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge whose condition kind "${String(condition.kind)}" is unknown; it will never match.`,
           sourceNode!
         );
+      } else if (condition.kind === 'always') {
+        // 'always' is a valid value-less always-true predicate (issue #111) —
+        // it is the deterministic default route, so no "missing value" warning.
       } else if (typeof condition.value !== 'string' || condition.value.length === 0) {
         add(
           'warning',
@@ -505,7 +508,11 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       if (!node) continue;
       const hasBareFallback = edges.some((e) => {
         if (isAttachmentEdge(e)) return false;
-        if (e.source === nodeId) return !e.data?.condition;
+        // A bare edge, OR an `always` edge (issue #111) which always matches, is a
+        // fallback: the node can never dead-end on a non-matching reply.
+        if (e.source === nodeId) {
+          return !e.data?.condition || (e.data.condition.kind === 'always' && !e.data.condition.negate);
+        }
         if (e.target === nodeId && e.data?.bidirectional) return true; // reverse route is bare
         return false;
       });

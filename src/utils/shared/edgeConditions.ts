@@ -7,20 +7,30 @@
  * is the default/fallback. This lets a flow branch on "did the step say PASS or
  * FAIL" without depending on a small model reliably emitting a handoff tool call.
  *
+ * The `always` kind is an explicit always-true predicate: a discoverable,
+ * deterministic default route that fires on ANY reply (including plain text), so
+ * a process node carrying an `always` edge advances instead of silently
+ * terminating when a small model does not emit a handoff tool call (issue #111).
+ * It replaces the non-obvious always-matching `[\s\S]*` regex workaround and
+ * needs no `value`.
+ *
  * This module is intentionally pure and dependency-light so it can run in the
  * browser (Flow builder / spec validation) and on the backend (ProcessNode.post)
  * alike. `evaluateCondition` NEVER throws — an invalid regex degrades to "no
  * match" so a typo in a predicate can never crash a run.
  */
 
-export type EdgeConditionKind = 'contains' | 'regex' | 'equals';
+export type EdgeConditionKind = 'contains' | 'regex' | 'equals' | 'always';
 export type EdgeConditionTarget = 'last-assistant' | 'last-message';
 
 export interface EdgeCondition {
   /** How `value` is matched against the selected message. */
   kind: EdgeConditionKind;
-  /** The literal (contains/equals) or regex source (regex) to match. */
-  value: string;
+  /** The literal (contains/equals) or regex source (regex) to match. Optional —
+   *  `kind: 'always'` is a value-less always-true predicate; the other kinds
+   *  require it (an empty/absent value is treated as "never match" by the
+   *  compiler/validator for those kinds). */
+  value?: string;
   /** Which message to test. Default 'last-assistant' (the step's own output). */
   target?: EdgeConditionTarget;
   /** Case-insensitive matching. For contains/equals it lowercases both sides;
@@ -31,7 +41,7 @@ export interface EdgeCondition {
   negate?: boolean;
 }
 
-export const EDGE_CONDITION_KINDS: readonly EdgeConditionKind[] = ['contains', 'regex', 'equals'];
+export const EDGE_CONDITION_KINDS: readonly EdgeConditionKind[] = ['contains', 'regex', 'equals', 'always'];
 export const EDGE_CONDITION_TARGETS: readonly EdgeConditionTarget[] = ['last-assistant', 'last-message'];
 
 /** True when `kind` is a known condition kind. */
@@ -133,6 +143,12 @@ export function evaluateCondition(
       matched = re.test(text);
       break;
     }
+    case 'always':
+      // Explicit always-true predicate (issue #111): the discoverable, always-
+      // matching deterministic fallback route. Needs no value; `negate` still
+      // applies (negate:true yields a harmless never-match, for consistency).
+      matched = true;
+      break;
     default:
       // Unknown kind: never match (validation drops these with a warning).
       console.warn('[edgeConditions] unknown condition kind; treating as no-match', (cond as { kind?: unknown }).kind);

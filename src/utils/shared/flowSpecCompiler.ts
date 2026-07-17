@@ -790,6 +790,15 @@ export function compileFlowSpec(
             'edge-condition-kind',
             `Edge "${fromKey}" -> "${toKey}" has an unknown condition kind "${String(rawCond.kind)}"; the condition was dropped.`
           );
+        } else if (rawCond.kind === 'always') {
+          // Tier 2b (issue #111): explicit always-true fallback predicate. It
+          // routes on ANY reply and legitimately carries no "value", so it must
+          // NOT be dropped by the value-required check below.
+          condition = {
+            kind: 'always',
+            ...(rawCond.target === 'last-message' ? { target: 'last-message' as const } : {}),
+            ...(rawCond.negate === true ? { negate: true } : {}),
+          };
         } else if (typeof rawCond.value !== 'string' || rawCond.value.length === 0) {
           warn(
             'edge-condition-value',

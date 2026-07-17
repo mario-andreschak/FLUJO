@@ -300,6 +300,20 @@ describe('compileFlowSpec — edge conditions (Tier 2b)', () => {
     const edge = flow!.edges.find((e) => e.source === processId(flow))!;
     expect((edge.data as any).condition).toEqual({ kind: 'regex', value: '[bad' });
   });
+
+  it('accepts an always condition with no value (issue #111) — no edge-condition-value warning', () => {
+    const { flow, issues, errorCount } = compileFlowSpec(condSpec({ condition: { kind: 'always' } as any }), context);
+    expect(errorCount).toBe(0);
+    expect(issues.some((i) => i.code === 'edge-condition-value')).toBe(false);
+    const edge = flow!.edges.find((e) => e.source === processId(flow))!;
+    expect((edge.data as any).condition).toEqual({ kind: 'always' });
+  });
+
+  it('drops a stray value on an always condition (keeps just { kind: "always" })', () => {
+    const { flow } = compileFlowSpec(condSpec({ condition: { kind: 'always', value: 'ignored' } as any }), context);
+    const edge = flow!.edges.find((e) => e.source === processId(flow))!;
+    expect((edge.data as any).condition).toEqual({ kind: 'always' });
+  });
 });
 
 // ---------------------------------------------------------------------------

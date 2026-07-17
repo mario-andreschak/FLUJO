@@ -62,6 +62,19 @@ describe('evaluateCondition — regex', () => {
   });
 });
 
+describe('evaluateCondition — always (issue #111)', () => {
+  it('matches ANY message (including plain text, empty, null) — no value needed', () => {
+    expect(evaluateCondition({ kind: 'always' }, 'here is my answer')).toBe(true);
+    expect(evaluateCondition({ kind: 'always' }, '')).toBe(true);
+    expect(evaluateCondition({ kind: 'always' }, null)).toBe(true);
+    expect(evaluateCondition({ kind: 'always' }, undefined)).toBe(true);
+  });
+
+  it('honors negate (a negated always never matches)', () => {
+    expect(evaluateCondition({ kind: 'always', negate: true }, 'anything')).toBe(false);
+  });
+});
+
 describe('evaluateCondition — edge inputs', () => {
   it('unknown kind never matches', () => {
     expect(evaluateCondition({ kind: 'nope' as any, value: 'x' }, 'x')).toBe(false);
@@ -135,6 +148,7 @@ describe('helpers', () => {
     expect(isValidConditionKind('contains')).toBe(true);
     expect(isValidConditionKind('regex')).toBe(true);
     expect(isValidConditionKind('equals')).toBe(true);
+    expect(isValidConditionKind('always')).toBe(true);
     expect(isValidConditionKind('switch')).toBe(false);
     expect(isValidConditionKind(undefined)).toBe(false);
   });

@@ -485,6 +485,39 @@ describe('validateFlow — edge conditions (Tier 2b)', () => {
   });
 });
 
+describe('validateFlow — always condition (issue #111)', () => {
+  const models = [{ id: 'm1' }];
+  // Local edge-with-condition builder (the Tier 2b describe's condEdge is scoped
+  // to that block). An `always` edge is the deterministic default route.
+  const alwaysEdge = (source: string, target: string): VEdge => ({
+    id: `${source}-${target}`,
+    source,
+    target,
+    data: { edgeType: 'standard', condition: { kind: 'always' } },
+  });
+
+  it('accepts an always condition without a value — no missing-value warning', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), processNode('q', { boundModel: 'm1' }), finishNode()],
+      edges: [edge('start', 'p'), alwaysEdge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).not.toContain('edge-condition-value');
+    expect(codes(r)).not.toContain('edge-condition-kind');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('treats an always edge as a valid fallback (no no-fallback warning even without a bare edge)', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), processNode('q', { boundModel: 'm1' }), finishNode()],
+      edges: [edge('start', 'p'), alwaysEdge('p', 'q'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).not.toContain('edge-condition-no-fallback');
+    expect(r.isRunnable).toBe(true);
+  });
+});
+
 describe('mcpServersConnectedToProcess', () => {
   it('returns servers reachable via mcp edges only', () => {
     const nodes = [processNode('p', {}), mcpNode('a', 'srvA'), mcpNode('b', 'srvB')];

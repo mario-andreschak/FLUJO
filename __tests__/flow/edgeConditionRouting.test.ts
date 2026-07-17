@@ -230,3 +230,38 @@ describe('ProcessNode.post — regression: no conditioned edges = unchanged', ()
     expect(action).toBe(FINAL_RESPONSE_ACTION);
   });
 });
+
+describe('ProcessNode.post — always condition (issue #111)', () => {
+  const ALWAYS: EdgeCondition = { kind: 'always' };
+
+  function alwaysProcess(): { node: ProcessNode; params: ProcessNodeParams } {
+    const node = new ProcessNode();
+    node.addSuccessor(finishTarget('next'), 'e-next');
+    const params: ProcessNodeParams = {
+      id: 'proc',
+      label: 'P',
+      type: 'process',
+      properties: {},
+      edgeConditions: { 'e-next': ALWAYS },
+      orderedOutgoingEdges: ['e-next'],
+    };
+    return { node, params };
+  }
+
+  it('routes to the always edge on a plain-text reply instead of terminating', async () => {
+    const { node, params } = alwaysProcess();
+    const action = await node.post(prep, execWith('here is my plain answer'), makeState(), params);
+    expect(action).toBe('e-next');
+  });
+
+  it('a model handoff tool call still wins over an always edge', async () => {
+    const { node, params } = alwaysProcess();
+    node.addSuccessor(finishTarget('handoff-target'), 'e-handoff');
+    const state = makeState();
+    const exec = execWith('plain answer', [
+      { name: 'handoff_to_handoff-target', args: {}, id: 'tc1', result: '' },
+    ]);
+    const action = await node.post(prep, exec, state, params);
+    expect(action).toBe('e-handoff');
+  });
+});
