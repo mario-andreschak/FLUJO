@@ -105,15 +105,23 @@ export interface UrlWatchTriggerConfig {
 export interface FlowEventTriggerConfig {
   type: 'flow-event';
   /**
-   * What upstream run to react to. EXACTLY ONE of the three must be set:
+   * What upstream event to react to. EXACTLY ONE of the four must be set:
    *  - `executionId`  — a specific planned execution's runs (most precise).
    *  - `flowId`       — any run of a given flow (chat/API/manual/scheduled).
    *  - `flowName`     — same, matched by the flow's current name.
+   *  - `topic`        — a `signal` node emission with this topic (issue #117):
+   *                     a deterministic, mid-run event rather than a terminal
+   *                     run. Free-form name (no registry), like a webhook id.
    */
-  source: { flowId?: string; flowName?: string; executionId?: string };
-  /** Which terminal statuses fire this trigger. At least one is required. */
-  on: Array<'completed' | 'error'>;
-  /** Optional filter on the upstream run's final output text. */
+  source: { flowId?: string; flowName?: string; executionId?: string; topic?: string };
+  /**
+   * Which terminal statuses fire this trigger. Required for a flow/execution
+   * source; ignored for a `topic` (signal) source, which has no completed/error
+   * status (issue #117).
+   */
+  on?: Array<'completed' | 'error'>;
+  /** Optional filter on the upstream run's final output text (or, for a topic
+   *  source, on the signal's payload). */
   outputMatch?: { contains?: string; regex?: string };
   /**
    * Loop safety: refuse to fire once the event-chain depth reaches this many

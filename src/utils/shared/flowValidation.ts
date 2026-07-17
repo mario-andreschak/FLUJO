@@ -350,6 +350,23 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     }
   }
 
+  // --- Signal nodes (issue #117: deterministic in-flow event emission) ---
+  // A signal node emits {topic, payload} onto the flow-run bus when traversed.
+  // Without a topic nothing can listen, so the node is inert — advisory only.
+  const signalNodes = nodes.filter((n) => getNodeType(n) === 'signal');
+  for (const node of signalNodes) {
+    const props = node.data?.properties ?? {};
+    const topic = typeof props.topic === 'string' ? props.topic.trim() : '';
+    if (!topic) {
+      add(
+        'warning',
+        'signal-missing-topic',
+        `Signal node "${getNodeLabel(node)}" has no topic; it emits nothing. Give it a topic that a flow-event trigger can listen for.`,
+        node
+      );
+    }
+  }
+
   // --- Connectivity / runnability ---
   if (startNodes.length > 0) {
     const adj = buildControlAdjacency(edges);

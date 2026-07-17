@@ -21,7 +21,7 @@ import { styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, RESOURCE_COLOR } from '../CustomNodes';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode, RESOURCE_COLOR, SIGNAL_COLOR } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge, ResourceEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
@@ -65,6 +65,7 @@ const nodeTypes = {
   mcp: MCPNode,
   subflow: SubflowNode,
   resource: ResourceNode,
+  signal: SignalNode,
 };
 
 const edgeTypes = {
@@ -123,6 +124,11 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       label: 'Resource Node',
       description: 'A data artifact steps read or write',
     },
+    {
+      type: 'signal',
+      label: 'Signal Node',
+      description: 'Emit an event to trigger another flow',
+    },
   ];
 
   // Filter node types based on validation
@@ -141,6 +147,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.warning.main, borderRadius: '50%' }}></div>;
       case 'resource':
         return <div style={{ width: 24, height: 24, backgroundColor: RESOURCE_COLOR, borderRadius: '50%' }}></div>;
+      case 'signal':
+        return <div style={{ width: 24, height: 24, backgroundColor: SIGNAL_COLOR, borderRadius: '50%' }}></div>;
       default:
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
     }

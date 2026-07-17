@@ -213,6 +213,10 @@ export class SubflowNode extends BaseNode {
       nodeType: 'subflow',
       subflowId,
       depth: (sharedState.runDepth ?? 0) + 1,
+      // Carry the parent run's event-chain depth unchanged (a subflow call is
+      // not an event hop) so a `signal` node inside the child emits at the right
+      // depth and maxChainDepth stays effective for nested signals (issue #117).
+      chainDepth: sharedState.chainDepth ?? 0,
       parentRunId: sharedState.conversationId,
       showSteps,
       // The engine attaches the run's emit to sharedState for the duration of
@@ -421,6 +425,7 @@ export class SubflowNode extends BaseNode {
       requireApproval: false, // headless: subflows never pause for approval
       debug: false,
       depth: prepResult.depth,
+      chainDepth: prepResult.chainDepth,
       parentRunId: prepResult.parentRunId,
       ...(childEmit ? { emit: childEmit } : {}),
     });
@@ -494,6 +499,7 @@ export class SubflowNode extends BaseNode {
           requireApproval: false,
           debug: false,
           depth: prepResult.depth,
+          chainDepth: prepResult.chainDepth,
           parentRunId: prepResult.parentRunId,
           ...(emit ? { emit } : {}),
         });

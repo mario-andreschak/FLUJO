@@ -21,6 +21,9 @@ export function describeTrigger(trigger: TriggerConfig): string {
       }
     }
     case 'flow-event': {
+      if (trigger.source?.topic) {
+        return `On signal “${trigger.source.topic}”`;
+      }
       const outcomes = (trigger.on ?? []).join('/') || 'terminal';
       return `When a flow is ${outcomes}`;
     }

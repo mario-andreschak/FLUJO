@@ -134,7 +134,7 @@ export function validTargetTypesFor(
   sourceType?: NodeType,
   sourceHandleId?: string | null
 ): NodeType[] {
-  const all: NodeType[] = ['process', 'finish', 'mcp', 'subflow', 'resource'];
+  const all: NodeType[] = ['process', 'finish', 'mcp', 'subflow', 'resource', 'signal'];
   if (!sourceType || !sourceHandleId) return all;
   return all.filter(
     t => getConnectionError(sourceType, sourceHandleId, t, defaultTargetHandleFor(t, sourceHandleId)) === null

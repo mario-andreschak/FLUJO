@@ -85,7 +85,7 @@ async function publishRunFlowEvent(
       status,
       outputText: trimmed,
       firedBy,
-      chainDepth: 0,
+      chainDepth: state.chainDepth ?? 0,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -156,6 +156,11 @@ export interface FlowRunInput {
   /** For scheduler-originated runs: the planned execution id that fired this
    *  run (issue #113). Only meaningful when `source === 'schedule'`. */
   plannedExecutionId?: string;
+  /** Event-chain depth of this run (issue #116/#117). Set by the scheduler from
+   *  the firing trigger's chainDepth so a `signal` node mid-run stamps the right
+   *  depth onto what it emits, and passed by SubflowNode so a child inherits the
+   *  parent's depth. Organic runs (chat/API/manual) are depth 0. */
+  chainDepth?: number;
 }
 
 export interface FlowRunResult {
@@ -369,6 +374,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // Subflow re-entrancy guard: record this run's depth and refuse to start if
   // the call tree is too deep (a flow calling itself, directly or via a chain).
   sharedState.runDepth = input.depth ?? sharedState.runDepth ?? 0;
+  // Event-chain depth (issue #116/#117): threaded from the firing trigger (via
+  // the scheduler) or from the parent run (via SubflowNode) so a `signal` node
+  // emits at the emitting run's true depth and runaway chains trip maxChainDepth.
+  sharedState.chainDepth = input.chainDepth ?? sharedState.chainDepth ?? 0;
   if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
     log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
     sharedState.status = 'error';

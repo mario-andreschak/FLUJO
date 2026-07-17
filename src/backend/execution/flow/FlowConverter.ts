@@ -1,7 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { Flow, BaseNode } from './pocketflow';
 import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';
-import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode } from './nodes';
+import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode, SignalNode } from './nodes';
 import { createLogger } from '@/utils/logger';
 import {
   NodeParams,
@@ -15,7 +15,8 @@ import {
   MCPNodeProperties,
   FinishNodeProperties,
   SubflowNodeProperties,
-  ResourceNodeProperties
+  ResourceNodeProperties,
+  SignalNodeProperties
 } from './types';
 
 // Create a logger instance for this file
@@ -323,6 +324,19 @@ export class FlowConverter {
           label: node.data.label,
           type: 'resource',
           properties: node.data.properties as ResourceNodeProperties || { name: node.data.label }
+        };
+        break;
+      case 'signal':
+        // Signal node (issue #117): a pass-through control node that emits a
+        // {topic, payload} event onto the flow-run bus when traversed. Like any
+        // control node it gets bare successor edges (never an attachment edge),
+        // so no special edge handling is needed — only instantiation here.
+        pocketNode = new SignalNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'signal',
+          properties: node.data.properties as SignalNodeProperties || { name: node.data.label }
         };
         break;
       default:

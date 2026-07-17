@@ -124,6 +124,19 @@ export interface FinishNodeProperties {
     name?: string;
 }
 
+// SignalNode specific properties (issue #117)
+export interface SignalNodeProperties {
+    name?: string;
+    /** The event topic this node emits when execution traverses it. Matched by a
+     *  `flow-event` trigger configured with `source: { topic }`. Free-form name
+     *  (no registry), like a webhook id. */
+    topic?: string;
+    /** The payload template emitted with the signal. `${var:NAME}` (run-scoped
+     *  scratchpad) is resolved at emit time via resolveRunVars; the result is the
+     *  signal's `payload`. */
+    payloadTemplate?: string;
+}
+
 // MCPNode specific properties
 export interface MCPNodeProperties {
     name?: string;
@@ -295,8 +308,12 @@ export interface ResourceNodeParams extends BaseNodeParams<ResourceNodePropertie
     type: 'resource';
 }
 
+export interface SignalNodeParams extends BaseNodeParams<SignalNodeProperties> {
+    type: 'signal';
+}
+
 // Union type for all node params
-export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams;
+export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams | SignalNodeParams;
 
 // Resource node (Tier 3) — a config-holder like the MCP node: it represents a
 // data artifact in the graph and is never executed. FlowConverter folds its
@@ -504,6 +521,17 @@ export interface SharedState {
     plannedExecutionId?: string;
 
     /**
+     * Event-chain depth of this run (issue #116/#117). 0 for an organic run
+     * (chat/API/manual, or any scheduled/webhook/file/poll fire); +1 per
+     * flow-event hop. Threaded in from FlowRunInput.chainDepth so a `signal`
+     * node mid-run (SignalNode.post) can stamp the emitting run's depth onto the
+     * event it publishes, and a subflow child inherits the parent's depth. The
+     * downstream `flow-event` trigger increments it and enforces maxChainDepth,
+     * breaking runaway A→B→A loops. Distinct from runFlow's subflow `runDepth`.
+     */
+    chainDepth?: number;
+
+    /**
      * True for a transient run (subflow child, future scheduler runs): this
      * state must NEVER reach the conversations/* store, so it never appears in
      * the chat sidebar. The policy travels ON the state and is enforced inside
@@ -632,6 +660,11 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     messages?: FlujoChatMessage[];
     /** This run's depth in the subflow-call tree (parent depth + 1). */
     depth: number;
+    /** The parent run's event-chain depth (issue #117), passed unchanged to the
+     *  child so a `signal` node inside the subflow emits at the parent chain's
+     *  depth (a subflow call is not an event hop). Keeps maxChainDepth effective
+     *  for signals nested in subflows. */
+    chainDepth?: number;
     /** Parent conversation id, for nesting provenance. */
     parentRunId?: string;
     /** Whether the child run's events are folded into the parent conversation

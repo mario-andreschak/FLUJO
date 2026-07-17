@@ -6,7 +6,7 @@
  * fired payload, and unsubscribes on dispose.
  */
 import { armFlowEvent } from '@/backend/services/scheduler/triggers/flowEvent';
-import { getFlowRunEventBus, FlowRunEvent } from '@/backend/services/scheduler/flowRunEventBus';
+import { getFlowRunEventBus, FlowRunEvent, FlowSignalEvent } from '@/backend/services/scheduler/flowRunEventBus';
 import type { FlowEventTriggerConfig } from '@/shared/types/plannedExecution';
 
 const publish = (overrides: Partial<FlowRunEvent> = {}) =>
@@ -215,5 +215,92 @@ describe('armFlowEvent', () => {
     publish();
     expect(deps.onFire).not.toHaveBeenCalled();
     expect(trigger.nextRun && trigger.nextRun()).toBeNull();
+  });
+});
+
+const publishSignal = (overrides: Partial<FlowSignalEvent> = {}) =>
+  getFlowRunEventBus().publish({
+    kind: 'signal',
+    topic: 'review-blocked',
+    payload: 'blocked',
+    emitterFlowId: 'flow-A',
+    flowName: 'Flow A',
+    runId: 'run-1',
+    conversationId: 'conv-1',
+    firedBy: 'chat',
+    chainDepth: 0,
+    timestamp: new Date().toISOString(),
+    ...overrides,
+  });
+
+describe('armFlowEvent topic source (issue #117)', () => {
+  it('fires on a matching signal topic, passing the payload context and depth+1', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent({ type: 'flow-event', source: { topic: 'review-blocked' } }, deps);
+
+    publishSignal({ chainDepth: 1, payload: 'boom' });
+
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    const payload = deps.onFire.mock.calls[0][0];
+    expect(payload.chainDepth).toBe(2); // upstream 1 → new run 2
+    expect(payload.context.topic).toBe('review-blocked');
+    expect(payload.context.payload).toBe('boom');
+    expect(payload.context.emitterFlowId).toBe('flow-A');
+    expect(payload.summary).toMatch(/Signal "review-blocked"/);
+
+    trigger.dispose();
+  });
+
+  it('ignores other topics and terminal-run events', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent({ type: 'flow-event', source: { topic: 'wanted' } }, deps);
+
+    publishSignal({ topic: 'other' }); // wrong topic
+    publish(); // a completion run event — a topic trigger must ignore it
+    expect(deps.onFire).not.toHaveBeenCalled();
+
+    publishSignal({ topic: 'wanted' });
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+
+    trigger.dispose();
+  });
+
+  it('a flow/execution trigger ignores signal events', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent(
+      { type: 'flow-event', source: { flowId: 'flow-A' }, on: ['completed'] },
+      deps
+    );
+    // Same emitter flow, but a SIGNAL — not a completion. Must not fire.
+    publishSignal({ emitterFlowId: 'flow-A' });
+    expect(deps.onFire).not.toHaveBeenCalled();
+    trigger.dispose();
+  });
+
+  it('records a skipped run once a signal chain reaches the depth cap', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent(
+      { type: 'flow-event', source: { topic: 't' }, maxChainDepth: 2 },
+      deps
+    );
+    publishSignal({ topic: 't', chainDepth: 1 }); // 1 < 2 → fires
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    publishSignal({ topic: 't', chainDepth: 2 }); // at the cap → skip
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(deps.onSkip).toHaveBeenCalledTimes(1);
+    trigger.dispose();
+  });
+
+  it('applies the payload outputMatch filter for a topic source', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent(
+      { type: 'flow-event', source: { topic: 't' }, outputMatch: { contains: 'FAIL' } },
+      deps
+    );
+    publishSignal({ topic: 't', payload: 'all good' });
+    expect(deps.onFire).not.toHaveBeenCalled();
+    publishSignal({ topic: 't', payload: 'it FAILed' });
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    trigger.dispose();
   });
 });

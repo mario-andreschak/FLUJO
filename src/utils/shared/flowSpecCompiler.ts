@@ -75,7 +75,7 @@ export interface FlowSpecNode {
    *  'resource' (Tier 3) is a data artifact: an edge resource→process means the
    *  step READS it; process→resource means the step's output is SAVED to it
    *  (run artifacts only). */
-  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource';
+  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal';
   label?: string;
   /** Free-text description; lands on FlowNode.data.description (wins verbatim in handoff synthesis). */
   description?: string;
@@ -114,6 +114,12 @@ export interface FlowSpecNode {
   /** resource only: name of a RUN artifact (mutually exclusive with server/uri) —
    *  produced by a step via a process→resource edge, injectable via \${res:NAME}. */
   runName?: string;
+  /** signal only (issue #117): the event topic emitted when the node is traversed.
+   *  A flow-event trigger with a matching topic source fires in response. */
+  topic?: string;
+  /** signal only (issue #117): the payload template emitted with the signal;
+   *  \${var:NAME} is resolved from run variables at emit time. */
+  payloadTemplate?: string;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
@@ -516,7 +522,7 @@ export function compileFlowSpec(
         );
         continue;
       }
-      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource') {
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') {
         error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
         continue;
       }
@@ -655,6 +661,20 @@ export function compileFlowSpec(
           } else if (!knownServers.has(server)) {
             warn('server-unknown', `Node "${key}": MCP server "${server}" is not configured in FLUJO.`, key);
           }
+        }
+      } else if (type === 'signal') {
+        // Signal node (issue #117): a pass-through that emits {topic, payload}.
+        const topic = typeof specNode.topic === 'string' ? specNode.topic.trim() : '';
+        if (topic) {
+          properties.topic = topic;
+        } else {
+          warn('signal-missing-topic', `Node "${key}": a signal node needs a "topic" to emit.`, key);
+        }
+        if (typeof specNode.payloadTemplate === 'string' && specNode.payloadTemplate) {
+          properties.payloadTemplate = specNode.payloadTemplate;
+        } else if (prompt !== undefined) {
+          // Back-compat authoring convenience: `prompt` doubles as the payload.
+          properties.payloadTemplate = prompt;
         }
       }
       // finish: no properties.
@@ -1109,7 +1129,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
   for (const node of nodes) {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource') continue;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') continue;
     const props = (node.data?.properties ?? {}) as Record<string, any>;
     const specNode: FlowSpecNode = {
       key: node.id,
@@ -1171,6 +1191,10 @@ export function flowToSpec(flow: Flow): FlowSpec {
         if (typeof props.boundServer === 'string' && props.boundServer) specNode.server = props.boundServer;
         if (typeof props.uri === 'string' && props.uri) specNode.uri = props.uri;
       }
+    } else if (type === 'signal') {
+      // Issue #117: round-trip topic/payload so AI-Improve never drops signal nodes.
+      if (typeof props.topic === 'string' && props.topic) specNode.topic = props.topic;
+      if (typeof props.payloadTemplate === 'string' && props.payloadTemplate) specNode.payloadTemplate = props.payloadTemplate;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);

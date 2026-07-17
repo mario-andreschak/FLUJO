@@ -24,6 +24,10 @@ export type FlowRunFiredBy =
  * no MCP/model/flow imports and scheduler unit tests stay isolated.
  */
 export interface FlowRunEvent {
+  /** Discriminant. Optional and defaulting to a terminal-run event so existing
+   *  publishers (scheduler / runFlow) need no change; a `signal` node publishes
+   *  a {@link FlowSignalEvent} instead (issue #117). */
+  kind?: 'run';
   /** The flow that ran. */
   flowId: string;
   /** The flow's current name, best-effort (may be undefined if unresolvable). */
@@ -47,7 +51,45 @@ export interface FlowRunEvent {
   timestamp: string;
 }
 
-export type FlowRunEventListener = (event: FlowRunEvent) => void;
+/**
+ * An in-flow `signal` node was traversed (issue #117): a deterministic,
+ * mid-run, fire-and-forget emission of `{ topic, payload }` onto the same bus,
+ * consumed by armed `flow-event` triggers configured with a topic source. It is
+ * NOT a terminal-run event (no completed/error status) — the shared
+ * `chainDepth` still bounds runaway signal chains exactly like completion
+ * events.
+ */
+export interface FlowSignalEvent {
+  kind: 'signal';
+  /** The emitted topic (matched against a trigger's `source.topic`). */
+  topic: string;
+  /** The resolved payload (the node's template after `${var:NAME}` expansion). */
+  payload: string;
+  /** The flow that contains the signal node. */
+  emitterFlowId: string;
+  /** The emitter flow's current name, best-effort. */
+  flowName?: string;
+  /** The emitting run's conversation/run id. */
+  runId: string;
+  conversationId: string;
+  /** What caused the emitting run. */
+  firedBy: FlowRunFiredBy;
+  /** The emitting run's event-chain depth (0 = organic). The listener
+   *  increments it and enforces maxChainDepth. */
+  chainDepth: number;
+  /** ISO timestamp the signal was emitted. */
+  timestamp: string;
+}
+
+/** Anything the bus can carry: a terminal-run event or a signal-node event. */
+export type FlowEvent = FlowRunEvent | FlowSignalEvent;
+
+/** Type guard: narrow a bus event to a signal-node emission. */
+export function isFlowSignalEvent(event: FlowEvent): event is FlowSignalEvent {
+  return event.kind === 'signal';
+}
+
+export type FlowRunEventListener = (event: FlowEvent) => void;
 
 /**
  * Process-global emitter for terminal flow runs. Global-backed for the same
@@ -60,12 +102,15 @@ export class FlowRunEventBus {
   private listeners = new Set<FlowRunEventListener>();
 
   /** Notify every current subscriber. A throwing listener never blocks others. */
-  publish(event: FlowRunEvent): void {
+  publish(event: FlowEvent): void {
     if (this.listeners.size === 0) {
       return;
     }
+    const label = isFlowSignalEvent(event)
+      ? `signal topic=${event.topic} emitter=${event.emitterFlowId}`
+      : `flow=${event.flowId} status=${event.status}`;
     log.debug(
-      `Publishing flow-run event: flow=${event.flowId} status=${event.status} ` +
+      `Publishing flow event: ${label} ` +
         `firedBy=${event.firedBy} depth=${event.chainDepth} listeners=${this.listeners.size}`
     );
     // Snapshot so a listener that unsubscribes (or arms another) during

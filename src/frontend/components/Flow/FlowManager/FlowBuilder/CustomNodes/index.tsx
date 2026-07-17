@@ -18,6 +18,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import OutputIcon from '@mui/icons-material/Output';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DescriptionIcon from '@mui/icons-material/Description';
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import type { NodeType } from '@/frontend/types/flow/flow';
@@ -28,6 +29,11 @@ import type { NodeType } from '@/frontend/types/flow/flow';
 export const RESOURCE_COLOR = '#009688';
 const RESOURCE_COLOR_LIGHT = '#4DB6AC';
 
+// Signal nodes (issue #117) use a deep-purple literal — same reason as the
+// resource teal: the MUI palette slots are all taken.
+export const SIGNAL_COLOR = '#7E57C2';
+const SIGNAL_COLOR_LIGHT = '#B39DDB';
+
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
 const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
@@ -37,6 +43,7 @@ const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: 
   mcp: { main: (t) => t.palette.info.main, light: (t) => t.palette.info.light },
   subflow: { main: (t) => t.palette.warning.main, light: (t) => t.palette.warning.light },
   resource: { main: () => RESOURCE_COLOR, light: () => RESOURCE_COLOR_LIGHT },
+  signal: { main: () => SIGNAL_COLOR, light: () => SIGNAL_COLOR_LIGHT },
 };
 
 const nodeMainColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
@@ -113,6 +120,8 @@ const getNodeIcon = (type: NodeType) => {
     case 'resource':
       // Same icon vocabulary as the resource browser (ServerResources.tsx).
       return <DescriptionIcon sx={{ color: RESOURCE_COLOR }} />;
+    case 'signal':
+      return <NotificationsActiveIcon sx={{ color: SIGNAL_COLOR }} />;
     default:
       return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
   }
@@ -313,6 +322,25 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
           />
         </>
       );
+    } else if (nodeType === 'signal') {
+      // Signal nodes (issue #117) sit inline like a subflow: in from above,
+      // out below. They emit an event when traversed and pass through.
+      return (
+        <>
+          <Handle
+            id="signal-top"
+            type="target"
+            position={Position.Top}
+            style={getProcessHandleStyle(theme)}
+          />
+          <Handle
+            id="signal-bottom"
+            type="source"
+            position={Position.Bottom}
+            style={getProcessHandleStyle(theme)}
+          />
+        </>
+      );
     }
 
     return null;
@@ -407,4 +435,8 @@ export const SubflowNode = memo(function SubflowNode(props: NodeProps) {
 
 export const ResourceNode = memo(function ResourceNode(props: NodeProps) {
   return <CustomNode {...props} nodeType="resource" selected={props.selected} />;
+});
+
+export const SignalNode = memo(function SignalNode(props: NodeProps) {
+  return <CustomNode {...props} nodeType="signal" selected={props.selected} />;
 });

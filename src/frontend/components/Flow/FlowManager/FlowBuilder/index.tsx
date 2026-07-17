@@ -56,6 +56,7 @@ import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
 import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
+import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
@@ -155,6 +156,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [finishModalOpen, setFinishModalOpen] = useState(false);
   const [subflowModalOpen, setSubflowModalOpen] = useState(false);
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
+  const [signalModalOpen, setSignalModalOpen] = useState(false);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
 
   // AI-Improve (issue #99): the dialog that revises the current flow, plus a transient
@@ -691,6 +693,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setFinishModalOpen(false);
     setSubflowModalOpen(false);
     setResourceModalOpen(false);
+    setSignalModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, []);
@@ -756,6 +759,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setSubflowModalOpen(true);
     } else if (node.data.type === 'resource') {
       setResourceModalOpen(true);
+    } else if (node.data.type === 'signal') {
+      setSignalModalOpen(true);
     } else {
       setProcessModalOpen(true);
     }
@@ -1032,6 +1037,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         open={resourceModalOpen}
         node={nodeToEdit}
         onClose={() => setResourceModalOpen(false)}
+        onSave={handleNodeUpdate}
+      />
+
+      <SignalNodePropertiesModal
+        open={signalModalOpen}
+        node={nodeToEdit}
+        onClose={() => setSignalModalOpen(false)}
         onSave={handleNodeUpdate}
       />
 

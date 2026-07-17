@@ -530,17 +530,23 @@ export class SchedulerService {
       }
       case 'flow-event': {
         const src = trigger.source;
-        const set = [src?.executionId, src?.flowId, src?.flowName].filter(
+        const set = [src?.executionId, src?.flowId, src?.flowName, src?.topic].filter(
           v => typeof v === 'string' && v.trim().length > 0
         );
         if (set.length !== 1) {
-          return 'Choose exactly one source: a flow or a planned execution';
+          return 'Choose exactly one source: a flow, a planned execution, or a signal topic';
         }
-        if (!Array.isArray(trigger.on) || trigger.on.length === 0) {
-          return 'Select at least one outcome to react to (completed or error)';
-        }
-        if (trigger.on.some(s => s !== 'completed' && s !== 'error')) {
-          return 'Outcomes must be "completed" or "error"';
+        // A topic source (issue #117) reacts to `signal` node emissions, which
+        // have no completed/error status, so `on` is not required for it. A
+        // flow/execution source still requires at least one terminal outcome.
+        const isTopicSource = typeof src?.topic === 'string' && src.topic.trim().length > 0;
+        if (!isTopicSource) {
+          if (!Array.isArray(trigger.on) || trigger.on.length === 0) {
+            return 'Select at least one outcome to react to (completed or error)';
+          }
+          if (trigger.on.some(s => s !== 'completed' && s !== 'error')) {
+            return 'Outcomes must be "completed" or "error"';
+          }
         }
         if (trigger.outputMatch?.regex) {
           try {
@@ -694,6 +700,11 @@ export class SchedulerService {
         // (issue #113).
         source: 'schedule',
         plannedExecutionId: execution.id,
+        // Event-chain depth (issue #116/#117): a flow-event/signal-fired run is
+        // one hop deeper than the run that triggered it. Threaded onto
+        // SharedState so a `signal` node inside this run emits at the right depth
+        // and runaway chains trip maxChainDepth. Organic fires are depth 0.
+        chainDepth: payload.chainDepth ?? 0,
         // Headless: an approval pause would suspend the run with no resumer.
         requireApproval: false,
         debug: false,

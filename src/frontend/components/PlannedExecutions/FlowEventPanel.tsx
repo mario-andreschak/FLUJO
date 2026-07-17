@@ -35,7 +35,7 @@ interface FlowEventPanelProps {
   currentExecutionId?: string;
 }
 
-type SourceKind = 'flow' | 'execution';
+type SourceKind = 'flow' | 'execution' | 'topic';
 
 /**
  * Flow-event trigger editor (issue #116): run this flow when ANOTHER flow (or a
@@ -49,7 +49,12 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
     config.maxChainDepth !== undefined || config.minIntervalMs !== undefined
   );
 
-  const sourceKind: SourceKind = config.source?.executionId ? 'execution' : 'flow';
+  const sourceKind: SourceKind = config.source?.topic !== undefined
+    ? 'topic'
+    : config.source?.executionId !== undefined
+    ? 'execution'
+    : 'flow';
+  const isTopic = sourceKind === 'topic';
 
   useEffect(() => {
     let cancelled = false;
@@ -69,7 +74,9 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
 
   const setSourceKind = (kind: SourceKind) => {
     // Reset the source to the chosen dimension so exactly one field is ever set.
-    onChange({ ...config, source: kind === 'flow' ? { flowId: '' } : { executionId: '' } });
+    const source =
+      kind === 'flow' ? { flowId: '' } : kind === 'execution' ? { executionId: '' } : { topic: '' };
+    onChange({ ...config, source });
   };
 
   const toggleOutcome = (outcome: 'completed' | 'error', checked: boolean) => {
@@ -95,10 +102,21 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
           >
             <MenuItem value="flow">A flow (any run)</MenuItem>
             <MenuItem value="execution">A planned execution</MenuItem>
+            <MenuItem value="topic">A signal topic</MenuItem>
           </Select>
         </FormControl>
 
-        {sourceKind === 'flow' ? (
+        {sourceKind === 'topic' ? (
+          <FormControl fullWidth>
+            <TextField
+              label="Signal topic"
+              value={config.source?.topic ?? ''}
+              onChange={(e) => onChange({ ...config, source: { topic: e.target.value } })}
+              placeholder="e.g. review-blocked"
+              helperText="React when a signal node in any flow emits this topic."
+            />
+          </FormControl>
+        ) : sourceKind === 'flow' ? (
           <FormControl fullWidth>
             <InputLabel id="flow-event-flow">Flow to watch</InputLabel>
             <Select
@@ -147,33 +165,37 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
         )}
       </Box>
 
-      <Typography variant="subtitle2" sx={{ mt: 2 }}>
-        When it…
-      </Typography>
-      <FormGroup row>
-        <FormControlLabel
-          control={
-            <Checkbox
-              checked={(config.on ?? []).includes('completed')}
-              onChange={(e) => toggleOutcome('completed', e.target.checked)}
+      {!isTopic && (
+        <>
+          <Typography variant="subtitle2" sx={{ mt: 2 }}>
+            When it…
+          </Typography>
+          <FormGroup row>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={(config.on ?? []).includes('completed')}
+                  onChange={(e) => toggleOutcome('completed', e.target.checked)}
+                />
+              }
+              label="completes"
             />
-          }
-          label="completes"
-        />
-        <FormControlLabel
-          control={
-            <Checkbox
-              checked={(config.on ?? []).includes('error')}
-              onChange={(e) => toggleOutcome('error', e.target.checked)}
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={(config.on ?? []).includes('error')}
+                  onChange={(e) => toggleOutcome('error', e.target.checked)}
+                />
+              }
+              label="errors"
             />
-          }
-          label="errors"
-        />
-      </FormGroup>
+          </FormGroup>
+        </>
+      )}
 
       <TextField
         fullWidth
-        label="Only when the output contains (optional)"
+        label={isTopic ? 'Only when the payload contains (optional)' : 'Only when the output contains (optional)'}
         value={config.outputMatch?.contains ?? ''}
         onChange={(e) => {
           const contains = e.target.value;
@@ -226,11 +248,9 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
 
       <Divider sx={{ mt: 2 }} />
       <Alert severity="info" sx={{ mt: 2 }}>
-        The upstream run&rsquo;s output is handed to this flow, so it can build on
-        what the other flow produced. To avoid runaway loops, a chain of
-        flow-event fires stops at the max depth above, and the existing
-        overlap-skip prevents a single execution from re-triggering itself while
-        it&rsquo;s still running.
+        {isTopic
+          ? 'The signal’s payload is handed to this flow. Emit a signal from a signal node in any flow to fire this one — fire-and-forget. To avoid runaway loops, a chain of fires stops at the max depth above, and the overlap-skip prevents a single execution from re-triggering itself while it’s still running.'
+          : 'The upstream run’s output is handed to this flow, so it can build on what the other flow produced. To avoid runaway loops, a chain of flow-event fires stops at the max depth above, and the existing overlap-skip prevents a single execution from re-triggering itself while it’s still running.'}
       </Alert>
     </Box>
   );
