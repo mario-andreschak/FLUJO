@@ -37,7 +37,7 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 # FLUJO
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.20.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.21.0-green.svg)](package.json)
 
 FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
 
