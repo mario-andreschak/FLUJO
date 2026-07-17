@@ -16,6 +16,7 @@
  * lazy-imports; and the encryption lock helper is mocked so we can flip it.
  */
 import { SchedulerService } from '@/backend/services/scheduler';
+import { StorageKey } from '@/shared/types/storage';
 import type { RunRecord } from '@/shared/types/plannedExecution';
 
 // --- in-memory storage ----------------------------------------------------
@@ -246,5 +247,115 @@ describe('SchedulerService overlap strategy (#121)', () => {
     );
     expect(result.execution).toBeUndefined();
     expect(result.error).toMatch(/Overlap strategy/);
+  });
+
+  // --- lifecycle vs. the overlap queue (issue #122) -----------------------
+
+  it('delete while queued: no zombie run, storage stays deleted, awaiter resolves skipped', async () => {
+    blockRunFlow();
+    const { execution } = await scheduler.create(input({ overlapStrategy: 'queue' }));
+    const id = execution!.id;
+
+    const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
+    await flush();
+    const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
+    await flush();
+    // Only the first is running; the second is queued.
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    await scheduler.delete(id);
+
+    // Release the in-flight run; its finally → drainQueue must NOT re-fire the
+    // queued fire for the just-deleted execution.
+    pendingRuns[0](completedResult);
+    await p1;
+    await flush();
+
+    // The queued fire never ran.
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    // Storage was not resurrected by the drained/in-flight run.
+    expect(store.has(`planned-execution-runs/${id}`)).toBe(false);
+    // The queued awaiter settled skipped (never hangs).
+    const r2 = await p2;
+    expect(r2.status).toBe('skipped');
+    expect(r2.error).toBe('execution deleted');
+  });
+
+  it('pause while queued: no drained run; the queued awaiter resolves skipped', async () => {
+    blockRunFlow();
+    const { execution } = await scheduler.create(input({ overlapStrategy: 'queue' }));
+    const id = execution!.id;
+
+    const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
+    await flush();
+    const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    await scheduler.setPaused(true);
+
+    pendingRuns[0](completedResult);
+    await p1;
+    await flush();
+
+    // No queued fire drained while paused.
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    const r2 = await p2;
+    expect(r2.status).toBe('skipped');
+    expect(r2.error).toBe('scheduler paused');
+  });
+
+  it('drainQueue re-checks existence (defense-in-depth) and never runs a vanished execution', async () => {
+    blockRunFlow();
+    const { execution } = await scheduler.create(input({ overlapStrategy: 'queue' }));
+    const id = execution!.id;
+
+    const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
+    await flush();
+    const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    // Simulate the raced case: the execution disappears from storage WITHOUT
+    // going through delete() (so this.queued still holds the deferred fire).
+    // The drainQueue re-check must catch it before re-entering fire().
+    store.set(StorageKey.PLANNED_EXECUTIONS, { version: 1, paused: false, executions: [] });
+
+    pendingRuns[0](completedResult);
+    await p1;
+    await flush();
+
+    // drainQueue reloaded get(id) → null → resolved skipped, no re-fire.
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    const r2 = await p2;
+    expect(r2.status).toBe('skipped');
+    expect(r2.error).toBe('execution deleted');
+  });
+
+  it('update while queued cancels the stale queued fire (skipped, "execution updated")', async () => {
+    blockRunFlow();
+    const { execution } = await scheduler.create(
+      input({ overlapStrategy: 'queue', prompt: 'OLD' })
+    );
+    const id = execution!.id;
+
+    const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
+    await flush();
+    const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    await scheduler.update(id, { prompt: 'NEW' });
+
+    // The queued fire (captured against the OLD snapshot) is cancelled.
+    const r2 = await p2;
+    expect(r2.status).toBe('skipped');
+    expect(r2.error).toBe('execution updated');
+
+    pendingRuns[0](completedResult);
+    await p1;
+    await flush();
+    // No stale re-fire of the pre-update config.
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
   });
 });

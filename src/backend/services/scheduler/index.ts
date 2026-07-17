@@ -353,6 +353,14 @@ export class SchedulerService {
     const file = await this.loadFile();
     await this.saveFile({ ...file, paused });
     await this.reconcile();
+    // Pausing must stop deferred fires too, not just disarm triggers (issue
+    // #122): a queued fire would otherwise run a flow while globally paused.
+    // Cancel every queued fire (storage still exists, so audit the skip).
+    if (paused) {
+      for (const id of [...this.queued.keys()]) {
+        await this.cancelQueued(id, 'scheduler paused', true);
+      }
+    }
   }
 
   async list(): Promise<PlannedExecutionListEntry[]> {
@@ -446,6 +454,11 @@ export class SchedulerService {
     executions[index] = merged;
     await this.saveFile({ ...file, executions });
     await this.reconcile();
+    // A queued fire captured the PRE-update snapshot (stale flowId/prompt/
+    // overlapStrategy) at enqueue time (issue #122). Cancel those stale fires
+    // rather than silently running the old config; storage still exists so the
+    // skip is audited. Fresh fires re-enqueue against the updated config.
+    await this.cancelQueued(id, 'execution updated', true);
     return { execution: merged };
   }
 
@@ -460,6 +473,10 @@ export class SchedulerService {
     });
     await this.reconcile();
     this.lastTriggerErrors.delete(id);
+    // Cancel deferred fires BEFORE erasing history (issue #122). appendAudit is
+    // false so appendRunRecord can't recreate planned-execution-runs/<id>.json
+    // — the reported resurrection bug.
+    await this.cancelQueued(id, 'execution deleted', false);
     await deleteRunHistory(id);
     await deleteExecutionState(id);
     return { success: true };
@@ -649,10 +666,67 @@ export class SchedulerService {
   }
 
   /**
+   * Build a `skipped` RunRecord for a queued fire that was cancelled or
+   * re-validated away (issue #122). Kept as a helper so delete/pause/update and
+   * the drainQueue re-check produce identical, auditable outcomes.
+   */
+  private skippedRecord(fire: QueuedFire, reason: string): RunRecord {
+    const at = new Date().toISOString();
+    return {
+      runId: fire.runId,
+      conversationId: '',
+      firedAt: at,
+      finishedAt: at,
+      status: 'skipped',
+      triggerSummary: fire.payload.summary,
+      error: reason,
+    };
+  }
+
+  /**
+   * Cancel every fire queued for an execution id and settle its awaiter so
+   * poll/url-watch `onFire` callers never hang (issue #122). Each pending
+   * QueuedFire resolves with a `skipped` RunRecord carrying `reason`.
+   *
+   * @param appendAudit when true, also persist the skipped record to run
+   *   history (pause/update — storage still exists). MUST be false for a hard
+   *   delete: appendRunRecord is a read-modify-write that would recreate the
+   *   just-erased `planned-execution-runs/<id>.json` — the reported
+   *   resurrection bug.
+   */
+  private async cancelQueued(id: string, reason: string, appendAudit: boolean): Promise<void> {
+    const queue = this.queued.get(id);
+    if (!queue || queue.length === 0) {
+      return;
+    }
+    this.queued.delete(id);
+    for (const fire of queue) {
+      const record = this.skippedRecord(fire, reason);
+      if (appendAudit) {
+        try {
+          await appendRunRecord(id, record);
+        } catch (error) {
+          log.warn(`Failed to record cancelled queued fire for ${id}:`, error);
+        }
+      }
+      fire.resolve(record);
+    }
+    log.info(`Cancelled ${queue.length} queued fire(s) for ${id}: ${reason}`);
+  }
+
+  /**
    * Start the next queued fire ('queue' overlap strategy) once nothing is
    * running for this id. Called from fire()'s finally so the queue drains FIFO,
    * one run at a time. The dequeued run reuses fire() (so it re-checks the
    * encryption guard etc.) and resolves the caller's promise with its outcome.
+   *
+   * Defense-in-depth (issue #122): drainQueue runs off fire()'s finally and is
+   * not awaited by the lifecycle methods, so a delete/pause/update can land
+   * mid-drain. Before re-entering fire() we reload the execution and re-check
+   * existence/enabled/pause; a since-deleted, disabled, or paused execution
+   * resolves the queued fire `skipped` and does NOT run the flow (nor recreate
+   * storage for a deleted id). The reload also means a surviving fire runs the
+   * FRESH config, which resolves the update()-staleness sub-bug.
    */
   private drainQueue(id: string): void {
     const queue = this.queued.get(id);
@@ -670,9 +744,24 @@ export class SchedulerService {
     if (!next) {
       return;
     }
-    void this.fire(next.execution, next.payload, next.runId)
-      .then(next.resolve)
-      .catch(error => log.error(`Queued fire failed for ${id}:`, error));
+    void (async () => {
+      const current = await this.get(id);
+      if (!current || !current.enabled || this.pausedCache) {
+        const reason = !current
+          ? 'execution deleted'
+          : !current.enabled
+            ? 'execution disabled'
+            : 'scheduler paused';
+        // Do NOT appendRunRecord here: a deleted id would be resurrected, and a
+        // disabled/paused execution's cancellation is recorded by the lifecycle
+        // method that caused it. Just settle the awaiter and stop draining.
+        next.resolve(this.skippedRecord(next, reason));
+        return;
+      }
+      // Re-fire with the freshly reloaded config (keeps the original runId).
+      const record = await this.fire(current, next.payload, next.runId);
+      next.resolve(record);
+    })().catch(error => log.error(`Queued fire failed for ${id}:`, error));
   }
 
   // --- status --------------------------------------------------------------
@@ -919,6 +1008,15 @@ export class SchedulerService {
       this.removeRunning(execution.id, runId);
       // Start the next queued fire (if any) now that this run has ended.
       this.drainQueue(execution.id);
+    }
+    // If the execution was hard-deleted while this run was in flight (issue
+    // #122), do NOT appendRunRecord (it would recreate the just-erased
+    // planned-execution-runs/<id>.json) nor publish a terminal event for a
+    // ghost execution. The scheduler has no cancellation handle for a live
+    // runFlow, so suppressing its side effects is the minimal safe fix.
+    if ((await this.get(execution.id)) === null) {
+      log.info(`Dropping run record for deleted execution ${execution.id}`);
+      return record;
     }
     await appendRunRecord(execution.id, record);
     // Broadcast terminal runs so `flow-event` triggers can react (issue #116).
