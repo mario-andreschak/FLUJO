@@ -360,6 +360,48 @@ describe('SchedulerService', () => {
     expect(readFile()?.executions ?? []).toHaveLength(0);
   });
 
+  it('publishes a FlowRunEvent for a completed fire, but not for a skipped one (issue #116)', async () => {
+    const { getFlowRunEventBus } = await import(
+      '@/backend/services/scheduler/flowRunEventBus'
+    );
+    const events: unknown[] = [];
+    const unsub = getFlowRunEventBus().subscribe((e) => events.push(e));
+
+    const { execution } = await scheduler.create(scheduleInput());
+    await scheduler.fire(execution!, {
+      kind: 'webhook',
+      summary: 'Webhook',
+      context: { hi: 1 },
+      chainDepth: 1,
+    });
+
+    expect(events).toHaveLength(1);
+    const event = events[0] as Record<string, unknown>;
+    expect(event.flowId).toBe('flow-1');
+    expect(event.executionId).toBe(execution!.id);
+    expect(event.status).toBe('completed');
+    expect(event.outputText).toBe('All done');
+    expect(event.firedBy).toBe('webhook');
+    // chainDepth is threaded through from the fire payload.
+    expect(event.chainDepth).toBe(1);
+
+    // An overlap-skipped fire must NOT publish.
+    let release!: () => void;
+    runFlowMock.mockImplementationOnce(
+      () => new Promise((resolve) => { release = () => resolve(completedResult); })
+    );
+    const inFlight = scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    await new Promise((r) => setTimeout(r, 10));
+    const skipped = await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    expect(skipped.status).toBe('skipped');
+    release();
+    await inFlight;
+
+    // Only the two completed fires published (the skip did not).
+    expect(events).toHaveLength(2);
+    unsub();
+  });
+
   it('tags a scheduler fire with source "schedule" and the planned execution id (issue #113)', async () => {
     const { execution } = await scheduler.create(scheduleInput());
     await scheduler.runNow(execution!.id);

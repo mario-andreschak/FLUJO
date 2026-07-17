@@ -3,6 +3,7 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { reconcileConversationLog, recoverMessagesFromLog } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import {
@@ -42,6 +43,55 @@ const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByNam
 
 // Persist conversation state WITHOUT the in-memory-only debug execution trace.
 const persistState = persistConversationState;
+
+/** Cap the output carried on a runFlow-originated FlowRunEvent (issue #116). */
+const MAX_EVENT_OUTPUT_CHARS = 4096;
+
+/**
+ * Announce a terminal run on the process-global FlowRunEvent bus (issue #116)
+ * so `flow-event` triggers can react to chat/API/manual runs. ONLY called for
+ * non-scheduled root runs (`runDepth === 0`): scheduler-fired runs are
+ * announced by SchedulerService.fire() with the precise stored output + chain
+ * depth, and subflow stages must never emit. Best-effort and never throws.
+ */
+async function publishRunFlowEvent(
+  state: SharedState,
+  status: 'completed' | 'error',
+  outputText: string | undefined
+): Promise<void> {
+  try {
+    const flowId = state.flowId;
+    if (!flowId) {
+      return;
+    }
+    let flowName: string | undefined;
+    try {
+      flowName = (await flowService.getFlow(flowId))?.name ?? undefined;
+    } catch {
+      /* best-effort name resolution */
+    }
+    // 'schedule' is filtered out before this is ever called.
+    const firedBy: FlowRunFiredBy = state.source === 'api' ? 'api' : 'chat';
+    const trimmed =
+      outputText && outputText.length > MAX_EVENT_OUTPUT_CHARS
+        ? `${outputText.slice(0, MAX_EVENT_OUTPUT_CHARS)}…`
+        : outputText;
+    getFlowRunEventBus().publish({
+      flowId,
+      flowName,
+      executionId: state.plannedExecutionId,
+      runId: state.conversationId || '',
+      conversationId: state.conversationId || '',
+      status,
+      outputText: trimmed,
+      firedBy,
+      chainDepth: 0,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    log.warn('Failed to publish runFlow flow-run event:', error);
+  }
+}
 
 export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | 'paused_debug' | 'running';
 
@@ -1057,6 +1107,18 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   emitNewMessages();
   if (finalStatus === 'completed' || finalStatus === 'error') {
     emit({ type: 'run:done', status: finalStatus });
+    // Flow-run event bus (issue #116): announce terminal runs so `flow-event`
+    // triggers can react to chat/API/manual runs. Scheduler-fired runs are
+    // announced by SchedulerService.fire() instead (de-dup), and subflow stages
+    // (runDepth > 0) must NOT emit or a composed flow sprays one event per stage.
+    if (sharedState.source !== 'schedule' && (sharedState.runDepth ?? 0) === 0) {
+      const lastMsg = sharedState.messages[sharedState.messages.length - 1];
+      const outputText =
+        lastMsg && lastMsg.role === 'assistant' && typeof lastMsg.content === 'string'
+          ? lastMsg.content
+          : undefined;
+      void publishRunFlowEvent(sharedState, finalStatus, outputText);
+    }
   }
 
   try {

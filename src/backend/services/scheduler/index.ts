@@ -17,6 +17,8 @@ import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
+import { armFlowEvent } from './triggers/flowEvent';
+import { getFlowRunEventBus, FlowRunFiredBy } from './flowRunEventBus';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord, loadRunRecords } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
 
@@ -262,6 +264,38 @@ export class SchedulerService {
         );
         break;
       }
+      case 'flow-event': {
+        this.armed.set(
+          execution.id,
+          armFlowEvent(trigger, {
+            onFire: ({ summary, context, chainDepth }) => {
+              this.lastTriggerErrors.delete(execution.id);
+              // Fire-and-forget: the bus listener is synchronous. Any run
+              // outcome is recorded by fire() as a RunRecord.
+              void this.fire(execution, { kind: 'flow-event', summary, context, chainDepth }).catch(
+                error => log.error(`Flow-event fire failed for ${execution.id}:`, error)
+              );
+            },
+            // Loop safety: record the depth-limit skip as a run so it's auditable.
+            onSkip: reason => {
+              const at = new Date().toISOString();
+              void appendRunRecord(execution.id, {
+                runId: uuidv4(),
+                conversationId: '',
+                firedAt: at,
+                finishedAt: at,
+                status: 'skipped',
+                triggerSummary: 'Flow event',
+                error: reason,
+              }).catch(error =>
+                log.warn(`Failed to record flow-event skip for ${execution.id}:`, error)
+              );
+            },
+            onError: message => this.lastTriggerErrors.set(execution.id, message),
+          })
+        );
+        break;
+      }
       default:
         log.warn(
           `Trigger type "${(trigger as { type: string }).type}" is not implemented — "${execution.name}" not armed`
@@ -494,6 +528,42 @@ export class SchedulerService {
         const result = validateSchedule(trigger.cron, trigger.timezone);
         return result.valid ? null : `Invalid schedule: ${result.error}`;
       }
+      case 'flow-event': {
+        const src = trigger.source;
+        const set = [src?.executionId, src?.flowId, src?.flowName].filter(
+          v => typeof v === 'string' && v.trim().length > 0
+        );
+        if (set.length !== 1) {
+          return 'Choose exactly one source: a flow or a planned execution';
+        }
+        if (!Array.isArray(trigger.on) || trigger.on.length === 0) {
+          return 'Select at least one outcome to react to (completed or error)';
+        }
+        if (trigger.on.some(s => s !== 'completed' && s !== 'error')) {
+          return 'Outcomes must be "completed" or "error"';
+        }
+        if (trigger.outputMatch?.regex) {
+          try {
+            // eslint-disable-next-line no-new
+            new RegExp(trigger.outputMatch.regex);
+          } catch (error) {
+            return `Invalid output-match regex: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+        if (
+          trigger.maxChainDepth !== undefined &&
+          (!Number.isInteger(trigger.maxChainDepth) || trigger.maxChainDepth < 1)
+        ) {
+          return 'Max chain depth must be a positive whole number';
+        }
+        if (
+          trigger.minIntervalMs !== undefined &&
+          (!Number.isFinite(trigger.minIntervalMs) || trigger.minIntervalMs < 0)
+        ) {
+          return 'Minimum interval must be zero or more milliseconds';
+        }
+        return null;
+      }
       default:
         return 'Unknown trigger type';
     }
@@ -660,7 +730,54 @@ export class SchedulerService {
       this.running.delete(execution.id);
     }
     await appendRunRecord(execution.id, record);
+    // Broadcast terminal runs so `flow-event` triggers can react (issue #116).
+    // Skips (overlap/encryption-lock) return earlier and never reach here.
+    if (record.status === 'completed' || record.status === 'error') {
+      await this.publishFlowRunEvent(execution, record, payload);
+    }
     return record;
+  }
+
+  /**
+   * Publish a terminal FlowRunEvent onto the process-global bus (issue #116).
+   * Every scheduler-fired run flows through here, carrying the truncated output
+   * and an event-chain depth so downstream `flow-event` triggers can match,
+   * chain their prompt, and enforce loop safety. Best-effort and never throws:
+   * an unresolvable flow name or a listener problem must not fail the run.
+   */
+  private async publishFlowRunEvent(
+    execution: PlannedExecution,
+    record: RunRecord,
+    payload: TriggerFirePayload
+  ): Promise<void> {
+    try {
+      let flowName: string | undefined;
+      try {
+        const { flowService } = await import('@/backend/services/flow');
+        flowName = (await flowService.getFlow(execution.flowId))?.name ?? undefined;
+      } catch (error) {
+        log.debug(`Could not resolve flow name for run event (${execution.flowId}):`, error);
+      }
+      // schedule-catchup is a schedule for downstream purposes; every other kind
+      // is already a valid FlowRunFiredBy.
+      const firedBy: FlowRunFiredBy =
+        payload.kind === 'schedule-catchup' ? 'schedule' : payload.kind;
+      getFlowRunEventBus().publish({
+        flowId: execution.flowId,
+        flowName,
+        executionId: execution.id,
+        runId: record.runId,
+        conversationId: record.conversationId,
+        status: record.status === 'completed' ? 'completed' : 'error',
+        outputText: record.outputText,
+        error: record.error,
+        firedBy,
+        chainDepth: payload.chainDepth ?? 0,
+        timestamp: record.finishedAt ?? new Date().toISOString(),
+      });
+    } catch (error) {
+      log.warn(`Failed to publish flow-run event for "${execution.name}":`, error);
+    }
   }
 
   private composePrompt(

@@ -26,10 +26,12 @@ import WebhookIcon from '@mui/icons-material/Webhook';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import LanguageIcon from '@mui/icons-material/Language';
+import AltRouteIcon from '@mui/icons-material/AltRoute';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import {
   FileWatchTriggerConfig,
+  FlowEventTriggerConfig,
   McpPollTriggerConfig,
   PlannedExecution,
   ScheduleTriggerConfig,
@@ -48,6 +50,7 @@ import WebhookPanel from './WebhookPanel';
 import FileWatchPanel from './FileWatchPanel';
 import WatchToolPanel from './WatchToolPanel';
 import UrlWatchPanel from './UrlWatchPanel';
+import FlowEventPanel from './FlowEventPanel';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -75,6 +78,11 @@ const DEFAULT_URL_WATCH: UrlWatchTriggerConfig = {
   type: 'url-watch',
   url: '',
   cron: '*/15 * * * *',
+};
+const DEFAULT_FLOW_EVENT: FlowEventTriggerConfig = {
+  type: 'flow-event',
+  source: { flowId: '' },
+  on: ['completed'],
 };
 
 interface ExecutionModalProps {
@@ -276,6 +284,19 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             title="When a website changes"
             description="Check a URL regularly and run when its content is different from the last check."
           />
+          <OptionCard
+            selected={trigger.type === 'flow-event'}
+            onClick={() => {
+              if (trigger.type !== 'flow-event') {
+                setTrigger(
+                  execution?.trigger.type === 'flow-event' ? execution.trigger : DEFAULT_FLOW_EVENT
+                );
+              }
+            }}
+            icon={<AltRouteIcon />}
+            title="When another flow finishes"
+            description="React to another flow completing or erroring — chain flows together or run triage when something fails."
+          />
         </Box>
 
         {trigger.type === 'schedule' && (
@@ -303,6 +324,14 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         )}
         {trigger.type === 'url-watch' && (
           <UrlWatchPanel config={trigger} onChange={setTrigger} />
+        )}
+        {trigger.type === 'flow-event' && (
+          <FlowEventPanel
+            config={trigger}
+            onChange={setTrigger}
+            flows={flows}
+            currentExecutionId={execution?.id ?? draftId}
+          />
         )}
 
         <Divider sx={{ mt: 3 }} />

@@ -20,6 +20,10 @@ export function describeTrigger(trigger: TriggerConfig): string {
         return 'Watching a URL';
       }
     }
+    case 'flow-event': {
+      const outcomes = (trigger.on ?? []).join('/') || 'terminal';
+      return `When a flow is ${outcomes}`;
+    }
     default:
       return 'Trigger';
   }

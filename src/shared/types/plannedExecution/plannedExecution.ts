@@ -92,12 +92,45 @@ export interface UrlWatchTriggerConfig {
   timezone?: string;
 }
 
+/**
+ * Flow-run event trigger (issue #116): fire when ANOTHER flow reaches a
+ * terminal state. Lets one planned execution react to a different flow
+ * completing or erroring — "run triage when X errors", "run B after A finishes"
+ * — without any external glue. Delivery is in-process: a source run just
+ * finished, so the process is up. Loop-safety is built in via an event-chain
+ * depth cap (`maxChainDepth`) plus an optional cooldown (`minIntervalMs`); the
+ * scheduler's existing overlap-skip guards a single execution against
+ * self-retrigger storms.
+ */
+export interface FlowEventTriggerConfig {
+  type: 'flow-event';
+  /**
+   * What upstream run to react to. EXACTLY ONE of the three must be set:
+   *  - `executionId`  — a specific planned execution's runs (most precise).
+   *  - `flowId`       — any run of a given flow (chat/API/manual/scheduled).
+   *  - `flowName`     — same, matched by the flow's current name.
+   */
+  source: { flowId?: string; flowName?: string; executionId?: string };
+  /** Which terminal statuses fire this trigger. At least one is required. */
+  on: Array<'completed' | 'error'>;
+  /** Optional filter on the upstream run's final output text. */
+  outputMatch?: { contains?: string; regex?: string };
+  /**
+   * Loop safety: refuse to fire once the event-chain depth reaches this many
+   * hops (a `skipped` run is recorded instead). Default 5.
+   */
+  maxChainDepth?: number;
+  /** Minimum gap between fires of THIS trigger, in ms (extra loop clamp). */
+  minIntervalMs?: number;
+}
+
 export type TriggerConfig =
   | ScheduleTriggerConfig
   | WebhookTriggerConfig
   | FileWatchTriggerConfig
   | McpPollTriggerConfig
-  | UrlWatchTriggerConfig;
+  | UrlWatchTriggerConfig
+  | FlowEventTriggerConfig;
 
 export type TriggerType = TriggerConfig['type'];
 
@@ -178,11 +211,27 @@ export interface PlannedExecutionState {
 
 /** What a trigger hands to the scheduler when it fires. */
 export interface TriggerFirePayload {
-  kind: 'manual' | 'schedule' | 'schedule-catchup' | 'webhook' | 'file' | 'mcp-poll' | 'url-watch';
+  kind:
+    | 'manual'
+    | 'schedule'
+    | 'schedule-catchup'
+    | 'webhook'
+    | 'file'
+    | 'mcp-poll'
+    | 'url-watch'
+    | 'flow-event';
   /** Short human-readable summary, stored on the RunRecord. */
   summary: string;
   /** Structured data appended to the run prompt as a fenced JSON block. */
   context?: unknown;
+  /**
+   * Event-chain depth of the run this fire produces (issue #116). Organic runs
+   * (schedule/webhook/file/poll/manual, or any chat/API run) are depth 0; a run
+   * fired by a `flow-event` trigger reacting to a depth-N run is depth N+1. The
+   * scheduler stamps it onto the emitted FlowRunEvent so `maxChainDepth` can
+   * break runaway A→B→A loops. Distinct from runFlow's subflow `runDepth`.
+   */
+  chainDepth?: number;
 }
 
 /** Live (non-persisted) status of an execution's armed trigger, for the UI. */
