@@ -22,9 +22,12 @@ jest.mock('@/backend/services/model', () => ({
 jest.mock('@/backend/services/scheduler', () => {
   const list = jest.fn();
   const runNow = jest.fn();
+  const create = jest.fn();
+  const update = jest.fn();
+  const del = jest.fn();
   return {
-    getSchedulerService: () => ({ list, runNow }),
-    __mocks: { list, runNow },
+    getSchedulerService: () => ({ list, runNow, create, update, delete: del }),
+    __mocks: { list, runNow, create, update, delete: del },
   };
 });
 jest.mock('@/backend/execution/flow/runFlow', () => ({
@@ -91,7 +94,11 @@ const flows = flowService as unknown as {
   revertFlow: jest.Mock;
 };
 const models = modelService as unknown as { loadModels: jest.Mock };
-const scheduler = (jest.requireMock('@/backend/services/scheduler') as { __mocks: { list: jest.Mock; runNow: jest.Mock } }).__mocks;
+const scheduler = (
+  jest.requireMock('@/backend/services/scheduler') as {
+    __mocks: { list: jest.Mock; runNow: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
+  }
+).__mocks;
 const runFlowMock = runFlow as jest.Mock;
 const compileSpecMock = compileSpec as jest.Mock;
 const loadConversationStateMock = loadConversationState as jest.Mock;
@@ -141,6 +148,9 @@ describe('internalToolDefinitions', () => {
         'list_models',
         'list_planned_executions',
         'run_planned_execution',
+        'update_planned_execution',
+        'create_planned_execution',
+        'delete_planned_execution',
         'list_conversations',
         'read_conversation',
         'terminal',
@@ -612,6 +622,205 @@ describe('planned executions', () => {
     const r = await internalCallTool(makeService(), 'run_planned_execution', { id: 'pe1' });
     expect(scheduler.runNow).toHaveBeenCalledWith('pe1');
     expect(text(r)).toContain('"out"');
+  });
+});
+
+describe('update_planned_execution', () => {
+  const schedulePe = {
+    id: 'pe1',
+    name: 'Nightly',
+    enabled: true,
+    flowId: 'f1',
+    prompt: 'go',
+    trigger: { type: 'schedule', cron: '0 3 * * *' },
+  };
+  const webhookPe = {
+    id: 'pe2',
+    name: 'Hooked',
+    enabled: true,
+    flowId: 'f1',
+    prompt: 'go',
+    trigger: { type: 'webhook', token: 'hook-secret' },
+  };
+
+  function listReturns(...executions: Array<Record<string, unknown>>) {
+    scheduler.list.mockResolvedValue(
+      executions.map((execution) => ({ execution, status: { armed: true }, lastRun: null }))
+    );
+  }
+
+  it('resolves by name and patches enabled/prompt by id', async () => {
+    listReturns(schedulePe);
+    scheduler.update.mockResolvedValue({ execution: { ...schedulePe, enabled: false, prompt: 'stop' } });
+    const r = await internalCallTool(makeService(), 'update_planned_execution', {
+      execution: 'Nightly',
+      enabled: false,
+      prompt: 'stop',
+    });
+    expect(scheduler.update).toHaveBeenCalledWith('pe1', { enabled: false, prompt: 'stop' });
+    expect(r.isError).toBeUndefined();
+    const out = JSON.parse(text(r));
+    expect(out).toMatchObject({ updated: true, id: 'pe1', enabled: false });
+  });
+
+  it('maps the bare cron convenience onto a schedule trigger', async () => {
+    listReturns(schedulePe);
+    scheduler.update.mockResolvedValue({ execution: schedulePe });
+    const r = await internalCallTool(makeService(), 'update_planned_execution', {
+      execution: 'pe1',
+      cron: '*/5 * * * *',
+    });
+    expect(scheduler.update).toHaveBeenCalledWith('pe1', {
+      trigger: { type: 'schedule', cron: '*/5 * * * *' },
+    });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it('errors when patching cron on a webhook trigger (no schedule to change)', async () => {
+    listReturns(webhookPe);
+    const r = await internalCallTool(makeService(), 'update_planned_execution', {
+      execution: 'Hooked',
+      cron: '*/5 * * * *',
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('webhook');
+    expect(scheduler.update).not.toHaveBeenCalled();
+  });
+
+  it('resolves flowId by flow name', async () => {
+    listReturns(schedulePe);
+    flows.loadFlows.mockResolvedValue([{ id: 'f2', name: 'Other Flow' }]);
+    scheduler.update.mockResolvedValue({ execution: { ...schedulePe, flowId: 'f2' } });
+    const r = await internalCallTool(makeService(), 'update_planned_execution', {
+      execution: 'pe1',
+      flowId: 'Other Flow',
+    });
+    expect(scheduler.update).toHaveBeenCalledWith('pe1', { flowId: 'f2' });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it('rejects a runaway (every-second) cron and never calls the service', async () => {
+    listReturns(schedulePe);
+    const r = await internalCallTool(makeService(), 'update_planned_execution', {
+      execution: 'pe1',
+      cron: '* * * * * *',
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('Cadence too fast');
+    expect(scheduler.update).not.toHaveBeenCalled();
+  });
+
+  it('never echoes the webhook token in its output', async () => {
+    listReturns(webhookPe);
+    scheduler.update.mockResolvedValue({ execution: { ...webhookPe, enabled: false } });
+    const r = await internalCallTool(makeService(), 'update_planned_execution', {
+      execution: 'pe2',
+      enabled: false,
+    });
+    expect(r.isError).toBeUndefined();
+    expect(text(r)).not.toContain('hook-secret');
+    expect(text(r)).toContain('"webhook"');
+  });
+
+  it('errors for an unknown execution', async () => {
+    listReturns(schedulePe);
+    const r = await internalCallTool(makeService(), 'update_planned_execution', { execution: 'ghost' });
+    expect(r.isError).toBe(true);
+    expect(scheduler.update).not.toHaveBeenCalled();
+  });
+
+  it('errors when nothing patchable is provided', async () => {
+    listReturns(schedulePe);
+    const r = await internalCallTool(makeService(), 'update_planned_execution', { execution: 'pe1' });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('Nothing to update');
+    expect(scheduler.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('create_planned_execution', () => {
+  it('creates from a flow name + cron convenience and returns the redacted execution', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    scheduler.create.mockResolvedValue({
+      execution: {
+        id: 'pe9',
+        name: 'New One',
+        enabled: true,
+        flowId: 'f1',
+        prompt: 'go',
+        trigger: { type: 'webhook', token: 'minted-secret' },
+      },
+    });
+    const r = await internalCallTool(makeService(), 'create_planned_execution', {
+      name: 'New One',
+      flow: 'My Flow',
+      prompt: 'go',
+      cron: '*/10 * * * *',
+    });
+    expect(scheduler.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'New One',
+        flowId: 'f1',
+        enabled: true,
+        prompt: 'go',
+        trigger: { type: 'schedule', cron: '*/10 * * * *' },
+      })
+    );
+    expect(r.isError).toBeUndefined();
+    const out = JSON.parse(text(r));
+    expect(out).toMatchObject({ created: true, id: 'pe9' });
+    // Even if the service minted a webhook token, it must not surface here.
+    expect(text(r)).not.toContain('minted-secret');
+  });
+
+  it('rejects an every-second cadence before calling the service', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    const r = await internalCallTool(makeService(), 'create_planned_execution', {
+      name: 'Runaway',
+      flow: 'My Flow',
+      cron: '*/1 * * * * *',
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('Cadence too fast');
+    expect(scheduler.create).not.toHaveBeenCalled();
+  });
+
+  it('errors for an unknown flow', async () => {
+    flows.loadFlows.mockResolvedValue([]);
+    const r = await internalCallTool(makeService(), 'create_planned_execution', {
+      name: 'X',
+      flow: 'ghost',
+      cron: '*/10 * * * *',
+    });
+    expect(r.isError).toBe(true);
+    expect(scheduler.create).not.toHaveBeenCalled();
+  });
+
+  it('requires either a trigger or a cron', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    const r = await internalCallTool(makeService(), 'create_planned_execution', { name: 'X', flow: 'My Flow' });
+    expect(r.isError).toBe(true);
+    expect(scheduler.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('delete_planned_execution', () => {
+  it('resolves by name and deletes by id', async () => {
+    scheduler.list.mockResolvedValue([
+      { execution: { id: 'pe1', name: 'Nightly', trigger: { type: 'schedule', cron: '0 3 * * *' } }, status: {}, lastRun: null },
+    ]);
+    scheduler.delete.mockResolvedValue({ success: true });
+    const r = await internalCallTool(makeService(), 'delete_planned_execution', { execution: 'Nightly' });
+    expect(scheduler.delete).toHaveBeenCalledWith('pe1');
+    expect(r.isError).toBeUndefined();
+    expect(text(r)).toContain('"deleted": true');
+  });
+
+  it('errors for an unknown execution', async () => {
+    scheduler.list.mockResolvedValue([]);
+    const r = await internalCallTool(makeService(), 'delete_planned_execution', { execution: 'ghost' });
+    expect(r.isError).toBe(true);
+    expect(scheduler.delete).not.toHaveBeenCalled();
   });
 });
 

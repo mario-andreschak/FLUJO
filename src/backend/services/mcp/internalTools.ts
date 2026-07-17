@@ -14,7 +14,11 @@
  *  - Secrets never reach a model: list_mcp_servers returns name/transport/status
  *    only (no env, headers, or OAuth material); list_models whitelists metadata
  *    fields and never the ApiKey; planned executions expose the trigger TYPE only
- *    (webhook trigger configs carry a secret token).
+ *    (webhook trigger configs carry a secret token) — and the create/update
+ *    planned-execution tools apply the same trigger-type redaction on the way OUT
+ *    (a minted webhook token is never echoed back) and clamp flow-driven schedule
+ *    changes to a minimum interval so a runaway flow can't set itself to a
+ *    every-second cadence.
  *  - Conversation transcripts (read_conversation) exclude system-role messages
  *    (node system prompts are model plumbing, same rule as the chat UI) and are
  *    size-bounded so a long conversation can't flood the calling model's context.
@@ -38,6 +42,8 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { getSchedulerService } from '@/backend/services/scheduler';
+import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule';
+import type { PlannedExecution, TriggerConfig } from '@/shared/types/plannedExecution';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
@@ -78,6 +84,17 @@ const TERMINAL_MAX_OUTPUT_CHARS = 100_000;
 const READ_CONVERSATION_DEFAULT_LIMIT = 50;
 const READ_CONVERSATION_MAX_CHARS = 100_000;
 const READ_CONVERSATION_TOOL_ARGS_CHARS = 2_000;
+
+/**
+ * Runaway-cadence guardrail (issue #112). Flow-driven create/update of a planned
+ * execution clamps the effective firing interval to this floor: a self-tuning
+ * flow that adjusts its own cadence can slow down or speed up, but can't set
+ * itself to an every-second pulse. The clamp REJECTS (never silently rewrites)
+ * and lives on the MCP path only — the REST/builder UI path is deliberately
+ * left unclamped so a human can still configure a fast poll. Named constant so
+ * it is trivially tunable.
+ */
+const MIN_FLOW_SCHEDULE_INTERVAL_MS = 60_000;
 
 /**
  * The slice of MCPService the dispatcher needs. Passed in by the caller instead
@@ -282,6 +299,52 @@ export function internalToolDefinitions(): Tool[] {
           id: { type: 'string', description: 'The planned execution id.' },
         },
         required: ['id'],
+      },
+    },
+    {
+      name: 'update_planned_execution',
+      description:
+        'Modify an existing planned execution (by id or name, see list_planned_executions). Patch any of: "enabled" (turn the schedule on/off), "prompt" (the run prompt), "flowId" (the flow to run — accepts a flow name or id), "cron" (a convenience for the trigger\'s cron pattern — works for schedule / mcp-poll / url-watch triggers) or a full "trigger" object for complete control. Flow-driven cadence changes are clamped to a minimum interval (a runaway every-second schedule is rejected). The webhook secret token is never returned.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          execution: { type: 'string', description: 'The planned execution id or name.' },
+          enabled: { type: 'boolean', description: 'Enable or disable the execution.' },
+          prompt: { type: 'string', description: 'The run prompt.' },
+          flowId: { type: 'string', description: 'The flow to run — a flow name or id (resolved to the flow id).' },
+          cron: { type: 'string', description: 'Cron pattern (croner syntax; 6-field form for seconds) for the trigger\'s schedule. Applies to schedule / mcp-poll / url-watch triggers.' },
+          trigger: { type: 'object', description: 'Full trigger config object (escape hatch for complete control). Prefer the named fields above.' },
+        },
+        required: ['execution'],
+      },
+    },
+    {
+      name: 'create_planned_execution',
+      description:
+        'Create a new planned execution: bind a flow to a trigger so it runs headlessly. Provide "name", "flow" (a flow name or id), an optional "prompt", optional "enabled" (default true), and EITHER a full "trigger" object OR a convenience "cron" (which creates a schedule trigger). Flow-driven cadence is clamped to a minimum interval. A webhook trigger\'s secret token is minted server-side and never returned.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'A name for the planned execution.' },
+          flow: { type: 'string', description: 'The flow to run — a flow name or id.' },
+          prompt: { type: 'string', description: 'The run prompt (may be empty).' },
+          enabled: { type: 'boolean', description: 'Whether to arm the trigger immediately (default true).' },
+          cron: { type: 'string', description: 'Cron pattern for a schedule trigger (convenience — use "trigger" for other trigger types).' },
+          trigger: { type: 'object', description: 'Full trigger config object (schedule / webhook / file-watch / mcp-poll / url-watch).' },
+        },
+        required: ['name', 'flow'],
+      },
+    },
+    {
+      name: 'delete_planned_execution',
+      description:
+        'Permanently delete a planned execution (by id or name, see list_planned_executions), along with its run history. This cannot be undone.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          execution: { type: 'string', description: 'The planned execution id or name.' },
+        },
+        required: ['execution'],
       },
     },
     {
@@ -735,6 +798,197 @@ async function runPlannedExecution(args: Record<string, unknown>): Promise<CallT
   });
 }
 
+/** Resolve a planned execution by id first (exact), then by name. */
+async function resolvePlannedExecution(ref: string): Promise<PlannedExecution | null> {
+  const entries = await getSchedulerService().list();
+  const byId = entries.find((e) => e.execution.id === ref);
+  const byName = entries.find((e) => e.execution.name === ref);
+  return (byId ?? byName)?.execution ?? null;
+}
+
+/**
+ * The whitelist a planned execution is reduced to on the way out of a write:
+ * exactly the fields list_planned_executions surfaces, so a webhook trigger's
+ * secret token (or any other trigger detail) can never ride back into the
+ * calling model's context.
+ */
+function redactExecution(execution: PlannedExecution): Record<string, unknown> {
+  return {
+    id: execution.id,
+    name: execution.name,
+    enabled: execution.enabled,
+    flowId: execution.flowId,
+    triggerType: execution.trigger?.type,
+  };
+}
+
+/** Cron-bearing trigger types whose cadence a bare "cron" convenience field can set. */
+function triggerHasCron(
+  trigger: TriggerConfig
+): trigger is Extract<TriggerConfig, { type: 'schedule' | 'mcp-poll' | 'url-watch' }> {
+  return trigger.type === 'schedule' || trigger.type === 'mcp-poll' || trigger.type === 'url-watch';
+}
+
+/**
+ * Shortest gap (ms) between two consecutive fires of a cron pattern, computed
+ * with the same croner the scheduler arms with. Returns null when the pattern
+ * can't be projected (invalid pattern — validation happens in the service).
+ */
+function cronMinGapMs(cron: string, timezone?: string): number | null {
+  try {
+    const runs = scheduleNextRuns(cron, timezone, 5).map((iso) => new Date(iso).getTime());
+    let min = Infinity;
+    for (let i = 1; i < runs.length; i++) {
+      const gap = runs[i] - runs[i - 1];
+      if (gap > 0 && gap < min) min = gap;
+    }
+    return Number.isFinite(min) ? min : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Runaway-cadence guardrail. Returns an error string when the trigger would fire
+ * faster than MIN_FLOW_SCHEDULE_INTERVAL_MS, else null. Cron-less trigger types
+ * (webhook, file-watch) are never clamped.
+ */
+function assertCadenceAllowed(trigger: TriggerConfig): string | null {
+  let intervalMs: number | null = null;
+  if (trigger.type === 'schedule' || trigger.type === 'url-watch') {
+    if (trigger.cron) intervalMs = cronMinGapMs(trigger.cron, trigger.timezone);
+  } else if (trigger.type === 'mcp-poll') {
+    if (trigger.cron) intervalMs = cronMinGapMs(trigger.cron, trigger.timezone);
+    else if (typeof trigger.intervalMs === 'number') intervalMs = trigger.intervalMs;
+  }
+  if (intervalMs !== null && intervalMs < MIN_FLOW_SCHEDULE_INTERVAL_MS) {
+    return `Cadence too fast: the trigger would fire about every ${Math.round(
+      intervalMs / 1000
+    )}s, but flow-driven schedule changes are clamped to a minimum interval of ${
+      MIN_FLOW_SCHEDULE_INTERVAL_MS / 1000
+    }s. Choose a slower cadence (change it from the Planned Executions page for a faster one).`;
+  }
+  return null;
+}
+
+async function updatePlannedExecution(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.execution ?? '').trim();
+  if (!ref) {
+    return textResult({ error: 'Provide "execution": a planned execution id or name (see list_planned_executions).' }, true);
+  }
+  const target = await resolvePlannedExecution(ref);
+  if (!target) {
+    return textResult({ error: `No planned execution with id or name "${ref}". Use list_planned_executions to see them.` }, true);
+  }
+
+  const patch: Partial<Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>> = {};
+  if (typeof args?.enabled === 'boolean') patch.enabled = args.enabled;
+  if (typeof args?.prompt === 'string') patch.prompt = args.prompt;
+
+  const flowRef = String(args?.flowId ?? args?.flow ?? '').trim();
+  if (flowRef) {
+    const flow = await resolveFlow(flowRef);
+    if (!flow) {
+      return textResult({ error: `No flow named or with id "${flowRef}". Use list_flow_building_blocks to see the flows.` }, true);
+    }
+    patch.flowId = flow.id;
+  }
+
+  // Trigger changes: a full trigger object (escape hatch) and/or a bare cron
+  // convenience layered on top of the effective trigger.
+  let nextTrigger: TriggerConfig | undefined;
+  if (args?.trigger && typeof args.trigger === 'object' && !Array.isArray(args.trigger)) {
+    nextTrigger = args.trigger as TriggerConfig;
+  }
+  const cron = typeof args?.cron === 'string' ? args.cron.trim() : '';
+  if (cron) {
+    const base = nextTrigger ?? target.trigger;
+    if (!triggerHasCron(base)) {
+      return textResult(
+        { error: `The "${base.type}" trigger has no schedule to change with "cron". Pass a full "trigger" object instead.` },
+        true
+      );
+    }
+    nextTrigger = { ...base, cron };
+  }
+  if (nextTrigger) {
+    const cadenceError = assertCadenceAllowed(nextTrigger);
+    if (cadenceError) {
+      return textResult({ error: cadenceError }, true);
+    }
+    patch.trigger = nextTrigger;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return textResult({ error: 'Nothing to update. Provide at least one of: enabled, prompt, flowId, cron, trigger.' }, true);
+  }
+
+  const result = await getSchedulerService().update(target.id, patch);
+  if (result.error || !result.execution) {
+    return textResult({ error: result.error ?? 'Update failed.' }, true);
+  }
+  return textResult({ updated: true, ...redactExecution(result.execution) });
+}
+
+async function createPlannedExecution(args: Record<string, unknown>): Promise<CallToolResult> {
+  const name = String(args?.name ?? '').trim();
+  if (!name) {
+    return textResult({ error: 'Provide "name": a name for the planned execution.' }, true);
+  }
+  const flowRef = String(args?.flow ?? args?.flowId ?? '').trim();
+  if (!flowRef) {
+    return textResult({ error: 'Provide "flow": a flow name or id to run.' }, true);
+  }
+  const flow = await resolveFlow(flowRef);
+  if (!flow) {
+    return textResult({ error: `No flow named or with id "${flowRef}". Use list_flow_building_blocks to see the flows.` }, true);
+  }
+
+  let trigger: TriggerConfig;
+  if (args?.trigger && typeof args.trigger === 'object' && !Array.isArray(args.trigger)) {
+    trigger = args.trigger as TriggerConfig;
+  } else {
+    const cron = typeof args?.cron === 'string' ? args.cron.trim() : '';
+    if (!cron) {
+      return textResult({ error: 'Provide a "trigger" object or a "cron" pattern (which creates a schedule trigger).' }, true);
+    }
+    trigger = { type: 'schedule', cron };
+  }
+  const cadenceError = assertCadenceAllowed(trigger);
+  if (cadenceError) {
+    return textResult({ error: cadenceError }, true);
+  }
+
+  const input = {
+    name,
+    enabled: typeof args?.enabled === 'boolean' ? args.enabled : true,
+    flowId: flow.id,
+    prompt: typeof args?.prompt === 'string' ? args.prompt : '',
+    trigger,
+  };
+  const result = await getSchedulerService().create(input);
+  if (result.error || !result.execution) {
+    return textResult({ error: result.error ?? 'Create failed.' }, true);
+  }
+  return textResult({ created: true, ...redactExecution(result.execution) });
+}
+
+async function deletePlannedExecution(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.execution ?? '').trim();
+  if (!ref) {
+    return textResult({ error: 'Provide "execution": a planned execution id or name (see list_planned_executions).' }, true);
+  }
+  const target = await resolvePlannedExecution(ref);
+  if (!target) {
+    return textResult({ error: `No planned execution with id or name "${ref}". Use list_planned_executions to see them.` }, true);
+  }
+  const result = await getSchedulerService().delete(target.id);
+  if (!result.success) {
+    return textResult({ error: result.error ?? `Failed to delete "${target.name}".` }, true);
+  }
+  return textResult({ deleted: true, id: target.id, name: target.name });
+}
+
 /**
  * List stored conversations as light summaries. Reads the conversation snapshot
  * files directly (same source as GET /v1/chat/conversations) instead of loading
@@ -1023,6 +1277,12 @@ export async function internalCallTool(
         return await listPlannedExecutions();
       case 'run_planned_execution':
         return await runPlannedExecution(args);
+      case 'update_planned_execution':
+        return await updatePlannedExecution(args);
+      case 'create_planned_execution':
+        return await createPlannedExecution(args);
+      case 'delete_planned_execution':
+        return await deletePlannedExecution(args);
       case 'list_conversations':
         return await listConversations(args);
       case 'read_conversation':
