@@ -15,6 +15,20 @@ import { killProcessTree } from '@/utils/process/killProcessTree';
 
 const log = createLogger('app/api/git/route');
 
+// Single-flight guard for heavy install/build streams. streamCommandInRepo is used
+// ONLY by the installStream and buildStream actions, so this one module-level flag
+// caps concurrent install/build to 1. The Next.js route module is a per-process
+// singleton, so the flag is process-wide. It is reset in finish() (and on every early
+// return), covering success, error, timeout and client-abort, so it can't get stuck.
+// This stops two heavy npm jobs from stacking on the (single) vCPU of a small host.
+let installBuildInFlight = false;
+
+// Hard ceiling for install/build streams: a runaway or hanging npm install|build can
+// otherwise pin the core forever. On timeout we kill the process tree (reusing the
+// existing killProcessTree plumbing) and emit a terminal `result` error. Default
+// 15 min; floored at 60s; tunable via FLUJO_GIT_STREAM_TIMEOUT_MS for constrained hosts.
+const GIT_STREAM_TIMEOUT_MS = Math.max(60_000, Number(process.env.FLUJO_GIT_STREAM_TIMEOUT_MS) || 15 * 60 * 1000);
+
 // Type definition for command execution options
 type CommandExecutionOptions = {
   savePath: string;
@@ -341,8 +355,27 @@ function streamCommandInRepo(
   request: NextRequest
 ): Response {
   return createNdjsonStreamResponse(async (emit, signal) => {
+    // Single-flight cap: reject a second install/build while one is already running so
+    // two heavy npm jobs can't stack on one core. We emit a terminal `result` error
+    // (rather than an HTTP status) so the existing streaming client handles it exactly
+    // like any other terminal error. Set the flag SYNCHRONOUSLY right after the check
+    // (no await in between) so two near-simultaneous requests can't both pass the guard.
+    if (installBuildInFlight) {
+      log.warn(`Rejecting ${actionName}: another install/build is already running [${requestId}]`);
+      emit({ type: 'result', success: false, error: 'Another install/build is already running. Please wait for it to finish.', commandOutput: '' });
+      return;
+    }
+    installBuildInFlight = true;
+    let inFlightReleased = false;
+    const releaseInFlight = () => {
+      if (inFlightReleased) return;
+      inFlightReleased = true;
+      installBuildInFlight = false;
+    };
+
     if (!savePath) {
       log.error(`Missing repository path [${requestId}]`);
+      releaseInFlight();
       emit({ type: 'result', success: false, error: 'Missing repository path', commandOutput: 'Missing repository path' });
       return;
     }
@@ -352,6 +385,7 @@ function streamCommandInRepo(
     } catch {
       const message = `Directory does not exist: ${savePath}`;
       log.error(`${message} [${requestId}]`);
+      releaseInFlight();
       emit({ type: 'result', success: false, error: message, commandOutput: message });
       return;
     }
@@ -366,6 +400,7 @@ function streamCommandInRepo(
     await new Promise<void>((resolve) => {
       let settled = false;
       let buffer = '';
+      let timer: ReturnType<typeof setTimeout> | undefined;
 
       // POSIX: detached so the shell wrapper leads its own process group and
       // killProcessTree can signal the whole group on abort (Windows uses taskkill /T).
@@ -388,11 +423,26 @@ function streamCommandInRepo(
       const finish = (result: { success: boolean; error?: string }) => {
         if (settled) return;
         settled = true;
+        if (timer) clearTimeout(timer); // stop the ceiling firing on normal completion/abort
         signal.removeEventListener('abort', onAbort);
         cancelEscalation?.();
+        releaseInFlight(); // single-point release: success, error, timeout and abort all pass here
         emit({ type: 'result', success: result.success, error: result.error, commandOutput: buffer });
         resolve();
       };
+
+      // Hard max-duration ceiling: abort + kill the process tree and report a terminal
+      // error if the command outlives GIT_STREAM_TIMEOUT_MS. finish() clears this timer
+      // on normal completion, client-abort or start-failure so it can't fire late.
+      const timeoutMinutes = Math.round(GIT_STREAM_TIMEOUT_MS / 60000);
+      timer = setTimeout(() => {
+        log.warn(`${actionName} exceeded ${GIT_STREAM_TIMEOUT_MS}ms timeout, killing process tree [${requestId}]`);
+        const message = `\n${actionName} exceeded ${timeoutMinutes} min timeout; aborting.\n`;
+        buffer += message;
+        emit({ type: 'stderr', data: message });
+        cancelEscalation = killProcessTree(child);
+        finish({ success: false, error: `${actionName} exceeded ${timeoutMinutes} min timeout` });
+      }, GIT_STREAM_TIMEOUT_MS);
 
       child.stdout?.on('data', (d: Buffer) => {
         const chunk = d.toString();

@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
+import { runWithConcurrency } from './utils/boundedConcurrency';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -1846,19 +1847,24 @@ export class MCPService {
       // entry as its attempt settles.
       enabledServers.forEach(config => this.connectingServers.add(config.name));
 
-      // Connect all enabled servers in PARALLEL. Connecting sequentially made startup
-      // scale with the SUM of every server's connect time (one slow/hanging server
-      // delayed all the others, and the page sat in "connecting"/error far too long).
-      // Each connectServer() already catches its own failures and never rejects.
-      await Promise.all(
-        enabledServers.map(config => {
-          log.info(`Starting server: ${config.name}`);
-          return this.connectServer(config).catch(error => {
-            log.error(`Failed to start server ${config.name}:`, error);
-            // Swallow so one failure doesn't abort the others.
-          });
-        })
-      );
+      // Connect enabled servers with BOUNDED concurrency. Connecting sequentially made
+      // startup scale with the SUM of every server's connect time (one slow/hanging
+      // server delayed all the others, and the page sat in "connecting"/error far too
+      // long). But the opposite extreme — an unbounded Promise.all — forks EVERY enabled
+      // stdio server at once, a thundering-herd fork storm that spikes CPU/RAM and OOMs
+      // small (e.g. 1-vCPU suspend/resume) hosts on every wake. A small pool keeps
+      // startup off the sequential worst case while capping the simultaneous fork load.
+      // Tunable via FLUJO_MCP_BOOT_CONCURRENCY (default 2). Each connectServer() already
+      // catches its own failures and never rejects.
+      const bootConcurrency = Math.max(1, Number(process.env.FLUJO_MCP_BOOT_CONCURRENCY) || 2);
+      log.info(`Connecting ${enabledServers.length} enabled servers with boot concurrency ${bootConcurrency}`);
+      await runWithConcurrency(enabledServers, bootConcurrency, async (config) => {
+        log.info(`Starting server: ${config.name}`);
+        await this.connectServer(config).catch(error => {
+          log.error(`Failed to start server ${config.name}:`, error);
+          // Swallow so one failure doesn't abort the others.
+        });
+      });
     } finally {
       // Always reset the flag when done, even if there were errors
       this.setStartingUp(false);
