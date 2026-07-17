@@ -29,7 +29,10 @@ import CodeIcon from '@mui/icons-material/Code';
 import { createLogger } from '@/utils/logger';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
+import { useCardPicker } from '@/frontend/hooks/useCardPicker';
+import { CardGroup } from '@/utils/shared/cardGrouping';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools');
 
@@ -114,8 +117,27 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     onConnectMcpServer?.(serverName);
   };
 
-  // Connect-a-server picker (#92): reuses the MCP Server Manager card layout so
-  // choosing a server here looks exactly like the MCP Servers page.
+  // Connect-a-server picker (#92): reuses the MCP Server Manager card layout +
+  // the MCP page's saved search/sort/folder settings so choosing a server here
+  // looks exactly like the MCP Servers page. Fed the already-filtered
+  // connectable subset so already-connected servers stay hidden.
+  const serverPicker = useCardPicker<any>('mcp', connectableServers);
+  const renderServerCard = (server: any) => (
+    <ServerCard
+      name={server.name}
+      status={(server.status as any) || 'disconnected'}
+      path={server.rootPath || ''}
+      enabled={!server.disabled}
+      transport={(server.transport as any) || 'stdio'}
+      pickerMode
+      onClick={() => handleConnectServer(server.name)}
+    />
+  );
+  const toServerCell = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
+  const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
+    ? serverPicker.groups.map((g) => ({ ...g, items: g.items.map(toServerCell) }))
+    : null;
   const connectServerPicker = (
     <CardPickerDialog
       open={connectPickerOpen}
@@ -123,20 +145,15 @@ const ServerTools: React.FC<ServerToolsProps> = ({
       title="Connect an MCP server"
       description="Pick a server to add to this flow and wire to this Process node."
       emptyMessage="No more servers to connect."
-      items={connectableServers.map(server => ({
-        key: server.name,
-        content: (
-          <ServerCard
-            name={server.name}
-            status={(server.status as any) || 'disconnected'}
-            path={server.rootPath || ''}
-            enabled={!server.disabled}
-            transport={(server.transport as any) || 'stdio'}
-            pickerMode
-            onClick={() => handleConnectServer(server.name)}
-          />
-        ),
-      }))}
+      searchable
+      searchPlaceholder="Search servers…"
+      searchTerm={serverPicker.searchTerm}
+      onSearchChange={serverPicker.setSearchTerm}
+      columns={{ xs: 12, sm: 6 }}
+      items={serverPickerItems}
+      groups={serverPickerGroups}
+      collapsedKeys={serverPicker.collapsedKeys}
+      onToggleGroup={serverPicker.toggleGroup}
     />
   );
   // State to track search query

@@ -28,7 +28,10 @@ import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import OptionCard from '@/frontend/components/shared/OptionCard';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
+import { useCardPicker } from '@/frontend/hooks/useCardPicker';
+import { CardGroup } from '@/utils/shared/cardGrouping';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
@@ -109,11 +112,17 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
     }
   };
 
+  // A flow shouldn't call itself (the runtime depth guard catches deeper loops,
+  // but selecting yourself is an obvious footgun), so exclude the current flow
+  // BEFORE the picker view-model. Computed above the early-return below so the
+  // hook is called unconditionally (Rules of Hooks).
+  const selectableFlows = flows.filter((f) => f.id !== flowId);
+  // Route the picker through the shared view-model (#92) so it mirrors the
+  // Flows page's saved search/sort/folder settings (favorites-first via #120).
+  const flowPicker = useCardPicker<Flow>('flows', selectableFlows);
+
   if (!node || !nodeData) return null;
 
-  // A flow shouldn't call itself (the runtime depth guard catches deeper loops,
-  // but selecting yourself is an obvious footgun), so exclude the current flow.
-  const selectableFlows = flows.filter((f) => f.id !== flowId);
   const selectedSubflowId = nodeData.properties?.subflowId || '';
   const selectedMissing = !!selectedSubflowId && !flows.some((f) => f.id === selectedSubflowId);
   const selectedSubflowName = selectedMissing
@@ -202,7 +211,11 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           isLoading={loadingFlows}
           skeleton={<FlowCardSkeleton />}
           emptyMessage="No other flows available. Create another flow first."
-          items={selectableFlows.map((f) => ({
+          searchable
+          searchPlaceholder="Search flows…"
+          searchTerm={flowPicker.searchTerm}
+          onSearchChange={flowPicker.setSearchTerm}
+          items={flowPicker.items.map((f) => ({
             key: f.id,
             content: (
               <FlowCard
@@ -216,6 +229,27 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
               />
             ),
           }))}
+          groups={flowPicker.groups
+            ? flowPicker.groups.map((g) => ({
+                ...g,
+                items: g.items.map((f): CardPickerItem => ({
+                  key: f.id,
+                  content: (
+                    <FlowCard
+                      flow={f}
+                      selected={f.id === selectedSubflowId}
+                      onSelect={(id) => {
+                        handlePropertyChange('subflowId', id);
+                        setPickerOpen(false);
+                      }}
+                      pickerMode
+                    />
+                  ),
+                })),
+              }))
+            : null}
+          collapsedKeys={flowPicker.collapsedKeys}
+          onToggleGroup={flowPicker.toggleGroup}
         />
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>

@@ -17,7 +17,7 @@ import {
 import {
   FlowSortOption,
   deriveFlowSortGroup,
-  sortFlows,
+  sortFlowsFavoritesFirst,
 } from '@/utils/shared/flowGrouping';
 
 /**
@@ -63,7 +63,9 @@ const ADAPTERS: Record<CardPickerDomain, DomainAdapter> = {
   },
   flows: {
     defaultSort: 'name-asc',
-    sort: (items, s) => sortFlows(items, s as FlowSortOption),
+    // Favorites-first (#120) so favorited flows surface at the top of every
+    // flow picker routed through the hook, matching the dashboard's ordering.
+    sort: (items, s) => sortFlowsFavoritesFirst(items, s as FlowSortOption),
     deriveSortGroup: (item, s) => deriveFlowSortGroup(item, s as FlowSortOption),
     getFolder: (item) => item.folder,
     getSearchText: (item) => item.name ?? '',

@@ -11,8 +11,10 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
-import { sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
+import { useCardPicker } from '@/frontend/hooks/useCardPicker';
+import { CardGroup } from '@/utils/shared/cardGrouping';
 
 interface FlowSelectorProps {
   selectedFlowId: string | null;
@@ -79,9 +81,24 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     }
   };
 
-  // Favorites first (#120), then A–Z, so favorited flows surface at the top of
-  // the picker.
-  const orderedFlows = sortFlowsFavoritesFirst(flows, 'name-asc');
+  // Route the picker through the shared view-model (#92) so it mirrors the
+  // Flows page's saved search/sort/folder settings; favorites-first (#120) is
+  // preserved by the hook's flows adapter.
+  const flowPicker = useCardPicker<Flow>('flows', flows);
+  const renderFlowCard = (flow: Flow) => (
+    <FlowCard
+      flow={flow}
+      selected={flow.id === selectedFlowId}
+      onSelect={handleSelect}
+      onToggleFavorite={handleToggleFavorite}
+      pickerMode
+    />
+  );
+  const toFlowCell = (flow: Flow): CardPickerItem => ({ key: flow.id, content: renderFlowCard(flow) });
+  const flowPickerItems: CardPickerItem[] = flowPicker.items.map(toFlowCell);
+  const flowPickerGroups: CardGroup<CardPickerItem>[] | null = flowPicker.groups
+    ? flowPicker.groups.map((g) => ({ ...g, items: g.items.map(toFlowCell) }))
+    : null;
 
   const selectedFlowName = getSelectedFlowName();
 
@@ -134,18 +151,14 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
             description="Pick the flow this conversation will run."
             skeleton={<FlowCardSkeleton />}
             emptyMessage="No flows available. Create some flows in the Flow Builder first."
-            items={orderedFlows.map((flow) => ({
-              key: flow.id,
-              content: (
-                <FlowCard
-                  flow={flow}
-                  selected={flow.id === selectedFlowId}
-                  onSelect={handleSelect}
-                  onToggleFavorite={handleToggleFavorite}
-                  pickerMode
-                />
-              ),
-            }))}
+            searchable
+            searchPlaceholder="Search flows…"
+            searchTerm={flowPicker.searchTerm}
+            onSearchChange={flowPicker.setSearchTerm}
+            items={flowPickerItems}
+            groups={flowPickerGroups}
+            collapsedKeys={flowPicker.collapsedKeys}
+            onToggleGroup={flowPicker.toggleGroup}
           />
         </>
       )}

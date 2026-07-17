@@ -186,6 +186,22 @@ describe('sortFlowsFavoritesFirst (#120)', () => {
     ]);
   });
 
+  it('keeps favorites first while sorting each partition newest-first (#120)', () => {
+    const flows = [
+      flow({ id: 'plain-new', updatedAt: 400 }),
+      flow({ id: 'fav-old', updatedAt: 100, favorite: true }),
+      flow({ id: 'plain-old', updatedAt: 200 }),
+      flow({ id: 'fav-new', updatedAt: 300, favorite: true }),
+    ];
+    // Favorites (by newest) first, then non-favorites (by newest).
+    expect(sortFlowsFavoritesFirst(flows, 'newest').map((f) => f.id)).toEqual([
+      'fav-new',
+      'fav-old',
+      'plain-new',
+      'plain-old',
+    ]);
+  });
+
   it('is stable/equivalent to sortFlows when nothing is favorited', () => {
     const flows = [flow({ name: 'Charlie' }), flow({ name: 'Alpha' }), flow({ name: 'Bravo' })];
     expect(sortFlowsFavoritesFirst(flows, 'name-asc').map((f) => f.name)).toEqual(
