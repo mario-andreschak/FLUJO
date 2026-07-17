@@ -202,6 +202,10 @@ export class SubflowNode extends BaseNode {
     const inputMode =
       node_params?.properties?.inputMode ?? (promptTemplate ? 'isolated' : 'full-history');
     const showSteps = node_params?.properties?.outputMode !== 'final-only';
+    // Debugging (issue #125): opt-in persistence of this subflow's OWN run as a
+    // sidebar conversation. Absent/false => ephemeral (back-compat); only honored
+    // on the single-child path in execCore (fan-out / map-over-list stay ephemeral).
+    const persistConversation = node_params?.properties?.saveConversation === true;
 
     // 'isolated' mode sends `promptTemplate` as the subflow's single user prompt,
     // ignoring the parent conversation. Otherwise, pass the parent conversation so
@@ -219,6 +223,7 @@ export class SubflowNode extends BaseNode {
       chainDepth: sharedState.chainDepth ?? 0,
       parentRunId: sharedState.conversationId,
       showSteps,
+      persistConversation,
       // The engine attaches the run's emit to sharedState for the duration of
       // this step; capturing it here lets execCore forward the child run's
       // events onto the PARENT conversation's channel, nested by depth.
@@ -420,7 +425,10 @@ export class SubflowNode extends BaseNode {
     const result = await runFlow({
       flowId: prepResult.subflowId,
       ...runInput,
-      mode: 'ephemeral',
+      // Debugging (issue #125): persist this subflow's own run as a sidebar
+      // conversation when opted in, via the sanctioned runFlow mode (never a
+      // persistConversationState call-site bypass). Default stays ephemeral.
+      mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
       flujo: true,
       requireApproval: false, // headless: subflows never pause for approval
       debug: false,

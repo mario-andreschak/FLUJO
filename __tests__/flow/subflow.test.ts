@@ -301,6 +301,31 @@ describe('SubflowNode', () => {
     expect(runFlowMock).toHaveBeenCalledWith(expect.objectContaining({ depth: 4 }));
   });
 
+  // --- Debugging: persist the subflow's own conversation (issue #125) ---
+
+  it('persists the child run as its own conversation when saveConversation is true (issue #125)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow', saveConversation: true }, 'edge-next');
+    await node.run(makeState());
+
+    // The single-child path routes persistence through the sanctioned runFlow
+    // mode (never a persistConversationState bypass).
+    expect(runFlowMock.mock.calls[0][0]).toMatchObject({ flowId: 'inner-flow', mode: 'conversation' });
+  });
+
+  it('runs the child ephemerally when saveConversation is false (issue #125)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow', saveConversation: false }, 'edge-next');
+    await node.run(makeState());
+
+    expect(runFlowMock.mock.calls[0][0].mode).toBe('ephemeral');
+  });
+
+  it('runs the child ephemerally when saveConversation is absent (back-compat, issue #125)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState());
+
+    expect(runFlowMock.mock.calls[0][0].mode).toBe('ephemeral');
+  });
+
   it('ends the flow (FINAL_RESPONSE_ACTION) when there is no successor', async () => {
     const node = makeNode({ subflowId: 'inner-flow' }); // no successor edge
     const { action } = await node.run(makeState());

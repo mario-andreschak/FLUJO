@@ -15,6 +15,7 @@ import {
   Alert,
   Checkbox,
   FormControlLabel,
+  Switch,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -55,9 +56,22 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
 
   useEffect(() => {
     if (node) {
+      const existing = node.data.properties || {};
       setNodeData({
         ...node.data,
-        properties: { ...node.data.properties },
+        properties: {
+          ...existing,
+          // Issue #125: isolated subflows almost always want caller context, so
+          // default "let the caller pass a prompt" to true for nodes that have
+          // never set it. The backend still treats an ABSENT value as false, so
+          // existing saved flows are unaffected until re-saved; this seed keeps the
+          // checkbox and the persisted value consistent.
+          allowCallerPrompt: existing.allowCallerPrompt ?? true,
+          // Issue #125: persist the subflow's own conversation to the sidebar for
+          // debugging by default on new nodes. The backend treats an ABSENT value
+          // as ephemeral (back-compat); this seed writes the opt-in on Save.
+          saveConversation: existing.saveConversation ?? true,
+        },
       });
     }
   }, [node, open]);
@@ -284,6 +298,28 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
             description="You only see the subflow's final answer as a single message. Its inner steps stay hidden."
           />
         </Box>
+
+        {/* Debugging (issue #125): persist the subflow's OWN conversation into the
+            chat sidebar, mirroring a planned execution's "Save full conversations".
+            Routed through runFlow mode:'conversation' on the single-child path. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          Debugging
+        </Typography>
+        <FormControlLabel
+          sx={{ display: 'block' }}
+          control={
+            <Switch
+              checked={nodeData.properties?.saveConversation !== false}
+              onChange={(e) => handlePropertyChange('saveConversation', e.target.checked)}
+            />
+          }
+          label="Save this subflow's conversation to the sidebar (useful for debugging)"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
+          When on, each run of this subflow is persisted as its own conversation in
+          the chat sidebar, linked to the parent run — like a planned execution's
+          "Save full conversations". Fan-out and map-over-list runs stay ephemeral.
+        </Typography>
       </DialogContent>
 
       <DialogActions>

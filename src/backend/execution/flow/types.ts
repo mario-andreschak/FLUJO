@@ -244,6 +244,17 @@ export interface SubflowNodeProperties {
      *  key-value entry surviving ACROSS runs (see ProcessNodeProperties.captureKv).
      *  Capture happens on the PARENT's subflow node, like captureVariable. */
     captureKv?: string;
+    /** Debugging (issue #125): when true, this subflow's OWN run is persisted as
+     *  its own conversation in the chat sidebar (deep-linkable, linked to the
+     *  parent run via parentRunId) instead of running ephemerally. Mirrors the
+     *  planned-execution `saveConversations` opt-in and is routed through
+     *  runFlow's `mode: 'conversation'` — NOT a persistConversationState call-site
+     *  bypass, so the ephemeral-by-default invariant is preserved. Only honored on
+     *  the single-child path; fan-out (parallelSubflowIds) and map-over-list runs
+     *  stay ephemeral to avoid flooding the sidebar. An ABSENT value is treated as
+     *  ephemeral at runtime (back-compat); the properties modal seeds `true` on
+     *  new nodes so newly authored subflows persist for debugging by default. */
+    saveConversation?: boolean;
 }
 
 /** One resolved lane in a SubflowNode plan: a fan-out child (issue #102) or a
@@ -681,6 +692,11 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     /** Whether the child run's events are folded into the parent conversation
      *  (outputMode 'steps', the default) or hidden ('final-only'). */
     showSteps: boolean;
+    /** Debugging (issue #125): when true, the single-child run is executed in
+     *  runFlow `mode: 'conversation'` so it persists as its own sidebar
+     *  conversation; otherwise it runs ephemerally. Fan-out / map-over-list lanes
+     *  ignore this and always run ephemerally. */
+    persistConversation?: boolean;
     /** The parent run's emit (captured from sharedState during prep): child
      *  events are forwarded through it onto the PARENT's channel/log with
      *  depth + 1. Transient — stripped from debug snapshots, never persisted. */
