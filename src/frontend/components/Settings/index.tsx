@@ -16,6 +16,7 @@ import BackupSettings from './BackupSettings';
 import SpeechRecognitionSettings from './SpeechRecognitionSettings';
 import UpdateSettings from './UpdateSettings';
 import OnboardingSettings from './OnboardingSettings';
+import BugReportSettings from './BugReportSettings';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -140,6 +141,22 @@ export default function Settings() {
           </AccordionSummary>
           <AccordionDetails>
             <OnboardingSettings />
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          expanded={expanded === 'bugReport'}
+          onChange={handleChange('bugReport')}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="bugReport-content"
+            id="bugReport-header"
+          >
+            <Typography variant="h6">Report a Bug</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <BugReportSettings />
           </AccordionDetails>
         </Accordion>
 
