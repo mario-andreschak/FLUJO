@@ -95,6 +95,14 @@ export async function POST(
     }
 
     const runId = uuidv4();
+    // Overlap policy (issue #121): with overlapStrategy 'error', a fire that
+    // arrives while a previous run is still in flight is rejected. Surface that
+    // to the caller as 409 Conflict (best-effort: the in-flight check races the
+    // background fire, but fire() records the authoritative 'error' run either
+    // way). Every other strategy resolves inside fire() and returns 202.
+    const overlapRejected =
+      (execution.overlapStrategy ?? 'skip') === 'error' &&
+      scheduler.isRunning(execution.id);
     // Fire-and-forget: the record lands in run history; fire() never throws.
     void scheduler.fire(
       execution,
@@ -105,6 +113,9 @@ export async function POST(
       },
       runId
     );
+    if (overlapRejected) {
+      return json({ error: 'A previous run is still in progress', runId }, 409);
+    }
     return json({ accepted: true, runId }, 202);
   } catch (error) {
     log.error('Error handling webhook request', error);

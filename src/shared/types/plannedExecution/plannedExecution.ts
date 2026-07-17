@@ -142,6 +142,22 @@ export type TriggerConfig =
 
 export type TriggerType = TriggerConfig['type'];
 
+/**
+ * What to do when a trigger fires while a previous run for THIS execution is
+ * still in flight (issue #121). Overlap is tracked per execution, not per
+ * trigger, so the policy lives on PlannedExecution (below) rather than on each
+ * TriggerConfig member.
+ *  - 'skip'     (default, historical behavior) — drop the new fire, recording
+ *               a `skipped` run so the event stays auditable.
+ *  - 'queue'    — defer the new fire (FIFO) and run it once the current run
+ *               finishes. Bounded by a queue-depth cap; over the cap the fire
+ *               is skipped.
+ *  - 'parallel' — run concurrently; overlapping runs are allowed.
+ *  - 'error'    — reject the new fire, recording an `error` run (and, for the
+ *               webhook path, a 409 response).
+ */
+export type OverlapStrategy = 'skip' | 'queue' | 'parallel' | 'error';
+
 export interface PlannedExecution {
   id: string;
   name: string;
@@ -171,6 +187,12 @@ export interface PlannedExecution {
    *              paused state survives to be resumed.
    */
   approvalPolicy?: 'auto' | 'fail' | 'pause';
+  /**
+   * Overlap policy when a fire arrives while a previous run for THIS execution
+   * is still running (issue #121). Defaults to 'skip' (historical behavior)
+   * when absent, so existing persisted configs keep working without migration.
+   */
+  overlapStrategy?: OverlapStrategy;
   trigger: TriggerConfig;
   createdAt: string;
   updatedAt: string;

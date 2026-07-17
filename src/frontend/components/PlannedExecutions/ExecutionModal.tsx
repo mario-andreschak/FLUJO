@@ -12,6 +12,7 @@ import {
   Divider,
   FormControl,
   FormControlLabel,
+  FormHelperText,
   IconButton,
   InputLabel,
   MenuItem,
@@ -33,6 +34,7 @@ import {
   FileWatchTriggerConfig,
   FlowEventTriggerConfig,
   McpPollTriggerConfig,
+  OverlapStrategy,
   PlannedExecution,
   ScheduleTriggerConfig,
   TriggerConfig,
@@ -104,6 +106,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [flowId, setFlowId] = useState('');
   const [prompt, setPrompt] = useState('');
   const [saveConversations, setSaveConversations] = useState(false);
+  const [overlapStrategy, setOverlapStrategy] = useState<OverlapStrategy>('skip');
   const [trigger, setTrigger] = useState<TriggerConfig>(DEFAULT_SCHEDULE);
   // Pre-generated id for NEW executions, so trigger types whose config is
   // id-derived (the webhook URL) can be shown before the first save.
@@ -121,6 +124,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setFlowId(execution?.flowId ?? '');
     setPrompt(execution?.prompt ?? '');
     setSaveConversations(execution?.saveConversations === true);
+    setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
     setTrigger(execution?.trigger ?? DEFAULT_SCHEDULE);
     setDraftId(execution ? '' : crypto.randomUUID());
   }, [open, execution]);
@@ -154,6 +158,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       flowId,
       prompt,
       saveConversations,
+      overlapStrategy,
       trigger,
       enabled: execution?.enabled ?? true,
       // The pre-generated id makes the webhook URL shown in the panel real.
@@ -333,6 +338,29 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             currentExecutionId={execution?.id ?? draftId}
           />
         )}
+
+        <FormControl fullWidth margin="normal">
+          <InputLabel id="overlap-strategy-label">If it&apos;s already running…</InputLabel>
+          <Select
+            labelId="overlap-strategy-label"
+            label="If it's already running…"
+            value={overlapStrategy}
+            onChange={(e) => setOverlapStrategy(e.target.value as OverlapStrategy)}
+          >
+            <MenuItem value="skip">Skip the new run (default)</MenuItem>
+            <MenuItem value="queue">Queue it — run after the current one finishes</MenuItem>
+            <MenuItem value="parallel">Run in parallel — allow concurrent runs</MenuItem>
+            <MenuItem value="error">Reject it — record an error (webhook gets 409)</MenuItem>
+          </Select>
+          <FormHelperText>
+            {overlapStrategy === 'parallel' &&
+            (trigger.type === 'url-watch' || trigger.type === 'mcp-poll')
+              ? 'Heads up: parallel runs of a change-watching trigger can race each other — skip or queue is usually safer here.'
+              : overlapStrategy === 'queue'
+                ? 'Queued fires run one at a time, in order. A burst is capped so it can’t grow without limit.'
+                : 'What happens when this trigger fires while a previous run of it is still going.'}
+          </FormHelperText>
+        </FormControl>
 
         <Divider sx={{ mt: 3 }} />
         <Typography variant="subtitle1" sx={{ mt: 2, mb: 0, fontWeight: 600 }}>

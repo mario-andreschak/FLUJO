@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
+  OverlapStrategy,
   PlannedExecution,
   PlannedExecutionsFile,
   PlannedExecutionStatus,
@@ -36,6 +37,15 @@ export interface PlannedExecutionListEntry {
   lastRun: RunRecord | null;
 }
 
+/** A fire deferred by the 'queue' overlap strategy (issue #121). */
+interface QueuedFire {
+  execution: PlannedExecution;
+  payload: TriggerFirePayload;
+  runId: string;
+  /** Resolved with the RunRecord once the queued fire actually runs. */
+  resolve: (record: RunRecord) => void;
+}
+
 /**
  * SchedulerService — Planned Executions (#10).
  *
@@ -54,11 +64,21 @@ export class SchedulerService {
   /** Armed trigger per enabled execution id. */
   private armed = new Map<string, ArmedTrigger>();
   /**
-   * Execution ids with a flow run currently in flight (overlap policy: skip),
-   * mapped to the ISO time that run started. Surfaced via getStatus() so the
-   * UI can show a live "Running…" state + elapsed timer — issue #50.
+   * In-flight runs per execution id, mapped runId → ISO start time. A nested
+   * map (rather than a single start time) lets the 'parallel' overlap strategy
+   * (issue #121) hold MORE THAN ONE concurrent run per execution while still
+   * surfacing a live "Running…" state + earliest-start elapsed timer via
+   * getStatus() — issue #50.
    */
-  private running = new Map<string, string>();
+  private running = new Map<string, Map<string, string>>();
+  /**
+   * Fires deferred by the 'queue' overlap strategy (issue #121), FIFO per
+   * execution id. Drained one at a time as each run finishes; bounded by
+   * MAX_QUEUE_DEPTH so a webhook/poll burst can't grow it without limit.
+   */
+  private queued = new Map<string, QueuedFire[]>();
+  /** Hard cap on the per-execution overlap queue depth (issue #121). */
+  private static readonly MAX_QUEUE_DEPTH = 50;
   /** Most recent trigger-level error (watcher/poll failures), for the UI. */
   private lastTriggerErrors = new Map<string, string>();
   /** Serializes reconcile/arm mutations so concurrent API calls can't interleave. */
@@ -471,6 +491,12 @@ export class SchedulerService {
     if (typeof input.prompt !== 'string') {
       return 'A prompt is required (may be empty)';
     }
+    if (
+      input.overlapStrategy !== undefined &&
+      !['skip', 'queue', 'parallel', 'error'].includes(input.overlapStrategy)
+    ) {
+      return 'Overlap strategy must be one of: skip, queue, parallel, error';
+    }
     const trigger = input.trigger;
     if (!trigger || typeof trigger !== 'object') {
       return 'A trigger is required';
@@ -576,6 +602,79 @@ export class SchedulerService {
     }
   }
 
+  // --- overlap tracking (issue #121) ---------------------------------------
+
+  /** True while at least one run for this execution is in flight. */
+  isRunning(id: string): boolean {
+    const runs = this.running.get(id);
+    return runs !== undefined && runs.size > 0;
+  }
+
+  /** Register an in-flight run (idempotent per runId). */
+  private addRunning(id: string, runId: string, firedAt: string): void {
+    let runs = this.running.get(id);
+    if (!runs) {
+      runs = new Map<string, string>();
+      this.running.set(id, runs);
+    }
+    runs.set(runId, firedAt);
+  }
+
+  /** Clear a finished run; drops the id entirely once nothing is left running. */
+  private removeRunning(id: string, runId: string): void {
+    const runs = this.running.get(id);
+    if (!runs) {
+      return;
+    }
+    runs.delete(runId);
+    if (runs.size === 0) {
+      this.running.delete(id);
+    }
+  }
+
+  /** Earliest start time among the in-flight runs (drives the live timer). */
+  private earliestRunningSince(id: string): string | undefined {
+    const runs = this.running.get(id);
+    if (!runs || runs.size === 0) {
+      return undefined;
+    }
+    let earliest: string | undefined;
+    for (const startedAt of runs.values()) {
+      // ISO-8601 timestamps sort lexicographically, so a string compare is fine.
+      if (earliest === undefined || startedAt < earliest) {
+        earliest = startedAt;
+      }
+    }
+    return earliest;
+  }
+
+  /**
+   * Start the next queued fire ('queue' overlap strategy) once nothing is
+   * running for this id. Called from fire()'s finally so the queue drains FIFO,
+   * one run at a time. The dequeued run reuses fire() (so it re-checks the
+   * encryption guard etc.) and resolves the caller's promise with its outcome.
+   */
+  private drainQueue(id: string): void {
+    const queue = this.queued.get(id);
+    if (!queue || queue.length === 0) {
+      return;
+    }
+    if (this.isRunning(id)) {
+      // A run is still in flight (e.g. a parallel run) — drain when it ends.
+      return;
+    }
+    const next = queue.shift();
+    if (queue.length === 0) {
+      this.queued.delete(id);
+    }
+    if (!next) {
+      return;
+    }
+    void this.fire(next.execution, next.payload, next.runId)
+      .then(next.resolve)
+      .catch(error => log.error(`Queued fire failed for ${id}:`, error));
+  }
+
   // --- status --------------------------------------------------------------
 
   getStatus(execution: PlannedExecution): PlannedExecutionStatus {
@@ -588,7 +687,7 @@ export class SchedulerService {
         execution.trigger.type === 'webhook' &&
         this.started &&
         !this.pausedCache);
-    const runningSince = this.running.get(execution.id);
+    const runningSince = this.earliestRunningSince(execution.id);
     // When NOT armed, tell the UI *why* so it can render a truthful hint
     // instead of a bare "Not armed" (issue #118). A disabled execution is
     // never armed regardless of the global switch, so check it first; then
@@ -612,13 +711,23 @@ export class SchedulerService {
 
   // --- firing --------------------------------------------------------------
 
-  /** Manual "Run now" — works even when disabled or globally paused. */
+  /**
+   * Manual "Run now" — works even when disabled or globally paused. It also
+   * bypasses the overlap policy (issue #121): a manual run is an explicit user
+   * action, so it always starts immediately rather than being skipped, queued,
+   * or rejected by an in-flight run. It is still tracked in `running`.
+   */
   async runNow(id: string): Promise<{ record?: RunRecord; error?: string }> {
     const execution = await this.get(id);
     if (!execution) {
       return { error: `No planned execution with id "${id}"` };
     }
-    const record = await this.fire(execution, { kind: 'manual', summary: 'Manual run' });
+    const record = await this.fire(
+      execution,
+      { kind: 'manual', summary: 'Manual run' },
+      uuidv4(),
+      true
+    );
     return { record };
   }
 
@@ -629,7 +738,12 @@ export class SchedulerService {
   async fire(
     execution: PlannedExecution,
     payload: TriggerFirePayload,
-    runId: string = uuidv4()
+    runId: string = uuidv4(),
+    /**
+     * Skip the overlap policy entirely and start immediately (issue #121).
+     * Used by manual runNow — an explicit user action is never skipped/queued.
+     */
+    bypassOverlap = false
   ): Promise<RunRecord> {
     const firedAt = new Date().toISOString();
 
@@ -657,22 +771,70 @@ export class SchedulerService {
       return record;
     }
 
-    if (this.running.has(execution.id)) {
-      const record: RunRecord = {
-        runId,
-        conversationId: '',
-        firedAt,
-        finishedAt: firedAt,
-        status: 'skipped',
-        triggerSummary: payload.summary,
-        error: 'Previous run still in progress',
-      };
-      await appendRunRecord(execution.id, record);
-      log.info(`Skipped overlapping fire for "${execution.name}"`);
-      return record;
+    // Overlap policy (issue #121): decide what to do when a fire arrives while
+    // a previous run for THIS execution is still in flight. Defaults to 'skip'
+    // (historical behavior). The encryption-locked guard above always wins.
+    const strategy: OverlapStrategy = execution.overlapStrategy ?? 'skip';
+    if (!bypassOverlap && this.isRunning(execution.id)) {
+      if (strategy === 'skip') {
+        const record: RunRecord = {
+          runId,
+          conversationId: '',
+          firedAt,
+          finishedAt: firedAt,
+          status: 'skipped',
+          triggerSummary: payload.summary,
+          // Stable reason string so historical run-history rows stay consistent.
+          error: 'Previous run still in progress',
+        };
+        await appendRunRecord(execution.id, record);
+        log.info(`Skipped overlapping fire for "${execution.name}"`);
+        return record;
+      }
+      if (strategy === 'error') {
+        const record: RunRecord = {
+          runId,
+          conversationId: '',
+          firedAt,
+          finishedAt: firedAt,
+          status: 'error',
+          triggerSummary: payload.summary,
+          error: 'Overlapping run rejected (overlapStrategy=error)',
+        };
+        await appendRunRecord(execution.id, record);
+        log.info(`Rejected overlapping fire for "${execution.name}" (overlapStrategy=error)`);
+        return record;
+      }
+      if (strategy === 'queue') {
+        const depth = this.queued.get(execution.id)?.length ?? 0;
+        if (depth >= SchedulerService.MAX_QUEUE_DEPTH) {
+          const record: RunRecord = {
+            runId,
+            conversationId: '',
+            firedAt,
+            finishedAt: firedAt,
+            status: 'skipped',
+            triggerSummary: payload.summary,
+            error: `Overlap queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
+          };
+          await appendRunRecord(execution.id, record);
+          log.warn(`Overlap queue full for "${execution.name}" — dropped fire`);
+          return record;
+        }
+        log.info(`Queued overlapping fire for "${execution.name}" (depth ${depth + 1})`);
+        // Resolve when the queued fire actually runs (drainQueue reuses fire()).
+        // poll/url-watch onFire await THIS promise, so the commit-after-success
+        // baseline still advances only on the queued run's real 'completed'.
+        return new Promise<RunRecord>(resolve => {
+          const queue = this.queued.get(execution.id) ?? [];
+          queue.push({ execution, payload, runId, resolve });
+          this.queued.set(execution.id, queue);
+        });
+      }
+      // strategy === 'parallel' — fall through and run concurrently.
     }
 
-    this.running.set(execution.id, firedAt);
+    this.addRunning(execution.id, runId, firedAt);
     const conversationId = uuidv4();
     let record: RunRecord;
     try {
@@ -754,7 +916,9 @@ export class SchedulerService {
       };
       log.error(`Run crashed for "${execution.name}":`, error);
     } finally {
-      this.running.delete(execution.id);
+      this.removeRunning(execution.id, runId);
+      // Start the next queued fire (if any) now that this run has ended.
+      this.drainQueue(execution.id);
     }
     await appendRunRecord(execution.id, record);
     // Broadcast terminal runs so `flow-event` triggers can react (issue #116).
