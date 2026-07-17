@@ -4,16 +4,15 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { SharedState } from '@/backend/execution/flow/types';
 import { StorageKey } from '@/shared/types/storage';
-import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import { v4 as uuidv4 } from 'uuid';
 import OpenAI from 'openai';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
@@ -86,85 +85,16 @@ export async function POST(
       return NextResponse.json({ error: 'Conversation is not awaiting tool approval' }, { status: 400 });
     }
 
-    const toolCallToProcess = sharedState.pendingToolCalls.find(tc => tc.id === toolCallId);
-    if (!toolCallToProcess) {
+    // 3/4. Apply the decision (execute-or-reject the tool, drain the batch,
+    // flip back to 'running' when done). Shared with the headless approval
+    // inbox (POST /api/approvals/:id) via applyApprovalDecision so both paths
+    // behave identically (issue #115).
+    const decision = await applyApprovalDecision(sharedState, toolCallId, action);
+    if (decision.outcome === 'tool_not_found') {
       log.warn(`Pending tool call not found`, { requestId, conversationId, toolCallId });
       return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
     }
-
-    // Messages appended by this request; folded into the append-only
-    // conversation log after the state is saved (the run loop's emission
-    // tracking never sees them — they are in the state before the resume
-    // starts — so the log must be told here).
-    const appendedMessages: FlujoChatMessage[] = [];
-
-    // 3. Process action
-    if (action === 'approve') {
-      log.info(`Approving tool call`, { requestId, conversationId, toolCallId });
-      // Process *only* the approved tool call
-      const toolProcessingResult = await ModelHandler.processToolCalls({ toolCalls: [toolCallToProcess], toolNameMap: sharedState.toolNameMap });
-
-      if (!toolProcessingResult.success) {
-        log.error(`Internal tool processing failed after approval`, { requestId, conversationId, toolCallId, error: toolProcessingResult.error });
-        // Add an error message to the chat? Or just fail the request? Let's add a message.
-        const errorMessage: FlujoChatMessage = {
-          role: 'tool',
-          tool_call_id: toolCallId,
-          content: `Error processing approved tool call ${toolCallToProcess.function.name}: ${toolProcessingResult.error?.message || 'Unknown error'}`,
-          id: uuidv4(),
-          timestamp: Date.now(),
-        };
-        sharedState.messages.push(errorMessage);
-        appendedMessages.push(errorMessage);
-        // Keep state as 'awaiting_tool_approval' but remove the failed call? Or mark as error?
-        // Let's remove the call and stay awaiting for others, or transition if it was the last one.
-        sharedState.pendingToolCalls = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
-        if (sharedState.pendingToolCalls.length === 0) {
-           sharedState.status = 'running'; // Or maybe 'error'? Let's try 'running'
-           sharedState.pendingToolCalls = undefined;
-        }
-
-      } else {
-        // Add tool result message(s), stamped with the id/timestamp identity
-        // every conversation message carries (mirrors the run loop's mapping;
-        // the log and the live-view dedupe are both keyed on message id).
-        log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} tool result message(s) after approval`, { requestId, conversationId });
-        const toolResultMessages: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
-          ...msg,
-          id: (msg as Partial<FlujoChatMessage>).id || uuidv4(),
-          timestamp: (msg as Partial<FlujoChatMessage>).timestamp || Date.now(),
-          processNodeId: (msg as Partial<FlujoChatMessage>).processNodeId || sharedState.currentNodeId,
-        }));
-        sharedState.messages.push(...toolResultMessages);
-        appendedMessages.push(...toolResultMessages);
-        // Remove the processed tool call from pending list
-        sharedState.pendingToolCalls = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
-      }
-
-    } else { // action === 'reject'
-      log.info(`Rejecting tool call`, { requestId, conversationId, toolCallId });
-      // Create a tool message indicating rejection
-      const rejectionMessage: FlujoChatMessage = {
-        role: 'tool',
-        tool_call_id: toolCallId,
-        content: `User rejected tool call: ${toolCallToProcess.function.name}`,
-        id: uuidv4(),
-        timestamp: Date.now(),
-      };
-      sharedState.messages.push(rejectionMessage);
-      appendedMessages.push(rejectionMessage);
-      // Remove the rejected tool call from pending list
-      sharedState.pendingToolCalls = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
-    }
-
-    // 4. Update state status if no more pending calls
-    if (sharedState.pendingToolCalls && sharedState.pendingToolCalls.length === 0) {
-      log.info(`No more pending tool calls, resuming execution`, { requestId, conversationId });
-      sharedState.status = 'running'; // Set status back to running
-      sharedState.pendingToolCalls = undefined; // Clear the array
-    } else {
-       log.debug(`Still pending tool calls`, { requestId, conversationId, count: sharedState.pendingToolCalls?.length });
-    }
+    const appendedMessages: FlujoChatMessage[] = decision.appendedMessages;
 
     // 5. Save updated state
     sharedState.lastResponse = undefined; // Clear last response before potentially resuming

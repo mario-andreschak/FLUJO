@@ -158,6 +158,19 @@ export interface PlannedExecution {
    * sidebar, deep-linkable). Default false = ephemeral + run history only.
    */
   saveConversations?: boolean;
+  /**
+   * What a HEADLESS run does when it reaches a tool that needs approval
+   * (issue #115). A scheduled run has no interactive approver, so:
+   *  - 'auto'  (default) — tools run without approval (today's behavior).
+   *  - 'fail'  — fail fast: the run ends with a structured `needs_approval`
+   *              outcome and the tool is NOT executed (no silent auto-approve,
+   *              no hang).
+   *  - 'pause' — persist the run (awaiting_tool_approval) so an external caller
+   *              can resume it later via the approval inbox
+   *              (GET/POST /api/approvals). Implies conversation mode so the
+   *              paused state survives to be resumed.
+   */
+  approvalPolicy?: 'auto' | 'fail' | 'pause';
   trigger: TriggerConfig;
   createdAt: string;
   updatedAt: string;
@@ -171,7 +184,7 @@ export interface PlannedExecutionsFile {
   executions: PlannedExecution[];
 }
 
-export type RunRecordStatus = 'completed' | 'error' | 'skipped';
+export type RunRecordStatus = 'completed' | 'error' | 'skipped' | 'needs_approval';
 
 /** One entry in an execution's run history (ring buffer, newest last). */
 export interface RunRecord {
@@ -189,6 +202,19 @@ export interface RunRecord {
   outputText?: string;
   usage?: UsageTotals;
   error?: string;
+  /**
+   * Set when a HEADLESS run hit a tool that needs approval (issue #115): the
+   * run either failed fast (approvalPolicy 'fail') or is parked awaiting
+   * approval ('pause'). Carries the pending tool call(s) so an approval inbox
+   * can surface them. Metadata only — never tool arguments.
+   */
+  pendingApproval?: {
+    /** The first tool that required approval (fail-fast convenience). */
+    tool?: string;
+    toolCallId?: string;
+    /** All tool calls in the batch awaiting approval (id + name only). */
+    pendingToolCalls?: Array<{ id: string; name: string }>;
+  };
 }
 
 /**

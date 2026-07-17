@@ -21,6 +21,7 @@ import { armFlowEvent } from './triggers/flowEvent';
 import { getFlowRunEventBus, FlowRunFiredBy } from './flowRunEventBus';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord, loadRunRecords } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
+import type { FlowRunResult } from '@/backend/execution/flow/runFlow';
 
 const log = createLogger('backend/services/scheduler/index');
 
@@ -688,13 +689,23 @@ export class SchedulerService {
           : null,
         nextPlannedRun: this.getStatus(execution).nextRun ?? null,
       };
+      // Headless approval policy (#115): a scheduled run has no interactive
+      // approver. 'auto' (default) keeps the legacy silent auto-run; 'fail'/
+      // 'pause' send tools to the approval gate (requireApproval), and the
+      // onApprovalRequired policy decides what happens there. A 'pause' run must
+      // persist (conversation mode) so its paused state survives to be resumed
+      // via /api/approvals.
+      const approvalPolicy = execution.approvalPolicy ?? 'auto';
+      const requireApproval = approvalPolicy !== 'auto';
+      const mode: 'conversation' | 'ephemeral' =
+        execution.saveConversations || approvalPolicy === 'pause' ? 'conversation' : 'ephemeral';
       // Lazy import keeps the execution stack out of module-load paths and
       // mirrors SubflowNode's approach to the engine's import cycles.
       const { runFlow } = await import('@/backend/execution/flow/runFlow');
       const result = await runFlow({
         flowId: execution.flowId,
         prompt: this.composePrompt(execution.prompt, payload, runInfo),
-        mode: execution.saveConversations ? 'conversation' : 'ephemeral',
+        mode,
         conversationId,
         // Tag origin so GET /api/runs/active can surface this as a scheduled run
         // (issue #113).
@@ -705,27 +716,20 @@ export class SchedulerService {
         // SharedState so a `signal` node inside this run emits at the right depth
         // and runaway chains trip maxChainDepth. Organic fires are depth 0.
         chainDepth: payload.chainDepth ?? 0,
-        // Headless: an approval pause would suspend the run with no resumer.
-        requireApproval: false,
+        // Headless approval handling (#115).
+        requireApproval,
+        onApprovalRequired: approvalPolicy,
         debug: false,
         // Fresh user turn: routes from the Start node and runs preflight
         // flow validation.
         userTurn: true,
       });
-      record = {
+      record = await this.recordFromResult(execution, result, {
         runId,
         conversationId,
         firedAt,
-        finishedAt: new Date().toISOString(),
-        status: result.status === 'completed' ? 'completed' : 'error',
-        triggerSummary: payload.summary,
-        outputText: this.truncateOutput(result.outputText),
-        usage: result.usage,
-        error:
-          result.status === 'completed'
-            ? undefined
-            : result.error?.message ?? `Run ended with status "${result.status}"`,
-      };
+        payload,
+      });
     } catch (error) {
       record = {
         runId,
@@ -747,6 +751,110 @@ export class SchedulerService {
       await this.publishFlowRunEvent(execution, record, payload);
     }
     return record;
+  }
+
+  /**
+   * Map a runFlow result to a RunRecord, handling the headless approval
+   * outcomes (#115). A run that hit a tool needing approval either failed fast
+   * (approvalPolicy 'fail' → a structured approval_required error) or is parked
+   * awaiting approval ('pause' → awaiting_tool_approval); both map to a
+   * dedicated `needs_approval` run status. Crucially `needs_approval` is not
+   * `completed`, so poll/url-watch change baselines (which only advance on
+   * `completed`) are not moved — the work is re-observable after resolution.
+   */
+  private async recordFromResult(
+    execution: PlannedExecution,
+    result: FlowRunResult,
+    meta: { runId: string; conversationId: string; firedAt: string; payload: TriggerFirePayload }
+  ): Promise<RunRecord> {
+    const { runId, conversationId, firedAt, payload } = meta;
+    const finishedAt = new Date().toISOString();
+
+    const isPause = result.status === 'awaiting_tool_approval';
+    const isFailFast =
+      result.status === 'error' && result.error?.details?.type === 'approval_required';
+    if (isPause || isFailFast) {
+      const pendingToolCalls = (result.pendingToolCalls ?? []).map(tc => ({
+        id: tc.id,
+        name: tc.type === 'function' ? tc.function.name : String(tc.type),
+      }));
+      const record: RunRecord = {
+        runId,
+        conversationId,
+        firedAt,
+        finishedAt,
+        status: 'needs_approval',
+        triggerSummary: payload.summary,
+        outputText: this.truncateOutput(result.outputText),
+        usage: result.usage,
+        error: isFailFast
+          ? result.error?.message ?? 'Tool approval required'
+          : 'Awaiting tool approval',
+        pendingApproval: {
+          tool: pendingToolCalls[0]?.name ?? result.error?.details?.name,
+          toolCallId: pendingToolCalls[0]?.id,
+          pendingToolCalls: pendingToolCalls.length > 0 ? pendingToolCalls : undefined,
+        },
+      };
+      // Only a 'pause' run is resumable (its state is persisted); register it in
+      // the durable approval inbox so /api/approvals can list + resolve it.
+      if (isPause) {
+        await this.registerPendingApproval(execution, record, pendingToolCalls);
+      }
+      return record;
+    }
+
+    return {
+      runId,
+      conversationId,
+      firedAt,
+      finishedAt,
+      status: result.status === 'completed' ? 'completed' : 'error',
+      triggerSummary: payload.summary,
+      outputText: this.truncateOutput(result.outputText),
+      usage: result.usage,
+      error:
+        result.status === 'completed'
+          ? undefined
+          : result.error?.message ?? `Run ended with status "${result.status}"`,
+    };
+  }
+
+  /**
+   * Write a durable approval-inbox entry for a paused headless run (#115), so
+   * GET /api/approvals can surface it and POST /api/approvals/:id can resolve it
+   * even across a process restart. Best-effort and never throws — an inbox
+   * write problem must not fail the run (the paused SharedState is the source of
+   * truth for the resume regardless).
+   */
+  private async registerPendingApproval(
+    execution: PlannedExecution,
+    record: RunRecord,
+    pendingToolCalls: Array<{ id: string; name: string }>
+  ): Promise<void> {
+    try {
+      let flowName: string | undefined;
+      try {
+        const { flowService } = await import('@/backend/services/flow');
+        flowName = (await flowService.getFlow(execution.flowId))?.name ?? undefined;
+      } catch (error) {
+        log.debug(`Could not resolve flow name for pending approval (${execution.flowId}):`, error);
+      }
+      const { putPendingApproval } = await import('./pendingApprovals');
+      await putPendingApproval({
+        approvalId: record.conversationId,
+        conversationId: record.conversationId,
+        plannedExecutionId: execution.id,
+        flowId: execution.flowId,
+        flowName,
+        runId: record.runId,
+        triggerSummary: record.triggerSummary,
+        pendingToolCalls,
+        createdAt: record.firedAt,
+      });
+    } catch (error) {
+      log.warn(`Failed to register pending approval for "${execution.name}":`, error);
+    }
   }
 
   /**

@@ -532,6 +532,17 @@ export interface SharedState {
     chainDepth?: number;
 
     /**
+     * Headless approval policy (issue #115): what a run with no interactive
+     * approver does when it reaches a tool that needs approval. 'auto' runs the
+     * tool (legacy behavior), 'fail' ends the run with a structured
+     * approval-required error, 'pause' parks the run (awaiting_tool_approval)
+     * for later resume via /api/approvals. Only consulted when requireApproval
+     * is true. Threaded in from FlowRunInput.onApprovalRequired and persisted so
+     * a resumed 'pause' run keeps re-pausing on later tool calls. Default 'auto'.
+     */
+    onApprovalRequired?: 'auto' | 'fail' | 'pause';
+
+    /**
      * True for a transient run (subflow child, future scheduler runs): this
      * state must NEVER reach the conversations/* store, so it never appears in
      * the chat sidebar. The policy travels ON the state and is enforced inside

@@ -53,6 +53,45 @@ export async function appendRunRecord(
   }
 }
 
+/**
+ * Patch an existing run record in place, matched by runId (issue #115). Used to
+ * transition a `needs_approval` record to its final completed/error outcome
+ * once a paused headless run is resumed via the approval inbox. Read-modify-
+ * write, chained per execution id (shares the append chain so it can't
+ * interleave with a concurrent append). Returns the patched record, or null if
+ * no record with that runId exists.
+ */
+export async function updateRunRecord(
+  executionId: string,
+  runId: string,
+  patch: Partial<RunRecord>
+): Promise<RunRecord | null> {
+  const previous = appendChains.get(executionId) ?? Promise.resolve();
+  let updated: RunRecord | null = null;
+  const run = previous
+    .catch(() => { /* prior write's error surfaced to its own caller */ })
+    .then(async () => {
+      const records = await loadRunRecords(executionId);
+      const index = records.findIndex(r => r.runId === runId);
+      if (index < 0) {
+        updated = null;
+        return;
+      }
+      records[index] = { ...records[index], ...patch, runId };
+      updated = records[index];
+      await saveItem(runsKey(executionId), records);
+    });
+  appendChains.set(executionId, run);
+  try {
+    await run;
+  } finally {
+    if (appendChains.get(executionId) === run) {
+      appendChains.delete(executionId);
+    }
+  }
+  return updated;
+}
+
 /** Most recent run, or null. */
 export async function loadLastRunRecord(executionId: string): Promise<RunRecord | null> {
   const records = await loadRunRecords(executionId);

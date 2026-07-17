@@ -161,6 +161,13 @@ export interface FlowRunInput {
    *  depth onto what it emits, and passed by SubflowNode so a child inherits the
    *  parent's depth. Organic runs (chat/API/manual) are depth 0. */
   chainDepth?: number;
+  /** Headless approval policy (issue #115): what to do when a tool needs
+   *  approval and this run has no interactive approver. 'auto' keeps today's
+   *  behavior (run the tool); 'fail' ends the run with a structured
+   *  approval-required error WITHOUT executing the tool; 'pause' persists the
+   *  run as awaiting_tool_approval so it can be resumed via /api/approvals.
+   *  Only consulted when `requireApproval` is true. Default 'auto'. */
+  onApprovalRequired?: 'auto' | 'fail' | 'pause';
 }
 
 export interface FlowRunResult {
@@ -378,6 +385,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // the scheduler) or from the parent run (via SubflowNode) so a `signal` node
   // emits at the emitting run's true depth and runaway chains trip maxChainDepth.
   sharedState.chainDepth = input.chainDepth ?? sharedState.chainDepth ?? 0;
+  // Headless approval policy (#115): what to do when a tool needs approval and
+  // there is no interactive approver. Persisted on the state so a resumed
+  // 'pause' run keeps re-pausing (not failing) on later tool calls.
+  sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
   if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
     log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
     sharedState.status = 'error';
@@ -809,6 +820,29 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
             if (flujo) {
               // --- Flujo=true: Handle optional approval ---
+              if (requireApproval && sharedState.onApprovalRequired === 'fail') {
+                // Headless fail-fast (#115): a tool needs approval but this run
+                // has no interactive approver. Do NOT execute the tool and do
+                // NOT hang — end the run with a structured approval-required
+                // error so the scheduler can record a `needs_approval` outcome.
+                const firstCall = lastAssistantMsg.tool_calls[0];
+                const toolName =
+                  firstCall && firstCall.type === 'function' ? firstCall.function.name : 'unknown';
+                log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
+                sharedState.status = 'error';
+                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
+                sharedState.lastResponse = {
+                  success: false,
+                  error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
+                  errorDetails: {
+                    message: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
+                    type: 'approval_required',
+                    name: toolName,
+                  },
+                };
+                currentAction = ERROR_ACTION;
+                break;
+              }
               if (requireApproval) {
                 log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
                 sharedState.status = 'awaiting_tool_approval';
