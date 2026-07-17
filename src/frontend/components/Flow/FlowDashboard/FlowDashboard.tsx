@@ -35,7 +35,7 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
-import { FlowSortOption, deriveFlowSortGroup, sortFlows } from '@/utils/shared/flowGrouping';
+import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
@@ -52,6 +52,8 @@ interface FlowDashboardProps {
   onCreateFlow?: () => void;
   /** Assign/clear a flow's organizing folder (#71). */
   onSetFolder?: (flowId: string, folder: string | undefined) => void;
+  /** Toggle a flow's favorite flag (#120). */
+  onToggleFavorite?: (flowId: string) => void;
   isLoading?: boolean;
 }
 
@@ -67,6 +69,7 @@ const FlowDashboard = ({
   onEditFlow,
   onCreateFlow,
   onSetFolder,
+  onToggleFavorite,
   isLoading = false,
 }: FlowDashboardProps) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -190,8 +193,9 @@ const FlowDashboard = ({
       );
     }
     
-    // Then sort (shared helper — see utils/shared/flowGrouping.ts)
-    return sortFlows(result, sortOption);
+    // Then sort favorites-first, then by the active key (shared helper — see
+    // utils/shared/flowGrouping.ts). Favorites (#120) float to the top.
+    return sortFlowsFavoritesFirst(result, sortOption);
   }, [flows, searchTerm, sortOption]);
 
   // Distinct folders currently in use, for the "Move to folder" picker.
@@ -236,6 +240,7 @@ const FlowDashboard = ({
             onCopy={onCopyFlow}
             onEdit={onEditFlow}
             onSetFolder={onSetFolder}
+            onToggleFavorite={onToggleFavorite}
             folders={folders}
             validation={validationByFlow[flow.id]}
           />

@@ -20,6 +20,13 @@ export interface Flow {
    * Absent/empty means "Ungrouped". Frontend-only organization.
    */
   folder?: string;
+  /**
+   * Optional user flag marking a flow as a favorite (#120). Favorites are
+   * surfaced first in the Flow picker and default the "New" chat's flow.
+   * Absent means "not a favorite". Frontend-only organization, migration-free
+   * (mirrors `folder?` #71).
+   */
+  favorite?: boolean;
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

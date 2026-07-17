@@ -12,6 +12,7 @@ import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
+import { sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 
 interface FlowSelectorProps {
   selectedFlowId: string | null;
@@ -60,6 +61,27 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     onSelectFlow(flowId);
     setPickerOpen(false);
   };
+
+  // Toggle favorite directly from the picker (#120): persist via the same seam
+  // the dashboard uses, then reflect it locally so the ordering updates live.
+  const handleToggleFavorite = async (flowId: string) => {
+    const flow = flows.find(f => f.id === flowId);
+    if (!flow) return;
+    const nextFavorite = !flow.favorite;
+    const updated: Flow = { ...flow, favorite: nextFavorite || undefined };
+    try {
+      const result = await flowService.updateFlow(updated);
+      if (result.success) {
+        setFlows(prev => prev.map(f => (f.id === flowId ? updated : f)));
+      }
+    } catch (err) {
+      console.error('Error toggling flow favorite:', err);
+    }
+  };
+
+  // Favorites first (#120), then A–Z, so favorited flows surface at the top of
+  // the picker.
+  const orderedFlows = sortFlowsFavoritesFirst(flows, 'name-asc');
 
   const selectedFlowName = getSelectedFlowName();
 
@@ -112,13 +134,14 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
             description="Pick the flow this conversation will run."
             skeleton={<FlowCardSkeleton />}
             emptyMessage="No flows available. Create some flows in the Flow Builder first."
-            items={flows.map((flow) => ({
+            items={orderedFlows.map((flow) => ({
               key: flow.id,
               content: (
                 <FlowCard
                   flow={flow}
                   selected={flow.id === selectedFlowId}
                   onSelect={handleSelect}
+                  onToggleFavorite={handleToggleFavorite}
                   pickerMode
                 />
               ),

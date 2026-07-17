@@ -332,6 +332,31 @@ const FlowsPage = () => {
     }
   }, [flows, showSnackbar]);
 
+  const handleToggleFavorite = useCallback(async (flowId: string) => {
+    log.info('Toggling flow favorite', { flowId });
+    const flow = flows.find(f => f.id === flowId);
+    if (!flow) {
+      log.warn('Flow to favorite not found', { flowId });
+      return;
+    }
+    // Persist the flipped flag via the same seam folders use (#71). Missing/false
+    // reads as "not a favorite"; toggling clears it back to that.
+    const nextFavorite = !flow.favorite;
+    const updated: Flow = { ...flow, favorite: nextFavorite || undefined };
+    try {
+      const result = await flowService.updateFlow(updated);
+      if (!result.success) {
+        showSnackbar(result.error || 'Failed to update favorite', 'error');
+        return;
+      }
+      setFlows(prev => prev.map(f => (f.id === flowId ? updated : f)));
+      showSnackbar(nextFavorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+    } catch (error) {
+      log.error('Error toggling flow favorite', error);
+      showSnackbar('Failed to update favorite', 'error');
+    }
+  }, [flows, showSnackbar]);
+
   const handleCopyFlow = (flowId: string) => {
     log.info('Copying flow', { flowId });
     const flowToCopy = flows.find(f => f.id === flowId);
@@ -511,6 +536,7 @@ const FlowsPage = () => {
             onCopyFlow={handleCopyFlow}
             onCreateFlow={createNewFlow}
             onSetFolder={handleSetFlowFolder}
+            onToggleFavorite={handleToggleFavorite}
             isLoading={isLoading}
           />
         </Box>

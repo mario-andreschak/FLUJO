@@ -20,6 +20,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditIcon from '@mui/icons-material/Edit';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Flow } from '@/frontend/types/flow/flow';
@@ -40,6 +42,8 @@ interface FlowCardProps {
   onEdit?: (flowId: string) => void;
   /** Assign/clear this flow's organizing folder (#71). */
   onSetFolder?: (flowId: string, folder: string | undefined) => void;
+  /** Toggle this flow's favorite flag (#120). Available in picker mode too. */
+  onToggleFavorite?: (flowId: string) => void;
   /** Existing folders on the dashboard, for the "Move to folder" picker. */
   folders?: string[];
   /** Consistency-check result; drives the problem badge. */
@@ -99,6 +103,7 @@ const FlowCard = ({
   onCopy,
   onEdit,
   onSetFolder,
+  onToggleFavorite,
   folders = [],
   validation,
   pickerMode = false
@@ -151,6 +156,13 @@ const FlowCard = ({
   const handleFolderClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setFolderAnchorEl(e.currentTarget as HTMLElement);
+  };
+
+  const handleFavoriteClick = (e: React.MouseEvent) => {
+    // The whole card is a CardActionArea that selects the flow — don't let the
+    // star toggle bubble up into a selection (mirrors handleFolderClick).
+    e.stopPropagation();
+    if (onToggleFavorite) onToggleFavorite(flow.id);
   };
   
   // Render a faithful mini-map of the flow: real node positions/edges scaled to
@@ -256,6 +268,25 @@ const FlowCard = ({
 
   return (
     <StyledCard selected={selected}>
+      {onToggleFavorite && (
+        <Tooltip title={flow.favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+          <IconButton
+            size="small"
+            onClick={handleFavoriteClick}
+            sx={{
+              position: 'absolute',
+              top: 4,
+              left: 4,
+              zIndex: 2,
+              color: flow.favorite ? theme.palette.warning.main : theme.palette.text.secondary,
+              backgroundColor: alpha(theme.palette.background.paper, 0.6),
+              '&:hover': { backgroundColor: alpha(theme.palette.background.paper, 0.9) },
+            }}
+          >
+            {flow.favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+      )}
       {badgeSeverity && (
         <Tooltip title={badgeTooltip} arrow placement="top">
           <Box

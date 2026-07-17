@@ -36,6 +36,8 @@ export interface FlowGroupingItem {
   id: string;
   name: string;
   nodes: unknown[];
+  /** Optional favorite flag (#120). Favorites float to the top of the list. */
+  favorite?: boolean;
 }
 
 /** Node-count bucket for the "most/least nodes" sort (#73). */
@@ -100,4 +102,23 @@ export function compareFlows(
 /** Sort a copy of `flows` by the active sort key, leaving the input untouched. */
 export function sortFlows<T extends FlowGroupingItem>(flows: T[], sortOption: FlowSortOption): T[] {
   return [...flows].sort(compareFlows(sortOption));
+}
+
+/**
+ * Sort a copy of `flows` favorites-first (#120): favorited flows are grouped
+ * ahead of the rest, and within each partition the active `sortOption` ordering
+ * still applies. Pure/React-free so it can be shared by the dashboard AND the
+ * Chat flow picker, and unit-tested in the node-env Jest harness. The input is
+ * left untouched.
+ */
+export function sortFlowsFavoritesFirst<T extends FlowGroupingItem>(
+  flows: T[],
+  sortOption: FlowSortOption,
+): T[] {
+  const cmp = compareFlows(sortOption);
+  return [...flows].sort((a, b) => {
+    const favDelta = Number(Boolean(b.favorite)) - Number(Boolean(a.favorite));
+    if (favDelta !== 0) return favDelta;
+    return cmp(a, b);
+  });
 }

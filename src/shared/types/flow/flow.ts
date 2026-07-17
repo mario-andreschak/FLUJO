@@ -26,6 +26,13 @@ export interface Flow {
    * on how the flow executes.
    */
   folder?: string;
+  /**
+   * Optional user flag marking a flow as a favorite (#120). Favorites are
+   * surfaced first in the Flow picker and default the "New" chat's flow.
+   * Absent means "not a favorite". Frontend-only organization — has no effect
+   * on how the flow executes.
+   */
+  favorite?: boolean;
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

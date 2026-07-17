@@ -701,7 +701,8 @@ const Chat: React.FC = () => {
     setError(null); // Clear previous errors
 
     // Determine the flowId - backend requires a non-null string
-    const selectedFlowId = flows[0]?.id || null; // Get the first available flow ID
+    // Prefer the first favorited flow (#120), falling back to the first flow.
+    const selectedFlowId = (flows.find(f => f.favorite) ?? flows[0])?.id || null;
     if (!selectedFlowId) {
       log.error('Cannot create conversation: No flows available or first flow has no ID.');
       setError('Cannot create a new conversation: No flows available.');
