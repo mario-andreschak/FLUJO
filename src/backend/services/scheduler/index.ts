@@ -589,8 +589,20 @@ export class SchedulerService {
         this.started &&
         !this.pausedCache);
     const runningSince = this.running.get(execution.id);
+    // When NOT armed, tell the UI *why* so it can render a truthful hint
+    // instead of a bare "Not armed" (issue #118). A disabled execution is
+    // never armed regardless of the global switch, so check it first; then
+    // the global pause. Anything else (idle/erroring) stays undefined.
+    const notArmedReason: PlannedExecutionStatus['notArmedReason'] = armed
+      ? undefined
+      : !execution.enabled
+        ? 'disabled'
+        : this.pausedCache
+          ? 'paused'
+          : undefined;
     return {
       armed,
+      notArmedReason,
       nextRun: trigger?.nextRun ? trigger.nextRun() : undefined,
       lastTriggerError: this.lastTriggerErrors.get(execution.id),
       running: runningSince !== undefined,

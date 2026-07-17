@@ -108,6 +108,32 @@ describe('SchedulerService', () => {
     expect(scheduler.getStatus((await scheduler.get(execution!.id))!).armed).toBe(false);
   });
 
+  it('reports WHY a trigger is not armed so the UI need not guess (issue #118)', async () => {
+    // Armed: no reason.
+    const { execution } = await scheduler.create(scheduleInput());
+    const armed = scheduler.getStatus(execution!);
+    expect(armed.armed).toBe(true);
+    expect(armed.notArmedReason).toBeUndefined();
+
+    // Disabled (own toggle off) takes precedence over the global switch.
+    await scheduler.update(execution!.id, { enabled: false });
+    const disabled = scheduler.getStatus((await scheduler.get(execution!.id))!);
+    expect(disabled.armed).toBe(false);
+    expect(disabled.notArmedReason).toBe('disabled');
+
+    // Enabled but globally paused -> 'paused', not the misleading bare 'Not armed'.
+    await scheduler.update(execution!.id, { enabled: true });
+    await scheduler.setPaused(true);
+    const paused = scheduler.getStatus((await scheduler.get(execution!.id))!);
+    expect(paused.armed).toBe(false);
+    expect(paused.notArmedReason).toBe('paused');
+
+    // A disabled execution while paused still reports 'disabled' (its own state wins).
+    await scheduler.update(execution!.id, { enabled: false });
+    const both = scheduler.getStatus((await scheduler.get(execution!.id))!);
+    expect(both.notArmedReason).toBe('disabled');
+  });
+
   it('runNow runs the flow headlessly (ephemeral, no approvals) and records the outcome', async () => {
     const { execution } = await scheduler.create(scheduleInput());
     const { record } = await scheduler.runNow(execution!.id);

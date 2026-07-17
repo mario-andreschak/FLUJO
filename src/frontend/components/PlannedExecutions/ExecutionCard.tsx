@@ -60,8 +60,44 @@ const formatDuration = (record: RunRecord) => {
   return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}min`;
 };
 
+/**
+ * Truthful one-line status for the card (issue #118). Replaces the old bare
+ * "Not armed", which read as "this trigger is broken" even when the only cause
+ * was the global pause switch. Precedence:
+ *  - a disabled execution shows nothing here (the "Off" chip already says so);
+ *  - a scheduled trigger with a next fire time shows "Next run: …";
+ *  - a globally-paused (but enabled) execution shows "Paused (global)";
+ *  - an armed "waiting" trigger (file-watch/webhook/poll — no nextRun) shows a
+ *    POSITIVE confirmation ("Watching…"/"Listening…") instead of a blank line;
+ *  - anything else that is enabled but not armed falls back to "Not armed".
+ */
+const statusLine = (entry: PlannedExecutionListEntry): string => {
+  const { execution, status } = entry;
+  if (!execution.enabled) return '';
+  if (status.nextRun) return `Next run: ${formatTime(status.nextRun)}`;
+  if (status.notArmedReason === 'paused') return 'Paused (global)';
+  if (status.armed) {
+    switch (execution.trigger.type) {
+      case 'webhook':
+        return 'Listening for webhook';
+      case 'file-watch':
+        return `Watching ${execution.trigger.path}`;
+      case 'mcp-poll':
+      case 'url-watch':
+        return 'Watching for changes';
+      case 'flow-event':
+        return 'Waiting for flow event';
+      default:
+        return 'Armed';
+    }
+  }
+  return 'Not armed';
+};
+
 interface ExecutionCardProps {
   entry: PlannedExecutionListEntry;
+  /** Global pause switch state — gates every trigger (issue #118). */
+  paused: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: (enabled: boolean) => void;
@@ -69,7 +105,7 @@ interface ExecutionCardProps {
   onRanNow: () => void;
 }
 
-const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: ExecutionCardProps) => {
+const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRanNow }: ExecutionCardProps) => {
   const { execution, status, lastRun } = entry;
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
@@ -129,11 +165,7 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
             </Box>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              {status.nextRun && execution.enabled
-                ? `Next run: ${formatTime(status.nextRun)}`
-                : execution.enabled && !status.armed
-                  ? 'Not armed'
-                  : ''}
+              {statusLine(entry)}
               {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
             </Typography>
           )}
@@ -165,7 +197,15 @@ const ExecutionCard = ({ entry, onEdit, onDelete, onToggleEnabled, onRanNow }: E
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={execution.enabled ? 'Turn off' : 'Turn on'}>
+        <Tooltip
+          title={
+            paused
+              ? 'Scheduler is paused globally — switch it to Active (top right) to arm triggers'
+              : execution.enabled
+                ? 'Turn off'
+                : 'Turn on'
+          }
+        >
           <Switch
             checked={execution.enabled}
             onChange={(e) => onToggleEnabled(e.target.checked)}

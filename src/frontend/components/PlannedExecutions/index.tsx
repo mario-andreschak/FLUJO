@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Dialog,
@@ -9,6 +10,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  Snackbar,
   Switch,
   Typography,
 } from '@mui/material';
@@ -36,6 +38,9 @@ const PlannedExecutionsManager = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PlannedExecution | null>(null);
   const [deleting, setDeleting] = useState<PlannedExecution | null>(null);
+  // Surfaces a failed enable/disable toggle instead of silently reverting on
+  // the next poll (issue #118).
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const response = await plannedExecutionsService.list();
@@ -74,7 +79,14 @@ const PlannedExecutionsManager = () => {
   };
 
   const handleToggleEnabled = async (execution: PlannedExecution, enabled: boolean) => {
-    await plannedExecutionsService.update(execution.id, { enabled });
+    const result = await plannedExecutionsService.update(execution.id, { enabled });
+    if (!result.success) {
+      // Don't let the switch silently snap back on the next poll with no
+      // explanation — tell the user why it didn't take.
+      const message = result.error || 'Failed to update the planned execution.';
+      log.warn('Failed to toggle enabled', message);
+      setToggleError(message);
+    }
     void refresh();
   };
 
@@ -130,7 +142,16 @@ const PlannedExecutionsManager = () => {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Run your flows automatically — on a schedule or when something happens —
         without opening the chat. FLUJO must be running for triggers to fire.
+        The Active/Paused switch above gates <em>all</em> triggers globally.
       </Typography>
+
+      {paused && entries.length > 0 && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          The scheduler is paused — no triggers will fire, so every execution
+          below shows “Paused (global)”. Switch it to Active (top right) to arm
+          them.
+        </Alert>
+      )}
 
       {loaded && entries.length === 0 && (
         <Box
@@ -174,6 +195,7 @@ const PlannedExecutionsManager = () => {
             onDelete={() => setDeleting(entry.execution)}
             onToggleEnabled={(enabled) => handleToggleEnabled(entry.execution, enabled)}
             onRanNow={() => void refresh()}
+            paused={paused}
           />
         ))}
       </Box>
@@ -184,6 +206,17 @@ const PlannedExecutionsManager = () => {
         onClose={() => setModalOpen(false)}
         onSaved={() => void refresh()}
       />
+
+      <Snackbar
+        open={toggleError !== null}
+        autoHideDuration={6000}
+        onClose={() => setToggleError(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="error" onClose={() => setToggleError(null)} sx={{ width: '100%' }}>
+          {toggleError}
+        </Alert>
+      </Snackbar>
 
       <Dialog open={deleting !== null} onClose={() => setDeleting(null)}>
         <DialogTitle>Delete “{deleting?.name}”?</DialogTitle>

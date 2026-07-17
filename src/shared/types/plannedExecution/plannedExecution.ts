@@ -271,6 +271,13 @@ export interface TriggerFirePayload {
 /** Live (non-persisted) status of an execution's armed trigger, for the UI. */
 export interface PlannedExecutionStatus {
   armed: boolean;
+  /**
+   * When NOT armed, why — so the UI can show a truthful reason instead of a
+   * bare "Not armed" (issue #118). 'paused' = the global pause switch gates
+   * every trigger; 'disabled' = this execution's own enable toggle is off.
+   * Undefined when armed, or when not armed for some other (error/idle) reason.
+   */
+  notArmedReason?: 'paused' | 'disabled';
   /** Next scheduled fire time (schedule triggers only). */
   nextRun?: string | null;
   /** Most recent trigger-level error (e.g. failed poll or watcher error). */
