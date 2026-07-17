@@ -110,6 +110,13 @@ export interface ProcessNodeProperties {
      *  server. The big/structured sibling of `captureVariable` (which stays the
      *  right tool for short strings). */
     captureResource?: string;
+    /** Tier 4 (persistent kv): when set, this node's final output is ALSO saved
+     *  to a PERSISTENT key-value entry that survives ACROSS runs, injected
+     *  elsewhere with `${kv:NAME}`. The name may carry a scope prefix
+     *  (`folder/` default, `flow/`, `global/`). Unlike captureVariable/
+     *  captureResource (run-scoped), a scheduled flow uses it to carry state to
+     *  its next pulse. Plaintext, never secrets. */
+    captureKv?: string;
 }
 
 // FinishNode specific properties
@@ -220,6 +227,10 @@ export interface SubflowNodeProperties {
      *  (see ProcessNodeProperties.captureResource). Capture happens on the
      *  PARENT's subflow node in the current run, like captureVariable. */
     captureResource?: string;
+    /** Tier 4 (persistent kv): store the subflow's folded output to a PERSISTENT
+     *  key-value entry surviving ACROSS runs (see ProcessNodeProperties.captureKv).
+     *  Capture happens on the PARENT's subflow node, like captureVariable. */
+    captureKv?: string;
 }
 
 /** One resolved lane in a SubflowNode plan: a fan-out child (issue #102) or a

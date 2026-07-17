@@ -19,6 +19,7 @@
 import { findBindings } from './mcpBinding';
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
+import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -567,6 +568,50 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
             'warning',
             'var-ref-uncaptured',
             `${getNodeLabel(node)} references \${var:${name}} but no step in this flow captures "${name}" (via captureVariable). It resolves to empty unless supplied as a run input — check for a typo or a step ordered after this one.`,
+            node
+          );
+        }
+      }
+    }
+  }
+
+  // --- Tier 4: persistent kv (${kv:NAME} + captureKv) ---
+  // Advisory only. kv is CROSS-RUN state, so — unlike ${var:} — a reference to a key
+  // nothing in THIS flow captures is expected (an earlier run, or another flow in the
+  // same folder, may have seeded it). We only flag a malformed key NAME.
+  {
+    for (const node of nodes) {
+      const capture = node.data?.properties?.captureKv;
+      if (typeof capture === 'string' && capture.trim()) {
+        const { key } = parseKvRef(capture.trim());
+        if (!isValidKvName(key)) {
+          add(
+            'warning',
+            'capture-kv-name',
+            `${getNodeType(node) === 'subflow' ? 'Subflow' : 'Process'} node "${getNodeLabel(node)}" captures into kv "${capture.trim()}", whose key is not a valid name (letters, digits, _ and - only, not starting with a digit); it will be awkward to reference with \${kv:...}.`,
+            node
+          );
+        }
+      }
+    }
+
+    const kvFields = ['promptTemplate', 'isolatedPrompt'] as const;
+    const warnedKvRefs = new Set<string>();
+    for (const node of nodes) {
+      const props = node.data?.properties ?? {};
+      for (const field of kvFields) {
+        const text = (props as Record<string, unknown>)[field];
+        if (typeof text !== 'string' || !text) continue;
+        for (const token of referencedKvKeys(text)) {
+          const { key } = parseKvRef(token);
+          if (isValidKvName(key)) continue;
+          const dedupeKey = `${node.id}:${token}`;
+          if (warnedKvRefs.has(dedupeKey)) continue;
+          warnedKvRefs.add(dedupeKey);
+          add(
+            'warning',
+            'kv-ref-name',
+            `${getNodeLabel(node)} references \${kv:${token}}, whose key is not a valid name (letters, digits, _ and - only, not starting with a digit); it resolves to empty.`,
             node
           );
         }

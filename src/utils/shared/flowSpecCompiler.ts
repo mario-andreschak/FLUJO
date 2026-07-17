@@ -188,6 +188,16 @@ export interface FlowSpecNode {
    * strings; `captureResource` for big/structured artifacts worth tracking.
    */
   captureResource?: string;
+  /**
+   * process/subflow only (Tier 4 — persistent kv): ALSO save this step's final
+   * output into a PERSISTENT key-value entry that SURVIVES ACROSS RUNS, injected
+   * elsewhere with `${kv:NAME}`. Unlike `captureVariable`/`captureResource`
+   * (run-scoped), a scheduled flow uses this to carry a loop counter / cursor /
+   * flag forward to its next pulse. Defaults to the flow's FOLDER board; prefix
+   * the name with `flow/` or `global/` to target another board. Plaintext, never
+   * secrets (distinct from `${global:VAR}`).
+   */
+  captureKv?: string;
 }
 
 export interface FlowSpecEdge {
@@ -581,6 +591,10 @@ export function compileFlowSpec(
         if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
           properties.captureResource = specNode.captureResource.trim();
         }
+        // captureKv (Tier 4): also persist this step's output to a cross-run kv key.
+        if (typeof specNode.captureKv === 'string' && specNode.captureKv.trim()) {
+          properties.captureKv = specNode.captureKv.trim();
+        }
       } else if (type === 'subflow') {
         resolveSubflowTarget(specNode, key, depth, childAncestors, properties);
         if (specNode.inputMode !== undefined) {
@@ -615,6 +629,10 @@ export function compileFlowSpec(
         // captureResource (Tier 3): save the folded output as a named run resource.
         if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
           properties.captureResource = specNode.captureResource.trim();
+        }
+        // captureKv (Tier 4): also persist the folded output to a cross-run kv key.
+        if (typeof specNode.captureKv === 'string' && specNode.captureKv.trim()) {
+          properties.captureKv = specNode.captureKv.trim();
         }
       } else if (type === 'resource') {
         // Tier 3: a data artifact. Run artifact (runName) OR static MCP
@@ -1116,6 +1134,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       }
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
+      if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
       const servers = serversByProcess.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
@@ -1143,6 +1162,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
+      if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
     } else if (type === 'resource') {
       // Tier 3: round-trip the binding so AI-Improve never drops resource nodes.
       if (props.scope === 'run' && typeof props.runName === 'string' && props.runName) {

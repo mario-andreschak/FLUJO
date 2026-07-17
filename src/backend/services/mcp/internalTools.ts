@@ -24,6 +24,11 @@
  *    size-bounded so a long conversation can't flood the calling model's context.
  *  - call_mcp_tool refuses the internal server itself, and execute_flow carries a
  *    process-wide depth guard, so a flow cannot recurse through FLUJO unboundedly.
+ *  - kv_get/kv_set expose the persistent key-value store (${kv:NAME}). Values are
+ *    PLAINTEXT and never secrets (secrets stay in ${global:} / encrypted env);
+ *    kv_set clamps to the value cap and both default to the 'global' board (they
+ *    have no flow context — a flow-folder board is targeted by passing its scope
+ *    id explicitly).
  *
  * MCPService loads this module via dynamic import only (never statically): the
  * imports below (runFlow, flowAuthoringTools → registryInstall) transitively import
@@ -54,6 +59,7 @@ import {
 } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getDataDir } from '@/utils/paths';
+import { kvGet, kvSet } from '@/backend/services/kvStore';
 import {
   authoringToolDefinitions,
   authoringCallTool,
@@ -393,6 +399,33 @@ export function internalToolDefinitions(): Tool[] {
           },
         },
         required: ['command'],
+      },
+    },
+    {
+      name: 'kv_get',
+      description:
+        'Read a value from FLUJO\'s PERSISTENT key-value store (the ${kv:NAME} store) — state that survives ACROSS flow runs (loop counters, cursors, flags). Returns { found, value }. Defaults to the instance-global board; pass "scope" to target another board (e.g. a flow-folder board id). Values are plain strings, never secrets.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'The key to read (an identifier: letters, digits, _ and -, not starting with a digit).' },
+          scope: { type: 'string', description: 'Optional board id to read from. Defaults to "global".' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'kv_set',
+      description:
+        'Write a value to FLUJO\'s PERSISTENT key-value store (the ${kv:NAME} store) — state that survives ACROSS flow runs. Last-write-wins. Defaults to the instance-global board; pass "scope" to target another board. Values are plain strings (never secrets — use ${global:} for those) and are size-capped; an oversized write is refused with { saved:false, skipped }.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'The key to write (an identifier: letters, digits, _ and -, not starting with a digit).' },
+          value: { type: 'string', description: 'The string value to store.' },
+          scope: { type: 'string', description: 'Optional board id to write to. Defaults to "global".' },
+        },
+        required: ['name', 'value'],
       },
     },
   ];
@@ -1233,6 +1266,41 @@ async function runTerminal(args: Record<string, unknown>): Promise<CallToolResul
   });
 }
 
+/** Persistent key-value store (${kv:NAME}) tool bounds. Board id and key must be
+ *  filesystem-safe / a sane identifier respectively (same gate as the store). */
+const KV_SCOPE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const KV_KEY_RE = /^[A-Za-z_][\w-]*$/;
+
+async function kvGetTool(args: Record<string, unknown>): Promise<CallToolResult> {
+  const name = typeof args.name === 'string' ? args.name.trim() : '';
+  const scope = typeof args.scope === 'string' && args.scope.trim() ? args.scope.trim() : 'global';
+  if (!KV_KEY_RE.test(name)) {
+    return textResult({ error: 'kv_get requires a valid "name" (letters, digits, _ and -, not starting with a digit).' }, true);
+  }
+  if (!KV_SCOPE_RE.test(scope)) {
+    return textResult({ error: `Invalid kv scope id: ${scope}` }, true);
+  }
+  const value = await kvGet(scope, name);
+  return textResult({ scope, name, found: value !== undefined, value: value ?? null });
+}
+
+async function kvSetTool(args: Record<string, unknown>): Promise<CallToolResult> {
+  const name = typeof args.name === 'string' ? args.name.trim() : '';
+  const scope = typeof args.scope === 'string' && args.scope.trim() ? args.scope.trim() : 'global';
+  const value = typeof args.value === 'string' ? args.value : args.value == null ? '' : String(args.value);
+  if (!KV_KEY_RE.test(name)) {
+    return textResult({ error: 'kv_set requires a valid "name" (letters, digits, _ and -, not starting with a digit).' }, true);
+  }
+  if (!KV_SCOPE_RE.test(scope)) {
+    return textResult({ error: `Invalid kv scope id: ${scope}` }, true);
+  }
+  const res = await kvSet(scope, name, value);
+  if ('skipped' in res) {
+    return textResult({ scope, name, saved: false, skipped: res.skipped }, true);
+  }
+  return textResult({ scope, name, saved: true, size: res.size });
+}
+
 /**
  * Dispatch one internal-server tool call. Always resolves to a CallToolResult
  * (errors become isError results, mirroring how a real MCP server responds).
@@ -1289,6 +1357,10 @@ export async function internalCallTool(
         return await readConversation(args);
       case 'terminal':
         return await runTerminal(args);
+      case 'kv_get':
+        return await kvGetTool(args);
+      case 'kv_set':
+        return await kvSetTool(args);
       default:
         return textResult({ error: `Unknown tool on the built-in FLUJO server: ${toolName}` }, true);
     }

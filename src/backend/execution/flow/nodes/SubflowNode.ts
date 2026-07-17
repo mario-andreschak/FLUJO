@@ -15,6 +15,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
+import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
 import { writeRunResource } from '@/backend/services/runResources';
 import { isCancelledByAncestry } from '../cancellation';
 
@@ -259,6 +260,17 @@ export class SubflowNode extends BaseNode {
         sharedState.emit,
         node_params?.id ? { nodeId: node_params.id, nodeType: 'subflow' } : undefined
       );
+      // Tier 4 (persistent kv): `${kv:NAME}` cross-run values in the isolated
+      // input. Scope keys off the PARENT flow (its folder), so a subflow node
+      // shares a board with the parent flow's process nodes.
+      if (prepResult.inputText.includes('${kv:')) {
+        let folder: string | undefined;
+        try {
+          const { flowService } = await import('@/backend/services/flow/index');
+          folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+        } catch { /* best effort */ }
+        prepResult.inputText = await resolveKvNodeRefs(prepResult.inputText, { flowId: sharedState.flowId, folder });
+      }
     }
 
     // Lane plan. The single decision point for both concurrency features: which
@@ -638,6 +650,28 @@ export class SubflowNode extends BaseNode {
         }
       } catch (error) {
         log.error('captureResource failed; continuing run', error);
+      }
+    }
+
+    // Tier 4 (persistent kv): also save the folded output to a PERSISTENT
+    // cross-run key with `captureKv: "NAME"` (scope-prefixable). Survives across
+    // runs, unlike captureVariable/captureResource. Scope keys off the parent flow.
+    const captureKv = node_params?.properties?.captureKv?.trim();
+    if (captureKv) {
+      try {
+        let folder: string | undefined;
+        try {
+          const { flowService } = await import('@/backend/services/flow/index');
+          folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+        } catch { /* best effort */ }
+        const res = await captureKvValue(captureKv, outputText, { flowId: sharedState.flowId, folder });
+        if ('skipped' in res) {
+          log.warn('captureKv skipped', { captureKv, reason: res.skipped });
+        } else {
+          log.info('Captured subflow output into persistent kv', { captureKv, nodeId: node_params?.id });
+        }
+      } catch (error) {
+        log.error('captureKv failed; continuing run', error);
       }
     }
 

@@ -28,6 +28,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessa
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
+import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { writeRunResource } from '@/backend/services/runResources';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
@@ -220,6 +221,22 @@ export class ProcessNode extends BaseNode {
       { nodeId }
     );
 
+    // Tier 4 (persistent kv): inject `${kv:NAME}` cross-run values AFTER vars
+    // and resources. Scope needs the flow's folder, fetched once (lazily) and
+    // reused for the isolatedPrompt below. Plaintext, crypto-free — NOT secrets
+    // (never resolveGlobalVars), and persistent unlike `${var:}` / `${res:}`.
+    let kvCtx: KvFlowContext | null = null;
+    const kvContext = async (): Promise<KvFlowContext> => {
+      if (kvCtx) return kvCtx;
+      let folder: string | undefined;
+      try { folder = (await flowService.getFlow(flowId))?.folder; } catch { /* best effort */ }
+      kvCtx = { flowId, folder };
+      return kvCtx;
+    };
+    if (completePrompt.includes('${kv:')) {
+      completePrompt = await resolveKvNodeRefs(completePrompt, await kvContext());
+    }
+
     // Tier 3: resource NODES wired to this step (consume role) inject their
     // contents as a "## Resources" block — the graph-visible sibling of
     // resource pills. Reads never break the run (failures render as notes).
@@ -350,7 +367,7 @@ export class ProcessNode extends BaseNode {
       // like the system prompt) so an isolated step can pull captured state.
       // Tier 3: `${res:NAME}` likewise.
       const isolatedPrompt = node_params?.properties?.isolatedPrompt;
-      const resolvedIsolatedPrompt = isolatedPrompt !== undefined
+      let resolvedIsolatedPrompt = isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -358,6 +375,10 @@ export class ProcessNode extends BaseNode {
             { nodeId }
           )
         : isolatedPrompt;
+      // Tier 4: `${kv:NAME}` in the isolated prompt too (wire-only text).
+      if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
+        resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());
+      }
       prepResult.wireMessages = scopeMessagesForInput(
         wireBase,
         inputMode,
@@ -757,6 +778,27 @@ export class ProcessNode extends BaseNode {
         }
       } catch (error) {
         log.error('captureResource failed; continuing run', error);
+      }
+    }
+
+    // Tier 4 (persistent kv): also save this node's output to a PERSISTENT
+    // cross-run key with `captureKv: "NAME"` (scope-prefixable as folder/flow/
+    // global). Unlike captureVariable/captureResource (run-scoped), this survives
+    // across runs so a scheduled pulse can carry a counter/cursor forward. Never
+    // breaks the run: a cap refusal or bad name logs and moves on.
+    const captureKv = node_params?.properties?.captureKv?.trim();
+    if (execResult.success && captureKv) {
+      try {
+        let folder: string | undefined;
+        try { folder = (await flowService.getFlow(sharedState.flowId))?.folder; } catch { /* best effort */ }
+        const res = await captureKvValue(captureKv, execResult.content ?? '', { flowId: sharedState.flowId, folder });
+        if ('skipped' in res) {
+          log.warn('captureKv skipped', { captureKv, reason: res.skipped });
+        } else {
+          log.info('Captured node output into persistent kv', { captureKv, nodeId: node_params?.id });
+        }
+      } catch (error) {
+        log.error('captureKv failed; continuing run', error);
       }
     }
 
