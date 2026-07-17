@@ -173,6 +173,32 @@ describe('SubflowNode', () => {
     expect(call.prompt).toBeUndefined();
   });
 
+  it("inputMode 'latest-message' PRESERVES a trailing Process-node output for the current turn (#119)", async () => {
+    // Regression for #119: a Process node hands off to this subflow, so the last
+    // message is the Process node's produced instruction (an assistant turn that
+    // sits AFTER the last user message). The old selector returned only the last
+    // user message and silently dropped that output. It must now survive.
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'latest-message' }, 'edge-next');
+    const state = makeState({
+      messages: [
+        { role: 'user', content: 'Plan issue #70', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'Detailed instruction from process node', id: 'a1', timestamp: 2, processNodeId: 'parent-proc' } as any,
+      ],
+    });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    // Both the current user task AND the Process node's trailing output reach the
+    // subflow (processNodeId stripped by sanitizeForSubflow).
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Plan issue #70' }),
+      expect.objectContaining({ role: 'assistant', content: 'Detailed instruction from process node' }),
+    ]);
+    expect(call.messages.every((m: any) => m.processNodeId === undefined)).toBe(true);
+    expect(call.prompt).toBeUndefined();
+  });
+
   it('back-compat: a promptTemplate with no inputMode is treated as isolated (sent as a prompt)', async () => {
     const node = makeNode({ subflowId: 'inner-flow', promptTemplate: 'use me instead' }, 'edge-next');
     await node.run(makeState());

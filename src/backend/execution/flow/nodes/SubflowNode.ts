@@ -63,18 +63,25 @@ function sanitizeForSubflow(messages: FlujoChatMessage[]): FlujoChatMessage[] {
 }
 
 /**
- * Narrow a sanitized transcript to just the most recent user instruction
- * ('latest-message' inputMode, issue #74). An orchestrator that hands off to a
- * worker subflow on every loop iteration would otherwise re-send the entire
- * accumulated history — including already-finished tasks — causing the worker
- * to re-anchor on the earliest/loudest task. Scoping to the last user message
- * pins each invocation to the current task. Falls back to the full sanitized
- * list when there is no user message (unusual, but keeps the subflow fed).
+ * Scope a sanitized transcript to the current turn: everything from the most
+ * recent user message ONWARD ('latest-message' inputMode, issue #74). An
+ * orchestrator that hands off to a worker subflow on every loop iteration would
+ * otherwise re-send the entire accumulated history — including already-finished
+ * tasks — causing the worker to re-anchor on the earliest/loudest task. Slicing
+ * from the last user message pins each invocation to the current task while
+ * PRESERVING any trailing assistant/Process-node output for that turn (issue
+ * #119): a Process node's produced instruction sits after the last user message,
+ * so returning only `[sanitized[i]]` silently dropped it. This mirrors
+ * `scopeMessagesForInput` in buildNodeContext.ts (the Process-node path) so the
+ * two 'latest-message' implementations cannot diverge again. Finished earlier
+ * tasks still precede the last user message, so #74's intent is intact. Falls
+ * back to the full sanitized list when there is no user message (unusual, but
+ * keeps the subflow fed).
  */
 function latestUserMessage(sanitized: FlujoChatMessage[]): FlujoChatMessage[] {
   for (let i = sanitized.length - 1; i >= 0; i--) {
     if (sanitized[i].role === 'user') {
-      return [sanitized[i]];
+      return sanitized.slice(i);
     }
   }
   return sanitized;
