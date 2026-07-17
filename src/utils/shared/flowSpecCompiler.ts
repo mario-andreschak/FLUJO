@@ -138,6 +138,16 @@ export interface FlowSpecNode {
    * MAX_GENERATED_FLOWS / MAX_SUBFLOW_DEPTH caps.
    */
   parallelSubflowSpecs?: FlowSpec[];
+  /**
+   * subflow only (issue #130): DYNAMIC fan-out. The NAME of a run-scoped variable
+   * (captured upstream via `captureVariable`, referenced elsewhere as ${var:NAME})
+   * whose value — a JSON array of flow ids/names, or a newline list — selects the
+   * fan-out target flows AT RUNTIME. Lets a running step decide WHICH (and how
+   * many) flows fan out. May stand ALONE as the sole target source, or decorate a
+   * static `parallelFlows` base that it overrides when it resolves non-empty.
+   * Mutually exclusive with `mapOverList`. Compiles to `properties.parallelSubflowIdsVar`.
+   */
+  parallelFlowsVariable?: string;
   /** subflow parallel: max lanes run at once (bounded pool). Clamped ≥1. Default runtime 4. */
   concurrencyLimit?: number;
   /** subflow parallel: string placed between joined lane outputs (child order). Default "\n\n". */
@@ -903,6 +913,11 @@ export function compileFlowSpec(
   ): void {
     const hasParallelFlows = Array.isArray(specNode.parallelFlows) && specNode.parallelFlows.length > 0;
     const hasParallelSpecs = Array.isArray(specNode.parallelSubflowSpecs) && specNode.parallelSubflowSpecs.length > 0;
+    // Dynamic fan-out (issue #130): a run-variable name whose value lists the
+    // fan-out targets at runtime. It can decorate a static `parallelFlows` base
+    // (runtime override) or stand ALONE as the sole target source.
+    const parallelVar =
+      typeof specNode.parallelFlowsVariable === 'string' ? specNode.parallelFlowsVariable.trim() : '';
     const present = [
       specNode.flow !== undefined && specNode.flow !== null ? 'flow' : null,
       specNode.subflowSpec !== undefined && specNode.subflowSpec !== null ? 'subflowSpec' : null,
@@ -952,6 +967,23 @@ export function compileFlowSpec(
         if (specNode.sequential === true) properties.sequential = true;
         // Per-item runs reuse the parallel pool/join/error tuning.
         applyParallelTuning(specNode, properties);
+      }
+    }
+
+    // Dynamic fan-out target selection (issue #130): stamp the run-variable name
+    // so the runtime resolves the targets. Mutually exclusive with map-over-list
+    // (fan-out vs per-item). It never resolves a static child here — the target
+    // set is runtime-determined — so it does not participate in the single-child
+    // precedence and can accompany a static `parallelFlows` base.
+    if (parallelVar) {
+      if (specNode.mapOverList === true) {
+        error(
+          'subflow-map-and-parallel-var',
+          `Node "${key}": "parallelFlowsVariable" (dynamic fan-out) cannot be combined with "mapOverList".`,
+          key
+        );
+      } else {
+        properties.parallelSubflowIdsVar = parallelVar;
       }
     }
 
@@ -1046,6 +1078,14 @@ export function compileFlowSpec(
       } else {
         error('parallel-empty', `Node "${key}": "parallelSubflowSpecs" produced no runnable lanes.`, key);
       }
+      return;
+    }
+
+    // Standalone DYNAMIC fan-out (issue #130): the whole target set comes from the
+    // runtime variable, so there is no static child to resolve above. Apply the
+    // parallel tuning and return before the "missing flow" error.
+    if (parallelVar && properties.parallelSubflowIdsVar) {
+      applyParallelTuning(specNode, properties);
       return;
     }
 
@@ -1171,6 +1211,17 @@ export function flowToSpec(flow: Flow): FlowSpec {
           specNode.mapOverList = true;
           if (props.itemSplit === 'json-array' || props.itemSplit === 'lines') specNode.itemSplit = props.itemSplit;
           if (props.sequential === true) specNode.sequential = true;
+          if (typeof props.concurrencyLimit === 'number' && props.concurrencyLimit > 0) specNode.concurrencyLimit = props.concurrencyLimit;
+          if (typeof props.joinSeparator === 'string') specNode.joinSeparator = props.joinSeparator;
+          if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;
+        }
+      }
+      // Dynamic fan-out (issue #130): round-trip the run-variable target selector.
+      // It can accompany a static `parallelFlows` base or stand alone; when alone,
+      // the parallel/single branches above did not carry the tuning, so do it here.
+      if (typeof props.parallelSubflowIdsVar === 'string' && props.parallelSubflowIdsVar) {
+        specNode.parallelFlowsVariable = props.parallelSubflowIdsVar;
+        if (!specNode.parallelFlows && !specNode.flow) {
           if (typeof props.concurrencyLimit === 'number' && props.concurrencyLimit > 0) specNode.concurrencyLimit = props.concurrencyLimit;
           if (typeof props.joinSeparator === 'string') specNode.joinSeparator = props.joinSeparator;
           if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;

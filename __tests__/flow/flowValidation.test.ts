@@ -177,6 +177,59 @@ describe('validateFlow — subflow single outgoing path', () => {
     expect(r.isRunnable).toBe(true); // warning only
   });
 
+  // --- Dynamic fan-out target selection (issue #130) ---
+  it('accepts a dynamic fan-out subflow (parallelSubflowIdsVar) whose var is captured upstream', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { parallelSubflowIdsVar: 'TARGETS' } },
+    };
+    const p = processNode('p', { boundModel: 'm1', captureVariable: 'TARGETS' });
+    const flow: VFlow = {
+      nodes: [startNode(), p, finishNode(), gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).not.toContain('subflow-parallel-var-uncaptured');
+    expect(codes(r)).not.toContain('subflow-parallel-var-name');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('warns when the dynamic fan-out variable is never captured', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { parallelSubflowIdsVar: 'TARGETS' } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-parallel-var-uncaptured');
+    expect(r.isRunnable).toBe(true); // advisory only
+  });
+
+  it('errors when dynamic fan-out is combined with mapOverList', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: {
+        label: 'gate',
+        type: 'subflow',
+        properties: { parallelSubflowIdsVar: 'TARGETS', mapOverList: true, subflowId: 'x' },
+      },
+    };
+    const p = processNode('p', { boundModel: 'm1', captureVariable: 'TARGETS' });
+    const flow: VFlow = {
+      nodes: [startNode(), p, finishNode(), gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-map-and-parallel-var');
+    expect(r.isRunnable).toBe(false);
+  });
+
   it('accepts a map-over-list subflow (mapOverList + subflowId) with a single outgoing edge', () => {
     const gate: VNode = {
       id: 'gate',

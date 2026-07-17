@@ -451,6 +451,44 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
+
+    // --- Dynamic fan-out (issue #130): parallelSubflowIdsVar names a run-scoped
+    // variable whose value lists the fan-out target flow ids AT RUNTIME. It is a
+    // fan-out (multiple CHILDREN), so — like the static parallel list — it is
+    // mutually exclusive with map-over-list; and it needs a valid variable name
+    // that some node actually captures (advisory: it may also be caller-seeded).
+    const parallelVar =
+      typeof props.parallelSubflowIdsVar === 'string' ? props.parallelSubflowIdsVar.trim() : '';
+    if (parallelVar) {
+      if (!isValidRunVarName(parallelVar)) {
+        add(
+          'warning',
+          'subflow-parallel-var-name',
+          `Subflow node "${getNodeLabel(node)}" reads dynamic fan-out targets from "${parallelVar}", which is not a valid variable name (letters, digits, _ and - only, not starting with a digit); it will be awkward to capture with \${var:...}.`,
+          node
+        );
+      }
+      if (mapOverList) {
+        add(
+          'error',
+          'subflow-map-and-parallel-var',
+          `Subflow node "${getNodeLabel(node)}" combines "mapOverList" with dynamic fan-out ("parallelSubflowIdsVar"); map-over-list runs a single child once per item and cannot be combined with fan-out.`,
+          node
+        );
+      }
+      const capturedSomewhere = nodes.some((n) => {
+        const c = n.data?.properties?.captureVariable;
+        return typeof c === 'string' && c.trim() === parallelVar;
+      });
+      if (!capturedSomewhere) {
+        add(
+          'warning',
+          'subflow-parallel-var-uncaptured',
+          `Subflow node "${getNodeLabel(node)}" reads dynamic fan-out targets from variable "${parallelVar}", but no node captures it (captureVariable). It may be seeded by the caller; otherwise it resolves to no targets and the node falls back to its static parallel list.`,
+          node
+        );
+      }
+    }
     if (parallelIds.length > 0) {
       const limit = props.concurrencyLimit;
       if (typeof limit === 'number' && limit < 1) {

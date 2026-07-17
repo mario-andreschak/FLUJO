@@ -203,6 +203,21 @@ export interface SubflowNodeProperties {
      *  (the default path is completely unchanged). The same resolved input
      *  (per `inputMode`) is fanned out to every lane. */
     parallelSubflowIds?: string[];
+    /** Dynamic fan-out target selection (issue #130): the NAME of a run-scoped
+     *  variable (${var:NAME}, captured upstream via captureVariable) whose value
+     *  lists the fan-out target flow ids to run CONCURRENTLY. This lets a running
+     *  model/process node decide WHICH (and how many) flows fan out at RUNTIME.
+     *  The value is split with the same itemSplit semantics as map-over-list (a
+     *  JSON array of ids — default — or a newline list), trimmed, de-duplicated,
+     *  capped at MAX_DYNAMIC_FANOUT_LANES, and each id is validated against the
+     *  flows store (unknown ids and a self-reference are dropped with a warning).
+     *  When it resolves to a NON-EMPTY set it OVERRIDES the static
+     *  parallelSubflowIds; an empty/absent resolution falls back to the static
+     *  list (today's behavior). Resolved ONLY through the plaintext run-var path
+     *  — never resolveGlobalVars (no secret decryption). Mutually exclusive with
+     *  mapOverList. The single-outgoing-edge rule is unchanged (this is about
+     *  multiple CHILDREN, not successors). */
+    parallelSubflowIdsVar?: string;
     /** Max child flows run at once in parallel mode (bounded worker pool). Default 4. */
     concurrencyLimit?: number;
     /** String placed between joined lane outputs (child order) in parallel mode.
@@ -713,6 +728,12 @@ export interface SubflowNodePrepResult extends BasePrepResult {
      *  execCore treat an EMPTY `lanes` as a clean "nothing to map" result rather
      *  than falling through to the single-child path. */
     mapOverList?: boolean;
+    /** True when prep resolved this node as a DYNAMIC fan-out (issue #130,
+     *  `parallelSubflowIdsVar`) that, after validating ids against the flows
+     *  store, produced ZERO runnable lanes. Like `mapOverList`, it lets execCore
+     *  fold a clean empty result instead of falling through to the single-child
+     *  path. */
+    fanOutResolvedEmpty?: boolean;
     /** Bounded worker-pool size for parallel mode (default 4). */
     concurrencyLimit?: number;
     /** Separator used to join lane outputs in child order (default "\n\n"). */

@@ -1289,3 +1289,44 @@ describe('compileFlowSpec — process maxTurns / prompt flags / allowedTools (1b
     expect(p).toEqual({ promptTemplate: 'x', boundModel: 'model-abc' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dynamic fan-out target selection (issue #130) — parallelFlowsVariable
+// ---------------------------------------------------------------------------
+
+describe('compileFlowSpec — dynamic fan-out (parallelFlowsVariable, issue #130)', () => {
+  it('standalone parallelFlowsVariable compiles to parallelSubflowIdsVar (no static child)', () => {
+    const { flow, errorCount } = compileFlowSpec(
+      subflowWrap({ parallelFlowsVariable: 'TARGETS', concurrencyLimit: 3, errorStrategy: 'fail-fast' }),
+      parallelContext
+    );
+    expect(errorCount).toBe(0);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.parallelSubflowIdsVar).toBe('TARGETS');
+    expect(gate.data.properties).not.toHaveProperty('subflowId');
+    expect(gate.data.properties).not.toHaveProperty('parallelSubflowIds');
+    expect(gate.data.properties!.concurrencyLimit).toBe(3);
+    expect(gate.data.properties!.errorStrategy).toBe('fail-fast');
+  });
+
+  it('parallelFlowsVariable can decorate a static parallelFlows base (runtime override)', () => {
+    const { flow, errorCount } = compileFlowSpec(
+      subflowWrap({ parallelFlows: ['run_tests', 'security_eval'], parallelFlowsVariable: 'TARGETS' }),
+      parallelContext
+    );
+    expect(errorCount).toBe(0);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.parallelSubflowIds).toEqual(['flow-tests', 'flow-sec']);
+    expect(gate.data.properties!.parallelSubflowIdsVar).toBe('TARGETS');
+  });
+
+  it('errors when parallelFlowsVariable is combined with mapOverList', () => {
+    const { issues } = compileFlowSpec(
+      subflowWrap({ flow: 'Summarizer', parallelFlowsVariable: 'TARGETS', mapOverList: true }),
+      parallelContext
+    );
+    expect(issues).toContainEqual(
+      expect.objectContaining({ code: 'subflow-map-and-parallel-var', severity: 'error' })
+    );
+  });
+});

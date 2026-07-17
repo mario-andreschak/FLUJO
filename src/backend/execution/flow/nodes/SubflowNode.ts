@@ -129,6 +129,46 @@ function splitItems(text: string, mode: 'json-array' | 'lines'): string[] {
 }
 
 /**
+ * Hard cap on dynamically-resolved fan-out lanes (issue #130). A model-chosen
+ * fan-out set must never be unbounded, so the resolved id list is truncated to
+ * this many lanes regardless of what the upstream variable contained. The
+ * bounded worker pool (`concurrencyLimit`) still limits how many run AT ONCE;
+ * this bounds how many run AT ALL.
+ */
+export const MAX_DYNAMIC_FANOUT_LANES = 32;
+
+/**
+ * Resolve the dynamic fan-out target flow ids (issue #130) from a run-scoped
+ * variable's raw value. The value is split with the SAME `itemSplit` semantics
+ * as map-over-list (`json-array` default, or `lines`), trimmed, de-duplicated
+ * preserving first-seen order, empties dropped, an optional self-reference
+ * removed (trivial-recursion guard — the depth cap still backstops), and capped
+ * at MAX_DYNAMIC_FANOUT_LANES. Pure/total: never throws, never does I/O. Id
+ * EXISTENCE is validated separately against the flows store in prep().
+ */
+export function resolveDynamicFanoutIds(
+  rawValue: string | undefined | null,
+  split: 'json-array' | 'lines',
+  excludeId?: string,
+): string[] {
+  if (typeof rawValue !== 'string' || rawValue.trim() === '') return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of splitItems(rawValue, split)) {
+    const id = item.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (excludeId && id === excludeId) {
+      log.warn('Dynamic fan-out target refers to the running flow itself; skipping (recursion guard)', { id });
+      continue;
+    }
+    out.push(id);
+    if (out.length >= MAX_DYNAMIC_FANOUT_LANES) break;
+  }
+  return out;
+}
+
+/**
  * Build the per-child `emit` wrapper that folds a subflow run's events onto the
  * PARENT conversation's channel.
  *
@@ -189,12 +229,42 @@ function buildChildEmit(
 export class SubflowNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
-    const parallelIds = (node_params?.properties?.parallelSubflowIds ?? []).filter(
+    let parallelIds = (node_params?.properties?.parallelSubflowIds ?? []).filter(
       (id): id is string => typeof id === 'string' && id.trim() !== '',
     );
     const mapOverList = node_params?.properties?.mapOverList === true;
     const itemSplit = node_params?.properties?.itemSplit === 'lines' ? 'lines' : 'json-array';
     const sequential = node_params?.properties?.sequential === true;
+    // Dynamic fan-out target selection (issue #130): when `parallelSubflowIdsVar`
+    // names a run-scoped variable, resolve the fan-out set from it at RUNTIME so
+    // an upstream model/process node can decide WHICH (and how many) flows fan
+    // out. Reuses the plaintext run-var scratchpad (never resolveGlobalVars → no
+    // secret decryption). A NON-EMPTY dynamic resolution OVERRIDES the static
+    // list; an empty one falls back to it (today's behavior). The helper trims,
+    // de-dupes, drops a self-reference and caps the count; unknown ids are
+    // dropped below after validating against the flows store.
+    const parallelSubflowIdsVar = node_params?.properties?.parallelSubflowIdsVar?.trim();
+    let dynamicFanout = false;
+    if (parallelSubflowIdsVar) {
+      const dyn = resolveDynamicFanoutIds(
+        sharedState.variables?.[parallelSubflowIdsVar],
+        itemSplit,
+        sharedState.flowId,
+      );
+      if (dyn.length > 0) {
+        parallelIds = dyn;
+        dynamicFanout = true;
+        log.info('Dynamic fan-out targets resolved from run variable', {
+          variable: parallelSubflowIdsVar,
+          count: dyn.length,
+        });
+      } else {
+        log.info('Dynamic fan-out variable resolved to no targets; using static parallelSubflowIds', {
+          variable: parallelSubflowIdsVar,
+          staticCount: parallelIds.length,
+        });
+      }
+    }
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
     // Back-compat: a promptTemplate saved before the explicit 'isolated' mode
     // existed used to override the history unconditionally. Preserve that by
@@ -297,21 +367,36 @@ export class SubflowNode extends BaseNode {
       });
     }
     if (parallelIds.length > 0) {
-      const lanes: SubflowLanePlan[] = parallelIds.map((id) => ({ subflowId: id }));
+      let lanes: SubflowLanePlan[] = parallelIds.map((id) => ({ subflowId: id }));
       try {
         const { flowService } = await import('@/backend/services/flow/index');
+        const missing = new Set<string>();
         await Promise.all(
           lanes.map(async (lane) => {
             try {
               const flow = await flowService.getFlow(lane.subflowId);
               if (flow?.name) lane.subflowName = flow.name;
+              // Dynamic fan-out (issue #130): a model-chosen id that matches no
+              // known flow is DROPPED (with a warning) rather than run; an
+              // author-fixed static id is left untouched (existing behavior).
+              else if (dynamicFanout && !flow) missing.add(lane.subflowId);
             } catch {
-              /* attribution only */
+              if (dynamicFanout) missing.add(lane.subflowId);
             }
           }),
         );
+        if (dynamicFanout && missing.size > 0) {
+          log.warn('Dropping unknown dynamic fan-out target id(s)', { dropped: [...missing] });
+          lanes = lanes.filter((lane) => !missing.has(lane.subflowId));
+        }
       } catch {
         /* attribution only */
+      }
+      // Dynamic fan-out that validated away ALL lanes: fold a clean empty result
+      // rather than falling through to the single-child path (execCore honors
+      // fanOutResolvedEmpty like the map-over-list empty case).
+      if (dynamicFanout && lanes.length === 0) {
+        prepResult.fanOutResolvedEmpty = true;
       }
       prepResult.lanes = lanes;
       prepResult.concurrencyLimit = Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
@@ -394,8 +479,11 @@ export class SubflowNode extends BaseNode {
 
     // Map-over-list that resolved ZERO items: nothing to map. Fold a clean empty
     // result and hand off — never fall through and run the child once.
-    if (prepResult.mapOverList) {
-      log.info('execCore() map-over-list resolved no items → nothing to map', { subflowId: prepResult.subflowId });
+    if (prepResult.mapOverList || prepResult.fanOutResolvedEmpty) {
+      log.info('execCore() resolved no lanes → nothing to run', {
+        subflowId: prepResult.subflowId,
+        reason: prepResult.fanOutResolvedEmpty ? 'dynamic-fanout-empty' : 'map-over-list-empty',
+      });
       return { success: true, outputText: '', subStatus: 'completed', lanes: [] };
     }
 

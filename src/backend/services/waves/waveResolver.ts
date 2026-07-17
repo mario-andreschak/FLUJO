@@ -85,6 +85,10 @@ function directSubflowIds(flow: Flow | undefined): string[] {
         if (typeof id === 'string' && id.trim()) ids.push(id.trim());
       }
     }
+    // Dynamic fan-out (issue #130, `parallelSubflowIdsVar`) selects its targets
+    // from a run variable AT RUNTIME, so the concrete set is unknowable here.
+    // Waves degrades gracefully: those runtime-only lanes simply do not appear in
+    // the static graph (there is nothing deterministic to draw).
   }
   // De-dupe while preserving first-seen order.
   return Array.from(new Set(ids));
