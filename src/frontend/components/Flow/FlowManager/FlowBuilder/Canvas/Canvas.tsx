@@ -28,7 +28,8 @@ import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/Flo
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
 import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
-import { validTargetTypesFor, defaultTargetHandleFor, isMcpHandle } from './utils/connectionRules';
+import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
+import { shouldOpenNodePicker } from './utils/nodePickerGate';
 import { findNodeById } from './utils/nodeUtils';
 import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
@@ -522,7 +523,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   // the node-selection modal opens carrying the source with it.
   const onConnectEnd: OnConnectEnd = useCallback(
     (event, connectionState) => {
-      const { fromNode, fromHandle } = connectionState;
+      const { fromNode, fromHandle, toHandle } = connectionState;
       if (!fromNode || !fromHandle?.id || !reactFlowInstance) {
         log.debug('onConnectEnd: No valid connection start data');
         return;
@@ -530,35 +531,32 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
       log.debug(`onConnectEnd: Connection ended from node ${fromNode.id}, handle ${fromHandle.id}`);
 
-      // Drags starting on a top (target-type) flow handle can only convert an
-      // existing edge to bidirectional (see onConnect) — dropping one on the
-      // pane must not offer to create a node that would hang off a backwards
-      // edge. MCP handles are exempt: MCP wiring is non-directional.
-      if (fromHandle.type === 'target' && !isMcpHandle(fromHandle.id)) {
-        log.debug('onConnectEnd: Drag from a target handle cannot create a new node');
-        return;
-      }
-
       // A subflow has a single outgoing path — once it has one, dropping on
       // the pane must not offer to create a second successor. (The same rule
-      // is enforced for direct connections in validateConnection.)
-      if (fromNode.type === 'subflow' && fromHandle.type === 'source') {
-        const hasOutgoing = edges.some(e => {
+      // is enforced for direct connections in validateConnection.) Attachment
+      // (mcp/resource) edges are config wiring, not successors.
+      const subflowHasOutgoing =
+        fromNode.type === 'subflow' &&
+        edges.some(e => {
           const data = e.data as { edgeType?: string; bidirectional?: boolean } | undefined;
-          // Attachment (mcp/resource) edges are config wiring, not successors.
           if (data?.edgeType === 'mcp' || data?.edgeType === 'resource') return false;
           return e.source === fromNode.id || (e.target === fromNode.id && !!data?.bidirectional);
         });
-        if (hasOutgoing) {
-          log.debug('onConnectEnd: Subflow already has an outgoing connection; not offering a new node');
-          return;
-        }
-      }
 
-      // Check if the target is the pane (not a node). If it isn't, onConnect
-      // handled any edge creation and there is nothing to do here.
-      const targetIsPane = (event.target as Element).classList.contains('react-flow__pane');
-      if (!targetIsPane) {
+      // Robust pane detection: `closest` tolerates the pointer being released
+      // over a child/overlay of the pane, and the `toHandle` check ensures a
+      // handle→handle drag (owned by onConnect) never opens the picker. Together
+      // they fix the popup that appeared while drawing connections (#133).
+      const droppedOnPane = !!(event.target as Element | null)?.closest?.('.react-flow__pane');
+
+      if (!shouldOpenNodePicker({
+        fromNodeType: fromNode.type,
+        fromHandleType: fromHandle.type,
+        fromHandleId: fromHandle.id,
+        landedOnHandle: !!toHandle,
+        droppedOnPane,
+        subflowHasOutgoing,
+      })) {
         return;
       }
 
