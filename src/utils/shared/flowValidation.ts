@@ -452,6 +452,38 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       );
     }
 
+    // --- Spawn briefs (issue #156): author-defined parallel briefs run the
+    // SINGLE sub-agent once per brief. They need that single subflowId and are
+    // mutually exclusive with the multi-flow fan-out list and map-over-list
+    // (both would fight over the lane plan).
+    const spawnBriefs = Array.isArray(props.spawnBriefs)
+      ? props.spawnBriefs.filter((b: unknown): b is string => typeof b === 'string' && b.trim() !== '')
+      : [];
+    if (spawnBriefs.length > 0 && !subflowId) {
+      add(
+        'error',
+        'subflow-spawn-no-child',
+        `Subflow node "${getNodeLabel(node)}" has spawn briefs but no sub-agent flow ("subflowId"); select the flow to spawn once per brief.`,
+        node
+      );
+    }
+    if (spawnBriefs.length > 0 && parallelIds.length > 0) {
+      add(
+        'error',
+        'subflow-spawn-and-parallel',
+        `Subflow node "${getNodeLabel(node)}" combines "spawnBriefs" with "parallelSubflowIds"; spawn briefs run one sub-agent per brief and cannot be combined with a multi-flow fan-out list.`,
+        node
+      );
+    }
+    if (spawnBriefs.length > 0 && mapOverList) {
+      add(
+        'error',
+        'subflow-spawn-and-map',
+        `Subflow node "${getNodeLabel(node)}" combines "spawnBriefs" with "mapOverList"; use one lane source or the other.`,
+        node
+      );
+    }
+
     // --- Dynamic fan-out (issue #130): parallelSubflowIdsVar names a run-scoped
     // variable whose value lists the fan-out target flow ids AT RUNTIME. It is a
     // fan-out (multiple CHILDREN), so — like the static parallel list — it is
@@ -502,7 +534,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
-    if (parallelIds.length > 0) {
+    if (parallelIds.length > 0 || spawnBriefs.length > 0) {
       const limit = props.concurrencyLimit;
       if (typeof limit === 'number' && limit < 1) {
         add(

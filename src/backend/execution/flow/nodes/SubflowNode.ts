@@ -18,6 +18,7 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
 import { writeRunResource } from '@/backend/services/runResources';
 import { isCancelledByAncestry } from '../cancellation';
+import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -169,6 +170,34 @@ export function resolveDynamicFanoutIds(
 }
 
 /**
+ * Resolve `${var:NAME}` (run scratchpad), `${res:NAME}` (run resources) and
+ * `${kv:NAME}` (persistent kv) references in a subflow input template — the
+ * shared resolution for the isolated inputText AND each spawn brief (issue
+ * #156), so briefs behave exactly like a promptTemplate.
+ */
+async function resolveSubflowTemplate(
+  text: string,
+  sharedState: SharedState,
+  nodeId: string | undefined,
+): Promise<string> {
+  let resolved = await resolveRunResourceRefs(
+    resolveRunVars(text, sharedState.variables),
+    sharedState.ephemeral ? undefined : sharedState.conversationId,
+    sharedState.emit,
+    nodeId ? { nodeId, nodeType: 'subflow' } : undefined,
+  );
+  if (resolved.includes('${kv:')) {
+    let folder: string | undefined;
+    try {
+      const { flowService } = await import('@/backend/services/flow/index');
+      folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+    } catch { /* best effort */ }
+    resolved = await resolveKvNodeRefs(resolved, { flowId: sharedState.flowId, folder });
+  }
+  return resolved;
+}
+
+/**
  * Build the per-child `emit` wrapper that folds a subflow run's events onto the
  * PARENT conversation's channel.
  *
@@ -278,15 +307,17 @@ export class SubflowNode extends BaseNode {
         });
       }
     }
-    // Phase 4 agentic fan-out (issue #130): when this node opted into
+    // Legacy Phase 4 agentic fan-out (issue #130): when this node opted into
     // `allowCallerFanout` and the handoff tool that routed here carried a
     // `parallelFlows` list, the ROUTING MODEL's chosen set wins over BOTH the
-    // dynamic-var and static lists — it is the DECIDING step choosing the set as
-    // it routes. Normalized/capped/self-reference-dropped by the same pure helper
-    // (a JSON array so `itemSplit` is irrelevant), then validated against the
-    // flows store below (dynamicFanout=true drops unknown ids). An optional caller
-    // `concurrencyLimit` overrides the node default for this run.
+    // dynamic-var and static lists. No handoff tool exposes the parameter
+    // anymore (superseded by spawn-with-brief `task` calls — issue #156), but a
+    // resumed old conversation may still deliver one, so the path stays honored.
+    // Normalized/capped/self-reference-dropped by the same pure helper, then
+    // validated against the flows store below. An all-unknown caller set is a
+    // loud ERROR now, not the old silent zero-lane success (issue #156 defect 2).
     let callerConcurrency: number | undefined;
+    let callerFanout = false;
     const allowCallerFanout = node_params?.properties?.allowCallerFanout === true;
     if (allowCallerFanout && handoffForThisNode?.parallelFlows && handoffForThisNode.parallelFlows.length > 0) {
       const callerIds = resolveDynamicFanoutIds(
@@ -297,14 +328,36 @@ export class SubflowNode extends BaseNode {
       if (callerIds.length > 0) {
         parallelIds = callerIds;
         dynamicFanout = true;
-        if (typeof handoffForThisNode.concurrencyLimit === 'number' && handoffForThisNode.concurrencyLimit >= 1) {
-          callerConcurrency = Math.floor(handoffForThisNode.concurrencyLimit);
-        }
+        callerFanout = true;
         log.info('Caller-chosen fan-out targets resolved from handoff tool', {
           count: callerIds.length,
           nodeId: node_params?.id,
         });
       }
+    }
+    if (typeof handoffForThisNode?.concurrencyLimit === 'number' && handoffForThisNode.concurrencyLimit >= 1) {
+      callerConcurrency = Math.floor(handoffForThisNode.concurrencyLimit);
+    }
+    // Spawn-with-brief (issue #156): the briefs this visit spawns the sub-agent
+    // with — one parallel lane per brief, resolved AFTER the shared input below
+    // so each lane composes brief + inputMode context. Caller-supplied `task`
+    // briefs (one handoff tool call each, gated on `allowCallerFanout`) win over
+    // the author-defined `spawnBriefs` list; both are capped like every
+    // model/runtime-chosen fan-out.
+    const callerTasks =
+      allowCallerFanout && handoffForThisNode?.tasks && handoffForThisNode.tasks.length > 0
+        ? handoffForThisNode.tasks
+        : undefined;
+    const authorBriefs = (node_params?.properties?.spawnBriefs ?? [])
+      .map((b) => (typeof b === 'string' ? b.trim() : ''))
+      .filter((b) => b !== '');
+    let spawnTasks = callerTasks ?? (authorBriefs.length > 0 ? authorBriefs : undefined);
+    if (spawnTasks && spawnTasks.length > MAX_DYNAMIC_FANOUT_LANES) {
+      log.warn('Spawn briefs exceed the fan-out lane cap; truncating', {
+        requested: spawnTasks.length,
+        cap: MAX_DYNAMIC_FANOUT_LANES,
+      });
+      spawnTasks = spawnTasks.slice(0, MAX_DYNAMIC_FANOUT_LANES);
     }
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
     // Back-compat: a promptTemplate saved before the explicit 'isolated' mode
@@ -317,8 +370,9 @@ export class SubflowNode extends BaseNode {
     // conversation. Canonical default is ON — absent => persist (issue #138 fixed
     // the frontend/backend default mismatch where the UI showed ON while the
     // backend treated absent as ephemeral). Only an explicit `false` opts out.
-    // Honored only on the single-child path in execCore (fan-out / map-over-list
-    // stay ephemeral).
+    // Honored on the single-child path AND per parallel lane (issue #156
+    // defect 1 — spawned/fan-out/map lanes used to stay force-ephemeral, so
+    // sub-agent conversations never reached the sidebar).
     const persistConversation = node_params?.properties?.saveConversation !== false;
 
     // 'isolated' mode sends `promptTemplate` as the subflow's single user prompt,
@@ -373,24 +427,11 @@ export class SubflowNode extends BaseNode {
     // (the history paths carry the verbatim transcript). When mapOverList splits
     // this text into items below, each item is already resolved.
     if (prepResult.inputText !== undefined) {
-      // Tier 3: `${res:NAME}` named run resources resolve here too (after vars).
-      prepResult.inputText = await resolveRunResourceRefs(
-        resolveRunVars(prepResult.inputText, sharedState.variables),
-        sharedState.ephemeral ? undefined : sharedState.conversationId,
-        sharedState.emit,
-        node_params?.id ? { nodeId: node_params.id, nodeType: 'subflow' } : undefined
-      );
-      // Tier 4 (persistent kv): `${kv:NAME}` cross-run values in the isolated
-      // input. Scope keys off the PARENT flow (its folder), so a subflow node
-      // shares a board with the parent flow's process nodes.
-      if (prepResult.inputText.includes('${kv:')) {
-        let folder: string | undefined;
-        try {
-          const { flowService } = await import('@/backend/services/flow/index');
-          folder = (await flowService.getFlow(sharedState.flowId))?.folder;
-        } catch { /* best effort */ }
-        prepResult.inputText = await resolveKvNodeRefs(prepResult.inputText, { flowId: sharedState.flowId, folder });
-      }
+      // Tier 3 `${res:NAME}` and Tier 4 `${kv:NAME}` resolve alongside vars —
+      // shared with the spawn-brief resolution (issue #156). Kv keys scope off
+      // the PARENT flow (its folder), so a subflow node shares a board with the
+      // parent flow's process nodes.
+      prepResult.inputText = await resolveSubflowTemplate(prepResult.inputText, sharedState, node_params?.id);
     }
 
     // Lane plan. The single decision point for both concurrency features: which
@@ -407,7 +448,65 @@ export class SubflowNode extends BaseNode {
         nodeId: node_params?.id,
       });
     }
-    if (parallelIds.length > 0) {
+    if (spawnTasks && spawnTasks.length > 0 && !subflowId) {
+      // Spawning needs the single sub-agent target; without one the briefs are
+      // undeliverable. Fall through to the normal (error) path rather than
+      // silently dropping model-authored work.
+      log.warn('Spawn briefs received but the node has no subflowId; briefs are ignored', {
+        nodeId: node_params?.id,
+        briefCount: spawnTasks.length,
+      });
+      spawnTasks = undefined;
+    }
+    if (spawnTasks && spawnTasks.length > 0 && subflowId) {
+      // Spawn-with-brief (issue #156): one lane per brief, all running THIS
+      // node's sub-agent. Each lane's input composes the brief with the node's
+      // inputMode: isolated lanes receive the brief as their single prompt
+      // (overriding promptTemplate, like a caller prompt); history-mode lanes
+      // receive the shared sanitized/scoped transcript PLUS the brief appended
+      // as the closing user instruction, so every spawned worker sees the
+      // conversation context and its own assignment. Briefs resolve ${var:} /
+      // ${res:} / ${kv:} exactly like a promptTemplate.
+      if (parallelIds.length > 0) {
+        log.warn('SubflowNode has both spawn briefs and parallelSubflowIds; spawn briefs win for this visit', {
+          nodeId: node_params?.id,
+        });
+      }
+      let subflowName: string | undefined;
+      try {
+        const { flowService } = await import('@/backend/services/flow/index');
+        subflowName = (await flowService.getFlow(subflowId))?.name;
+      } catch {
+        /* attribution only */
+      }
+      const resolvedBriefs = await Promise.all(
+        spawnTasks.map((brief) => resolveSubflowTemplate(brief, sharedState, node_params?.id)),
+      );
+      prepResult.lanes = resolvedBriefs.map((brief, i) => ({
+        subflowId,
+        subflowName,
+        input:
+          prepResult.messages !== undefined
+            ? {
+                messages: [
+                  ...prepResult.messages,
+                  { role: 'user' as const, content: brief, id: crypto.randomUUID(), timestamp: Date.now() },
+                ],
+              }
+            : { prompt: brief },
+        itemIndex: i,
+        itemCount: resolvedBriefs.length,
+        laneTitle: buildConversationTitle(brief),
+      }));
+      prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
+      prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
+      log.info('Spawn-with-brief lanes resolved', {
+        nodeId: node_params?.id,
+        laneCount: resolvedBriefs.length,
+        source: callerTasks ? 'caller' : 'author',
+      });
+    } else if (parallelIds.length > 0) {
       let lanes: SubflowLanePlan[] = parallelIds.map((id) => ({ subflowId: id }));
       try {
         const { flowService } = await import('@/backend/services/flow/index');
@@ -433,11 +532,19 @@ export class SubflowNode extends BaseNode {
       } catch {
         /* attribution only */
       }
-      // Dynamic fan-out that validated away ALL lanes: fold a clean empty result
-      // rather than falling through to the single-child path (execCore honors
-      // fanOutResolvedEmpty like the map-over-list empty case).
+      // Dynamic fan-out that validated away ALL lanes: a CALLER-chosen set that
+      // resolved to nothing is a loud error (issue #156 defect 2 — the model
+      // named flows that don't exist; the old behavior was a silent zero-lane
+      // success that looked like the fan-out ran). A var-driven set keeps the
+      // documented clean-empty fold.
       if (dynamicFanout && lanes.length === 0) {
-        prepResult.fanOutResolvedEmpty = true;
+        if (callerFanout) {
+          prepResult.laneResolutionError =
+            `None of the requested parallel flows exist: ${parallelIds.join(', ')}. ` +
+            'The handoff "parallelFlows" argument must name existing flows; to run several copies of THIS sub-agent, call the handoff tool once per task instead.';
+        } else {
+          prepResult.fanOutResolvedEmpty = true;
+        }
       }
       prepResult.lanes = lanes;
       prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
@@ -468,6 +575,7 @@ export class SubflowNode extends BaseNode {
         input: { prompt: item },
         itemIndex: i,
         itemCount: items.length,
+        laneTitle: buildConversationTitle(item),
       }));
       prepResult.mapOverList = true; // let execCore treat an EMPTY list as "nothing to map"
       // `sequential` pins the pool to 1 (in-order, one item at a time) rather than
@@ -512,8 +620,15 @@ export class SubflowNode extends BaseNode {
       ? { messages: prepResult.messages }
       : { prompt: prepResult.inputText ?? '' };
 
-    // Lane execution: fan-out/join (issue #102) OR map-over-list (Tier 2a). Both
-    // resolve a lane plan in prep and run through the same bounded pool below.
+    // A lane plan that failed to resolve (issue #156 defect 2: caller-requested
+    // fan-out flows that don't exist) is a REAL error — never a silent success.
+    if (prepResult.laneResolutionError) {
+      return { success: false, error: prepResult.laneResolutionError };
+    }
+
+    // Lane execution: spawn-with-brief (issue #156), fan-out/join (issue #102)
+    // or map-over-list (Tier 2a). All resolve a lane plan in prep and run
+    // through the same bounded pool below.
     if (prepResult.lanes && prepResult.lanes.length > 0) {
       return this.execParallel(prepResult, runFlow, nodeRef, runInput);
     }
@@ -625,13 +740,18 @@ export class SubflowNode extends BaseNode {
         { index: lane.itemIndex ?? i, count: lane.itemCount ?? laneCount },
       );
       try {
-        // Map-over-list lanes carry their OWN input (one per item); fan-out lanes
-        // have none, so they fall back to the shared runInput — keeping the fan-out
-        // path byte-for-byte identical to before.
+        // Spawn/map-over-list lanes carry their OWN input (one per brief/item);
+        // fan-out lanes have none, so they fall back to the shared runInput —
+        // keeping the fan-out path byte-for-byte identical to before.
+        // saveConversation is honored PER LANE (issue #156 defect 1): each lane
+        // persists as its own sidebar conversation via the sanctioned runFlow
+        // mode, titled by its brief/item and linked through parentRunId — lanes
+        // no longer stay force-ephemeral.
         const r = await runFlow({
           flowId: lane.subflowId,
           ...(lane.input ?? runInput),
-          mode: 'ephemeral',
+          mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
+          ...(prepResult.persistConversation && lane.laneTitle ? { title: lane.laneTitle } : {}),
           flujo: true,
           requireApproval: false,
           debug: false,

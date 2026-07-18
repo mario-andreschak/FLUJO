@@ -1241,6 +1241,57 @@ describe('compileFlowSpec — map-over-list (Tier 2a)', () => {
   });
 });
 
+describe('compileFlowSpec — spawn briefs (issue #156)', () => {
+  it('spawnBriefs decorate a single child: subflowId + spawnBriefs + tuning copied', () => {
+    const spec = subflowWrap({
+      flow: 'run_tests',
+      spawnBriefs: ['audit security', ' check cleanliness ', ''],
+      concurrencyLimit: 2,
+      joinSeparator: '\n--\n',
+      errorStrategy: 'fail-fast',
+    });
+    const { flow, errorCount } = compileFlowSpec(spec, parallelContext);
+    expect(errorCount).toBe(0);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.subflowId).toBe('flow-tests');
+    // Blank entries are dropped; briefs are kept verbatim otherwise.
+    expect(gate.data.properties!.spawnBriefs).toEqual(['audit security', ' check cleanliness ']);
+    expect(gate.data.properties!.concurrencyLimit).toBe(2);
+    expect(gate.data.properties!.joinSeparator).toBe('\n--\n');
+    expect(gate.data.properties!.errorStrategy).toBe('fail-fast');
+    expect(gate.data.properties).not.toHaveProperty('parallelSubflowIds');
+  });
+
+  it('errors when spawnBriefs is combined with parallelFlows', () => {
+    const { issues } = compileFlowSpec(
+      subflowWrap({ spawnBriefs: ['b'], parallelFlows: ['run_tests', 'run_lint_typecheck'] }),
+      parallelContext
+    );
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-spawn-and-parallel', severity: 'error' }));
+  });
+
+  it('errors when spawnBriefs is combined with mapOverList', () => {
+    const { issues } = compileFlowSpec(
+      subflowWrap({ flow: 'run_tests', spawnBriefs: ['b'], mapOverList: true }),
+      parallelContext
+    );
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-spawn-and-map', severity: 'error' }));
+  });
+
+  it('errors when spawnBriefs has no single child to spawn', () => {
+    const { issues } = compileFlowSpec(subflowWrap({ spawnBriefs: ['b'] }), parallelContext);
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-spawn-no-child', severity: 'error' }));
+  });
+
+  it('a spawn-brief subflow validates clean', () => {
+    const { flow } = compileFlowSpec(subflowWrap({ flow: 'run_tests', spawnBriefs: ['b1', 'b2'] }), parallelContext);
+    const validation = validateFlow(flow!, { models: context.models });
+    expect(validation.issues.map((i) => i.code)).not.toContain('subflow-spawn-no-child');
+    expect(validation.issues.map((i) => i.code)).not.toContain('subflow-spawn-and-parallel');
+    expect(validation.isRunnable).toBe(true);
+  });
+});
+
 describe('compileFlowSpec — process maxTurns / prompt flags / allowedTools (1b–1d)', () => {
   const procWrap = (over: Partial<FlowSpec['nodes'][number]>): FlowSpec => ({
     nodes: [

@@ -133,6 +133,10 @@ export interface FlowRunInput {
   mode?: 'ephemeral' | 'conversation';
   /** Required to resume/persist a conversation; a random id is used otherwise. */
   conversationId?: string;
+  /** Sidebar title for a NEW persisted conversation (issue #156: spawn lanes
+   *  are titled by their brief so parallel sub-agent runs are tellable apart).
+   *  Ignored when resuming (the existing title wins) and for ephemeral runs. */
+  title?: string;
 
   /** Engine flags (defaults preserve the legacy completions behavior). */
   flujo?: boolean;               // default true
@@ -327,7 +331,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       conversationId: effectiveConvId,
       currentNodeId: undefined,
       status: 'running',
-      title: 'New Conversation',
+      // A caller-supplied title (spawn lanes: the brief) sticks — the
+      // first-user-message auto-titling below only replaces the placeholder.
+      title: input.title?.trim() || 'New Conversation',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       debugMode: flujodebug,
@@ -1003,80 +1009,125 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           if (typeof nextNodeId === 'string' && nextNodeId.length > 0) {
 
             const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
-            let handoffToolCallId: string | undefined = undefined;
 
             if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
-              const handoffToolCall = lastAssistantMsg.tool_calls.find(tc =>
+              const allHandoffCalls = lastAssistantMsg.tool_calls.filter(tc =>
                 tc.type === 'function' &&
                 (tc.function.name === 'handoff' || tc.function.name.startsWith('handoff_to_'))
               );
+              // Spawn-with-brief (issue #156): the routing model may call the SAME
+              // handoff tool several times in one turn — each call is one spawned
+              // lane of the target sub-agent, briefed by its `task` argument. So
+              // the capture walks EVERY handoff call that resolves to the chosen
+              // target (via handoffNameMap; legacy names embed the node id), not
+              // just the first one, and answers each with its own tool result so
+              // the transcript stays well-formed (one result per tool_call id).
+              const resolveCallTarget = (name: string): string =>
+                sharedState.handoffNameMap?.[name] || name.replace('handoff_to_', '');
+              const matchingCalls = allHandoffCalls.filter(
+                tc => tc.type === 'function' && resolveCallTarget(tc.function.name) === nextNodeId
+              );
+              // Defensive: an edge chosen without a decodable matching call (e.g.
+              // a deterministic-condition route after a tool-call turn) keeps the
+              // legacy "first handoff call" pairing so its result never dangles.
+              const callsToAnswer = matchingCalls.length > 0 ? matchingCalls : allHandoffCalls.slice(0, 1);
 
-              if (handoffToolCall) {
-                handoffToolCallId = handoffToolCall.id;
-                log.debug(`Found handoff tool call ID: ${handoffToolCallId} for edge ${currentAction}`);
-
-                // Capture a caller-supplied `prompt` argument (issue #96) so an
-                // isolated subflow with `allowCallerPrompt` can be driven by the
-                // routing model. Single-shot and node-id-scoped; the target
-                // node's prep consumes and clears it. A malformed args string
-                // must NEVER break routing — parse defensively and skip on error.
-                if (handoffToolCall.type === 'function') {
-                  try {
-                    const parsedArgs = JSON.parse(handoffToolCall.function.arguments || '{}');
-                    const callerPrompt = typeof parsedArgs?.prompt === 'string' ? parsedArgs.prompt.trim() : '';
-                    // Phase 4 agentic fan-out (issue #130): a fan-out-enabled subflow
-                    // target's handoff tool may carry a `parallelFlows` list (+ an
-                    // optional `concurrencyLimit`) — the ROUTING MODEL choosing the
-                    // parallel set at call time. Captured single-shot & node-scoped
-                    // alongside the caller prompt; SubflowNode.prep validates &
-                    // applies it (unknown ids dropped, count capped).
-                    const callerFlows = Array.isArray(parsedArgs?.parallelFlows)
-                      ? parsedArgs.parallelFlows.filter(
-                          (f: unknown): f is string => typeof f === 'string' && f.trim() !== '',
-                        )
-                      : undefined;
-                    const rawLimit = parsedArgs?.concurrencyLimit;
-                    const callerConcurrency =
-                      typeof rawLimit === 'number' && rawLimit >= 1 ? Math.floor(rawLimit) : undefined;
-                    if (callerPrompt || (callerFlows && callerFlows.length > 0)) {
-                      sharedState.handoffInput = {
-                        targetNodeId: nextNodeId,
-                        prompt: callerPrompt,
-                        ...(callerFlows && callerFlows.length > 0 ? { parallelFlows: callerFlows } : {}),
-                        ...(callerConcurrency !== undefined ? { concurrencyLimit: callerConcurrency } : {}),
-                      };
-                      log.info(`Captured caller handoff input for node ${nextNodeId}`, {
-                        promptChars: callerPrompt.length,
-                        fanoutCount: callerFlows?.length ?? 0,
-                      });
-                    }
-                  } catch (parseError) {
-                    log.warn(`Could not parse handoff tool-call arguments for edge ${currentAction}; ignoring caller input`, { parseError });
-                  }
-                }
-
-                const toolResultMessage: FlujoChatMessage = {
-                  id: crypto.randomUUID(),
-                  role: 'tool',
-                  tool_call_id: handoffToolCallId,
-                  content: JSON.stringify({ status: 'Handoff processed', targetNodeId: nextNodeId }),
-                  timestamp: Date.now(),
-                  processNodeId: sharedState.currentNodeId,
-                };
-
-                sharedState.messages.push(toolResultMessage);
-                log.info(`Appended tool result message for handoff tool call ${handoffToolCallId}`);
-
-                // NOTE: we no longer append a synthetic "The handoff was
-                // successful. Continue" user message. The receiving node now
-                // builds its model context via buildNodeContext('scoped'), which
-                // strips this handoff tool-call/result so the model sees a clean
-                // conversation ending on the real task and responds naturally.
-                // See ~/.claude/plans/execution-core-v2.md.
-
-              } else {
+              if (callsToAnswer.length === 0) {
                 log.warn(`Handoff action received for edge ${currentAction}, but could not find corresponding handoff tool call in last assistant message.`);
               }
+
+              // Capture caller-supplied handoff input: `prompt` (issue #96,
+              // single-call caller prompt), `task` briefs (issue #156 spawns —
+              // one per call), and the legacy `parallelFlows`/`concurrencyLimit`
+              // (issue #130; no tool exposes them anymore but a resumed old
+              // conversation may still send them). Single-shot and node-id-scoped;
+              // the target node's prep consumes and clears it. A malformed args
+              // string must NEVER break routing — parse defensively per call.
+              const briefs: string[] = [];
+              let callerPrompt = '';
+              let callerFlows: string[] | undefined;
+              let callerConcurrency: number | undefined;
+              callsToAnswer.forEach((call, laneIdx) => {
+                if (call.type === 'function') {
+                  try {
+                    const parsedArgs = JSON.parse(call.function.arguments || '{}');
+                    const task = typeof parsedArgs?.task === 'string' ? parsedArgs.task.trim() : '';
+                    const prompt = typeof parsedArgs?.prompt === 'string' ? parsedArgs.prompt.trim() : '';
+                    // `task` is always a spawn brief; a `prompt` on a MULTI-call
+                    // turn clearly means per-instance instructions too. On a
+                    // single-call turn `prompt` keeps its issue-#96 meaning.
+                    const brief = task || (callsToAnswer.length > 1 ? prompt : '');
+                    if (brief) briefs.push(brief);
+                    if (!callerPrompt && prompt) callerPrompt = prompt;
+                    if (!callerFlows && Array.isArray(parsedArgs?.parallelFlows)) {
+                      const flows = parsedArgs.parallelFlows.filter(
+                        (f: unknown): f is string => typeof f === 'string' && f.trim() !== '',
+                      );
+                      if (flows.length > 0) callerFlows = flows;
+                    }
+                    const rawLimit = parsedArgs?.concurrencyLimit;
+                    if (callerConcurrency === undefined && typeof rawLimit === 'number' && rawLimit >= 1) {
+                      callerConcurrency = Math.floor(rawLimit);
+                    }
+                  } catch (parseError) {
+                    log.warn(`Could not parse handoff tool-call arguments for edge ${currentAction}; ignoring caller input for this call`, { parseError });
+                  }
+                }
+                sharedState.messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'tool',
+                  tool_call_id: call.id,
+                  content: JSON.stringify({
+                    status: 'Handoff processed',
+                    targetNodeId: nextNodeId,
+                    ...(callsToAnswer.length > 1 ? { lane: laneIdx + 1, laneCount: callsToAnswer.length } : {}),
+                  }),
+                  timestamp: Date.now(),
+                  processNodeId: sharedState.currentNodeId,
+                });
+              });
+              // Handoff calls that targeted a DIFFERENT node lost the route (one
+              // successor wins per turn). Answer them too — a tool_call id
+              // without a result corrupts the persisted transcript — with an
+              // explicit not-executed status. (All handoff plumbing is stripped
+              // from the model wire either way.)
+              for (const call of allHandoffCalls) {
+                if (callsToAnswer.includes(call)) continue;
+                sharedState.messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'tool',
+                  tool_call_id: call.id,
+                  content: JSON.stringify({ status: 'Not executed', reason: 'A different handoff was chosen this turn.' }),
+                  timestamp: Date.now(),
+                  processNodeId: sharedState.currentNodeId,
+                });
+                log.warn(`Handoff call ${call.type === 'function' ? call.function.name : call.id} targeted a different node than the chosen route; answered as not executed.`);
+              }
+              // A lone brief also serves as the caller prompt so a single
+              // `task`-style call still drives an isolated allowCallerPrompt
+              // subflow that never opted into spawning.
+              if (!callerPrompt && briefs.length === 1) callerPrompt = briefs[0];
+              if (callerPrompt || briefs.length > 0 || (callerFlows && callerFlows.length > 0)) {
+                sharedState.handoffInput = {
+                  targetNodeId: nextNodeId,
+                  prompt: callerPrompt,
+                  ...(briefs.length > 0 ? { tasks: briefs } : {}),
+                  ...(callerFlows && callerFlows.length > 0 ? { parallelFlows: callerFlows } : {}),
+                  ...(callerConcurrency !== undefined ? { concurrencyLimit: callerConcurrency } : {}),
+                };
+                log.info(`Captured caller handoff input for node ${nextNodeId}`, {
+                  promptChars: callerPrompt.length,
+                  spawnBriefs: briefs.length,
+                  fanoutCount: callerFlows?.length ?? 0,
+                });
+              }
+
+              // NOTE: we no longer append a synthetic "The handoff was
+              // successful. Continue" user message. The receiving node now
+              // builds its model context via buildNodeContext('scoped'), which
+              // strips this handoff tool-call/result so the model sees a clean
+              // conversation ending on the real task and responds naturally.
+              // See ~/.claude/plans/execution-core-v2.md.
             } else {
               log.warn(`Handoff action received for edge ${currentAction}, but the last message was not an assistant message with tool calls.`);
             }

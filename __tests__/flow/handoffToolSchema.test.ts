@@ -104,16 +104,16 @@ describe('ProcessNode.generateHandoffTools — caller-prompt schema (#96)', () =
   });
 });
 
-describe('ProcessNode.generateHandoffTools — agentic fan-out schema (#130 Phase 4)', () => {
-  it('exposes optional `parallelFlows` + `concurrencyLimit` ONLY for a subflow with allowCallerFanout', async () => {
+describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', () => {
+  it('exposes an optional `task` param ONLY for a subflow with allowCallerFanout, with the multi-call instruction', async () => {
     const proc = makeProcessNode([
-      { edgeId: 'e-fan', nodeId: 'sub-fan' },
+      { edgeId: 'e-spawn', nodeId: 'sub-spawn' },
       { edgeId: 'e-plain', nodeId: 'sub-plain' },
     ]);
 
     getFlowMock.mockResolvedValue({
       nodes: [
-        { id: 'sub-fan', type: 'subflow', data: { properties: { allowCallerFanout: true } } },
+        { id: 'sub-spawn', type: 'subflow', data: { properties: { allowCallerFanout: true } } },
         { id: 'sub-plain', type: 'subflow', data: { properties: {} } },
       ],
     });
@@ -121,24 +121,29 @@ describe('ProcessNode.generateHandoffTools — agentic fan-out schema (#130 Phas
     const sharedState = { flowId: 'flow-1' } as SharedState;
     const tools = await (proc as any).generateHandoffTools(sharedState);
 
-    const withFanout = tools.filter((t: any) => !!t?.inputSchema?.properties?.parallelFlows);
-    expect(withFanout).toHaveLength(1);
+    const withTask = tools.filter((t: any) => !!t?.inputSchema?.properties?.task);
+    expect(withTask).toHaveLength(1);
 
     const nameToId = sharedState.handoffNameMap!;
-    expect(nameToId[withFanout[0].name]).toBe('sub-fan');
+    expect(nameToId[withTask[0].name]).toBe('sub-spawn');
 
-    // parallelFlows is an OPTIONAL array of strings; concurrencyLimit an optional number.
-    expect(withFanout[0].inputSchema.properties.parallelFlows.type).toBe('array');
-    expect(withFanout[0].inputSchema.properties.parallelFlows.items.type).toBe('string');
-    expect(withFanout[0].inputSchema.properties.concurrencyLimit.type).toBe('number');
-    expect(withFanout[0].inputSchema.required).toEqual([]);
+    // task is an OPTIONAL string; the legacy parallelFlows/concurrencyLimit
+    // params are gone from the schema (the model must never name flows again).
+    expect(withTask[0].inputSchema.properties.task.type).toBe('string');
+    expect(withTask[0].inputSchema.properties.parallelFlows).toBeUndefined();
+    expect(withTask[0].inputSchema.properties.concurrencyLimit).toBeUndefined();
+    expect(withTask[0].inputSchema.required).toEqual([]);
+
+    // The description teaches the model to call the tool once per parallel worker.
+    expect(withTask[0].description).toContain('MULTIPLE TIMES');
+    expect(withTask[0].description).toContain('task');
 
     // The non-opted subflow keeps the byte-identical empty schema.
     const plain = tools.find((t: any) => nameToId[t.name] === 'sub-plain');
     expect(plain.inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
   });
 
-  it('combines caller prompt and fan-out params when both are opted in', async () => {
+  it('spawn wins over caller-prompt when both are opted in (only `task` is exposed)', async () => {
     const proc = makeProcessNode([{ edgeId: 'e-both', nodeId: 'sub-both' }]);
     getFlowMock.mockResolvedValue({
       nodes: [
@@ -154,9 +159,8 @@ describe('ProcessNode.generateHandoffTools — agentic fan-out schema (#130 Phas
 
     expect(tools).toHaveLength(1);
     const props = tools[0].inputSchema.properties;
-    expect(props.prompt.type).toBe('string');
-    expect(props.parallelFlows.type).toBe('array');
-    expect(props.concurrencyLimit.type).toBe('number');
+    expect(props.task.type).toBe('string');
+    expect(props.prompt).toBeUndefined();
     expect(tools[0].inputSchema.required).toEqual([]);
   });
 });

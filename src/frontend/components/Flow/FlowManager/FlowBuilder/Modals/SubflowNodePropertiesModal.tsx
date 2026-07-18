@@ -16,6 +16,7 @@ import {
   Checkbox,
   FormControlLabel,
   Switch,
+  MenuItem,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -56,6 +57,10 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loadingFlows, setLoadingFlows] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Spawn briefs (issue #156) are edited as free multi-line text (one brief per
+  // line) and only parsed back into the string[] property at save time, so
+  // typing/removing blank lines never fights the user mid-edit.
+  const [briefsText, setBriefsText] = useState('');
 
   useEffect(() => {
     if (node) {
@@ -73,6 +78,11 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
         ...node.data,
         properties: { ...existing },
       });
+      setBriefsText(
+        Array.isArray(existing.spawnBriefs)
+          ? existing.spawnBriefs.filter((b: unknown) => typeof b === 'string').join('\n')
+          : ''
+      );
     }
   }, [node, open]);
 
@@ -104,7 +114,20 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
 
   const handleSave = () => {
     if (node && nodeData) {
-      onSave(node.id, nodeData);
+      // Parse the brief editor back into the stored list. An empty editor
+      // REMOVES the key (issue #138 spirit: never seed values the user didn't
+      // set) rather than persisting an empty array.
+      const briefs = briefsText
+        .split('\n')
+        .map((b) => b.trim())
+        .filter((b) => b !== '');
+      const properties = { ...nodeData.properties };
+      if (briefs.length > 0) {
+        properties.spawnBriefs = briefs;
+      } else {
+        delete properties.spawnBriefs;
+      }
+      onSave(node.id, { ...nodeData, properties });
       onClose();
     }
   };
@@ -125,6 +148,25 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   const selectedSubflowName = selectedMissing
     ? ''
     : flows.find((f) => f.id === selectedSubflowId)?.name || '';
+
+  // API-authored lane configuration (issue #156 defect 3): these fields have no
+  // full editor here (they come from /api/flow/compile), but they must be
+  // VISIBLE — a node fanning out to 5 flows used to render as "Choose a flow…"
+  // as if it were unbound/broken.
+  const parallelIds: string[] = Array.isArray(nodeData.properties?.parallelSubflowIds)
+    ? nodeData.properties.parallelSubflowIds.filter((id: unknown): id is string => typeof id === 'string' && id !== '')
+    : [];
+  const parallelNames = parallelIds.map((id) => flows.find((f) => f.id === id)?.name || id);
+  const parallelVar =
+    typeof nodeData.properties?.parallelSubflowIdsVar === 'string'
+      ? nodeData.properties.parallelSubflowIdsVar.trim()
+      : '';
+  const mapOverList = nodeData.properties?.mapOverList === true;
+  const spawnEnabled = !!nodeData.properties?.allowCallerFanout;
+  const hasBriefs = briefsText.split('\n').some((b) => b.trim() !== '');
+  // The pool/join/error tuning applies to every lane mode; show it as soon as
+  // any lane source is in play so it never seeds values on unrelated saves.
+  const showTuning = spawnEnabled || hasBriefs || parallelIds.length > 0 || !!parallelVar || mapOverList;
 
   // Back-compat: a flow saved before the explicit 'isolated' mode existed just
   // has a promptTemplate and no inputMode — surface it as Isolated so the same
@@ -189,7 +231,12 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
             sx={{ textTransform: 'none', maxWidth: '100%' }}
           >
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {selectedSubflowName || 'Choose a flow…'}
+              {selectedSubflowName ||
+                (parallelIds.length > 0
+                  ? `Parallel fan-out: ${parallelIds.length} flows`
+                  : parallelVar
+                    ? `Fan-out targets from \${var:${parallelVar}}`
+                    : 'Choose a flow…')}
             </Box>
           </Button>
         </Box>
@@ -197,6 +244,23 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
         {selectedMissing && (
           <Alert severity="warning" sx={{ mt: 1 }}>
             The previously selected flow no longer exists. Please choose another.
+          </Alert>
+        )}
+
+        {/* Issue #156 defect 3: surface API-authored lane config instead of
+            looking unbound. There is no full editor for these here (they are
+            authored via the flow-compile API), but the node must not look broken. */}
+        {(parallelIds.length > 0 || (parallelVar && !selectedSubflowId)) && (
+          <Alert severity="info" sx={{ mt: 1 }}>
+            {parallelIds.length > 0
+              ? `This node runs ${parallelIds.length} flows in parallel and merges their results: ${parallelNames.join(', ')}. (Configured via the flow API.)`
+              : `This node picks its parallel target flows at runtime from the run variable "${parallelVar}". (Configured via the flow API.)`}
+          </Alert>
+        )}
+        {mapOverList && (
+          <Alert severity="info" sx={{ mt: 1 }}>
+            This node runs the selected flow once per item parsed from its input
+            (map-over-list, configured via the flow API).
           </Alert>
         )}
 
@@ -310,23 +374,98 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           </>
         )}
 
-        {/* Phase 4 agentic fan-out (issue #130): let a routing model choose the
-            parallel fan-out set at call time via this subflow's handoff tool. */}
+        {/* Spawn-with-brief (issue #156): this node as a spawnable sub-agent —
+            the routing model calls the handoff tool once per parallel worker,
+            each call carrying its own task brief; and/or the author pins a
+            fixed brief list. Both run through the same parallel lane engine. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          Parallel workers (spawning)
+        </Typography>
         <FormControlLabel
-          sx={{ mt: 2, display: 'block' }}
+          sx={{ display: 'block' }}
           control={
             <Checkbox
-              checked={!!nodeData.properties?.allowCallerFanout}
+              checked={spawnEnabled}
               onChange={(e) => handlePropertyChange('allowCallerFanout', e.target.checked)}
             />
           }
-          label="Let the caller choose parallel flows (agentic fan-out)"
+          label="Let the caller spawn parallel copies of this sub-agent"
         />
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
-          When on, a step that routes to this subflow can pass a list of flows to run in
-          parallel through its handoff tool, letting the model decide the fan-out set at
-          runtime. Unknown flows are dropped and the count is capped.
+          When on, the step that hands off here may call this node&apos;s handoff tool
+          several times in one reply — each call runs one parallel copy of the selected
+          flow with its own task brief. The copies run concurrently; their results are
+          merged in order and the flow continues once all of them finish.
         </Typography>
+        <TextField
+          fullWidth
+          label="Always spawn these briefs (one per line, optional)"
+          value={briefsText}
+          onChange={(e) => setBriefsText(e.target.value)}
+          margin="normal"
+          multiline
+          minRows={2}
+          helperText="When set, every visit runs one parallel copy of the selected flow per line — no caller needed. Caller-passed tasks (above) override this list for that visit. Supports ${var:NAME}, ${res:NAME} and ${kv:NAME}."
+        />
+        {showTuning && (
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1 }}>
+            <TextField
+              label="Max copies at once"
+              type="number"
+              size="small"
+              sx={{ width: 160 }}
+              value={typeof nodeData.properties?.concurrencyLimit === 'number' ? nodeData.properties.concurrencyLimit : ''}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') {
+                  // Clearing removes the key (never seed a default — issue #138).
+                  setNodeData((prev) => {
+                    if (!prev) return null;
+                    const { concurrencyLimit: _drop, ...rest } = prev.properties;
+                    return { ...prev, properties: rest };
+                  });
+                } else {
+                  const n = Math.max(1, Math.floor(Number(raw)));
+                  if (!Number.isNaN(n)) handlePropertyChange('concurrencyLimit', n);
+                }
+              }}
+              helperText="Default 4"
+            />
+            <TextField
+              label="Error handling"
+              select
+              size="small"
+              sx={{ width: 220 }}
+              value={nodeData.properties?.errorStrategy === 'fail-fast' ? 'fail-fast' : 'collect-all'}
+              onChange={(e) => handlePropertyChange('errorStrategy', e.target.value)}
+              helperText="What happens if a copy fails"
+            >
+              <MenuItem value="collect-all">Collect all (note failures, continue)</MenuItem>
+              <MenuItem value="fail-fast">Fail fast (first failure stops the node)</MenuItem>
+            </TextField>
+            <TextField
+              label="Separator between merged results"
+              size="small"
+              sx={{ width: 260 }}
+              multiline
+              maxRows={2}
+              value={typeof nodeData.properties?.joinSeparator === 'string' ? nodeData.properties.joinSeparator : ''}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') {
+                  setNodeData((prev) => {
+                    if (!prev) return null;
+                    const { joinSeparator: _drop, ...rest } = prev.properties;
+                    return { ...prev, properties: rest };
+                  });
+                } else {
+                  handlePropertyChange('joinSeparator', raw);
+                }
+              }}
+              helperText="Empty = blank line"
+            />
+          </Box>
+        )}
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           What do you see in the chat while the subflow runs?
@@ -366,8 +505,9 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
         />
         <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
           When on, each run of this subflow is persisted as its own conversation in
-          the chat sidebar, linked to the parent run — like a planned execution's
-          "Save full conversations". Fan-out and map-over-list runs stay ephemeral.
+          the chat sidebar, linked to the parent run — like a planned execution&apos;s
+          &quot;Save full conversations&quot;. Parallel copies each get their own
+          conversation, titled by their brief.
         </Typography>
       </DialogContent>
 

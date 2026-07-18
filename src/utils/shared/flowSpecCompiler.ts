@@ -188,13 +188,27 @@ export interface FlowSpecNode {
    *  off to this subflow may pass a `prompt` argument that overrides `prompt`
    *  (the authored default). Defaults to false. */
   allowCallerPrompt?: boolean;
-  /** subflow only (issue #130 Phase 4): when true, a step that hands off to this
-   *  subflow may pass a `parallelFlows` array (+ optional `concurrencyLimit`)
-   *  through its handoff tool — the ROUTING MODEL choosing the parallel fan-out
-   *  set at runtime. A non-empty caller set overrides `parallelFlows` /
+  /** subflow only (issue #156 spawn-with-brief; supersedes the #130 Phase 4
+   *  `parallelFlows` handoff argument): when true, this node is a SPAWNABLE
+   *  sub-agent — a step that hands off to it may call the handoff tool SEVERAL
+   *  TIMES in one turn, each call carrying a `task` brief, and each call runs
+   *  one parallel instance of the child flow briefed with that task. Results
+   *  join in call order and the flow continues after all instances finish.
+   *  Caller briefs override `spawnBriefs` / `parallelFlows` /
    *  `parallelFlowsVariable`. Compiles to `properties.allowCallerFanout`.
    *  Defaults false. */
   allowCallerFanout?: boolean;
+  /**
+   * subflow only (issue #156): AUTHOR-DEFINED spawn briefs. When non-empty, every
+   * visit runs the SINGLE child flow (`flow` / `subflowSpec`) once per brief, in
+   * parallel through the bounded pool (`concurrencyLimit` / `joinSeparator` /
+   * `errorStrategy` apply). Each brief supports `${var:}` / `${res:}` / `${kv:}`.
+   * In isolated inputMode a brief is the lane's whole prompt; in history modes it
+   * is appended to the shared conversation as that lane's closing instruction.
+   * Requires a single child; mutually exclusive with `parallelFlows` /
+   * `parallelSubflowSpecs` / `mapOverList`. Compiles to `properties.spawnBriefs`.
+   */
+  spawnBriefs?: string[];
   /**
    * process/subflow only (Tier 2c — named variables): save this step's final
    * output into a run-scoped variable of this name. Any LATER step can inject it
@@ -982,6 +996,42 @@ export function compileFlowSpec(
       }
     }
 
+    // Spawn briefs (issue #156): a modifier on a SINGLE-child subflow that runs
+    // the child once per author-defined brief, in parallel. Like map-over-list it
+    // is NOT a target source — it decorates `flow` / `subflowSpec` — and it is
+    // mutually exclusive with the parallel fan-out sources and map-over-list.
+    const specBriefs = Array.isArray(specNode.spawnBriefs)
+      ? specNode.spawnBriefs.filter((b): b is string => typeof b === 'string' && b.trim() !== '')
+      : [];
+    if (specBriefs.length > 0) {
+      const hasSingleChild =
+        (specNode.flow !== undefined && specNode.flow !== null) ||
+        (specNode.subflowSpec !== undefined && specNode.subflowSpec !== null);
+      if (hasParallelFlows || hasParallelSpecs) {
+        error(
+          'subflow-spawn-and-parallel',
+          `Node "${key}": "spawnBriefs" runs a SINGLE child once per brief and cannot be combined with "parallelFlows"/"parallelSubflowSpecs".`,
+          key
+        );
+      } else if (specNode.mapOverList === true) {
+        error(
+          'subflow-spawn-and-map',
+          `Node "${key}": "spawnBriefs" cannot be combined with "mapOverList"; use one lane source or the other.`,
+          key
+        );
+      } else if (!hasSingleChild) {
+        error(
+          'subflow-spawn-no-child',
+          `Node "${key}": "spawnBriefs" needs a single child ("flow" or "subflowSpec") to spawn once per brief.`,
+          key
+        );
+      } else {
+        properties.spawnBriefs = specBriefs;
+        // Spawn lanes reuse the parallel pool/join/error tuning.
+        applyParallelTuning(specNode, properties);
+      }
+    }
+
     // Dynamic fan-out target selection (issue #130): stamp the run-variable name
     // so the runtime resolves the targets. Mutually exclusive with map-over-list
     // (fan-out vs per-item). It never resolves a static child here — the target
@@ -1223,6 +1273,16 @@ export function flowToSpec(flow: Flow): FlowSpec {
           specNode.mapOverList = true;
           if (props.itemSplit === 'json-array' || props.itemSplit === 'lines') specNode.itemSplit = props.itemSplit;
           if (props.sequential === true) specNode.sequential = true;
+          if (typeof props.concurrencyLimit === 'number' && props.concurrencyLimit > 0) specNode.concurrencyLimit = props.concurrencyLimit;
+          if (typeof props.joinSeparator === 'string') specNode.joinSeparator = props.joinSeparator;
+          if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;
+        }
+        // Spawn briefs (issue #156): the other single-child lane modifier.
+        const roundTripBriefs = Array.isArray(props.spawnBriefs)
+          ? props.spawnBriefs.filter((b: unknown): b is string => typeof b === 'string' && b.trim() !== '')
+          : [];
+        if (roundTripBriefs.length > 0) {
+          specNode.spawnBriefs = roundTripBriefs;
           if (typeof props.concurrencyLimit === 'number' && props.concurrencyLimit > 0) specNode.concurrencyLimit = props.concurrencyLimit;
           if (typeof props.joinSeparator === 'string') specNode.joinSeparator = props.joinSeparator;
           if (props.errorStrategy === 'fail-fast' || props.errorStrategy === 'collect-all') specNode.errorStrategy = props.errorStrategy;

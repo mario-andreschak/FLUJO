@@ -166,8 +166,10 @@ interface ToolInteraction {
  * parsing the SDK's streamed messages. Each captured assistant/tool message is
  * BOTH streamed live (via `onTranscriptMessage`, so the UI sees tool calls as
  * they happen instead of an hour later) AND collected into the returned
- * `transcript` for persistence. Handoff tools are exposed too: invoking one records the handoff
- * and aborts the run, surfacing it as a tool_call so FLUJO's edge routing fires.
+ * `transcript` for persistence. Handoff tools are exposed too: invoking one
+ * records the handoff and ends the run, surfacing EVERY handoff call of the
+ * routing turn as a tool_call so FLUJO's edge routing fires — repeated calls to
+ * a spawnable sub-agent become parallel briefed lanes (issue #156).
  * `canUseTool` auto-approves FLUJO's tools (the seam for an interactive approval
  * UI); `maxTurns` bounds the loop.
  *
@@ -218,12 +220,25 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     let capturedSessionId: string | undefined;
 
     const usedNames = new Set<string>();
-    let handoffCall: { name: string; args: Record<string, unknown> } | null = null;
+    // Spawn-with-brief (issue #156): a routing model may call handoff tools
+    // SEVERAL times — in one turn (parallel tool_use blocks) or one per turn,
+    // which is how models under the SDK's agentic loop usually work. Collect
+    // them ALL (in call order) instead of only the first; the message loop ends
+    // the run when the model produces a turn WITHOUT another handoff call (or
+    // the SDK loop ends), so a model can keep queueing spawn lanes.
+    const handoffCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    // Local mirror of MAX_DYNAMIC_FANOUT_LANES (SubflowNode) — prep re-caps the
+    // briefs anyway; this only stops a runaway spawn loop from burning turns.
+    const MAX_SPAWN_CALLS = 32;
+    // Set when a PLAIN (non-spawnable) handoff tool fires: those keep the
+    // legacy semantics — the run ends at the next streamed message, no extra
+    // model turn. Spawnable targets instead end when the model stops calling.
+    let endSpawning = false;
     const abortController = new AbortController();
     // Chain the caller's cancellation signal (Stop button) onto the controller
     // that owns the whole agentic loop — this is the largest otherwise
     // un-interruptible window (the SDK can run tools/turns for a long time).
-    // A handoff abort is intentional and handled separately (handoffCall set).
+    // A handoff abort is intentional and handled separately (handoffCalls set).
     const onExternalAbort = () => abortController.abort();
     if (signal?.aborted) {
       abortController.abort();
@@ -272,21 +287,37 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         const schemaShape = jsonSchemaToZodShape(t.function.parameters);
 
         if (handoff) {
+          // A spawnable sub-agent's handoff tool carries a `task` param (issue
+          // #156); a plain handoff tool is parameter-less. The two end the run
+          // differently (see below).
+          const spawnable = !!(
+            (t.function.parameters as { properties?: Record<string, unknown> } | undefined)?.properties?.task
+          );
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
-            // A model can emit several tool_uses in one turn; only the first
-            // handoff counts. Ignoring the rest also avoids re-aborting.
-            if (handoffCall) {
-              return { content: [{ type: 'text', text: 'Already handing off.' }] };
-            }
-            handoffCall = { name: fnName, args: args ?? {} };
-            log.debug('Claude subscription requested handoff', { tool: fnName });
+            // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
+            // splitting work calls the same spawn tool once per brief, and
+            // dropping the extras silently discarded its work.
+            handoffCalls.push({ name: fnName, args: args ?? {} });
+            log.debug('Claude subscription requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
             // Do NOT abort here. Aborting inside the tool handler tears down the
             // SDK control stream mid-permission-round-trip and surfaces the
-            // benign "permission stream closed" error. Instead just record the
-            // handoff and return cleanly; the message loop aborts on its next
-            // turn (see the handoffCall check at the top of the for-await).
-            return { content: [{ type: 'text', text: 'Handing off.' }] };
+            // benign "permission stream closed" error. Instead record the call
+            // and return cleanly; the message loop ends the run at the right
+            // moment (see the for-await checks). For a SPAWNABLE target the
+            // result text invites further calls, so a model that works one tool
+            // call per turn can still queue several parallel workers; a plain
+            // handoff keeps the legacy immediate end.
+            if (!spawnable) {
+              endSpawning = true;
+              return { content: [{ type: 'text', text: 'Handing off.' }] };
+            }
+            return {
+              content: [{
+                type: 'text',
+                text: 'Worker spawned for this task. Call this tool again right now to spawn another parallel worker (one call per task). When you stop calling it, all spawned workers run concurrently and their merged results come back.',
+              }],
+            };
           });
         }
 
@@ -454,12 +485,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
-        // A handoff was requested by the tool handler (which runs between the
-        // assistant turn that called it and the next turn). Stop here — BEFORE
-        // accumulating any further turn — so the model can't narrate post-handoff
-        // (e.g. the benign abort-race "permission stream closed" message), while
-        // the handoff turn's own text (already in accumulatedText) is preserved.
-        if (handoffCall) {
+        // Handoff end conditions (issue #156). A PLAIN handoff (endSpawning)
+        // ends the run at the next streamed message, exactly like before —
+        // no extra model turn, no post-handoff narration. SPAWN handoffs
+        // instead let the model keep calling the spawn tool (one call per
+        // turn, or several tool_uses in one turn) and end the run when the
+        // model produces a turn WITHOUT another handoff call — or at the
+        // runaway cap.
+        if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
           abortController.abort();
           break;
         }
@@ -467,12 +500,30 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
+          let turnHandoffUses = 0;
           if (Array.isArray(content)) {
             for (const block of content) {
               if (block?.type === 'text' && typeof block.text === 'string') turnText += block.text;
+              // SDK MCP tool names arrive namespaced (mcp__<server>__<tool>),
+              // so match handoff tool_use blocks on the bare name.
+              if (block?.type === 'tool_use' && typeof (block as { name?: unknown }).name === 'string') {
+                const rawName = (block as { name: string }).name;
+                const bare = rawName.includes('__') ? rawName.slice(rawName.lastIndexOf('__') + 2) : rawName;
+                if (isHandoffName(bare)) turnHandoffUses++;
+              }
             }
           }
-          if (turnText) {
+          // Spawning ended: the model produced a turn with no further handoff
+          // call after spawning at least one worker. Stop BEFORE accumulating
+          // it so the model can't narrate post-handoff.
+          if (handoffCalls.length > 0 && turnHandoffUses === 0) {
+            abortController.abort();
+            break;
+          }
+          // Mid-spawn narration (between successive spawn calls) is mid-action
+          // plumbing, not the node's answer — the routing turn's own prose
+          // (before any handoff was recorded) is still preserved below.
+          if (turnText && handoffCalls.length === 0) {
             accumulatedText += turnText;
             // Stream THIS turn's narration live as its own assistant message, so
             // the UI shows Claude's step-by-step reasoning interleaved with the
@@ -491,7 +542,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           usage = (message as { usage?: SdkUsage }).usage;
           if (message.subtype === 'success') {
             resultText = (message as { result?: string }).result ?? '';
-          } else if (!handoffCall) {
+          } else if (handoffCalls.length === 0) {
             const errs = (message as { errors?: string[] }).errors;
             const detail = Array.isArray(errs) && errs.length ? errs.join('; ') : message.subtype;
             throw new Error(`Claude subscription run failed: ${detail}`);
@@ -521,7 +572,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         }
         // The probe-observed SDK behavior: an aborted query can END the loop
         // normally (no throw, no result). Never let that read as success.
-        if (signal.aborted && !handoffCall) {
+        if (signal.aborted && handoffCalls.length === 0) {
           throw new Error('Claude subscription run cancelled by user.');
         }
       } else {
@@ -530,7 +581,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
-      if (!handoffCall) {
+      if (handoffCalls.length === 0) {
         // Drop any tracked session on a genuine error/cancellation so a later
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
@@ -560,7 +611,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       const reusableSessionAvailable = Boolean(
         findReusableSession(sessionTracking.key, sessionTracking.prefixHash, messages.length),
       );
-      if (handoffCall || !capturedSessionId) {
+      if (handoffCalls.length > 0 || !capturedSessionId) {
         invalidateSession(sessionTracking.key);
       } else {
         recordSession(sessionTracking.key, {
@@ -578,7 +629,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         promptTokens,
         cacheReadTokens,
         completionTokens,
-        endedByHandoff: Boolean(handoffCall),
+        endedByHandoff: handoffCalls.length > 0,
       });
     }
 
@@ -594,11 +645,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     //     no assistant text turns and only the terminal `result` carried text).
     // Re-emitting `finalText` when we already streamed it would duplicate it.
     let finalToolCalls: OpenAI.ChatCompletionMessageToolCall[] | undefined;
-    if (handoffCall) {
-      const h = handoffCall as { name: string; args: Record<string, unknown> };
-      finalToolCalls = [
-        { id: `call_${uuidv4()}`, type: 'function', function: { name: h.name, arguments: JSON.stringify(h.args) } },
-      ];
+    if (handoffCalls.length > 0) {
+      // ALL handoff calls of the routing turn, in call order (issue #156): the
+      // run loop's capture turns repeated spawn calls into parallel lanes and
+      // answers each id with its own tool result.
+      finalToolCalls = handoffCalls.map((h) => ({
+        id: `call_${uuidv4()}`,
+        type: 'function' as const,
+        function: { name: h.name, arguments: JSON.stringify(h.args) },
+      }));
     }
     if (finalToolCalls) {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });

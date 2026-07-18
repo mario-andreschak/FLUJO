@@ -329,6 +329,42 @@ describe('flowToSpec — Tier 1 fields round-trip', () => {
     const gate2 = flow2.nodes.find((n) => n.type === 'subflow')!;
     expect(gate2.data.properties).toEqual(flow1.nodes.find((n) => n.type === 'subflow')!.data.properties);
   });
+
+  it('serializes spawn briefs (issue #156) back to flow + spawnBriefs + tuning', () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        {
+          key: 'gate',
+          type: 'subflow',
+          flow: 'run_tests',
+          spawnBriefs: ['audit security', 'check cleanliness'],
+          concurrencyLimit: 2,
+          joinSeparator: '\n--\n',
+          errorStrategy: 'fail-fast',
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'gate' },
+        { from: 'gate', to: 'f' },
+      ],
+    };
+    const flow1 = compileFlowSpec(spec, parallelContext).flow!;
+    const reSpec = flowToSpec(flow1);
+    const gate = reSpec.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.flow).toBe('flow-tests');
+    expect(gate.spawnBriefs).toEqual(['audit security', 'check cleanliness']);
+    expect(gate.concurrencyLimit).toBe(2);
+    expect(gate.joinSeparator).toBe('\n--\n');
+    expect(gate.errorStrategy).toBe('fail-fast');
+    expect(gate.parallelFlows).toBeUndefined();
+    expect(gate.mapOverList).toBeUndefined();
+
+    const flow2 = compileFlowSpec(reSpec, parallelContext).flow!;
+    const gate2 = flow2.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate2.data.properties).toEqual(flow1.nodes.find((n) => n.type === 'subflow')!.data.properties);
+  });
 });
 
 describe('flowToSpec — edge conditions (Tier 2b) round-trip', () => {

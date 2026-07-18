@@ -120,41 +120,40 @@ export class ProcessNode extends BaseNode {
       // still route with no prompt, in which case the authored promptTemplate is
       // used as the default (see SubflowNode.prep).
       const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean } | undefined;
+      // Spawn-with-brief (issue #156, supersedes the #130 `parallelFlows` param):
+      // a subflow target that opted into `allowCallerFanout` is a SPAWNABLE
+      // sub-agent. Its handoff tool gains an optional `task` string, and the
+      // description tells the model it may call the tool several times in ONE
+      // turn — each call spawns one parallel, independently-briefed instance of
+      // the target. runFlow captures every matching call's brief single-shot;
+      // SubflowNode.prep turns them into parallel lanes. Every OTHER handoff
+      // tool keeps the byte-identical empty schema (preserving the #89 provider
+      // prefix-cache stability).
+      const acceptsCallerSpawn =
+        target.type === 'subflow' && targetProps?.allowCallerFanout === true;
       const acceptsCallerPrompt =
         target.type === 'subflow' &&
         targetProps?.inputMode === 'isolated' &&
         targetProps?.allowCallerPrompt === true;
-      // Phase 4 agentic fan-out (issue #130): a subflow target that opted into
-      // `allowCallerFanout` lets the ROUTING MODEL choose the parallel fan-out
-      // set at call time. Its handoff tool gains an optional `parallelFlows`
-      // (string[]) parameter plus an optional `concurrencyLimit`; runFlow captures
-      // the chosen set single-shot and SubflowNode.prep validates + applies it.
-      // The single-outgoing-edge rule is unchanged (one handoff target, multiple
-      // CHILDREN). Every OTHER handoff tool keeps the byte-identical empty schema
-      // (preserving the #89 provider prefix-cache stability).
-      const acceptsCallerFanout =
-        target.type === 'subflow' && targetProps?.allowCallerFanout === true;
 
       const paramProps: Record<string, unknown> = {};
       const descExtras: string[] = [];
-      if (acceptsCallerPrompt) {
+      if (acceptsCallerSpawn) {
+        // `task` subsumes `prompt` for spawnable targets (a single spawn with a
+        // brief behaves like a caller prompt), so only one param is exposed.
+        paramProps.task = {
+          type: "string",
+          description: "The brief for this spawned instance of the sub-agent: what this one copy should work on. Optional; omit it (and call the tool once) for a plain handoff."
+        };
+        descExtras.push(
+          'PARALLEL SPAWNING: You may call this tool MULTIPLE TIMES in the SAME response — each call spawns one parallel instance of this sub-agent, briefed with that call\'s "task". All instances run concurrently in the background; their results are merged in call order and the flow continues once every instance has finished. To split work, make one call per sub-task, each with a specific, self-contained "task".'
+        );
+      } else if (acceptsCallerPrompt) {
         paramProps.prompt = {
           type: "string",
           description: "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
         };
         descExtras.push('Optionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.');
-      }
-      if (acceptsCallerFanout) {
-        paramProps.parallelFlows = {
-          type: "array",
-          items: { type: "string" },
-          description: "Flow ids (or names) to run CONCURRENTLY as parallel subflow lanes — the agentic fan-out set. Choose which flows to run in parallel; each must be an existing flow (unknown ids are dropped, the count is capped). Omit to use the node's configured targets."
-        };
-        paramProps.concurrencyLimit = {
-          type: "number",
-          description: "Optional: max lanes to run at once (bounded worker pool). Omit for the node default."
-        };
-        descExtras.push('Optionally pass "parallelFlows" (an array of flow ids) to fan out several flows in parallel, with an optional "concurrencyLimit"; omit to use the node\'s configured targets.');
       }
       const hasParams = Object.keys(paramProps).length > 0;
 
