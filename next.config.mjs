@@ -26,6 +26,20 @@ const nextConfig = {
           { key: 'Access-Control-Allow-Headers', value: '*' },
         ],
       },
+      // Defense-in-depth for /api/env (#141): this route can return DECRYPTED
+      // secrets (`?includeSecrets=true`). Even though `assertLocalRequest` already
+      // rejects cross-origin callers, do NOT advertise a wildcard ACAO here so the
+      // response is never cross-origin readable if the guard were ever bypassed.
+      // This block is more specific and comes after the wildcard, so its
+      // Access-Control-Allow-Origin value overrides the '*' above for /api/env.
+      // (In-app calls are same-origin and don't rely on CORS.)
+      {
+        source: '/api/env',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: 'http://localhost:4200' },
+          { key: 'Vary', value: 'Origin' },
+        ],
+      },
     ];
   },
   typescript: {

@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -46,6 +47,11 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
  * A body `name` that differs from the path triggers a rename and is validated.
  */
 export async function PUT(request: NextRequest, { params }: RouteContext) {
+  // Local-only: a PUT can persist an arbitrary `command` that the MCP manager
+  // later spawns, so reject cross-origin / DNS-rebinding callers first (#141).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -93,7 +99,12 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
  * DELETE /api/mcp/servers/{name}
  * Delete an MCP server configuration by name (disconnecting it first if connected).
  */
-export async function DELETE(_request: NextRequest, { params }: RouteContext) {
+export async function DELETE(request: NextRequest, { params }: RouteContext) {
+  // Local-only: this is a state-mutating route, so reject cross-origin /
+  // DNS-rebinding callers first (#141).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 

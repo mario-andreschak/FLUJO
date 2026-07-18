@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -57,6 +58,11 @@ export async function GET() {
  * Create a new MCP server configuration. The request body is the server config.
  */
 export async function POST(request: NextRequest) {
+  // Local-only: this route persists an arbitrary `command` that the MCP manager
+  // later spawns, so reject cross-origin / DNS-rebinding callers first (#141).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 

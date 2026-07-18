@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -17,6 +18,11 @@ const log = createLogger('app/api/mcp/test-connection/route');
  * send the configured custom headers (Authorization, X-SAP-*), which a browser fetch cannot.
  */
 export async function POST(request: NextRequest) {
+  // Local-only: this route spawns a stdio child process from a caller-supplied
+  // command, so reject cross-origin / DNS-rebinding callers before anything else (#141).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 

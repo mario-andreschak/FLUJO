@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
@@ -27,6 +28,12 @@ export const runtime = 'nodejs';
  * terminated by a single `{ type: 'result', ... }` event.
  */
 export async function POST(request: NextRequest) {
+  // Local-only: testConnection spawns child processes from a caller-supplied
+  // command, so reject cross-origin / DNS-rebinding callers before any stream
+  // setup or spawn (#141).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 

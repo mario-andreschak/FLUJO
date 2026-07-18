@@ -71,11 +71,55 @@ jest.mock('@/utils/paths', () => ({
   getAppDir: jest.fn(() => '/tmp/flujo-app'),
 }));
 
+// --- Mocks for the routes newly guarded in #141. -----------------------------
+// The MCP service is where the real stdio child processes are spawned and where
+// server configs are persisted; mocking it means a request that gets PAST the
+// guard is observable (the mock is called) without any real spawn/IO.
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: {
+    testConnection: jest.fn(async () => ({ success: true })),
+    updateServerConfig: jest.fn(async () => ({ name: 'x' })),
+    deleteServerConfig: jest.fn(async () => ({ success: true })),
+    loadServerConfigs: jest.fn(async () => []),
+  },
+}));
+
+// /api/env sinks: loadItem/saveItem (storage) and decrypt/encrypt (secrets).
+const loadItemMock = jest.fn(async () => ({}));
+const saveItemMock = jest.fn(async () => undefined);
+jest.mock('@/utils/storage/backend', () => ({
+  loadItem: (...args: unknown[]) => loadItemMock(...args),
+  saveItem: (...args: unknown[]) => saveItemMock(...args),
+}));
+const decryptWithPasswordMock = jest.fn(async () => 'decrypted-secret');
+const encryptWithPasswordMock = jest.fn(async () => 'encrypted');
+jest.mock('@/utils/encryption/secure', () => ({
+  encryptWithPassword: (...args: unknown[]) => encryptWithPasswordMock(...args),
+  decryptWithPassword: (...args: unknown[]) => decryptWithPasswordMock(...args),
+  isEncryptionInitialized: jest.fn(() => true),
+  initializeDefaultEncryption: jest.fn(async () => undefined),
+}));
+jest.mock('@/utils/shared', () => ({ isSecretEnvVar: () => true }));
+
 import type { NextRequest } from 'next/server';
 import { isLocalRequest, assertLocalRequest } from '@/utils/http/localRequest';
 import { POST as gitPost } from '@/app/api/git/route';
 import { GET as cwdGet } from '@/app/api/cwd/route';
 import { GET as updateGet, POST as updatePost } from '@/app/api/update/route';
+import { POST as testConnPost } from '@/app/api/mcp/test-connection/route';
+import { POST as testConnStreamPost } from '@/app/api/mcp/test-connection/stream/route';
+import { POST as serversPost } from '@/app/api/mcp/servers/route';
+import { PUT as serverPut, DELETE as serverDelete } from '@/app/api/mcp/servers/[name]/route';
+import { GET as envGet, POST as envPost } from '@/app/api/env/route';
+import { mcpService } from '@/backend/services/mcp';
+
+// Convenience typed handles to the mcpService mock fns for assertions.
+const testConnectionMock = mcpService.testConnection as jest.Mock;
+const updateServerConfigMock = mcpService.updateServerConfig as jest.Mock;
+const deleteServerConfigMock = mcpService.deleteServerConfig as jest.Mock;
+
+/** Route context for the /api/mcp/servers/[name] handlers. */
+const nameCtx = (name = 'x') => ({ params: Promise.resolve({ name }) });
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -282,5 +326,290 @@ describe('GET /api/cwd origin guard', () => {
       makeRequest('http://localhost:4200/api/cwd', { host: 'localhost:4200' })
     );
     expect(res.status).toBe(200);
+  });
+});
+
+// ============================================================================
+// #141: routes that spawn child processes (drive-by RCE) or return secrets and
+// were previously guarded only by assertUnlocked().
+// ============================================================================
+
+const stdioBody = { transport: 'stdio', command: 'calc.exe', args: [] };
+
+describe('POST /api/mcp/test-connection origin guard', () => {
+  it('blocks a cross-origin POST with 403 and never spawns (testConnection not called)', async () => {
+    const res = await testConnPost(
+      makeRequest('http://localhost:4200/api/mcp/test-connection', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+        body: stdioBody,
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(testConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never spawns', async () => {
+    const res = await testConnPost(
+      makeRequest('http://evil.com/api/mcp/test-connection', { host: 'evil.com', body: stdioBody })
+    );
+    expect(res.status).toBe(403);
+    expect(testConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await testConnPost(
+      makeRequest('http://localhost:4200/api/mcp/test-connection', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        body: stdioBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a native request with no Origin past the guard (not 403)', async () => {
+    const res = await testConnPost(
+      makeRequest('http://localhost:4200/api/mcp/test-connection', {
+        host: 'localhost:4200',
+        body: stdioBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('POST /api/mcp/test-connection/stream origin guard', () => {
+  it('blocks a cross-origin POST with 403 and never spawns', async () => {
+    const res = await testConnStreamPost(
+      makeRequest('http://localhost:4200/api/mcp/test-connection/stream', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+        body: stdioBody,
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(testConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never spawns', async () => {
+    const res = await testConnStreamPost(
+      makeRequest('http://evil.com/api/mcp/test-connection/stream', { host: 'evil.com', body: stdioBody })
+    );
+    expect(res.status).toBe(403);
+    expect(testConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await testConnStreamPost(
+      makeRequest('http://localhost:4200/api/mcp/test-connection/stream', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        body: stdioBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a native request with no Origin past the guard (not 403)', async () => {
+    const res = await testConnStreamPost(
+      makeRequest('http://localhost:4200/api/mcp/test-connection/stream', {
+        host: 'localhost:4200',
+        body: stdioBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('POST /api/mcp/servers origin guard', () => {
+  const serverBody = { name: 'evil', transport: 'stdio', command: 'calc.exe', args: [] };
+
+  it('blocks a cross-origin POST with 403 and never persists (updateServerConfig not called)', async () => {
+    const res = await serversPost(
+      makeRequest('http://localhost:4200/api/mcp/servers', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+        body: serverBody,
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never persists', async () => {
+    const res = await serversPost(
+      makeRequest('http://evil.com/api/mcp/servers', { host: 'evil.com', body: serverBody })
+    );
+    expect(res.status).toBe(403);
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await serversPost(
+      makeRequest('http://localhost:4200/api/mcp/servers', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        body: serverBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a native request with no Origin past the guard (not 403)', async () => {
+    const res = await serversPost(
+      makeRequest('http://localhost:4200/api/mcp/servers', {
+        host: 'localhost:4200',
+        body: serverBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('PUT /api/mcp/servers/[name] origin guard', () => {
+  const putBody = { name: 'x', transport: 'stdio', command: 'calc.exe', args: [] };
+
+  it('blocks a cross-origin PUT with 403 and never persists', async () => {
+    const res = await serverPut(
+      makeRequest('http://localhost:4200/api/mcp/servers/x', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+        body: putBody,
+      }),
+      nameCtx('x')
+    );
+    expect(res.status).toBe(403);
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never persists', async () => {
+    const res = await serverPut(
+      makeRequest('http://evil.com/api/mcp/servers/x', { host: 'evil.com', body: putBody }),
+      nameCtx('x')
+    );
+    expect(res.status).toBe(403);
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await serverPut(
+      makeRequest('http://localhost:4200/api/mcp/servers/x', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        body: putBody,
+      }),
+      nameCtx('x')
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('DELETE /api/mcp/servers/[name] origin guard', () => {
+  it('blocks a cross-origin DELETE with 403 and never deletes', async () => {
+    const res = await serverDelete(
+      makeRequest('http://localhost:4200/api/mcp/servers/x', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+      }),
+      nameCtx('x')
+    );
+    expect(res.status).toBe(403);
+    expect(deleteServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never deletes', async () => {
+    const res = await serverDelete(
+      makeRequest('http://evil.com/api/mcp/servers/x', { host: 'evil.com' }),
+      nameCtx('x')
+    );
+    expect(res.status).toBe(403);
+    expect(deleteServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await serverDelete(
+      makeRequest('http://localhost:4200/api/mcp/servers/x', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+      }),
+      nameCtx('x')
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('GET /api/env origin guard (secret exfiltration)', () => {
+  it('blocks a cross-origin ?includeSecrets=true with 403 and never decrypts', async () => {
+    const res = await envGet(
+      makeRequest('http://localhost:4200/api/env?includeSecrets=true', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(decryptWithPasswordMock).not.toHaveBeenCalled();
+    expect(loadItemMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never decrypts', async () => {
+    const res = await envGet(
+      makeRequest('http://evil.com/api/env?includeSecrets=true', { host: 'evil.com' })
+    );
+    expect(res.status).toBe(403);
+    expect(decryptWithPasswordMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await envGet(
+      makeRequest('http://localhost:4200/api/env', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a native request with no Origin past the guard (not 403)', async () => {
+    const res = await envGet(
+      makeRequest('http://localhost:4200/api/env', { host: 'localhost:4200' })
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('POST /api/env origin guard', () => {
+  const setBody = { action: 'set', key: 'OPENAI_API_KEY', value: 'sk-secret', metadata: { isSecret: true } };
+
+  it('blocks a cross-origin POST with 403 and never persists', async () => {
+    const res = await envPost(
+      makeRequest('http://localhost:4200/api/env', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+        body: setBody,
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(encryptWithPasswordMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never persists', async () => {
+    const res = await envPost(
+      makeRequest('http://evil.com/api/env', { host: 'evil.com', body: setBody })
+    );
+    expect(res.status).toBe(403);
+    expect(saveItemMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    const res = await envPost(
+      makeRequest('http://localhost:4200/api/env', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        body: setBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
   });
 });

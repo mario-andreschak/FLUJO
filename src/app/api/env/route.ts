@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -68,6 +69,12 @@ function migrateToNewFormat(oldData: Record<string, string>): Record<string, Env
 
 // GET handler for retrieving environment variables
 export async function GET(req: NextRequest) {
+  // Local-only: `?includeSecrets=true` decrypts and returns plaintext API keys,
+  // so a cross-origin browser must never reach the decrypt path (#141). Reject
+  // before any crypto/lock work.
+  const notLocal = assertLocalRequest(req);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -198,6 +205,11 @@ export async function GET(req: NextRequest) {
 
 // POST handler for setting environment variables
 export async function POST(req: NextRequest) {
+  // Local-only: this route persists (and encrypts) env vars, so reject
+  // cross-origin / DNS-rebinding callers first (#141).
+  const notLocal = assertLocalRequest(req);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
