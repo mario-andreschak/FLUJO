@@ -230,6 +230,40 @@ describe('validateFlow — subflow single outgoing path', () => {
     expect(r.isRunnable).toBe(false);
   });
 
+  it('errors when agentic fan-out (allowCallerFanout) is combined with mapOverList', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: {
+        label: 'gate',
+        type: 'subflow',
+        properties: { allowCallerFanout: true, mapOverList: true, subflowId: 'x' },
+      },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).toContain('subflow-map-and-caller-fanout');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('accepts a subflow with allowCallerFanout and no mapOverList', () => {
+    const gate: VNode = {
+      id: 'gate',
+      type: 'subflow',
+      data: { label: 'gate', type: 'subflow', properties: { subflowId: 'x', allowCallerFanout: true } },
+    };
+    const flow: VFlow = {
+      nodes: [...base, gate],
+      edges: [edge('start', 'p'), edge('p', 'gate'), edge('gate', 'finish')],
+    };
+    const r = validateFlow(flow, ctx);
+    expect(codes(r)).not.toContain('subflow-map-and-caller-fanout');
+    expect(r.isRunnable).toBe(true);
+  });
+
   it('accepts a map-over-list subflow (mapOverList + subflowId) with a single outgoing edge', () => {
     const gate: VNode = {
       id: 'gate',

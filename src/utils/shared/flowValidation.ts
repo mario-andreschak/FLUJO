@@ -489,6 +489,19 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         );
       }
     }
+
+    // --- Agentic fan-out (issue #130 Phase 4): allowCallerFanout lets the ROUTING
+    // model pass the parallel set via the handoff tool at call time. Like the
+    // other fan-out sources it is a fan-out (multiple CHILDREN) and so is mutually
+    // exclusive with map-over-list (which runs a single child once per item).
+    if (props.allowCallerFanout === true && mapOverList) {
+      add(
+        'error',
+        'subflow-map-and-caller-fanout',
+        `Subflow node "${getNodeLabel(node)}" combines "mapOverList" with agentic fan-out ("allowCallerFanout"); map-over-list runs a single child once per item and cannot be combined with fan-out.`,
+        node
+      );
+    }
     if (parallelIds.length > 0) {
       const limit = props.concurrencyLimit;
       if (typeof limit === 'number' && limit < 1) {

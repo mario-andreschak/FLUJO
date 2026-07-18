@@ -1330,3 +1330,21 @@ describe('compileFlowSpec — dynamic fan-out (parallelFlowsVariable, issue #130
     );
   });
 });
+
+describe('compileFlowSpec — agentic fan-out (allowCallerFanout, issue #130 Phase 4)', () => {
+  it('compiles allowCallerFanout onto the subflow node properties', () => {
+    const { flow, errorCount } = compileFlowSpec(
+      subflowWrap({ flow: 'Summarizer', allowCallerFanout: true }),
+      parallelContext
+    );
+    expect(errorCount).toBe(0);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties!.allowCallerFanout).toBe(true);
+  });
+
+  it('omits allowCallerFanout when not set (default false)', () => {
+    const { flow } = compileFlowSpec(subflowWrap({ flow: 'Summarizer' }), parallelContext);
+    const gate = flow!.nodes.find((n) => n.type === 'subflow')!;
+    expect(gate.data.properties).not.toHaveProperty('allowCallerFanout');
+  });
+});

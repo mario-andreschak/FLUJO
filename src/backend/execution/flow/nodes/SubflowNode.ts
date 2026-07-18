@@ -229,6 +229,19 @@ function buildChildEmit(
 export class SubflowNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
+    // Consume the single-shot, node-id-scoped handoff input ONCE here (issue #96
+    // caller prompt + issue #130 Phase 4 caller-chosen fan-out set). Reading it
+    // in one place — and clearing it only when it targets THIS node — means both
+    // the isolated-mode prompt (below) and the agentic fan-out set draw from the
+    // same value, and a stale value can never leak to a later node or a
+    // subsequent turn. A value targeting a DIFFERENT node is left untouched.
+    const handoffForThisNode =
+      sharedState.handoffInput && sharedState.handoffInput.targetNodeId === node_params?.id
+        ? sharedState.handoffInput
+        : undefined;
+    if (handoffForThisNode) {
+      sharedState.handoffInput = undefined; // consume on read
+    }
     let parallelIds = (node_params?.properties?.parallelSubflowIds ?? []).filter(
       (id): id is string => typeof id === 'string' && id.trim() !== '',
     );
@@ -262,6 +275,34 @@ export class SubflowNode extends BaseNode {
         log.info('Dynamic fan-out variable resolved to no targets; using static parallelSubflowIds', {
           variable: parallelSubflowIdsVar,
           staticCount: parallelIds.length,
+        });
+      }
+    }
+    // Phase 4 agentic fan-out (issue #130): when this node opted into
+    // `allowCallerFanout` and the handoff tool that routed here carried a
+    // `parallelFlows` list, the ROUTING MODEL's chosen set wins over BOTH the
+    // dynamic-var and static lists — it is the DECIDING step choosing the set as
+    // it routes. Normalized/capped/self-reference-dropped by the same pure helper
+    // (a JSON array so `itemSplit` is irrelevant), then validated against the
+    // flows store below (dynamicFanout=true drops unknown ids). An optional caller
+    // `concurrencyLimit` overrides the node default for this run.
+    let callerConcurrency: number | undefined;
+    const allowCallerFanout = node_params?.properties?.allowCallerFanout === true;
+    if (allowCallerFanout && handoffForThisNode?.parallelFlows && handoffForThisNode.parallelFlows.length > 0) {
+      const callerIds = resolveDynamicFanoutIds(
+        JSON.stringify(handoffForThisNode.parallelFlows),
+        'json-array',
+        sharedState.flowId,
+      );
+      if (callerIds.length > 0) {
+        parallelIds = callerIds;
+        dynamicFanout = true;
+        if (typeof handoffForThisNode.concurrencyLimit === 'number' && handoffForThisNode.concurrencyLimit >= 1) {
+          callerConcurrency = Math.floor(handoffForThisNode.concurrencyLimit);
+        }
+        log.info('Caller-chosen fan-out targets resolved from handoff tool', {
+          count: callerIds.length,
+          nodeId: node_params?.id,
         });
       }
     }
@@ -309,15 +350,10 @@ export class SubflowNode extends BaseNode {
       // targets THIS node, and clear it once inspected so it can never leak to a
       // later node or a subsequent turn.
       const allowCallerPrompt = node_params?.properties?.allowCallerPrompt === true;
-      const pendingInput = sharedState.handoffInput;
-      if (pendingInput && pendingInput.targetNodeId === node_params?.id) {
-        sharedState.handoffInput = undefined; // consume on read
-        if (allowCallerPrompt && pendingInput.prompt.trim()) {
-          prepResult.inputText = pendingInput.prompt;
-          log.info('Using caller-supplied prompt for isolated subflow', { nodeId: node_params?.id });
-        } else {
-          prepResult.inputText = promptTemplate ?? '';
-        }
+      // handoffForThisNode was already consumed (and cleared) at the top of prep().
+      if (allowCallerPrompt && handoffForThisNode?.prompt.trim()) {
+        prepResult.inputText = handoffForThisNode.prompt;
+        log.info('Using caller-supplied prompt for isolated subflow', { nodeId: node_params?.id });
       } else {
         prepResult.inputText = promptTemplate ?? '';
       }
@@ -399,7 +435,7 @@ export class SubflowNode extends BaseNode {
         prepResult.fanOutResolvedEmpty = true;
       }
       prepResult.lanes = lanes;
-      prepResult.concurrencyLimit = Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
       prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
       prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
     } else if (mapOverList && subflowId) {

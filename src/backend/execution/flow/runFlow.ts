@@ -1023,12 +1023,34 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   try {
                     const parsedArgs = JSON.parse(handoffToolCall.function.arguments || '{}');
                     const callerPrompt = typeof parsedArgs?.prompt === 'string' ? parsedArgs.prompt.trim() : '';
-                    if (callerPrompt) {
-                      sharedState.handoffInput = { targetNodeId: nextNodeId, prompt: callerPrompt };
-                      log.info(`Captured caller prompt for handoff to node ${nextNodeId} (${callerPrompt.length} chars)`);
+                    // Phase 4 agentic fan-out (issue #130): a fan-out-enabled subflow
+                    // target's handoff tool may carry a `parallelFlows` list (+ an
+                    // optional `concurrencyLimit`) — the ROUTING MODEL choosing the
+                    // parallel set at call time. Captured single-shot & node-scoped
+                    // alongside the caller prompt; SubflowNode.prep validates &
+                    // applies it (unknown ids dropped, count capped).
+                    const callerFlows = Array.isArray(parsedArgs?.parallelFlows)
+                      ? parsedArgs.parallelFlows.filter(
+                          (f: unknown): f is string => typeof f === 'string' && f.trim() !== '',
+                        )
+                      : undefined;
+                    const rawLimit = parsedArgs?.concurrencyLimit;
+                    const callerConcurrency =
+                      typeof rawLimit === 'number' && rawLimit >= 1 ? Math.floor(rawLimit) : undefined;
+                    if (callerPrompt || (callerFlows && callerFlows.length > 0)) {
+                      sharedState.handoffInput = {
+                        targetNodeId: nextNodeId,
+                        prompt: callerPrompt,
+                        ...(callerFlows && callerFlows.length > 0 ? { parallelFlows: callerFlows } : {}),
+                        ...(callerConcurrency !== undefined ? { concurrencyLimit: callerConcurrency } : {}),
+                      };
+                      log.info(`Captured caller handoff input for node ${nextNodeId}`, {
+                        promptChars: callerPrompt.length,
+                        fanoutCount: callerFlows?.length ?? 0,
+                      });
                     }
                   } catch (parseError) {
-                    log.warn(`Could not parse handoff tool-call arguments for edge ${currentAction}; ignoring caller prompt`, { parseError });
+                    log.warn(`Could not parse handoff tool-call arguments for edge ${currentAction}; ignoring caller input`, { parseError });
                   }
                 }
 

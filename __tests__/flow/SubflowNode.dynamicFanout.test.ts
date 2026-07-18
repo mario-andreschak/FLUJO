@@ -183,3 +183,98 @@ describe('SubflowNode dynamic fan-out (issue #130)', () => {
     expect(depths).toEqual([3, 3]);
   });
 });
+
+describe('SubflowNode agentic caller fan-out (issue #130 Phase 4)', () => {
+  it('fans out over exactly the flows the caller passed via handoffInput', async () => {
+    const node = makeNode();
+    const params = makeParams({ allowCallerFanout: true });
+    const shared = makeShared({
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', parallelFlows: ['a', 'b', 'c'] },
+    });
+    const prep = await node.prep(shared, params);
+    const exec = await node.execCore(prep);
+
+    expect(prep.lanes?.map((l) => l.subflowId)).toEqual(['a', 'b', 'c']);
+    expect(runFlowMock).toHaveBeenCalledTimes(3);
+    expect(exec.success).toBe(true);
+    expect(exec.outputText).toBe('OUT_a\n\nOUT_b\n\nOUT_c');
+  });
+
+  it('caller fan-out OVERRIDES both the dynamic-var and the static list', async () => {
+    const node = makeNode();
+    const params = makeParams({
+      parallelSubflowIds: ['static1'],
+      parallelSubflowIdsVar: 'TARGETS',
+      allowCallerFanout: true,
+    });
+    const shared = makeShared({
+      variables: { TARGETS: '["dyn1","dyn2"]' },
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', parallelFlows: ['caller1', 'caller2'] },
+    });
+    const prep = await node.prep(shared, params);
+
+    expect(prep.lanes?.map((l) => l.subflowId)).toEqual(['caller1', 'caller2']);
+  });
+
+  it('honors an optional caller-supplied concurrencyLimit', async () => {
+    const node = makeNode();
+    const params = makeParams({ allowCallerFanout: true, concurrencyLimit: 4 });
+    const shared = makeShared({
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', parallelFlows: ['a', 'b'], concurrencyLimit: 1 },
+    });
+    const prep = await node.prep(shared, params);
+
+    expect(prep.concurrencyLimit).toBe(1);
+  });
+
+  it('ignores caller parallelFlows when allowCallerFanout is not opted in', async () => {
+    const node = makeNode();
+    const params = makeParams({ subflowId: 'solo' }); // no allowCallerFanout
+    const shared = makeShared({
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', parallelFlows: ['a', 'b'] },
+    });
+    const prep = await node.prep(shared, params);
+    await node.execCore(prep);
+
+    // No fan-out lanes; falls back to the single-child path on subflowId.
+    expect(prep.lanes).toBeUndefined();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    expect(runFlowMock.mock.calls[0][0].flowId).toBe('solo');
+  });
+
+  it('ignores a handoffInput scoped to a DIFFERENT node id', async () => {
+    const node = makeNode();
+    const params = makeParams({ subflowId: 'solo', allowCallerFanout: true });
+    const shared = makeShared({
+      handoffInput: { targetNodeId: 'other-node', prompt: '', parallelFlows: ['a', 'b'] },
+    });
+    const prep = await node.prep(shared, params);
+
+    expect(prep.lanes).toBeUndefined();
+    expect(prep.subflowId).toBe('solo');
+    // Not consumed: it targets another node, so it must remain for that node.
+    expect(shared.handoffInput).toBeDefined();
+  });
+
+  it('consumes (clears) the handoffInput once it applies to this node', async () => {
+    const node = makeNode();
+    const params = makeParams({ allowCallerFanout: true });
+    const shared = makeShared({
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', parallelFlows: ['a', 'b'] },
+    });
+    await node.prep(shared, params);
+
+    expect(shared.handoffInput).toBeUndefined();
+  });
+
+  it('drops unknown caller ids (validated against the flows store)', async () => {
+    const node = makeNode();
+    const params = makeParams({ allowCallerFanout: true });
+    const shared = makeShared({
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', parallelFlows: ['a', 'missing-z', 'b'] },
+    });
+    const prep = await node.prep(shared, params);
+
+    expect(prep.lanes?.map((l) => l.subflowId)).toEqual(['a', 'b']);
+  });
+});

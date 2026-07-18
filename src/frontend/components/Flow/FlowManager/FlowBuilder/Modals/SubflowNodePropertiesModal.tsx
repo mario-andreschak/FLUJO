@@ -313,6 +313,24 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           </>
         )}
 
+        {/* Phase 4 agentic fan-out (issue #130): let a routing model choose the
+            parallel fan-out set at call time via this subflow's handoff tool. */}
+        <FormControlLabel
+          sx={{ mt: 2, display: 'block' }}
+          control={
+            <Checkbox
+              checked={!!nodeData.properties?.allowCallerFanout}
+              onChange={(e) => handlePropertyChange('allowCallerFanout', e.target.checked)}
+            />
+          }
+          label="Let the caller choose parallel flows (agentic fan-out)"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
+          When on, a step that routes to this subflow can pass a list of flows to run in
+          parallel through its handoff tool, letting the model decide the fan-out set at
+          runtime. Unknown flows are dropped and the count is capped.
+        </Typography>
+
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           What do you see in the chat while the subflow runs?
         </Typography>

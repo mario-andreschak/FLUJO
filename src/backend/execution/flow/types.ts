@@ -197,6 +197,20 @@ export interface SubflowNodeProperties {
      *  prompt and their handoff tools stay parameter-less. Groundwork for
      *  running subflows as independent, callable workers. */
     allowCallerPrompt?: boolean;
+    /** Phase 4 agentic fan-out (issue #130): opt-in. When true, the handoff tool
+     *  that targets THIS subflow node exposes an optional `parallelFlows`
+     *  string-array parameter (plus an optional `concurrencyLimit`), letting the
+     *  ROUTING MODEL choose the parallel fan-out target set at CALL TIME — the
+     *  agentic decision seam requested in #130. A caller-supplied non-empty list
+     *  is single-shot & node-id-scoped (carried via SharedState.handoffInput),
+     *  validated against the flows store, de-duped, self-reference-dropped and
+     *  capped at MAX_DYNAMIC_FANOUT_LANES in prep(), and OVERRIDES both
+     *  `parallelSubflowIdsVar` and the static `parallelSubflowIds`. Reuses the
+     *  existing lane engine unchanged; the single-outgoing-edge rule is unchanged
+     *  (one handoff target, multiple CHILDREN). Unlike `parallelSubflowIdsVar`
+     *  (#130 Phase 2, which needs an EARLIER step to capture the set) this lets
+     *  the DECIDING step choose the set as it routes. Defaults false. */
+    allowCallerFanout?: boolean;
     /** Fan-out / join (issue #102): when this list has >=1 entry, the node runs
      *  SEVERAL child flows CONCURRENTLY and joins their outputs, instead of the
      *  single-`subflowId` path. Empty/absent => today's single-child behavior
@@ -450,6 +464,12 @@ export interface SharedState {
     handoffInput?: {
         targetNodeId: string;
         prompt: string;
+        /** Phase 4 (issue #130): caller-chosen fan-out target flow ids passed to a
+         *  handoff tool whose target subflow node opted into `allowCallerFanout`.
+         *  Single-shot & node-id-scoped like `prompt`; consumed and validated in
+         *  SubflowNode.prep. An optional caller concurrency override travels with it. */
+        parallelFlows?: string[];
+        concurrencyLimit?: number;
     };
     // Conversation ID for tracking multiple conversations
     conversationId?: string;

@@ -119,33 +119,53 @@ export class ProcessNode extends BaseNode {
       // prefix-cache stability from #89). The param is OPTIONAL: the model may
       // still route with no prompt, in which case the authored promptTemplate is
       // used as the default (see SubflowNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean } | undefined;
+      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean } | undefined;
       const acceptsCallerPrompt =
         target.type === 'subflow' &&
         targetProps?.inputMode === 'isolated' &&
         targetProps?.allowCallerPrompt === true;
+      // Phase 4 agentic fan-out (issue #130): a subflow target that opted into
+      // `allowCallerFanout` lets the ROUTING MODEL choose the parallel fan-out
+      // set at call time. Its handoff tool gains an optional `parallelFlows`
+      // (string[]) parameter plus an optional `concurrencyLimit`; runFlow captures
+      // the chosen set single-shot and SubflowNode.prep validates + applies it.
+      // The single-outgoing-edge rule is unchanged (one handoff target, multiple
+      // CHILDREN). Every OTHER handoff tool keeps the byte-identical empty schema
+      // (preserving the #89 provider prefix-cache stability).
+      const acceptsCallerFanout =
+        target.type === 'subflow' && targetProps?.allowCallerFanout === true;
+
+      const paramProps: Record<string, unknown> = {};
+      const descExtras: string[] = [];
+      if (acceptsCallerPrompt) {
+        paramProps.prompt = {
+          type: "string",
+          description: "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
+        };
+        descExtras.push('Optionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.');
+      }
+      if (acceptsCallerFanout) {
+        paramProps.parallelFlows = {
+          type: "array",
+          items: { type: "string" },
+          description: "Flow ids (or names) to run CONCURRENTLY as parallel subflow lanes — the agentic fan-out set. Choose which flows to run in parallel; each must be an existing flow (unknown ids are dropped, the count is capped). Omit to use the node's configured targets."
+        };
+        paramProps.concurrencyLimit = {
+          type: "number",
+          description: "Optional: max lanes to run at once (bounded worker pool). Omit for the node default."
+        };
+        descExtras.push('Optionally pass "parallelFlows" (an array of flow ids) to fan out several flows in parallel, with an optional "concurrencyLimit"; omit to use the node\'s configured targets.');
+      }
+      const hasParams = Object.keys(paramProps).length > 0;
 
       handoffTools.push({
         name: toolName,
-        description: acceptsCallerPrompt
-          ? `${description}\n\nOptionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.`
-          : description,
-        inputSchema: acceptsCallerPrompt
-          ? {
-              type: "object",
-              properties: {
-                prompt: {
-                  type: "string",
-                  description: "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
-                }
-              },
-              required: []
-            }
-          : {
-              type: "object",
-              properties: {}, // No parameters needed for a standard handoff
-              required: []
-            }
+        description: descExtras.length > 0 ? `${description}\n\n${descExtras.join('\n\n')}` : description,
+        inputSchema: {
+          type: "object",
+          properties: hasParams ? paramProps : {}, // parameter-less for a standard handoff
+          required: []
+        }
       });
 
       log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });

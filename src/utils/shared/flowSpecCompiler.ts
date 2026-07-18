@@ -188,6 +188,13 @@ export interface FlowSpecNode {
    *  off to this subflow may pass a `prompt` argument that overrides `prompt`
    *  (the authored default). Defaults to false. */
   allowCallerPrompt?: boolean;
+  /** subflow only (issue #130 Phase 4): when true, a step that hands off to this
+   *  subflow may pass a `parallelFlows` array (+ optional `concurrencyLimit`)
+   *  through its handoff tool — the ROUTING MODEL choosing the parallel fan-out
+   *  set at runtime. A non-empty caller set overrides `parallelFlows` /
+   *  `parallelFlowsVariable`. Compiles to `properties.allowCallerFanout`.
+   *  Defaults false. */
+  allowCallerFanout?: boolean;
   /**
    * process/subflow only (Tier 2c — named variables): save this step's final
    * output into a run-scoped variable of this name. Any LATER step can inject it
@@ -637,6 +644,11 @@ export function compileFlowSpec(
         // Opt-in caller prompt (issue #96): only meaningful in isolated mode.
         if (typeof specNode.allowCallerPrompt === 'boolean') {
           properties.allowCallerPrompt = specNode.allowCallerPrompt;
+        }
+        // Opt-in agentic fan-out (issue #130 Phase 4): the routing model may pass
+        // the parallel target set via the handoff tool.
+        if (typeof specNode.allowCallerFanout === 'boolean') {
+          properties.allowCallerFanout = specNode.allowCallerFanout;
         }
         // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
@@ -1231,6 +1243,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
+      if (props.allowCallerFanout === true) specNode.allowCallerFanout = true;
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
