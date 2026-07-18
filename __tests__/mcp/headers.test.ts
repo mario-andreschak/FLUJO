@@ -5,6 +5,7 @@ import {
   normalizeHeaderValue,
   flattenHeaders,
   maskServerHeaders,
+  hydrateMaskedHeaders,
 } from '@/utils/mcp/headers';
 import { MASKED_API_KEY, MASKED_STRING } from '@/shared/types/constants';
 import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
@@ -98,5 +99,72 @@ describe('maskServerHeaders', () => {
 
   it('is a no-op for undefined headers', () => {
     expect(maskServerHeaders(undefined)).toBeUndefined();
+  });
+});
+
+describe('hydrateMaskedHeaders (#137)', () => {
+  it('replaces a masked SECRET value with the stored (encrypted) counterpart', () => {
+    const incoming: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: MASKED_API_KEY, metadata: { isSecret: true } },
+    };
+    const stored: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: 'encrypted:abc', metadata: { isSecret: true } },
+    };
+    expect(hydrateMaskedHeaders(incoming, stored)).toEqual({
+      'Authorization': { value: 'encrypted:abc', metadata: { isSecret: true } },
+    });
+  });
+
+  it('replaces a masked SECRET value with the stored ${global:} binding', () => {
+    const incoming: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: MASKED_STRING, metadata: { isSecret: true } },
+    };
+    const stored: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: '${global:TOKEN}', metadata: { isSecret: true } },
+    };
+    expect(hydrateMaskedHeaders(incoming, stored)).toEqual({
+      'Authorization': { value: '${global:TOKEN}', metadata: { isSecret: true } },
+    });
+  });
+
+  it('drops a masked SECRET value that has no stored counterpart', () => {
+    const incoming: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: MASKED_API_KEY, metadata: { isSecret: true } },
+    };
+    expect(hydrateMaskedHeaders(incoming, undefined)).toEqual({});
+    expect(hydrateMaskedHeaders(incoming, {})).toEqual({});
+  });
+
+  it('passes a NON-secret header whose literal value is "********" through unchanged', () => {
+    const incoming: Record<string, MCPHeaderValue> = {
+      'X-SAP-Client': { value: MASKED_API_KEY, metadata: { isSecret: false } },
+    };
+    expect(hydrateMaskedHeaders(incoming, undefined)).toEqual({
+      'X-SAP-Client': { value: MASKED_API_KEY, metadata: { isSecret: false } },
+    });
+  });
+
+  it('passes plaintext / ${global:} / encrypted secret values through unchanged', () => {
+    const incoming: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: 'Bearer freshly-typed', metadata: { isSecret: true } },
+      'X-Api-Key': { value: '${global:KEY}', metadata: { isSecret: true } },
+      'X-Token': { value: 'encrypted:zzz', metadata: { isSecret: true } },
+    };
+    expect(hydrateMaskedHeaders(incoming, { 'Authorization': { value: 'encrypted:old', metadata: { isSecret: true } } }))
+      .toEqual(incoming);
+  });
+
+  it('hydrates a legacy plain-string masked Authorization header (secret inferred from the key)', () => {
+    const incoming = { 'Authorization': MASKED_API_KEY } as Record<string, MCPHeaderValue>;
+    const stored: Record<string, MCPHeaderValue> = {
+      'Authorization': { value: 'encrypted:abc', metadata: { isSecret: true } },
+    };
+    expect(hydrateMaskedHeaders(incoming, stored)).toEqual({
+      'Authorization': { value: 'encrypted:abc', metadata: { isSecret: true } },
+    });
+  });
+
+  it('returns undefined for undefined incoming headers', () => {
+    expect(hydrateMaskedHeaders(undefined, {})).toBeUndefined();
   });
 });

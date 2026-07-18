@@ -89,7 +89,7 @@ import {
 } from '@/utils/mcp/utils';
 import { encryptApiKey } from '@/backend/services/model/encryption';
 import { MASKED_API_KEY } from '@/shared/types/constants';
-import { normalizeHeaderValue, isMaskedHeaderValue, isGlobalBinding } from '@/utils/mcp/headers';
+import { normalizeHeaderValue, isMaskedHeaderValue, isGlobalBinding, hydrateMaskedHeaders } from '@/utils/mcp/headers';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 import {
@@ -826,7 +826,8 @@ export class MCPService {
    */
   async testConnection(
     config: MCPServerConfig,
-    onOutput?: (event: TestConnectionEvent) => void
+    onOutput?: (event: TestConnectionEvent) => void,
+    options?: { storedName?: string }
   ): Promise<MCPServiceResponse> {
     log.info(`testConnection: Testing connection to ${config.name || '(unnamed)'} via ${config.transport} transport`);
 
@@ -845,10 +846,28 @@ export class MCPService {
     let transport: ReturnType<typeof createTransport> | null = null;
 
     try {
+      // For remote (streamable/sse) servers the browser may send back a MASKED secret header
+      // (e.g. Authorization: "********") when the user did not re-type the token — i.e. when
+      // editing or re-testing a server whose secret was saved earlier (#137). Hydrate those
+      // masked SECRET headers from the stored, saved config (looked up by the pre-edit name so
+      // rename + Test Connection also works) before resolving, mirroring resolveHeadersForSave's
+      // masked->keep contract. This happens entirely server-side — the real secret is read from
+      // disk here and never sent to the browser. resolveConfigHeaders then decrypts/resolves it
+      // exactly as the live connection does.
+      let toTest = config;
+      const lookupName = options?.storedName || config.name;
+      if ((config.transport === 'streamable' || config.transport === 'sse') && lookupName) {
+        const stored = await this.loadServerConfigs();
+        const savedCfg = Array.isArray(stored) ? stored.find(c => c.name === lookupName) : undefined;
+        const savedHeaders = (savedCfg as MCPSSEConfig | MCPStreamableConfig | undefined)?.headers;
+        const incomingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
+        toTest = { ...config, headers: hydrateMaskedHeaders(incomingHeaders, savedHeaders) } as MCPServerConfig;
+      }
+
       // Resolve + decrypt custom headers (#84) so the probe uses the same real header values
       // the live connection would (shares createTransport). Global bindings / encrypted
       // secrets are resolved here; plain values pass through unchanged.
-      const connectConfig = await resolveConfigHeaders(config);
+      const connectConfig = await resolveConfigHeaders(toTest);
       client = createNewClient(connectConfig);
       transport = createTransport(connectConfig);
 

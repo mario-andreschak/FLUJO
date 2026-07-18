@@ -33,8 +33,14 @@ export async function POST(request: NextRequest) {
   log.debug('Entering POST method');
 
   let config: MCPServerConfig;
+  let storedName: string | undefined;
   try {
-    config = (await request.json()) as MCPServerConfig;
+    // storedName (the pre-edit server name from the modal) travels as a sibling field so the
+    // backend can hydrate masked secret headers from the saved config even after a rename
+    // (#137). Strip it off before the rest of the body is treated as the config.
+    const { storedName: incomingStoredName, ...rest } = (await request.json()) as MCPServerConfig & { storedName?: string };
+    storedName = incomingStoredName;
+    config = rest as MCPServerConfig;
   } catch (error) {
     log.error('Failed to parse request body', error);
     return json({ success: false, ...formatErrorResponse(error) }, 400);
@@ -47,6 +53,6 @@ export async function POST(request: NextRequest) {
   return createNdjsonStreamResponse(async (emit) => {
     // testConnection emits status/stderr live via onOutput and also emits the final
     // `result` event itself, so we simply forward everything it produces.
-    await mcpService.testConnection(config, emit);
+    await mcpService.testConnection(config, emit, { storedName });
   }, { signal: request.signal });
 }

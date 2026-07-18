@@ -71,3 +71,37 @@ export function maskServerHeaders(
 export function isMaskedHeaderValue(value: string): boolean {
   return value === MASKED_API_KEY || value === MASKED_STRING;
 }
+
+/**
+ * For a test/connect operation, replace a masked SECRET header value the browser sent back
+ * (MASKED_API_KEY / MASKED_STRING = "keep the stored secret") with the real stored value from
+ * the saved config, mirroring resolveHeadersForSave's masked->keep contract EXACTLY: the
+ * masked->keep substitution applies only when the header is secret, so a non-secret header
+ * whose literal value happens to be "********" passes through untouched (just like the save
+ * path stores it verbatim — the resolveConfigHeaders guard still stops the literal mask from
+ * ever being sent on the wire). A masked secret with no stored counterpart (new/unsaved
+ * server) is dropped, so the probe omits it and the remote server returns a meaningful
+ * "authentication required" instead of "badly formatted". All other values pass through.
+ *
+ * This runs entirely server-side (never in the browser), so the real encrypted/bound secret
+ * is only ever read from disk here — it is never sent to the frontend.
+ */
+export function hydrateMaskedHeaders(
+  incoming?: Record<string, MCPHeaderValue>,
+  stored?: Record<string, MCPHeaderValue>,
+): Record<string, MCPHeaderValue> | undefined {
+  if (!incoming) return incoming;
+  const out: Record<string, MCPHeaderValue> = {};
+  for (const [key, raw] of Object.entries(incoming)) {
+    if (!key) continue;
+    const { value, isSecret } = normalizeHeaderValue(raw, key);
+    if (isSecret && isMaskedHeaderValue(value)) {
+      const prev = stored?.[key];
+      if (prev !== undefined) out[key] = prev;   // real encrypted/bound value from disk
+      // else: drop (no stored value to test with)
+      continue;
+    }
+    out[key] = raw;                              // plaintext / ${global:} / encrypted pass through
+  }
+  return out;
+}

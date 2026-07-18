@@ -18,7 +18,7 @@ import { getDataDir } from '@/utils/paths';
 import { registerRootsHandler } from './roots';
 import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
-import { normalizeHeaderValue } from '@/utils/mcp/headers';
+import { normalizeHeaderValue, isMaskedHeaderValue } from '@/utils/mcp/headers';
 import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
@@ -68,6 +68,11 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
     if (!key) continue;
     const { value } = normalizeHeaderValue(raw, key);
     if (!value) continue;
+    // Defence-in-depth (#137): never forward the mask placeholder ("********") as a literal
+    // header. testConnection hydrates masked SECRET headers from the stored config before this
+    // point; any value still masked here (e.g. a masked secret with no stored counterpart)
+    // must be dropped so the remote server can't reject it as "badly formatted".
+    if (isMaskedHeaderValue(value)) continue;
     const out = await resolveAndDecryptApiKey(value);
     if (out) {
       resolved[key] = out;

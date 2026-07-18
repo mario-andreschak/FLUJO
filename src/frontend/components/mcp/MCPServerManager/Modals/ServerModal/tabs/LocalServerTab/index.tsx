@@ -224,7 +224,10 @@ const LocalServerTab: React.FC<TabProps> = ({
       setConsoleOutput,
       setIsConsoleVisible,
       setMessage,
-      setRunCompleted
+      setRunCompleted,
+      // Pass the pre-edit server name so masked secret headers hydrate from the saved
+      // config on Test Connection, even after a rename (#137).
+      initialConfig?.name
     );
   };
 

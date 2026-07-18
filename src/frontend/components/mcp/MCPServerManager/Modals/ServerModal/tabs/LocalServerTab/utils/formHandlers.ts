@@ -533,7 +533,11 @@ export const handleRun = async (
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
   setIsConsoleVisible: (isVisible: boolean) => void,
   setMessage: (message: MessageState | null) => void,
-  setRunCompleted: (completed: boolean) => void
+  setRunCompleted: (completed: boolean) => void,
+  // The pre-edit server name (initialConfig?.name). Sent with the test request so the
+  // backend can hydrate masked secret headers from the saved config, even after a rename
+  // (#137). Undefined for a brand-new server (nothing stored to hydrate from).
+  storedName?: string
 ) => {
   if (!localConfig.name) {
     setMessage({
@@ -604,7 +608,7 @@ export const handleRun = async (
         setConsoleOutput((prev: string) => prev + `Sending ${headerCount} custom header(s).\n`);
       }
 
-      const testResult = await mcpService.testConnectionStreaming(testConfig, onStreamEvent);
+      const testResult = await mcpService.testConnectionStreaming(testConfig, onStreamEvent, storedName);
 
       if (testResult.success) {
         setRunCompleted(true);

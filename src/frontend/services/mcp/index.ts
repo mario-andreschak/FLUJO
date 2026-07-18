@@ -291,7 +291,7 @@ class MCPService {
    * browser, so it can reach servers behind custom CAs (system CA trust) and send the
    * configured custom headers (Authorization, X-SAP-*), which a browser fetch cannot.
    */
-  async testConnection(config: MCPServerConfig): Promise<{
+  async testConnection(config: MCPServerConfig, storedName?: string): Promise<{
     success: boolean;
     error?: string;
     requiresAuthentication?: boolean;
@@ -303,7 +303,9 @@ class MCPService {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(config),
+        // storedName rides alongside the config so the backend can hydrate masked secret
+        // headers from the saved config, even after a rename (#137).
+        body: JSON.stringify({ ...config, storedName }),
       });
 
       return await response.json();
@@ -330,7 +332,8 @@ class MCPService {
    */
   async testConnectionStreaming(
     config: MCPServerConfig,
-    onEvent: (event: TestConnectionEvent) => void
+    onEvent: (event: TestConnectionEvent) => void,
+    storedName?: string
   ): Promise<{
     success: boolean;
     error?: string;
@@ -343,12 +346,14 @@ class MCPService {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(config),
+        // storedName rides alongside the config so the backend can hydrate masked secret
+        // headers from the saved config, even after a rename (#137).
+        body: JSON.stringify({ ...config, storedName }),
       });
 
       if (!response.ok || !response.body) {
         log.warn(`Streaming test-connection unavailable (status ${response.status}); falling back`);
-        return this.testConnection(config);
+        return this.testConnection(config, storedName);
       }
 
       let result: {
@@ -383,7 +388,7 @@ class MCPService {
       };
     } catch (error) {
       log.warn(`Streaming test connection failed for ${config.name}; falling back to non-streaming:`, error);
-      return this.testConnection(config);
+      return this.testConnection(config, storedName);
     }
   }
 
