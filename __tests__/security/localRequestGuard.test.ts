@@ -60,10 +60,22 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 jest.mock('uuid', () => ({ v4: () => 'test-request-id' }));
 jest.mock('@/utils/mcp', () => ({ processPathLikeArgument: (p: string) => p }));
 
+// The update route reads the install mode from @/utils/paths; force 'git' so
+// POST/GET /api/update reach PAST the mode check to the git/exec/spawn sinks that
+// the origin guard must block (otherwise a non-git early-return would mask it).
+// getDataDir/getAppDir are kept because the git & cwd routes resolve module-level
+// paths from them at import time.
+jest.mock('@/utils/paths', () => ({
+  getInstallMode: jest.fn(() => 'git'),
+  getDataDir: jest.fn(() => '/tmp/flujo-data'),
+  getAppDir: jest.fn(() => '/tmp/flujo-app'),
+}));
+
 import type { NextRequest } from 'next/server';
 import { isLocalRequest, assertLocalRequest } from '@/utils/http/localRequest';
 import { POST as gitPost } from '@/app/api/git/route';
 import { GET as cwdGet } from '@/app/api/cwd/route';
+import { GET as updateGet, POST as updatePost } from '@/app/api/update/route';
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -163,6 +175,92 @@ describe('POST /api/git origin guard', () => {
         host: 'localhost:4200',
         body: { action: 'checkUpdates' },
       })
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('POST /api/update origin guard', () => {
+  const applyBody = { action: 'apply' };
+
+  it('blocks a cross-origin POST with 403 and never touches exec/spawn/git', async () => {
+    const res = await updatePost(
+      makeRequest('http://localhost:4200/api/update', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+        body: applyBody,
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(simpleGitFactory).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403 and never touches the sinks', async () => {
+    const res = await updatePost(
+      makeRequest('http://evil.com/api/update', { host: 'evil.com', body: applyBody })
+    );
+    expect(res.status).toBe(403);
+    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(simpleGitFactory).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost same-origin request past the guard (not 403)', async () => {
+    // The mocked simple-git has no checkIsRepo, so the handler errors out with 500
+    // AFTER the guard — that it is NOT 403 proves the guard allowed it through.
+    const res = await updatePost(
+      makeRequest('http://localhost:4200/api/update', {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        body: applyBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a native request with no Origin past the guard (not 403)', async () => {
+    const res = await updatePost(
+      makeRequest('http://localhost:4200/api/update', {
+        host: 'localhost:4200',
+        body: applyBody,
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('GET /api/update origin guard', () => {
+  it('blocks a cross-origin request with 403 and never touches git', async () => {
+    const res = await updateGet(
+      makeRequest('http://localhost:4200/api/update', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+      })
+    );
+    expect(res.status).toBe(403);
+    expect(simpleGitFactory).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-local Host with 403', async () => {
+    const res = await updateGet(
+      makeRequest('http://evil.com/api/update', { host: 'evil.com' })
+    );
+    expect(res.status).toBe(403);
+    expect(simpleGitFactory).not.toHaveBeenCalled();
+  });
+
+  it('lets a localhost request past the guard (not 403)', async () => {
+    const res = await updateGet(
+      makeRequest('http://localhost:4200/api/update', { host: 'localhost:4200' })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets a native request with no Origin past the guard (not 403)', async () => {
+    const res = await updateGet(
+      makeRequest('http://localhost:4200/api/update', { host: 'localhost:4200' })
     );
     expect(res.status).not.toBe(403);
   });

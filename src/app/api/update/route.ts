@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import simpleGit from 'simple-git';
 import path from 'path';
@@ -41,7 +42,10 @@ async function getCurrentVersion(): Promise<string> {
  * GET /api/update
  * Fetches from origin and reports whether the local clone is behind its tracking branch.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -109,6 +113,9 @@ export async function GET() {
  * spawns a detached relauncher that restarts the server once this process exits.
  */
 export async function POST(request: NextRequest) {
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
