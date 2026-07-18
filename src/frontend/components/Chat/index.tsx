@@ -553,6 +553,16 @@ const Chat: React.FC = () => {
       log.debug('Skipping detail fetch for client-only conversation', { conversationId: id });
       return;
     }
+    // Only the VIEWED conversation renders details. A caller reconciling a
+    // background conversation (its run finished while another one is on
+    // screen) must not blank the on-screen messages — the setters below run
+    // before the stale-response guard could catch it. The sidebar summary is
+    // all a background conversation needs, so refresh the list instead.
+    if (currentConversationIdRef.current !== id) {
+      log.debug('Detail fetch requested for non-viewed conversation; refreshing list instead', { conversationId: id });
+      fetchConversations(undefined, { silent: true });
+      return;
+    }
     log.debug('Fetching detailed conversation', { conversationId: id });
     setIsLoadingDetails(true);
     setDetailsError(null);
@@ -986,14 +996,26 @@ const Chat: React.FC = () => {
         setIsDebugPaused(true);
         break;
       case 'run:done':
-        setLiveStats(null);
-        setLiveActivity(EMPTY_LIVE_ACTIVITY);
-        setIsLoading(false);
-        setLoadingConversationId(null);
         if (event.conversationId) {
           markConvRunning(event.conversationId, false);
           patchConversationStatus(event.conversationId, event.status);
         }
+        // The live-view teardown (indicator, stream, input gate) belongs to
+        // the run this client is tracking. Events normally only arrive from
+        // that run's stream, but a straggler for another conversation (e.g. a
+        // late event applied after the user started a run elsewhere) must not
+        // dismantle the newer run's live view.
+        if (
+          event.conversationId &&
+          loadingConversationIdRef.current &&
+          event.conversationId !== loadingConversationIdRef.current
+        ) {
+          break;
+        }
+        setLiveStats(null);
+        setLiveActivity(EMPTY_LIVE_ACTIVITY);
+        setIsLoading(false);
+        setLoadingConversationId(null);
         closeEventStream();
         // Only refresh the view if this run is the one being viewed (a
         // background run must not hijack the displayed conversation).
@@ -1059,6 +1081,16 @@ const Chat: React.FC = () => {
     if (!currentConversationId) return;
     if (currentConversationSummary?.status !== 'running') return;
     if (loadingConversationIdRef.current === currentConversationId) return; // already tracking
+    // The user just Stopped this conversation: the server may briefly still
+    // report 'running' while the live loop winds down. Re-attaching now would
+    // resurrect the Stop banner the user just dismissed (and its replay would
+    // clear the stop notice) — flickering until the run finalizes. The list
+    // poll picks up the terminal status; a genuinely new run clears the flag
+    // via run:start / the next send.
+    if (stoppedConversationIdsRef.current.has(currentConversationId)) {
+      log.debug('Skipping re-attach to a conversation the user just stopped', { conversationId: currentConversationId });
+      return;
+    }
     log.info('Re-attaching to in-progress run', { conversationId: currentConversationId });
     loadingConversationIdRef.current = currentConversationId; // guard re-entry before state commits
     setIsLoading(true);
@@ -1344,9 +1376,31 @@ const Chat: React.FC = () => {
     // viewed-conversation gates (pendingToolCalls / isDebugPaused).
     markConvRunning(conversationId, data.status === 'running');
 
+    // This funnel also resolves for conversations the user has since navigated
+    // away from (the blocking POST of a run that finished in the background).
+    // Global, view-owning state — the live indicator/stream (tracked) and the
+    // approval prompt/debug panel (viewed) — must only be touched when this
+    // response's conversation still owns it; otherwise conversation A's ending
+    // dismantles conversation B's live view.
+    const isTracked = loadingConversationIdRef.current === conversationId;
+    const isViewed = currentConversationIdRef.current === conversationId;
+
     // --- Check for Debug Paused State ---
     if (data.status === 'paused_debug' && data.debugState) {
       log.info('API Response: Paused for debugging', { conversationId });
+      if (!isViewed) {
+        // A background conversation pausing must not hijack the viewed one's
+        // debugger panel. Record its status in the sidebar, release the live
+        // tracking if this run held it (the pause parks the run), and stop.
+        patchConversationStatus(conversationId, 'paused_debug');
+        if (isTracked) {
+          setIsLoading(false);
+          setLoadingConversationId(null);
+          closeEventStream();
+          stopPolling();
+        }
+        return true;
+      }
       setDebugState(data.debugState as SharedState);
       setIsDebugPaused(true);
       setDebugSessionActive(true);
@@ -1378,8 +1432,10 @@ const Chat: React.FC = () => {
           : c
       ).sort((a, b) => b.updatedAt - a.updatedAt)); // Re-sort
       return true; // Indicate debug state was handled
-    } else if (data.status === 'completed' || data.status === 'error') {
-      // Only hide the debugger panel if the execution is definitively finished or errored
+    } else if ((data.status === 'completed' || data.status === 'error') && isViewed) {
+      // Only hide the debugger panel if the execution is definitively finished
+      // or errored — and only when the finished conversation is the one on
+      // screen (a background run ending must not close the viewed debugger).
       log.info(`API Response: Execution completed or errored (Status: ${data.status}). Hiding debugger panel.`, { conversationId });
       setIsDebugPaused(false);
       setDebugState(null);
@@ -1427,17 +1483,23 @@ const Chat: React.FC = () => {
     // Update pending tool calls based on standard response/polling data
     if (data.status === 'awaiting_tool_approval') {
       log.info('API Response/Polling: Pausing for tool approval', { conversationId });
-      setPendingToolCalls(data.pendingToolCalls || []);
-      setIsLoading(false); // Stop loading indicator
-      setLoadingConversationId(null);
-      closeEventStream();
-      stopPolling();
+      // The approval prompt belongs to the viewed conversation only — same
+      // bleed rule as the SSE run:awaiting_approval handler.
+      if (isViewed) setPendingToolCalls(data.pendingToolCalls || []);
+      if (isTracked) {
+        setIsLoading(false); // Stop loading indicator
+        setLoadingConversationId(null);
+        closeEventStream();
+        stopPolling();
+      }
     } else if (data.status === 'completed' || data.status === 'error') {
       log.info('API Response/Polling: Stopping due to final status', { conversationId, status: data.status });
-      stopPolling();
-      setIsLoading(false);
-      setLoadingConversationId(null);
-      closeEventStream();
+      if (isTracked) {
+        stopPolling();
+        setIsLoading(false);
+        setLoadingConversationId(null);
+        closeEventStream();
+      }
       if (data.status === 'error') {
          // Handle OpenAI compatible error structure
          const errorMessage = data.error?.message || data.lastResponse?.error || 'Unknown error during execution';
@@ -1445,24 +1507,27 @@ const Chat: React.FC = () => {
          // (the "stopped" banner) rather than flashing a red failure.
          if (CANCELLED_MESSAGE_RE.test(errorMessage) || stoppedConversationIdsRef.current.has(conversationId)) {
            markConversationStopped(conversationId, true);
-           setError(null);
+           // Don't wipe an error banner that may belong to another conversation.
+           if (isTracked || isViewed) setError(null);
            log.info('API Response/Polling: Execution cancelled by user', { conversationId });
          } else {
            setError(errorMessage);
            log.error('API Response/Polling: Execution resulted in error', { conversationId, error: data.error || data.lastResponse });
          }
       }
-      // Fetch final state one last time for completed/error?
+      // Fetch final state one last time for completed/error. (For a background
+      // conversation this resolves to a silent list refresh — the detail fetch
+      // itself refuses to clobber the viewed conversation.)
       fetchDetailedConversation(conversationId);
     } else if (data.status === 'running' && !isDebugPaused) {
        // If status is running and we are NOT paused for debug, clear pending calls and continue polling/loading
-       setPendingToolCalls(null);
-       if (!pollingIntervalRef.current) { // Restart polling if it stopped
+       if (isViewed) setPendingToolCalls(null);
+       if (isTracked && !pollingIntervalRef.current) { // Restart polling if it stopped
           setIsLoading(true); // Ensure loading indicator is on
        }
     } else {
        // Other statuses or conditions
-       setPendingToolCalls(null); // Clear pending calls for safety
+       if (isViewed) setPendingToolCalls(null); // Clear pending calls for safety
     }
 
     // Update conversation list status, title, and flowId from standard response/polling with type assertion
@@ -1484,7 +1549,7 @@ const Chat: React.FC = () => {
 
     return false; // Indicate standard response was handled
      // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning]);
+  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning, patchConversationStatus, markConversationStopped]);
 
 
   // Function to stop polling (legacy interval; live updates now use SSE)
@@ -1524,6 +1589,10 @@ const Chat: React.FC = () => {
     setIsLoading(true); // Set loading true for the API call itself
     setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
     markConvRunning(conversation.id, true);
+    // A fresh run supersedes a prior Stop on this conversation (run:start does
+    // this too, but clear it before any event arrives so the re-attach guard
+    // and the cancel-classifying catches don't act on the stale flag).
+    markConversationStopped(conversation.id, false);
     // Sending is what creates a client-only conversation (an unsent split) on
     // the backend — runFlow persists its initial state at run start — so from
     // here on it is real: detail fetches and list refreshes may treat it
@@ -1688,13 +1757,18 @@ const Chat: React.FC = () => {
       if (isCancellationError(err) || stoppedConversationIdsRef.current.has(conversation.id)) {
         log.info('Chat completion cancelled by user', { conversationId: conversation.id });
         success = false;
-        stopPolling();
-        setIsLoading(false);
-        setLoadingConversationId(null);
         markConvRunning(conversation.id, false);
-        closeEventStream();
-        setError(null);
         markConversationStopped(conversation.id, true);
+        // Only tear down the live view if it still belongs to this run — the
+        // user may have started a run in another conversation since, and its
+        // stream/indicator must survive this one's ending.
+        if (loadingConversationIdRef.current === conversation.id) {
+          stopPolling();
+          setIsLoading(false);
+          setLoadingConversationId(null);
+          closeEventStream();
+          setError(null);
+        }
         return success;
       }
       log.error('Error calling chat completions API:', err);
@@ -1724,11 +1798,15 @@ const Chat: React.FC = () => {
         errorMessage = err.message;
       }
       setError(errorMessage);
-      stopPolling();
-      setIsLoading(false); // Stop loading on error
-      setLoadingConversationId(null);
       markConvRunning(conversation.id, false);
-      closeEventStream();
+      // Same scoping as the cancel branch: this conversation's failure must
+      // not dismantle a live view that now belongs to another conversation.
+      if (loadingConversationIdRef.current === conversation.id) {
+        stopPolling();
+        setIsLoading(false); // Stop loading on error
+        setLoadingConversationId(null);
+        closeEventStream();
+      }
       // The send failed — if the conversation was client-only (unsent split),
       // re-shield it so the list poll doesn't wipe it before a retry.
       if (wasLocalOnly) localOnlyConversationIdsRef.current.add(conversation.id);
@@ -1796,6 +1874,7 @@ const Chat: React.FC = () => {
       setIsLoading(true);
       setLoadingConversationId(updatedDetailedConv.id);
       markConvRunning(updatedDetailedConv.id, true);
+      markConversationStopped(updatedDetailedConv.id, false); // a fresh run supersedes a prior Stop
       setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
       await openEventStream(updatedDetailedConv.id);
       try {
@@ -1866,10 +1945,13 @@ const Chat: React.FC = () => {
           log.error('Error sending edited message:', err);
           setError(err instanceof Error ? err.message : 'Failed to send edited message');
         }
-        setIsLoading(false);
-        setLoadingConversationId(null);
         markConvRunning(updatedDetailedConv.id, false);
-        closeEventStream();
+        // Scoped teardown: leave another conversation's live view alone.
+        if (loadingConversationIdRef.current === updatedDetailedConv.id) {
+          setIsLoading(false);
+          setLoadingConversationId(null);
+          closeEventStream();
+        }
       }
     }
   };
@@ -1941,7 +2023,7 @@ const Chat: React.FC = () => {
       if (isCancellationError(err) || stoppedConversationIdsRef.current.has(currentConversationId)) {
         log.info('Tool-response resume cancelled by user', { conversationId: currentConversationId });
         markConversationStopped(currentConversationId, true);
-        setIsLoading(false);
+        if (loadingConversationIdRef.current === currentConversationId) setIsLoading(false);
         markConvRunning(currentConversationId, false);
         return;
       }
@@ -1953,7 +2035,9 @@ const Chat: React.FC = () => {
         errorMessage += ` Error: ${err.message}`;
       }
       setError(errorMessage);
-      setIsLoading(false); // Stop loading on error since polling won't restart
+      // Stop loading on error since polling won't restart — unless the live
+      // view has since moved on to another conversation's run.
+      if (loadingConversationIdRef.current === currentConversationId) setIsLoading(false);
       markConvRunning(currentConversationId, false);
     }
   };

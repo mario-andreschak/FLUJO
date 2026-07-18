@@ -82,8 +82,12 @@ export async function GET(
           return;
         }
         // A run can pause (awaiting approval / debug) and resume on the same
-        // conversation, so only a terminal run:done closes the stream.
-        if (event.type === 'run:done') {
+        // conversation, so only a terminal run:done closes the stream — and
+        // only the CHANNEL'S LATEST one. The buffer spans runs: a replay from
+        // an early position on a continued conversation includes the previous
+        // run's run:done, and closing on it would cut the stream off before
+        // the live run's events are ever delivered.
+        if (event.type === 'run:done' && event.seq + 1 >= executionEventBus.currentSeq(conversationId)) {
           cleanup();
         }
       };
@@ -93,7 +97,21 @@ export async function GET(
 
       // Replay buffered events first (ascending seq), then go live.
       if (fromSeq !== null && !Number.isNaN(fromSeq)) {
-        for (const event of executionEventBus.getBufferedSince(conversationId, fromSeq)) {
+        const buffered = executionEventBus.getBufferedSince(conversationId, fromSeq);
+        // The buffer spans runs on the same conversation (the channel — and its
+        // monotonic seq — survives a run:done as long as the conversation is
+        // continued). Replaying a FINISHED earlier run would feed the client
+        // stale start/terminal transitions: its run:done tears down the live
+        // view of the CURRENT run and (pre-guard) closed this stream before
+        // the current run's events were ever delivered. So clamp the replay to
+        // the latest run boundary; older history is served by the conversation
+        // GET, not the live stream.
+        let replayFrom = fromSeq;
+        for (const event of buffered) {
+          if (event.type === 'run:start') replayFrom = Math.max(replayFrom, event.seq);
+        }
+        for (const event of buffered) {
+          if (event.seq < replayFrom) continue;
           send(event);
           if (closed) break;
         }
