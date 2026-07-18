@@ -13,6 +13,13 @@ import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
+import {
+  sessionKey,
+  computePrefixHash,
+  findReusableSession,
+  recordSession,
+  invalidateSession,
+} from './claudeSessionStore';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
@@ -80,11 +87,16 @@ function isHandoffName(name: string): boolean {
  * this was fixed by surfacing cache RE-READ tokens separately (see claudeUsage
  * .ts) so warmed-cache reads stop inflating the headline. The efficiency side
  * — reusing the SDK session per conversation via `resume` + a persisted
- * `session_id` and sending only the per-turn delta — is a larger, separate
- * change (needs per-(conversation,node) session keying because each node has
- * its own systemPrompt/tool set, plus reconciliation with client-side history
- * pruning and handoff "clean conversation" semantics) and is deliberately left
- * as a follow-up; this flatten path remains the documented fallback.
+ * `session_id` and sending only the per-turn delta — is tracked as issue #154.
+ *
+ * #154 STATUS: the enabling infrastructure has landed (Phase 0/1) — a per-
+ * `(conversationId, nodeId)` session registry (claudeSessionStore.ts) that keys
+ * on a prefix hash of `systemPrompt` + tool set and invalidates on prefix change
+ * / history divergence / error / handoff, plus capture of the SDK `session_id`
+ * here and per-turn token instrumentation. The behaviour change itself (flipping
+ * the send path to `resume` + delta) is the next increment, gated on live
+ * token-curve verification because it touches conversation-context correctness.
+ * Until then this flatten path remains the always-correct behaviour and fallback.
  */
 export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]): {
   systemPrompt?: string;
@@ -175,6 +187,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     requestToolApproval,
     onTranscriptMessage,
     signal,
+    conversationId,
+    nodeId,
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
@@ -182,6 +196,26 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
 
     const { systemPrompt, content: userContent } = buildUserMessage(messages);
+
+    // #154 session tracking. When the caller identifies the conversation+node,
+    // key a reusable Agent SDK session on a hash of the reusable prefix
+    // (systemPrompt + tool set). We capture the SDK `session_id` below and, once
+    // the run succeeds, record it so a later turn of the SAME single-node Flow
+    // could `resume` instead of re-flattening the whole history. This increment
+    // records + measures only (the flatten path below is unchanged); the resume
+    // send-path flip is the follow-up. `findReusableSession` here surfaces, per
+    // turn, whether reuse WOULD be possible — the Phase-0 measurement signal.
+    const sessionTracking =
+      conversationId && nodeId
+        ? {
+            key: sessionKey(conversationId, nodeId),
+            prefixHash: computePrefixHash(
+              systemPrompt,
+              (tools ?? []).filter(t => t.type === 'function').map(t => t.function.name),
+            ),
+          }
+        : undefined;
+    let capturedSessionId: string | undefined;
 
     const usedNames = new Set<string>();
     let handoffCall: { name: string; args: Record<string, unknown> } | null = null;
@@ -413,6 +447,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // Capture the SDK session id (present on system/assistant/result
+        // messages) for the #154 session registry, before any early break.
+        const sid = (message as { session_id?: unknown }).session_id;
+        if (typeof sid === 'string' && sid) capturedSessionId = sid;
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
@@ -492,7 +530,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
-      if (!handoffCall) throw err;
+      if (!handoffCall) {
+        // Drop any tracked session on a genuine error/cancellation so a later
+        // turn never resumes a corrupted or half-torn-down session (#154 — the
+        // "drop the cached session on error" contract coordinated with #151).
+        if (sessionTracking) invalidateSession(sessionTracking.key);
+        throw err;
+      }
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
     }
@@ -506,6 +550,37 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       lastTurnUsage,
       totalOutputTokens,
     });
+
+    // #154 session bookkeeping + Phase-0 instrumentation. A handoff routes to a
+    // different node with fresh context, so drop the session; a normal turn
+    // records the captured session for a potential future `resume`. Either way,
+    // log the per-turn token split and whether a reusable session WAS available
+    // this turn — the measurement signal that quantifies the pending resume win.
+    if (sessionTracking) {
+      const reusableSessionAvailable = Boolean(
+        findReusableSession(sessionTracking.key, sessionTracking.prefixHash, messages.length),
+      );
+      if (handoffCall || !capturedSessionId) {
+        invalidateSession(sessionTracking.key);
+      } else {
+        recordSession(sessionTracking.key, {
+          sessionId: capturedSessionId,
+          prefixHash: sessionTracking.prefixHash,
+          seenMessageCount: messages.length,
+        });
+      }
+      log.debug('Claude session usage (#154)', {
+        conversationId,
+        nodeId,
+        reusableSessionAvailable,
+        capturedSession: Boolean(capturedSessionId),
+        inputMessages: messages.length,
+        promptTokens,
+        cacheReadTokens,
+        completionTokens,
+        endedByHandoff: Boolean(handoffCall),
+      });
+    }
 
     // The per-tool assistant(tool_call)+tool(result) pairs, and now each turn's
     // narration text, were already recorded and streamed live as they happened

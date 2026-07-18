@@ -14,6 +14,17 @@ export interface CompletionInput {
   apiKey: string;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
+  /**
+   * Optional identity of the conversation + process node this call belongs to.
+   * Self-orchestrating adapters (Claude subscription) use the pair to key a
+   * reusable Agent SDK session per `(conversationId, nodeId)` (issue #154), so
+   * turns of the same single-node Flow can resume one session instead of
+   * re-sending the whole flattened history each turn. Request/response adapters
+   * ignore these (matching the existing pattern for `maxTurns` /
+   * `localToolExecutors`). Omitted means session reuse is disabled for the call.
+   */
+  conversationId?: string;
+  nodeId?: string;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionTool[];
   /** Sampling temperature. */

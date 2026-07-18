@@ -297,6 +297,8 @@ export class ModelHandler {
       requestToolApproval,
       onTranscriptMessage,
       shouldAbort,
+      conversationId,
+      nodeId,
     });
 
     if (!response.success) {
@@ -428,6 +430,10 @@ export class ModelHandler {
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
       shouldAbort?: () => boolean;
+      /** Conversation + node identity, so self-orchestrating adapters can key a
+       * reusable Agent SDK session per (conversationId, nodeId) — issue #154. */
+      conversationId?: string;
+      nodeId?: string;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -570,6 +576,8 @@ export class ModelHandler {
           requestToolApproval: opts?.requestToolApproval,
           onTranscriptMessage: opts?.onTranscriptMessage,
           signal: abortController.signal,
+          conversationId: opts?.conversationId,
+          nodeId: opts?.nodeId,
         }));
       } finally {
         stopCancelWatch();
