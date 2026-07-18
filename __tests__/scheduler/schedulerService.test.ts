@@ -181,6 +181,9 @@ describe('SchedulerService', () => {
     expect(prompt).toContain('"trigger": "webhook"');
     expect(prompt).toContain('"lastRun": null');
     expect(prompt).toMatch(/"nextPlannedRun": "\d{4}-/);
+    // #135: the previous run's final answer is no longer force-fed into the
+    // prompt — output chaining is now explicit via the signal/flow-event bus.
+    expect(prompt).not.toContain('lastOutput');
   });
 
   it('reports the previous run in the next run info', async () => {
@@ -193,22 +196,7 @@ describe('SchedulerService', () => {
     expect(secondPrompt).toContain('"status": "completed"');
   });
 
-  it("chains the previous run's final output into the next run's input (lastOutput)", async () => {
-    const { execution } = await scheduler.create(scheduleInput());
-
-    // First run has no predecessor.
-    await scheduler.runNow(execution!.id);
-    const firstPrompt = runFlowMock.mock.calls[0][0].prompt as string;
-    expect(firstPrompt).toContain('"lastOutput": null');
-
-    // Second run receives the first run's outputText.
-    await scheduler.runNow(execution!.id);
-    const secondPrompt = runFlowMock.mock.calls[1][0].prompt as string;
-    expect(secondPrompt).toContain('"lastOutput"');
-    expect(secondPrompt).toContain('"text": "All done"');
-  });
-
-  it('lastOutput survives an intervening run without output (error/skip does not blank the chain)', async () => {
+  it('reports an intervening errored attempt via lastRun.status (no output chaining)', async () => {
     const { execution } = await scheduler.create(scheduleInput());
     await scheduler.runNow(execution!.id); // produces "All done"
 
@@ -218,9 +206,9 @@ describe('SchedulerService', () => {
 
     await scheduler.runNow(execution!.id);
     const thirdPrompt = runFlowMock.mock.calls[2][0].prompt as string;
-    // lastRun reports the errored attempt, lastOutput still carries the last real answer.
+    // lastRun reports the errored attempt; #135: no lastOutput chaining anymore.
     expect(thirdPrompt).toContain('"status": "error"');
-    expect(thirdPrompt).toContain('"text": "All done"');
+    expect(thirdPrompt).not.toContain('lastOutput');
   });
 
   it('records an error run when the flow ends non-completed or throws', async () => {

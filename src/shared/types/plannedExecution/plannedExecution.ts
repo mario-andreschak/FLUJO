@@ -218,9 +218,9 @@ export interface RunRecord {
   status: RunRecordStatus;
   /** Short human-readable description of what fired ("Schedule", "Webhook", ...). */
   triggerSummary: string;
-  /** Final assistant output, truncated for storage. Also chained into the
-   *  NEXT run's prompt as the run-info "lastOutput" field, so a triggered flow
-   *  can build on its previous result instead of starting blind. */
+  /** Final assistant output, truncated for storage. Surfaced in run history and
+   *  carried on the flow-run event bus (FlowRunEvent.outputText) so downstream
+   *  flow-event triggers can chain it explicitly. */
   outputText?: string;
   usage?: UsageTotals;
   error?: string;
