@@ -43,7 +43,11 @@ import { POST } from '@/app/api/git/route';
 const { loadItem } = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
 const { __git: mockGit } = jest.requireMock('simple-git') as any;
 
-const req = (body: unknown) => ({ json: async () => body }) as any;
+// The route enforces the localhost origin guard (#131), which reads
+// request.headers.get('host'|'origin'); supply a localhost Host so these
+// git-action tests exercise the real handler, not the 403 short-circuit.
+const req = (body: unknown) =>
+  ({ json: async () => body, headers: new Headers({ host: 'localhost:4200' }) }) as any;
 
 beforeEach(() => {
   jest.clearAllMocks();

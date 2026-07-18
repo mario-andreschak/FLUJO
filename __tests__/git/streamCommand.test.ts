@@ -71,6 +71,10 @@ function request(body: unknown) {
   return {
     json: async () => body,
     signal: new AbortController().signal,
+    // The route enforces the localhost origin guard (#131), which reads
+    // request.headers.get('host'|'origin'); supply a localhost Host so this
+    // streaming test exercises the real handler, not the 403 short-circuit.
+    headers: new Headers({ host: 'localhost:4200' }),
   } as unknown as Parameters<typeof POST>[0];
 }
 

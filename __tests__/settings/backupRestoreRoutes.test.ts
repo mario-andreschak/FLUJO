@@ -52,7 +52,8 @@ const flowsData = [{ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], crea
 const callBackup = (selections: unknown) => {
   const request = new Request('http://localhost:4200/api/backup', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    // #131: the route now requires a localhost Host (origin guard).
+    headers: { 'content-type': 'application/json', host: 'localhost:4200' },
     body: JSON.stringify({ selections }),
   }) as unknown as NextRequest;
   return backupPost(request);
@@ -67,6 +68,8 @@ const callRestore = (zipBuffer: ArrayBuffer, selections: string[]) => {
   formData.append('selections', JSON.stringify(selections));
   const request = new Request('http://localhost:4200/api/restore', {
     method: 'POST',
+    // #131: the route now requires a localhost Host (origin guard).
+    headers: { host: 'localhost:4200' },
     body: formData,
   }) as unknown as NextRequest;
   return restorePost(request);

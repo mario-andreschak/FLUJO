@@ -55,7 +55,11 @@ import { POST } from '@/app/api/git/route';
 
 const { __git: mockGit } = jest.requireMock('simple-git') as any;
 
-const req = (body: unknown) => ({ json: async () => body }) as any;
+// The route now enforces the localhost origin guard (#131), which reads
+// request.headers.get('host'|'origin'); supply a localhost Host so these
+// git-action tests exercise the real handler rather than the 403 short-circuit.
+const req = (body: unknown) =>
+  ({ json: async () => body, headers: new Headers({ host: 'localhost:4200' }) }) as any;
 
 // Real temp directories: a clone root (with a monorepo-style subdirectory) and a
 // directory that is not a repo. Git operations themselves are mocked; only the

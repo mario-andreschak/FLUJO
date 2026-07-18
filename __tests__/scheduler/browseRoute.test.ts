@@ -14,7 +14,8 @@ const call = (target?: string) => {
   const url = target
     ? `http://localhost:4200/api/browse?path=${encodeURIComponent(target)}`
     : 'http://localhost:4200/api/browse';
-  return GET(new Request(url) as unknown as NextRequest);
+  // #131: the route now requires a localhost Host (origin guard).
+  return GET(new Request(url, { headers: { host: 'localhost:4200' } }) as unknown as NextRequest);
 };
 
 describe('browse route', () => {

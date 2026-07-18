@@ -26,39 +26,14 @@ const log = createLogger('backend/services/mcp/proxyForward');
  */
 const LOCKED_MESSAGE = 'FLUJO encryption is locked (encryption_locked). Unlock FLUJO to continue.';
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-
-/** Extract the bare hostname from a Host header value (strips port; handles IPv6 brackets). */
-function hostnameOf(hostHeader: string | null): string | null {
-  if (!hostHeader) return null;
-  const h = hostHeader.trim();
-  if (h.startsWith('[')) {
-    const end = h.indexOf(']');
-    return end > 0 ? h.slice(1, end) : null;
-  }
-  return h.split(':')[0] || null;
-}
-
 /**
- * Localhost guard (#17A, single-user/localhost posture). Blocks the DNS-rebinding
- * vector: a browser tricked into hitting `localhost` carries the attacker's domain
- * in Host and an attacker Origin, while native MCP clients connect to a localhost
- * Host and send no Origin. We allow only localhost-family Hosts, and reject any
- * non-localhost Origin when present. We do our own check (predictable) rather than
- * relying on the SDK transport's allowedHosts semantics.
+ * Localhost guard (#17A, single-user/localhost posture). Re-exported from the
+ * shared util (#131) so the command-executing `/api/*` routes can reuse the exact
+ * same DNS-rebinding defense without importing from `backend/services/mcp`. This
+ * module's original callers (`/mcp-flows`, `/mcp-proxy/[server]`, `/api/webhooks/[id]`)
+ * keep importing it from here unchanged.
  */
-export function isLocalRequest(host: string | null, origin: string | null): boolean {
-  const h = hostnameOf(host);
-  if (!h || !LOCAL_HOSTS.has(h)) return false;
-  if (origin) {
-    try {
-      if (!LOCAL_HOSTS.has(new URL(origin).hostname)) return false;
-    } catch {
-      return false;
-    }
-  }
-  return true;
-}
+export { isLocalRequest } from '@/utils/http/localRequest';
 
 /**
  * Whether a server is opted in to being re-exposed. Requires the config to

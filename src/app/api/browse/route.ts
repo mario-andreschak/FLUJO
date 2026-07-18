@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -48,6 +49,8 @@ async function listWindowsDrives(): Promise<string[]> {
 export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   try {
     const requested = new URL(request.url).searchParams.get('path') ?? '';

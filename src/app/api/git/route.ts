@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import simpleGit from 'simple-git';
 import path from 'path';
@@ -476,6 +477,8 @@ function streamCommandInRepo(
 export async function POST(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const requestId = uuidv4();
   log.info(`Received new request [RequestID: ${requestId}]`);

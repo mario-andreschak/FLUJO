@@ -1,5 +1,6 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
-import { NextResponse } from 'next/server';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
@@ -8,9 +9,11 @@ import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/cwd/route');
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const requestId = uuidv4();
   log.info(`Handling GET request [RequestID: ${requestId}]`);
