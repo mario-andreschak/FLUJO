@@ -197,10 +197,11 @@ export function evaluateNewItems(
   });
 
   const seen = state.seenIds;
-  const mergeSeen = (previous: string[] | undefined): string[] => {
+  const allIds = withIds.map(({ id }) => id);
+  const mergeSeenIds = (previous: string[] | undefined, ids: string[]): string[] => {
     const merged = [...(previous ?? [])];
     const known = new Set(merged);
-    for (const { id } of withIds) {
+    for (const id of ids) {
       if (!known.has(id)) {
         known.add(id);
         merged.push(id);
@@ -210,8 +211,8 @@ export function evaluateNewItems(
   };
 
   if (!seen) {
-    // First poll primes the seen-set without firing.
-    return { fire: false, newState: { seenIds: mergeSeen(undefined) } };
+    // First poll primes the seen-set without firing (absorb every visible id).
+    return { fire: false, newState: { seenIds: mergeSeenIds(undefined, allIds) } };
   }
 
   const knownIds = new Set(seen);
@@ -219,16 +220,21 @@ export function evaluateNewItems(
   if (fresh.length === 0) {
     return { fire: false, newState: {} };
   }
+  // Deliver at most MAX_NEW_ITEMS per fire; the rest of the backlog stays unseen
+  // and is drained by subsequent polls (issue #140 — no silent overflow drop).
+  const delivered = fresh.slice(0, MAX_NEW_ITEMS);
   return {
     fire: true,
     summary: fresh.length === 1 ? '1 new item' : `${fresh.length} new items`,
     context: {
-      newItems: capForContext(fresh.slice(0, MAX_NEW_ITEMS).map(({ item }) => item)),
+      newItems: capForContext(delivered.map(({ item }) => item)),
       ...(fresh.length > MAX_NEW_ITEMS ? { omitted: fresh.length - MAX_NEW_ITEMS } : {}),
     },
     // Hold the freshly-seen ids pending: only remember them once a fired run
     // actually processes them, so a skipped/failed run retries them (#75).
+    // Commit ONLY the delivered ids so overflow items (>50) stay unseen and the
+    // next poll re-fires to drain them, 50 at a time (issue #140).
     newState: {},
-    pendingState: { seenIds: mergeSeen(seen) },
+    pendingState: { seenIds: mergeSeenIds(seen, delivered.map(({ id }) => id)) },
   };
 }

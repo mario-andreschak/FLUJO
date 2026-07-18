@@ -110,6 +110,72 @@ describe('evaluateNewItems', () => {
     // The newest ids survive the cap.
     expect(primed.newState.seenIds![999]).toBe('1199');
   });
+
+  it('delivers all fresh items and commits them all when ≤ 50 (no overflow)', () => {
+    // Primed seen-set + a poll with 30 fresh items: unchanged behavior.
+    const state: PlannedExecutionState = { seenIds: ['seed'] };
+    const result = evaluateNewItems(feed(Array.from({ length: 30 }, (_, i) => i)), 'items', 'id', state);
+    expect(result.fire).toBe(true);
+    const ctx = result.context as { newItems: unknown[]; omitted?: number };
+    expect(ctx.newItems).toHaveLength(30);
+    expect(ctx.omitted).toBeUndefined();
+    // All 30 delivered ids are committed alongside the prior seed.
+    expect(result.pendingState?.seenIds).toEqual([
+      'seed',
+      ...Array.from({ length: 30 }, (_, i) => String(i)),
+    ]);
+  });
+
+  it('caps a burst at 50 and commits ONLY the delivered ids (overflow stays unseen, #140)', () => {
+    // Primed seen-set + a burst of 120 unseen items.
+    const state: PlannedExecutionState = { seenIds: ['seed'] };
+    const result = evaluateNewItems(feed(Array.from({ length: 120 }, (_, i) => i)), 'items', 'id', state);
+    expect(result.fire).toBe(true);
+    expect(result.summary).toBe('120 new items');
+    const ctx = result.context as { newItems: unknown[]; omitted?: number };
+    // Only 50 delivered, 70 reported as omitted (drained later, not dropped).
+    expect(ctx.newItems).toHaveLength(50);
+    expect(ctx.omitted).toBe(70);
+    // Seen-set gains ONLY the 50 delivered ids (0..49) on top of the prior seed.
+    expect(result.pendingState?.seenIds).toEqual([
+      'seed',
+      ...Array.from({ length: 50 }, (_, i) => String(i)),
+    ]);
+    // An overflow id (e.g. 80) is NOT marked seen — so it can still be delivered.
+    expect(result.pendingState?.seenIds).not.toContain('80');
+  });
+
+  it('drains a >50 backlog across successive polls without skipping any item (#140)', () => {
+    const bigFeed = feed(Array.from({ length: 120 }, (_, i) => i));
+
+    // Batch 1: deliver ids 0..49, omit 70. Commit the delivered ids into state.
+    const batch1 = evaluateNewItems(bigFeed, 'items', 'id', { seenIds: [] });
+    expect(batch1.fire).toBe(true);
+    expect((batch1.context as { newItems: Array<{ id: number }> }).newItems.map(i => i.id)).toEqual(
+      Array.from({ length: 50 }, (_, i) => i)
+    );
+    expect((batch1.context as { omitted?: number }).omitted).toBe(70);
+
+    // Batch 2: with batch1 committed, deliver ids 50..99, omit 20.
+    const batch2 = evaluateNewItems(bigFeed, 'items', 'id', { seenIds: batch1.pendingState!.seenIds });
+    expect(batch2.fire).toBe(true);
+    expect((batch2.context as { newItems: Array<{ id: number }> }).newItems.map(i => i.id)).toEqual(
+      Array.from({ length: 50 }, (_, i) => i + 50)
+    );
+    expect((batch2.context as { omitted?: number }).omitted).toBe(20);
+
+    // Batch 3: deliver the final ids 100..119, nothing omitted.
+    const batch3 = evaluateNewItems(bigFeed, 'items', 'id', { seenIds: batch2.pendingState!.seenIds });
+    expect(batch3.fire).toBe(true);
+    expect((batch3.context as { newItems: Array<{ id: number }> }).newItems.map(i => i.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => i + 100)
+    );
+    expect((batch3.context as { omitted?: number }).omitted).toBeUndefined();
+
+    // Batch 4: backlog fully drained — the same feed no longer fires.
+    const batch4 = evaluateNewItems(bigFeed, 'items', 'id', { seenIds: batch3.pendingState!.seenIds });
+    expect(batch4.fire).toBe(false);
+  });
 });
 
 describe('intervalMsToCron (legacy migration)', () => {
