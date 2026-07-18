@@ -14,16 +14,22 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
-  // Allow browser apps on other origins (e.g. the `brain` visualizer) to read
-  // the data APIs. Matches the '*' CORS already sent by /v1/chat/completions.
+  // CORS for `/api/*` is defense-in-depth secondary to the fail-closed origin
+  // guard in `src/middleware.ts` (#142). We do NOT advertise a wildcard
+  // `Access-Control-Allow-Origin: *` for the blanket `/api` surface: even if the
+  // guard were ever bypassed, a cross-origin page must not be told it may read
+  // `/api` responses. The value is narrowed to the local dev origin, consistent
+  // with the `/api/env` override (#141). The public OpenAI-compatible `/v1/*`
+  // API sets its own permissive CORS in-handler and is not matched here.
   async headers() {
     return [
       {
         source: '/api/:path*',
         headers: [
-          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Origin', value: 'http://localhost:4200' },
           { key: 'Access-Control-Allow-Methods', value: 'GET, OPTIONS' },
           { key: 'Access-Control-Allow-Headers', value: '*' },
+          { key: 'Vary', value: 'Origin' },
         ],
       },
       // Defense-in-depth for /api/env (#141): this route can return DECRYPTED

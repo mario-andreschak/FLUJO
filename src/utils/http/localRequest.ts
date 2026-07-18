@@ -22,12 +22,14 @@ import { NextResponse } from 'next/server';
  * (`assertUnlocked`, which needs in-process state) — it could also run in
  * middleware; it is kept as an in-handler call for parity and testability.
  *
- * MAINTAINERS: any NEW `/api/*` route that executes a command / spawns a child
- * process, reads or deletes arbitrary files, or returns secrets (decrypted env
- * vars, API keys, tokens) MUST call `assertLocalRequest(request)` at the very top
- * of the handler (local-first, before `assertUnlocked()`) — or be covered by a
- * future central `middleware.ts` allow-list. `assertUnlocked()` alone is a no-op
- * while the app is unlocked and does NOT stop cross-origin drive-by requests.
+ * PRIMARY CONTROL (#142): `src/middleware.ts` now runs `isLocalRequest` against
+ * EVERY `/api/:path*` request and returns 403 by default (fail-closed), except
+ * for the explicit public allow-list in `publicApiAllowlist.ts`. So new `/api`
+ * routes are guarded automatically. The highest-risk handlers (command / secret
+ * sinks) additionally keep `assertLocalRequest(request)` at the top of the
+ * handler as DEFENSE-IN-DEPTH — do not remove those. `assertUnlocked()` alone is
+ * a no-op while the app is unlocked and does NOT stop cross-origin drive-by
+ * requests.
  */
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);

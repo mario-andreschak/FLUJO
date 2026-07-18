@@ -13,6 +13,7 @@ import {
   logout
 } from '@/utils/encryption/secure';
 import { onUnlocked } from '@/backend/init';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
@@ -27,7 +28,14 @@ initializeDefaultEncryption().catch(error => {
 export async function POST(req: NextRequest) {
   const requestId = uuidv4();
   // log.info(`Handling secure encryption request`, { requestId });
-  
+
+  // Defense-in-depth (#142): the fail-closed origin guard in `src/middleware.ts`
+  // already blocks cross-origin / DNS-rebinding callers, but this route handles
+  // secrets (initialize / authenticate / change_password / encrypt), so keep an
+  // in-handler localhost check as a second layer.
+  const notLocal = assertLocalRequest(req);
+  if (notLocal) return notLocal;
+
   try {
     const { action, password, oldPassword, newPassword, data, token } = await req.json();
 
