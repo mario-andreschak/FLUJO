@@ -110,8 +110,105 @@ describe('middleware origin guard: OPTIONS preflight passes', () => {
   });
 });
 
+// The internal /v1/chat/conversations/** control-plane (#143). Not part of the
+// OpenAI spec; each of these has a dangerous local side effect (respond/approve
+// = RCE, list = ID enumeration, PATCH = flip requireApproval, DELETE, debug/*,
+// edit-state, breakpoints). They must be fail-closed like /api.
+const V1_GUARDED_PATHS = [
+  '/v1/chat/conversations',
+  '/v1/chat/conversations/abc123/respond',
+  '/v1/chat/conversations/abc123',
+  '/v1/chat/conversations/abc123/cancel',
+  '/v1/chat/conversations/abc123/debug/continue',
+  '/v1/chat/conversations/abc123/debug/step',
+  '/v1/chat/conversations/abc123/edit-state',
+  '/v1/chat/conversations/abc123/breakpoints',
+];
+
+describe('middleware origin guard: blocks non-local /v1 conversations control-plane (#143)', () => {
+  it.each(V1_GUARDED_PATHS)('403s a cross-origin (evil Origin) POST to %s', (p) => {
+    const res = middleware(
+      makeRequest(`http://localhost:4200${p}`, { host: 'localhost:4200', origin: 'http://evil.com', method: 'POST' })
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it.each(V1_GUARDED_PATHS)('403s a rebound-Host (non-local Host) request to %s', (p) => {
+    const res = middleware(makeRequest(`http://evil.com${p}`, { host: 'evil.com', method: 'POST' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('403s cross-origin GET /v1/chat/conversations (ID enumeration)', () => {
+    const res = middleware(
+      makeRequest('http://localhost:4200/v1/chat/conversations', {
+        host: 'localhost:4200',
+        origin: 'http://evil.com',
+      })
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('is fail-closed on a missing Host for a /v1 conversations route', () => {
+    const res = middleware(
+      makeRequest('http://localhost:4200/v1/chat/conversations/abc123/respond', {
+        origin: 'http://localhost:4200',
+        method: 'POST',
+      })
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('is fail-closed on an unparseable Origin for a /v1 conversations route', () => {
+    const res = middleware(
+      makeRequest('http://localhost:4200/v1/chat/conversations/abc123/respond', {
+        host: 'localhost:4200',
+        origin: 'not-a-url',
+        method: 'POST',
+      })
+    );
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('middleware origin guard: allows legitimate local /v1 conversations requests (#143)', () => {
+  it.each(V1_GUARDED_PATHS)('lets a localhost same-origin request to %s pass (not 403)', (p) => {
+    const res = middleware(
+      makeRequest(`http://localhost:4200${p}`, {
+        host: 'localhost:4200',
+        origin: 'http://localhost:4200',
+        method: 'POST',
+      })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it.each(V1_GUARDED_PATHS)('lets a native (no-Origin) localhost request to %s pass (not 403)', (p) => {
+    const res = middleware(makeRequest(`http://localhost:4200${p}`, { host: 'localhost:4200', method: 'POST' }));
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe('middleware origin guard: public OpenAI /v1 surface stays reachable (#143)', () => {
+  const PUBLIC_OPENAI_PATHS = ['/v1/chat/completions', '/v1/models'];
+
+  it.each(PUBLIC_OPENAI_PATHS)('lets a cross-origin (evil Origin) request reach %s (not 403)', (p) => {
+    const res = middleware(
+      makeRequest(`http://evil.com${p}`, { host: 'evil.com', origin: 'http://evil.com', method: 'POST' })
+    );
+    expect(res.status).not.toBe(403);
+  });
+
+  it('does not treat a sibling of the OpenAI allow-list as public', () => {
+    const res = middleware(
+      makeRequest('http://localhost:4200/v1/models-evil', { host: 'localhost:4200', origin: 'http://evil.com' })
+    );
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('middleware matcher scope', () => {
-  it('is scoped to /api/:path*', () => {
+  it('is scoped to /api/:path* and /v1/:path*', () => {
     expect(config.matcher).toContain('/api/:path*');
+    expect(config.matcher).toContain('/v1/:path*');
   });
 });

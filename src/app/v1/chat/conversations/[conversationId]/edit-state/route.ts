@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -28,6 +29,9 @@ export async function PATCH(
 ) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const { conversationId } = await params;
   if (!conversationId) {

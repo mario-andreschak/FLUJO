@@ -12,6 +12,7 @@
  * The fix passes the stored status through unchanged.
  */
 import type { SharedState } from '@/backend/execution/flow/types';
+import { makeLocalRequest } from '../utils/localRequest';
 
 // The route module imports the flow engine and services at top level; none of
 // them are exercised by PATCH, so stub them to keep the test hermetic.
@@ -52,7 +53,7 @@ function seedConversation(id: string, status: SharedState['status']) {
 }
 
 function patchRequest(body: unknown) {
-  return { json: async () => body } as any;
+  return makeLocalRequest({ body });
 }
 
 async function patchFlow(conversationId: string) {

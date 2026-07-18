@@ -13,9 +13,9 @@
  *  - finalizes parked states inline (status 'error' + cancelled message) and
  *    broadcasts run:done so sidebars/live views flip immediately.
  */
-import type { NextRequest } from 'next/server';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type OpenAI from 'openai';
+import { makeLocalRequest } from '../utils/localRequest';
 
 const assertUnlockedMock = jest.fn(async () => undefined);
 jest.mock('@/utils/encryption/lockGate', () => ({
@@ -79,7 +79,7 @@ const toolCall = (id: string): OpenAI.ChatCompletionMessageToolCall => ({
 });
 
 const cancel = (conversationId = CONV_ID) =>
-  POST({} as NextRequest, { params: Promise.resolve({ conversationId }) });
+  POST(makeLocalRequest(), { params: Promise.resolve({ conversationId }) });
 
 beforeEach(() => {
   conversationStates.clear();
@@ -148,5 +148,17 @@ describe('cancel route', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
+  });
+
+  it('403s a cross-origin (DNS-rebinding) request before touching state (#142/#143 DiD)', async () => {
+    const state = seedState({ status: 'running' });
+    const res = await POST(
+      makeLocalRequest({ host: 'localhost:4200', origin: 'http://evil.com' }),
+      { params: Promise.resolve({ conversationId: CONV_ID }) },
+    );
+    expect(res.status).toBe(403);
+    // The guard runs first: the conversation must be untouched.
+    expect(state.isCancelled).toBeUndefined();
+    expect(persistMock).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isLocalRequest } from '@/utils/http/localRequest';
-import { isPublicApiPath } from '@/utils/http/publicApiAllowlist';
+import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllowlist';
 
 /**
- * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` (#142).
+ * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
+ * (#142, extended to `/v1` in #143).
  *
  * FLUJO is a single-user, localhost-posture app. Several `/api/*` routes execute
  * shell commands, spawn child processes, read/delete arbitrary files, or hand
@@ -14,13 +15,17 @@ import { isPublicApiPath } from '@/utils/http/publicApiAllowlist';
  * `/api/local-models/*`).
  *
  * This middleware makes the guard SECURE-BY-DEFAULT: it runs the same pure
- * `isLocalRequest(host, origin)` check against EVERY `/api/:path*` request and
- * returns 403 unless the request is local. The only exceptions are the small,
- * explicit, reviewed set of intentionally-public routes in
- * `publicApiAllowlist.ts` (external webhooks, OAuth redirect/flow). Any future
- * `/api` route is therefore fail-closed by construction — the highest-risk
- * handlers additionally keep their in-handler `assertLocalRequest` as
- * defense-in-depth.
+ * `isLocalRequest(host, origin)` check against EVERY `/api/:path*` and
+ * `/v1/:path*` request and returns 403 unless the request is local. The only
+ * exceptions are the small, explicit, reviewed sets of intentionally-public
+ * routes in `publicApiAllowlist.ts` (external webhooks + OAuth redirect/flow via
+ * `isPublicApiPath`; the genuinely-public OpenAI surface
+ * `/v1/chat/completions` + `/v1/models` via `isPublicOpenAiPath`). Any future
+ * `/api` or `/v1` route is therefore fail-closed by construction — in
+ * particular the internal `/v1/chat/conversations/**` control-plane
+ * (list / respond-approve = RCE / PATCH / DELETE / debug / edit-state /
+ * breakpoints) is now guarded centrally (#143). The highest-risk handlers
+ * additionally keep their in-handler `assertLocalRequest` as defense-in-depth.
  *
  * Runtime: middleware runs on the Edge runtime. It only reads the Host/Origin
  * headers and calls the pure `isLocalRequest` (no Node-only APIs), so it is
@@ -39,8 +44,10 @@ export function middleware(request: NextRequest): NextResponse {
 
   const { pathname } = request.nextUrl;
 
-  // Explicit, reviewed allow-list of intentionally-public /api routes.
-  if (isPublicApiPath(pathname)) {
+  // Explicit, reviewed allow-lists of intentionally-public routes: the public
+  // `/api` set (webhooks / oauth) and the public OpenAI `/v1` surface
+  // (completions / models). Everything else under both matchers is fail-closed.
+  if (isPublicApiPath(pathname) || isPublicOpenAiPath(pathname)) {
     return NextResponse.next();
   }
 
@@ -58,9 +65,11 @@ export function middleware(request: NextRequest): NextResponse {
   return NextResponse.next();
 }
 
-/** Scope the middleware to the `/api` surface only (see matcher-scope note in
- * `publicApiAllowlist.ts`). `/v1/*`, `/mcp-proxy/*` and `/mcp-flows` are
- * intentionally NOT matched here. */
+/** Scope the middleware to the `/api` and `/v1` surfaces (see matcher-scope note
+ * in `publicApiAllowlist.ts`). `/v1/:path*` is guarded too (#143), with only the
+ * public OpenAI endpoints allow-listed via `isPublicOpenAiPath`. `/mcp-proxy/*`
+ * and `/mcp-flows` are intentionally NOT matched here (they keep their inline
+ * `isLocalRequest` guards). */
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: ['/api/:path*', '/v1/:path*'],
 };

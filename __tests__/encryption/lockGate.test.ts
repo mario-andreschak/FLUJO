@@ -14,6 +14,7 @@ import { promises as fs } from 'fs';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
+import { makeLocalRequest } from '../utils/localRequest';
 
 let tmpDir: string;
 
@@ -84,7 +85,7 @@ describe('assertUnlocked / isLocked', () => {
 });
 
 describe('a representative gated /api route (env)', () => {
-  const req = () => ({ url: 'http://localhost/api/env?includeSecrets=false' }) as any;
+  const req = () => makeLocalRequest({ url: 'http://localhost/api/env?includeSecrets=false' });
 
   it('returns 423 while locked and succeeds after unlock', async () => {
     const { secure } = await load();

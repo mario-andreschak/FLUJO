@@ -58,8 +58,9 @@ describe('route guard drift', () => {
     expect(routeFiles.length).toBeGreaterThan(0);
   });
 
-  it('keeps the middleware matcher scoped to /api/:path* (fail-closed default)', () => {
+  it('keeps the middleware matcher scoped to /api/:path* and /v1/:path* (fail-closed default)', () => {
     expect(middlewareConfig.matcher).toContain('/api/:path*');
+    expect(middlewareConfig.matcher).toContain('/v1/:path*');
   });
 
   it('has an /api prefix on every discovered route (so the matcher covers it)', () => {

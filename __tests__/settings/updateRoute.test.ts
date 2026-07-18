@@ -29,10 +29,13 @@ jest.mock('simple-git', () => {
 });
 
 import { GET, POST } from '@/app/api/update/route';
+import { makeLocalRequest } from '../utils/localRequest';
 
 const { __git: mockGit, default: simpleGitFactory } = jest.requireMock('simple-git') as any;
 
-const postReq = (body: unknown) => ({ json: async () => body }) as any;
+const postReq = (body: unknown) => makeLocalRequest({ body });
+// GET is guarded by the fail-closed origin guard (#142); it reads only Host/Origin.
+const getReq = () => makeLocalRequest();
 
 const ENV_KEYS = ['FLUJO_CONTAINER', 'FLUJO_NPM'] as const;
 const saved: Record<string, string | undefined> = {};
@@ -58,7 +61,7 @@ afterEach(() => {
 describe('GET /api/update', () => {
   it("reports updateMode 'container' without touching git when FLUJO_CONTAINER is set", async () => {
     process.env.FLUJO_CONTAINER = '1';
-    const res = await GET();
+    const res = await GET(getReq());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -74,7 +77,7 @@ describe('GET /api/update', () => {
 
   it("reports updateMode 'npm' without touching git when FLUJO_NPM is set", async () => {
     process.env.FLUJO_NPM = '1';
-    const res = await GET();
+    const res = await GET(getReq());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -88,7 +91,7 @@ describe('GET /api/update', () => {
     mockGit.fetch.mockResolvedValue(undefined);
     mockGit.status.mockResolvedValue({ behind: 0, current: 'main', tracking: 'origin/main' });
 
-    const res = await GET();
+    const res = await GET(getReq());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -100,7 +103,7 @@ describe('GET /api/update', () => {
     mockGit.fetch.mockResolvedValue(undefined);
     mockGit.status.mockResolvedValue({ behind: 3, current: 'main', tracking: 'origin/main' });
 
-    const res = await GET();
+    const res = await GET(getReq());
     const body = await res.json();
 
     expect(body).toMatchObject({ updateMode: 'git', updateAvailable: true, behindBy: 3, branch: 'main' });
@@ -109,7 +112,7 @@ describe('GET /api/update', () => {
   it("reports updateMode 'none' when git mode but not a git repo", async () => {
     mockGit.checkIsRepo.mockResolvedValue(false);
 
-    const res = await GET();
+    const res = await GET(getReq());
     const body = await res.json();
 
     expect(res.status).toBe(200);

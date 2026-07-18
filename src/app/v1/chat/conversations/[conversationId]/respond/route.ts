@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -28,6 +29,11 @@ export async function POST(
 ) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143): approving a pending
+  // tool call executes a local command (RCE-equivalent), so this is the
+  // highest-value cross-origin target under /v1/chat/conversations.
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const { conversationId } = await params;
   const requestId = `conv-respond-${Date.now()}`;

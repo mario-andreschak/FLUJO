@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server'; // Import NextRequest
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -43,9 +44,13 @@ interface CreateConversationPayload {
 
 
 // --- GET Handler (Existing) ---
-export async function GET() {
+export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143). Middleware guards
+  // this route centrally too; kept inline for the internal control-plane sinks.
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const startTime = Date.now();
   const requestId = `conv-list-${Date.now()}`;
@@ -179,6 +184,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143).
+  const notLocal = assertLocalRequest(req);
+  if (notLocal) return notLocal;
 
   const startTime = Date.now();
   const requestId = `conv-create-${Date.now()}`;

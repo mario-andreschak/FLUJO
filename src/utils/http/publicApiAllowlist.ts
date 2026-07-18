@@ -11,10 +11,16 @@
  * every entry maps to a real route file, so a new sensitive route can never be
  * made public by accident (and a stale entry can never silently open nothing).
  *
- * Matcher-scope note: `/v1/*`, `/mcp-proxy/*` and `/mcp-flows` are NOT under
- * `/api/`, so the middleware's `'/api/:path*'` matcher never touches them — they
- * keep their existing behavior (public CORS for `/v1/*`; inline `isLocalRequest`
- * for the mcp transports). They are intentionally absent from this list.
+ * Matcher-scope note: `/mcp-proxy/*` and `/mcp-flows` are NOT under `/api/` and
+ * are NOT covered by the middleware matcher, so they keep their existing inline
+ * `isLocalRequest` behavior and are intentionally absent from this list.
+ *
+ * `/v1` split (#143): the middleware matcher now ALSO covers `/v1/:path*`. Only
+ * the genuinely-public OpenAI-compatible surface (`/v1/chat/completions`,
+ * `/v1/models`) is public — see `PUBLIC_OPENAI_EXACT_PATHS`/`isPublicOpenAiPath`
+ * below. Everything else under `/v1` (notably the internal
+ * `/v1/chat/conversations/**` control-plane) is fail-closed by the same
+ * localhost / DNS-rebinding guard as `/api`.
  */
 
 /**
@@ -61,4 +67,26 @@ export function isPublicApiPath(pathname: string): boolean {
     if (p === prefix.slice(0, -1) || p.startsWith(prefix)) return true;
   }
   return false;
+}
+
+/**
+ * The ONLY genuinely-public OpenAI-compatible endpoints (#143). Everything else
+ * under `/v1/*` — notably the internal `/v1/chat/conversations/**` control-plane
+ * (list / respond-approve / PATCH / DELETE / debug / edit-state / breakpoints) —
+ * is an internal control-plane and must pass the localhost origin guard.
+ *
+ * EXACT matching (not prefix) so `/v1/chat/conversations` can never be mistaken
+ * for public and a hypothetical `/v1/models-evil` is never opened.
+ */
+export const PUBLIC_OPENAI_EXACT_PATHS: readonly string[] = [
+  '/v1/chat/completions',
+  '/v1/models',
+];
+
+/**
+ * Whether `pathname` is an intentionally-public OpenAI-compatible `/v1` endpoint
+ * that the origin guard middleware must let through regardless of Host/Origin.
+ */
+export function isPublicOpenAiPath(pathname: string): boolean {
+  return PUBLIC_OPENAI_EXACT_PATHS.includes(normalizePath(pathname));
 }

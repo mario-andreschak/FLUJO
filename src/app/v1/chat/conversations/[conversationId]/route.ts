@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -85,6 +86,9 @@ export async function GET(
 ) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const awaitedParams = await params; // Await the params object
   const conversationId = awaitedParams.conversationId; // Access conversationId from awaited params
@@ -214,6 +218,9 @@ export async function PATCH(
 ) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const conversationId = (await params).conversationId;
   const requestId = `conv-patch-${Date.now()}`;
@@ -342,6 +349,9 @@ export async function DELETE(
 ) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
+  // Defense-in-depth localhost / DNS-rebinding guard (#143).
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
 
   const conversationId = (await params).conversationId; // Direct access instead of destructuring
   const requestId = `conv-delete-${Date.now()}`;

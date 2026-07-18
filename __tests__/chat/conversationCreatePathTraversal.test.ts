@@ -17,6 +17,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { makeLocalRequest } from '../utils/localRequest';
 
 // The route is gated behind assertUnlocked; make it a pass-through so the lock
 // gate doesn't short-circuit the request.
@@ -38,7 +39,7 @@ const exists = async (p: string) => {
   try { await fs.access(p); return true; } catch { return false; }
 };
 
-const makeReq = (body: unknown) => ({ json: async () => body } as any);
+const makeReq = (body: unknown) => makeLocalRequest({ body });
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-'));

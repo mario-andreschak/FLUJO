@@ -44,9 +44,11 @@ import { GET as getStatus } from '@/app/api/mcp/servers/[name]/status/route';
 import { GET as getTools } from '@/app/api/mcp/servers/[name]/tools/route';
 import { POST as callTool } from '@/app/api/mcp/servers/[name]/tools/[toolName]/route';
 import { POST as testConnection } from '@/app/api/mcp/test-connection/route';
+import { makeLocalRequest } from '../utils/localRequest';
 
-// The handlers only call request.json(); a minimal stub stands in for NextRequest.
-const req = (body?: unknown) => ({ json: async () => body }) as any;
+// The handlers call request.json() and the fail-closed origin guard (#142) reads
+// Host/Origin; makeLocalRequest supplies both so the guard treats it as local.
+const req = (body?: unknown) => makeLocalRequest({ body });
 const ctx = (name: string) => ({ params: Promise.resolve({ name }) });
 const toolCtx = (name: string, toolName: string) => ({ params: Promise.resolve({ name, toolName }) });
 
