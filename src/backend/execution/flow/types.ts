@@ -189,13 +189,16 @@ export interface SubflowNodeProperties {
      *  the parent conversation's live stream + log, nested by depth;
      *  'final-only' shows only the folded final output message. */
     outputMode?: 'steps' | 'final-only';
-    /** Opt-in (issue #96): only meaningful in 'isolated' inputMode. When true,
-     *  the handoff tool that targets this node exposes an optional `prompt`
-     *  string parameter; a caller-supplied value OVERRIDES `promptTemplate`
-     *  (which becomes the default/fallback used when the caller passes none).
-     *  Defaults to false — existing isolated subflows keep sending their static
-     *  prompt and their handoff tools stay parameter-less. Groundwork for
-     *  running subflows as independent, callable workers. */
+    /** Opt-out (issue #96 / #138): only meaningful in 'isolated' inputMode. When
+     *  not explicitly `false`, the handoff tool that targets this node exposes an
+     *  optional `prompt` string parameter; a caller-supplied value OVERRIDES
+     *  `promptTemplate` (which becomes the default/fallback used when the caller
+     *  passes none). Canonical default is ON — an ABSENT value is treated as ON
+     *  at runtime, matching the properties modal's display (issue #138 fixed the
+     *  frontend/backend default mismatch). Set explicitly to `false` to keep an
+     *  isolated subflow sending only its static prompt with a parameter-less
+     *  handoff tool. Groundwork for running subflows as independent, callable
+     *  workers. */
     allowCallerPrompt?: boolean;
     /** Phase 4 agentic fan-out (issue #130): opt-in. When true, the handoff tool
      *  that targets THIS subflow node exposes an optional `parallelFlows`
@@ -280,9 +283,12 @@ export interface SubflowNodeProperties {
      *  runFlow's `mode: 'conversation'` — NOT a persistConversationState call-site
      *  bypass, so the ephemeral-by-default invariant is preserved. Only honored on
      *  the single-child path; fan-out (parallelSubflowIds) and map-over-list runs
-     *  stay ephemeral to avoid flooding the sidebar. An ABSENT value is treated as
-     *  ephemeral at runtime (back-compat); the properties modal seeds `true` on
-     *  new nodes so newly authored subflows persist for debugging by default. */
+     *  stay ephemeral to avoid flooding the sidebar. Canonical default is ON — an
+     *  ABSENT value is treated as persist at runtime, matching the properties
+     *  modal's display (issue #138 fixed the frontend/backend default mismatch
+     *  where the UI showed ON while the backend ran ephemerally). Only an explicit
+     *  `false` opts out; the modal no longer seeds a value into stored data, so an
+     *  unrelated save can never silently bake in this key. */
     saveConversation?: boolean;
 }
 

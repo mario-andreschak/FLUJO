@@ -60,21 +60,18 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   useEffect(() => {
     if (node) {
       const existing = node.data.properties || {};
+      // Issue #138: do NOT seed default values (previously `allowCallerPrompt`/
+      // `saveConversation` were forced to `?? true` here). Seeding baked those
+      // defaults into stored data on ANY save — e.g. opening the modal to change
+      // something unrelated and hitting Save silently wrote `saveConversation:
+      // true`, flooding the sidebar. The canonical "absent => ON" default now
+      // lives in ONE place on both layers: the checkbox display below renders
+      // `!== false`, and the backend treats absent as ON. Initialize from the
+      // stored properties unchanged so an unset field stays unset until the user
+      // actually toggles it.
       setNodeData({
         ...node.data,
-        properties: {
-          ...existing,
-          // Issue #125: isolated subflows almost always want caller context, so
-          // default "let the caller pass a prompt" to true for nodes that have
-          // never set it. The backend still treats an ABSENT value as false, so
-          // existing saved flows are unaffected until re-saved; this seed keeps the
-          // checkbox and the persisted value consistent.
-          allowCallerPrompt: existing.allowCallerPrompt ?? true,
-          // Issue #125: persist the subflow's own conversation to the sidebar for
-          // debugging by default on new nodes. The backend treats an ABSENT value
-          // as ephemeral (back-compat); this seed writes the opt-in on Save.
-          saveConversation: existing.saveConversation ?? true,
-        },
+        properties: { ...existing },
       });
     }
   }, [node, open]);
@@ -285,7 +282,7 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
               sx={{ mt: 1, display: 'block' }}
               control={
                 <Checkbox
-                  checked={!!nodeData.properties?.allowCallerPrompt}
+                  checked={nodeData.properties?.allowCallerPrompt !== false}
                   onChange={(e) => handlePropertyChange('allowCallerPrompt', e.target.checked)}
                 />
               }
@@ -298,14 +295,14 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
             </Typography>
             <TextField
               fullWidth
-              label={nodeData.properties?.allowCallerPrompt ? 'Default prompt (used if the caller sends none)' : 'Isolated prompt'}
+              label={nodeData.properties?.allowCallerPrompt !== false ? 'Default prompt (used if the caller sends none)' : 'Isolated prompt'}
               value={promptTemplate}
               onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
               margin="normal"
               multiline
               rows={3}
               helperText={
-                nodeData.properties?.allowCallerPrompt
+                nodeData.properties?.allowCallerPrompt !== false
                   ? 'The default first message for the subflow. A routing model may override it via the handoff tool. The parent conversation is not passed.'
                   : 'Sent to the subflow as its single user message. The parent conversation is not passed.'
               }

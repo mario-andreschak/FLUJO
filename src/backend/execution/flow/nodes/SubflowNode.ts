@@ -313,10 +313,13 @@ export class SubflowNode extends BaseNode {
     const inputMode =
       node_params?.properties?.inputMode ?? (promptTemplate ? 'isolated' : 'full-history');
     const showSteps = node_params?.properties?.outputMode !== 'final-only';
-    // Debugging (issue #125): opt-in persistence of this subflow's OWN run as a
-    // sidebar conversation. Absent/false => ephemeral (back-compat); only honored
-    // on the single-child path in execCore (fan-out / map-over-list stay ephemeral).
-    const persistConversation = node_params?.properties?.saveConversation === true;
+    // Debugging (issue #125 / #138): persist this subflow's OWN run as a sidebar
+    // conversation. Canonical default is ON — absent => persist (issue #138 fixed
+    // the frontend/backend default mismatch where the UI showed ON while the
+    // backend treated absent as ephemeral). Only an explicit `false` opts out.
+    // Honored only on the single-child path in execCore (fan-out / map-over-list
+    // stay ephemeral).
+    const persistConversation = node_params?.properties?.saveConversation !== false;
 
     // 'isolated' mode sends `promptTemplate` as the subflow's single user prompt,
     // ignoring the parent conversation. Otherwise, pass the parent conversation so
@@ -349,7 +352,9 @@ export class SubflowNode extends BaseNode {
       // handoffInput is single-shot and node-id-scoped: only apply it when it
       // targets THIS node, and clear it once inspected so it can never leak to a
       // later node or a subsequent turn.
-      const allowCallerPrompt = node_params?.properties?.allowCallerPrompt === true;
+      // Canonical default ON (issue #138): absent => the caller MAY pass a prompt,
+      // matching the modal's display. Only an explicit `false` opts out.
+      const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
       // handoffForThisNode was already consumed (and cleared) at the top of prep().
       if (allowCallerPrompt && handoffForThisNode?.prompt.trim()) {
         prepResult.inputText = handoffForThisNode.prompt;

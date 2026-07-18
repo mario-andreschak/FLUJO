@@ -85,7 +85,10 @@ beforeEach(() => {
 
 describe('SubflowNode', () => {
   it('runs the child flow ephemerally at depth+1 and hands off to its successor', async () => {
-    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    // Explicit opt-out keeps this ephemeral: since #138 the canonical default is
+    // ON (absent saveConversation persists), so this contract test pins the
+    // ephemeral/handoff path via an explicit `saveConversation: false`.
+    const node = makeNode({ subflowId: 'inner-flow', saveConversation: false }, 'edge-next');
     const state = makeState();
 
     const { action } = await node.run(state);
@@ -250,9 +253,12 @@ describe('SubflowNode', () => {
     expect(call.prompt).toBe('default task');
   });
 
-  it('isolated WITHOUT allowCallerPrompt: ignores a handoffInput (uses promptTemplate) but still consumes it', async () => {
+  it('isolated with allowCallerPrompt=false: ignores a handoffInput (uses promptTemplate) but still consumes it', async () => {
+    // #138: the canonical default is now ON, so opting OUT requires an explicit
+    // `false`. This pins that opt-out path (a matching handoffInput is consumed
+    // but not honored).
     const node = makeNode(
-      { subflowId: 'inner-flow', inputMode: 'isolated', promptTemplate: 'default task' },
+      { subflowId: 'inner-flow', inputMode: 'isolated', allowCallerPrompt: false, promptTemplate: 'default task' },
       'edge-next',
     );
     const state = makeState({ handoffInput: { targetNodeId: 'sub-node', prompt: 'caller instruction' } });
@@ -262,6 +268,23 @@ describe('SubflowNode', () => {
     const call = runFlowMock.mock.calls[0][0];
     expect(call.prompt).toBe('default task');
     // Even when not honored, a handoffInput addressed to THIS node is cleared.
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('isolated with ABSENT allowCallerPrompt now defaults to ON (#138): a matching handoffInput OVERRIDES', async () => {
+    // #138: absent must behave the same as the modal has always displayed (ON).
+    // A legacy isolated node with no stored allowCallerPrompt now accepts the
+    // caller's prompt over its authored promptTemplate.
+    const node = makeNode(
+      { subflowId: 'inner-flow', inputMode: 'isolated', promptTemplate: 'default task' },
+      'edge-next',
+    );
+    const state = makeState({ handoffInput: { targetNodeId: 'sub-node', prompt: 'caller instruction' } });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.prompt).toBe('caller instruction');
     expect(state.handoffInput).toBeUndefined();
   });
 
@@ -319,11 +342,15 @@ describe('SubflowNode', () => {
     expect(runFlowMock.mock.calls[0][0].mode).toBe('ephemeral');
   });
 
-  it('runs the child ephemerally when saveConversation is absent (back-compat, issue #125)', async () => {
+  it('persists the child run when saveConversation is ABSENT (canonical default ON, issue #138)', async () => {
+    // Regression for #138: the modal showed this toggle ON for legacy nodes with
+    // no stored value, but the backend used to treat absent as ephemeral — so
+    // the UI lied. Absent now persists (mode:'conversation'), matching the
+    // display, and only an explicit `false` opts out (covered above).
     const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
     await node.run(makeState());
 
-    expect(runFlowMock.mock.calls[0][0].mode).toBe('ephemeral');
+    expect(runFlowMock.mock.calls[0][0].mode).toBe('conversation');
   });
 
   it('ends the flow (FINAL_RESPONSE_ACTION) when there is no successor', async () => {
