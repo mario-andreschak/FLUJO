@@ -11,6 +11,56 @@ import OpenAI from 'openai';
 // --- Debugger Types ---
 
 /**
+ * Why a message from the node's full THREADED history is (or isn't) in the exact
+ * wire conversation the model receives. Derived from the SAME pipeline functions
+ * the runtime uses (deriveModelInputView in buildNodeContext.ts), so the
+ * explanation can never drift from behaviour. Issue #153.
+ *   - 'system'           — the resolved system message the node used.
+ *   - 'sent'             — present in the final wire view (what the model sees).
+ *   - 'folded'           — removed by collapseNodeOutputs (outputMode fold).
+ *   - 'scoped-out'       — removed by scopeMessagesForInput (inputMode narrowing).
+ *   - 'handoff-stripped' — removed/rewritten by stripHandoffPlumbing (handoff
+ *                          tool-call/result + synthetic "Continue").
+ */
+export type WireStatus = 'system' | 'sent' | 'folded' | 'scoped-out' | 'handoff-stripped';
+
+/** Per-message provenance in a ModelInputSnapshot (see WireStatus). Carries only
+ *  a short content preview, never the full payload, so the snapshot stays bounded. */
+export interface ModelInputProvenanceEntry {
+  id?: string;
+  role: string;
+  status: WireStatus;
+  /** Human-readable why (for scoped-out/folded/handoff-stripped). */
+  reason?: string;
+  /** Truncated content preview for the annotated history view. */
+  preview?: string;
+  /** Names of any tool calls this assistant turn made (for annotation). */
+  toolCallNames?: string[];
+}
+
+/**
+ * A purpose-built, debug-mode-gated snapshot of exactly what a Process node's
+ * model call receives (issue #153): the resolved system message, the exact wire
+ * conversation (after fold + scope + handoff-plumbing strip), and per-message
+ * provenance explaining how the wire differs from the threaded history.
+ *
+ * SECURITY: conversation content ONLY. Never carries provider credentials,
+ * modelId-resolved keys, or headers — honours "API keys never to the frontend".
+ */
+export interface ModelInputSnapshot {
+  /** The resolved system text the model saw (null for none). */
+  systemMessage: { content: string } | null;
+  /** The exact final wire conversation (post-strip), for rich rendering. Content
+   *  is per-message capped to keep the trace roughly constant size per step. */
+  wireMessages: FlujoChatMessage[];
+  /** One entry per message in the node's full threaded history. */
+  provenance: ModelInputProvenanceEntry[];
+  /** Summary counts for a one-line "18 in history → 11 sent · 5 folded …". */
+  counts: { threaded: number; sent: number; folded: number; scopedOut: number; handoffStripped: number };
+  inputMode?: 'full-history' | 'latest-message' | 'isolated';
+}
+
+/**
  * Represents a single step in the execution trace for debugging.
  */
 export interface DebugStep {
@@ -25,6 +75,9 @@ export interface DebugStep {
   stateAfter: Partial<SharedState>; // Snapshot after node execution
   prepResultSnapshot: any; // Snapshot of the result from prep()
   execResultSnapshot: any; // Snapshot of the result from execCore()
+  /** Model-input visualization for a Process node's model call (issue #153).
+   *  Populated only in debug mode; absent for non-model nodes / older traces. */
+  modelInput?: ModelInputSnapshot;
 }
 
 // --- Core Flow Types ---
@@ -691,6 +744,11 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
+    /** Debugger model-input visualization (issue #153). Computed in prep (where
+     *  the threaded/folded/scoped views are all in scope) and promoted onto the
+     *  DebugStep by FlowExecutor. Populated only when the run is in debug mode /
+     *  the execution tracker is on; unset otherwise so normal runs pay nothing. */
+    modelInput?: ModelInputSnapshot;
 }
 
 // FinishNode prep result

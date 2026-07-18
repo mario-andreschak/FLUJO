@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { ModelInputSnapshot, ModelInputProvenanceEntry } from './types';
 
 /** True when this assistant turn is mid-action (made tool calls). */
 function isToolCallTurn(
@@ -296,4 +297,123 @@ export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompleti
     ({ id, timestamp, disabled, processNodeId, depth, usage, ...rest }) =>
       rest as OpenAI.ChatCompletionMessageParam
   );
+}
+
+// --- Debugger: explain how a conversation reaches the model (issue #153) ------
+
+/** Max chars of message content kept in the wire view of a ModelInputSnapshot. */
+const WIRE_CONTENT_MAX = 4000;
+/** Max chars of the per-message preview kept in provenance entries. */
+const PREVIEW_MAX = 300;
+
+function contentPreview(m: FlujoChatMessage, max: number): string {
+  if (typeof m.content === 'string') return m.content.slice(0, max);
+  if (Array.isArray(m.content)) {
+    try { return JSON.stringify(m.content).slice(0, max); } catch { return ''; }
+  }
+  return '';
+}
+
+function toolCallNamesOf(m: FlujoChatMessage): string[] | undefined {
+  if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+    const names = m.tool_calls
+      .map((tc) => (tc.type === 'function' ? tc.function.name : undefined))
+      .filter((n): n is string => !!n);
+    return names.length > 0 ? names : undefined;
+  }
+  return undefined;
+}
+
+/** Cap a wire message's content so the snapshot stays roughly constant per step. */
+function capWireContent(m: FlujoChatMessage): FlujoChatMessage {
+  if (typeof m.content === 'string' && m.content.length > WIRE_CONTENT_MAX) {
+    return {
+      ...m,
+      content: `${m.content.slice(0, WIRE_CONTENT_MAX)}\n…[truncated ${m.content.length - WIRE_CONTENT_MAX} chars]`,
+    } as FlujoChatMessage;
+  }
+  return m;
+}
+
+function idSet(msgs: FlujoChatMessage[]): Set<string> {
+  const s = new Set<string>();
+  for (const m of msgs) if (m.id) s.add(m.id);
+  return s;
+}
+
+/**
+ * Build a ModelInputSnapshot that explains, per message in the node's full
+ * threaded history, whether (and why) it reaches the model — derived from the
+ * SAME pipeline the runtime uses, so the explanation can never drift from
+ * behaviour (issue #153).
+ *
+ * The `sent` set is exactly what stripHandoffPlumbing(scopedView) produces,
+ * which (modulo internal-field stripping) is what toApiMessages sends to the
+ * provider. A unit test asserts this equivalence so UI and behaviour stay locked.
+ *
+ * @param threaded    The node's full threaded history (buildNodeContext output).
+ * @param foldedView  After collapseNodeOutputs (outputMode fold). == threaded when nothing folds.
+ * @param scopedView  After scopeMessagesForInput (inputMode narrowing). == foldedView when full-history.
+ * @param systemContent The resolved system text the node used (or null).
+ * @param inputMode   The node's inputMode (for reason text).
+ */
+export function deriveModelInputView(args: {
+  threaded: FlujoChatMessage[];
+  foldedView: FlujoChatMessage[];
+  scopedView: FlujoChatMessage[];
+  systemContent: string | null;
+  inputMode?: 'full-history' | 'latest-message' | 'isolated';
+}): ModelInputSnapshot {
+  const { threaded, foldedView, scopedView, systemContent, inputMode } = args;
+
+  // The exact final wire the model sees (before internal-field stripping, which
+  // is display-irrelevant). This is the single source of truth for `sent`.
+  const finalWire = stripHandoffPlumbing(scopedView);
+
+  const foldedIds = idSet(foldedView);
+  const scopedIds = idSet(scopedView);
+  const sentIds = idSet(finalWire);
+
+  const provenance: ModelInputProvenanceEntry[] = [];
+  let sent = 0, folded = 0, scopedOut = 0, handoffStripped = 0;
+
+  for (const m of threaded) {
+    const entry: ModelInputProvenanceEntry = {
+      id: m.id,
+      role: m.role as string,
+      status: 'sent',
+      preview: contentPreview(m, PREVIEW_MAX),
+      toolCallNames: toolCallNamesOf(m),
+    };
+    if (m.role === 'system') {
+      entry.status = 'system';
+    } else if (m.id && sentIds.has(m.id)) {
+      entry.status = 'sent';
+      sent++;
+    } else if (m.id && scopedIds.has(m.id)) {
+      // Survived fold + scope, removed at the provider boundary.
+      entry.status = 'handoff-stripped';
+      entry.reason = 'Removed as FLUJO handoff plumbing (handoff tool-call / result, or synthetic "Continue").';
+      handoffStripped++;
+    } else if (m.id && foldedIds.has(m.id)) {
+      // Survived fold, dropped by inputMode narrowing.
+      entry.status = 'scoped-out';
+      entry.reason = `Outside this node's input scope (inputMode: ${inputMode ?? 'full-history'}).`;
+      scopedOut++;
+    } else {
+      // Dropped by the outputMode fold of a 'latest-message' node.
+      entry.status = 'folded';
+      entry.reason = 'Settled tool exchange folded away (a node with outputMode: latest-message).';
+      folded++;
+    }
+    provenance.push(entry);
+  }
+
+  return {
+    systemMessage: systemContent != null ? { content: systemContent } : null,
+    wireMessages: finalWire.map(capWireContent),
+    provenance,
+    counts: { threaded: threaded.length, sent, folded, scopedOut, handoffStripped },
+    inputMode,
+  };
 }

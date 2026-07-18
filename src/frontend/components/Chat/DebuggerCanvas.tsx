@@ -21,6 +21,7 @@ import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode 
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { LiveActivity, LIVE_HIGHLIGHT_TTL_MS, resourceActivityKey } from '@/utils/shared/liveActivity';
 import RunResourcesPanel from './RunResourcesPanel';
+import DebuggerModelInput from './DebuggerModelInput';
 
 // Import Canvas components if needed (or create simplified versions)
 // import { CanvasControls } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/components/CanvasControls';
@@ -459,6 +460,27 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               <Typography variant="body2"><b>Type:</b> {currentStepData.nodeType}</Typography>
               <Typography variant="body2"><b>Timestamp:</b> {new Date(currentStepData.timestamp).toLocaleString()}</Typography>
               <Typography variant="body2"><b>Action Taken:</b> {currentStepData.actionTaken}</Typography>
+
+              {/* Model Input (issue #153): human-readable view of exactly what
+                  the model receives — resolved system message + the wire
+                  conversation (after fold/scope/handoff-strip), with an annotated
+                  full-history toggle. Shown for model calls (Process nodes);
+                  other steps get a short note. The raw JSON accordions below are
+                  kept as a power-user fallback. */}
+              {currentStepData.modelInput ? (
+                <Accordion defaultExpanded sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+                    <Typography variant="caption"><b>Model Input</b></Typography>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ p: 0 }}>
+                    <DebuggerModelInput modelInput={currentStepData.modelInput} />
+                  </AccordionDetails>
+                </Accordion>
+              ) : (
+                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 2 }}>
+                  No model call for this step.
+                </Typography>
+              )}
 
               {/* Accordion for Prep Result */}
               <Accordion sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>

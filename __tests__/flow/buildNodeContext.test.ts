@@ -13,7 +13,7 @@
  *    generic "400 Bad Request" (seen via Requesty), so nothing beyond the
  *    OpenAI spec may survive this mapping.
  */
-import { buildNodeContext, stripHandoffPlumbing, toApiMessages, scopeMessagesForInput, collapseNodeOutputs } from '@/backend/execution/flow/buildNodeContext';
+import { buildNodeContext, stripHandoffPlumbing, toApiMessages, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '@/backend/execution/flow/buildNodeContext';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
 const sys = (content: string, id = content): FlujoChatMessage =>
@@ -457,5 +457,147 @@ describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => 
 
     expect(m.id).toBe('a1');
     expect(m.usage).toEqual({ promptTokens: 1, completionTokens: 1, totalTokens: 2 });
+  });
+});
+
+describe('deriveModelInputView (debugger model-input explanation — issue #153)', () => {
+  // Strip FLUJO-internal fields exactly like toApiMessages, so a snapshot's
+  // wire view can be compared byte-for-byte against what the provider receives.
+  const stripInternal = (msgs: FlujoChatMessage[]) =>
+    msgs.map(({ id, timestamp, disabled, processNodeId, depth, usage, ...rest }) => rest);
+
+  const toolCallTurn = (id: string, callId: string, nodeId: string, content = ''): FlujoChatMessage =>
+    ({
+      role: 'assistant',
+      content,
+      id,
+      timestamp: 1,
+      processNodeId: nodeId,
+      tool_calls: [{ id: callId, type: 'function', function: { name: 'mcp_x', arguments: '{}' } }],
+    } as FlujoChatMessage);
+  const nodeToolResult = (id: string, callId: string, nodeId: string): FlujoChatMessage =>
+    ({ role: 'tool', tool_call_id: callId, content: 'res', id, timestamp: 1, processNodeId: nodeId } as FlujoChatMessage);
+  const nodeAssistant = (content: string, id: string, nodeId: string): FlujoChatMessage =>
+    ({ role: 'assistant', content, id, timestamp: 1, processNodeId: nodeId } as FlujoChatMessage);
+
+  it('marks every non-system message as SENT when nothing is folded/scoped/stripped', () => {
+    const threaded = [sys('NODE', 'node-sys'), user('hi', 'u1'), assistant('hello', 'a1')];
+    const snap = deriveModelInputView({
+      threaded,
+      foldedView: threaded,
+      scopedView: threaded,
+      systemContent: 'NODE',
+      inputMode: 'full-history',
+    });
+
+    expect(snap.systemMessage).toEqual({ content: 'NODE' });
+    expect(snap.provenance.map((p) => [p.id, p.status])).toEqual([
+      ['node-sys', 'system'],
+      ['u1', 'sent'],
+      ['a1', 'sent'],
+    ]);
+    expect(snap.counts).toEqual({ threaded: 3, sent: 2, folded: 0, scopedOut: 0, handoffStripped: 0 });
+    // The SENT wire view must exactly equal what toApiMessages sends.
+    expect(stripInternal(snap.wireMessages)).toEqual(toApiMessages(threaded));
+  });
+
+  it('classifies handoff plumbing as HANDOFF-STRIPPED (and matches toApiMessages)', () => {
+    const threaded = [
+      sys('NODE', 'node-sys'),
+      user('task', 'u1'),
+      handoffAssistant('a-ho', 'call-1'), // pure routing, no text
+      toolResult('t-ho', 'call-1', '{}'),
+    ];
+    const snap = deriveModelInputView({
+      threaded,
+      foldedView: threaded,
+      scopedView: threaded,
+      systemContent: 'NODE',
+      inputMode: 'full-history',
+    });
+
+    expect(snap.provenance.map((p) => [p.id, p.status])).toEqual([
+      ['node-sys', 'system'],
+      ['u1', 'sent'],
+      ['a-ho', 'handoff-stripped'],
+      ['t-ho', 'handoff-stripped'],
+    ]);
+    expect(snap.counts.handoffStripped).toBe(2);
+    expect(snap.counts.sent).toBe(1);
+    expect(stripInternal(snap.wireMessages)).toEqual(toApiMessages(threaded));
+  });
+
+  it('classifies a collapsed node output as FOLDED', () => {
+    const threaded = [
+      sys('NODE', 'node-sys'),
+      user('q', 'u1'),
+      toolCallTurn('a-call', 'c1', 'nodeX'),
+      nodeToolResult('t1', 'c1', 'nodeX'),
+      nodeAssistant('done', 'a-final', 'nodeX'),
+    ];
+    const foldedView = collapseNodeOutputs(threaded, new Set(['nodeX']));
+    // Sanity: the settled tool exchange was dropped, the text response survived.
+    expect(foldedView.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a-final']);
+
+    const snap = deriveModelInputView({
+      threaded,
+      foldedView,
+      scopedView: foldedView,
+      systemContent: 'NODE',
+      inputMode: 'full-history',
+    });
+
+    expect(snap.provenance.map((p) => [p.id, p.status])).toEqual([
+      ['node-sys', 'system'],
+      ['u1', 'sent'],
+      ['a-call', 'folded'],
+      ['t1', 'folded'],
+      ['a-final', 'sent'],
+    ]);
+    expect(snap.counts).toMatchObject({ folded: 2, sent: 2 });
+    expect(stripInternal(snap.wireMessages)).toEqual(toApiMessages(foldedView));
+  });
+
+  it('classifies inputMode narrowing as SCOPED-OUT', () => {
+    const threaded = [
+      sys('NODE', 'node-sys'),
+      user('old', 'u1'),
+      assistant('old-reply', 'a1'),
+      user('recent', 'u2'),
+      assistant('reply', 'a2'),
+    ];
+    const scopedView = scopeMessagesForInput(threaded, 'latest-message');
+    expect(scopedView.map((m) => m.id)).toEqual(['node-sys', 'u2', 'a2']);
+
+    const snap = deriveModelInputView({
+      threaded,
+      foldedView: threaded,
+      scopedView,
+      systemContent: 'NODE',
+      inputMode: 'latest-message',
+    });
+
+    expect(snap.provenance.map((p) => [p.id, p.status])).toEqual([
+      ['node-sys', 'system'],
+      ['u1', 'scoped-out'],
+      ['a1', 'scoped-out'],
+      ['u2', 'sent'],
+      ['a2', 'sent'],
+    ]);
+    expect(snap.counts).toMatchObject({ scopedOut: 2, sent: 2 });
+    expect(stripInternal(snap.wireMessages)).toEqual(toApiMessages(scopedView));
+  });
+
+  it('carries conversation content only — no credentials — and a null system when absent', () => {
+    const threaded = [user('hi', 'u1')];
+    const snap = deriveModelInputView({
+      threaded,
+      foldedView: threaded,
+      scopedView: threaded,
+      systemContent: null,
+    });
+    expect(snap.systemMessage).toBeNull();
+    const serialized = JSON.stringify(snap);
+    expect(serialized).not.toMatch(/apiKey|api_key|Authorization/i);
   });
 });

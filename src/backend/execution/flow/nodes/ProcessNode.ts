@@ -5,7 +5,7 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
-import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs } from '../buildNodeContext';
+import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
 import { flowService } from '@/backend/services/flow/index';
@@ -412,6 +412,28 @@ export class ProcessNode extends BaseNode {
       inputMode,
       wireMessageCount: prepResult.wireMessages?.length,
     });
+
+    // Debugger model-input visualization (issue #153): explain how this exact
+    // conversation reaches the model — the resolved system message, the wire
+    // conversation the model receives (after fold + scope + handoff-plumbing
+    // strip), and per-message provenance. Derived from the SAME pipeline
+    // functions used above, so it can never drift from behaviour. Gated on debug
+    // mode / the execution tracker so normal runs pay nothing, and carries
+    // conversation content ONLY (never credentials).
+    if (sharedState.debugMode || FEATURES.ENABLE_EXECUTION_TRACKER) {
+      try {
+        prepResult.modelInput = deriveModelInputView({
+          threaded: prepResult.messages,
+          foldedView: wireBase,
+          scopedView: prepResult.wireMessages ?? wireBase,
+          systemContent: completePrompt,
+          inputMode,
+        });
+      } catch (err) {
+        // Observability must never break a run.
+        log.warn('Could not derive model-input debug view', { err });
+      }
+    }
 
     log.info('prep() completed', {
       completePromptLength: completePrompt.length,

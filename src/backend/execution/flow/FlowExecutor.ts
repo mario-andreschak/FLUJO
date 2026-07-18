@@ -1,5 +1,5 @@
 import { createLogger } from '@/utils/logger';
-import { SharedState, ERROR_ACTION, DebugStep, PrepResult, ExecResult } from './types';
+import { SharedState, ERROR_ACTION, DebugStep, PrepResult, ExecResult, ProcessNodePrepResult } from './types';
 import cloneDeep from 'lodash/cloneDeep'; // Import cloneDeep for snapshots
 import { FEATURES } from '@/config/features'; // Import feature flags
 import { FlowEngine } from './engine/FlowEngine';
@@ -33,8 +33,11 @@ declare global {
 // length.
 
 /** Bulky or non-serializable fields stripped from prep/exec result snapshots
- *  ('emit' is the transient event callback a SubflowNode captures in prep). */
-const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit'] as const;
+ *  ('emit' is the transient event callback a SubflowNode captures in prep).
+ *  'modelInput' is the debugger model-input snapshot (issue #153) — it is
+ *  promoted to its own DebugStep.modelInput field, so drop it from the raw
+ *  prep snapshot to avoid embedding it twice per step. */
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput'] as const;
 
 /** Lightweight state snapshot: everything except the conversation/tool payloads. */
 function slimStateSnapshot(state: SharedState): Partial<SharedState> {
@@ -208,6 +211,10 @@ export class FlowExecutor {
           stateAfter,
           prepResultSnapshot: slimResultSnapshot(prepResult),
           execResultSnapshot: slimResultSnapshot(execResult),
+          // Debugger model-input visualization (issue #153): promoted from the
+          // ProcessNode prep result to its own field (survives the slimming that
+          // deletes it from prepResultSnapshot). Absent for non-model nodes.
+          modelInput: (prepResult as ProcessNodePrepResult | undefined)?.modelInput,
         };
         sharedState.executionTrace.push(debugStep);
         log.verbose(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
@@ -264,6 +271,10 @@ export class FlowExecutor {
           stateAfter: slimStateSnapshot(sharedState),
           prepResultSnapshot: prepResult ? slimResultSnapshot(prepResult) : null,
           execResultSnapshot: { success: false, error: sharedState.lastResponse } as ExecResult,
+          // Keep the model-input view (issue #153) on a failed step too — prep
+          // (which builds it) ran before the model call, so it explains exactly
+          // what was about to be sent when the call failed.
+          modelInput: (prepResult as ProcessNodePrepResult | undefined)?.modelInput,
         };
         sharedState.executionTrace.push(errorStep);
         log.verbose(`Appended ERROR step ${stepIndex} to execution trace for conversation ${conversationId}`);
