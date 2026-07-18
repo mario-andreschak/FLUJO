@@ -18,15 +18,16 @@ export interface CreateOpenAIClientOptions {
 }
 
 /**
- * App-attribution headers some routers accept/expect so requests are
- * identifiable as coming from FLUJO. Requesty asks for these two headers
- * (issue 88); OpenRouter honours the same pair, but is left unchanged here
- * to keep its existing wire behaviour untouched.
+ * App-attribution headers some OpenAI-compatible routers accept so requests are
+ * identifiable as coming from FLUJO. Requesty (issue 88) and OpenRouter
+ * (issue 136) both honour this HTTP-Referer / X-Title pair and surface it in
+ * their analytics dashboards. Other providers are left untouched to keep their
+ * existing wire behaviour unchanged.
  */
 export function getProviderDefaultHeaders(
   provider?: string
 ): Record<string, string> | undefined {
-  if (provider === 'requesty') {
+  if (provider === 'requesty' || provider === 'openrouter') {
     return {
       'HTTP-Referer': 'https://flujo.com.co',
       'X-Title': 'FLUJO',

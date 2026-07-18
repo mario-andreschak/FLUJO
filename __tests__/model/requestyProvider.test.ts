@@ -66,8 +66,15 @@ describe('getProviderDefaultHeaders', () => {
     });
   });
 
+  it('returns the same attribution headers for provider "openrouter" (issue 136)', () => {
+    expect(getProviderDefaultHeaders('openrouter')).toEqual({
+      'HTTP-Referer': 'https://flujo.com.co',
+      'X-Title': 'FLUJO',
+    });
+  });
+
   it('returns undefined for every other provider (wire behaviour unchanged)', () => {
-    for (const p of ['openai', 'openrouter', 'ollama', 'xai', 'litellm', undefined]) {
+    for (const p of ['openai', 'ollama', 'xai', 'litellm', undefined]) {
       expect(getProviderDefaultHeaders(p)).toBeUndefined();
     }
   });
@@ -94,7 +101,31 @@ describe('OpenAiAdapter with a Requesty model', () => {
     });
   });
 
-  it('does not attach attribution headers for non-Requesty providers', async () => {
+  it('attaches attribution headers for an OpenRouter model (issue 136)', async () => {
+    const adapter = new OpenAiAdapter();
+    await adapter.createCompletion({
+      model: {
+        ...requestyModel('anthropic/claude-3.5-sonnet'),
+        provider: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+      } as Model,
+      apiKey: 'or-sk-test',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0,
+    });
+
+    expect(mockCreateCalls).toHaveLength(1);
+    expect(mockCreateCalls[0]).toMatchObject({
+      apiKey: 'or-sk-test',
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': 'https://flujo.com.co',
+        'X-Title': 'FLUJO',
+      },
+    });
+  });
+
+  it('does not attach attribution headers for non-attribution providers', async () => {
     const adapter = new OpenAiAdapter();
     await adapter.createCompletion({
       model: { ...requestyModel('gpt-4o'), provider: 'openai', baseUrl: 'https://api.openai.com/v1' } as Model,
