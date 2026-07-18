@@ -122,6 +122,20 @@ class ChatService {
     return parse<ConversationListItem>(response);
   }
 
+  /** PATCH /v1/chat/conversations/{id} — rename the conversation (issue #134). */
+  async updateConversationTitle(
+    id: string,
+    title: string
+  ): Promise<ConversationListItem> {
+    log.debug('updateConversationTitle: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    return parse<ConversationListItem>(response);
+  }
+
   /** PATCH /v1/chat/conversations/{id} — update the conversation's tool-approval setting. */
   async updateConversationApproval(
     id: string,

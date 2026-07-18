@@ -26,6 +26,7 @@ import { FEATURES } from '@/config/features';
 import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
+import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -473,7 +474,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
         const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
         if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-          sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+          sharedState.title = buildConversationTitle(firstUserMessage.content);
           log.verbose(`Updated conversation title for ${effectiveConvId} during init to: ${sharedState.title}`);
         }
       }
@@ -787,7 +788,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
           const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
           if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-            sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+            sharedState.title = buildConversationTitle(firstUserMessage.content);
             log.verbose(`Updated conversation title for ${effectiveConvId} after step ${internalIterations} to: ${sharedState.title}`);
           }
         }
@@ -854,7 +855,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
                     const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
                     if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-                      sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+                      sharedState.title = buildConversationTitle(firstUserMessage.content);
                       log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`);
                     }
                   }
@@ -1191,7 +1192,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
       const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
       if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-        sharedState.title = firstUserMessage.content.split(' ').slice(0, 5).join(' ') + '...';
+        sharedState.title = buildConversationTitle(firstUserMessage.content);
         log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
       }
     }

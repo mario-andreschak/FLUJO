@@ -198,13 +198,25 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                             />
                           </Tooltip>
                         )}
-                        <Typography
-                          component="span"
-                          noWrap
-                          fontWeight={conversation.id === currentConversationId ? 'bold' : 'normal'}
-                        >
-                          {conversation.title}
-                        </Typography>
+                        <Tooltip title={conversation.title} enterDelay={500}>
+                          <Typography
+                            component="span"
+                            fontWeight={conversation.id === currentConversationId ? 'bold' : 'normal'}
+                            sx={{
+                              // Allow the title to wrap to two lines with an
+                              // ellipsis (issue #134) instead of the old single-
+                              // line clamp, so longer generated titles are
+                              // readable; the tooltip shows the full title.
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {conversation.title}
+                          </Typography>
+                        </Tooltip>
                       </Box>
                     }
                     secondary={formatDate(conversation.updatedAt)}

@@ -250,9 +250,23 @@ export async function PATCH(
     }
     allowedUpdates.requireApproval = updateData.requireApproval;
   }
+  // Manual rename (issue #134, item 2). Trim and cap the length; an empty title
+  // after trimming is rejected so a conversation can't be renamed to blank.
+  if ('title' in updateData) {
+    if (typeof updateData.title !== 'string') {
+      log.warn('Invalid title in PATCH request body', { requestId, conversationId });
+      return NextResponse.json({ error: 'title must be a string' }, { status: 400 });
+    }
+    const trimmed = updateData.title.trim().slice(0, 200);
+    if (!trimmed) {
+      log.warn('Empty title in PATCH request body', { requestId, conversationId });
+      return NextResponse.json({ error: 'title must not be empty' }, { status: 400 });
+    }
+    allowedUpdates.title = trimmed;
+  }
   if (Object.keys(allowedUpdates).length === 0) {
     log.warn('No updatable fields in PATCH request body', { requestId, conversationId, updateData: JSON.stringify(updateData) });
-    return NextResponse.json({ error: 'No updatable fields provided (flowId, requireApproval)' }, { status: 400 });
+    return NextResponse.json({ error: 'No updatable fields provided (flowId, requireApproval, title)' }, { status: 400 });
   }
 
 
@@ -267,10 +281,11 @@ export async function PATCH(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    // 2. Update the state. Settings-only changes (e.g. toggling requireApproval)
-    // must NOT bump updatedAt — otherwise flipping a checkbox would re-sort the
-    // conversation to the top. Only content/flow changes refresh the timestamp.
-    const SETTINGS_ONLY_FIELDS = new Set(['requireApproval']);
+    // 2. Update the state. Settings-only changes (e.g. toggling requireApproval,
+    // or renaming — issue #134) must NOT bump updatedAt — otherwise flipping a
+    // checkbox or editing the title would re-sort the conversation to the top.
+    // Only content/flow changes refresh the timestamp.
+    const SETTINGS_ONLY_FIELDS = new Set(['requireApproval', 'title']);
     const isSettingsOnly = Object.keys(allowedUpdates).every(k => SETTINGS_ONLY_FIELDS.has(k));
     const nextUpdatedAt = isSettingsOnly ? existingState.updatedAt : Date.now();
 

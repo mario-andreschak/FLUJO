@@ -44,7 +44,7 @@ import { ChatMessage } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
-import { type ToolCallPair, groupToolCallsByAnchor } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
+import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
 
@@ -711,23 +711,24 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             ? message.tool_calls.filter((tc) => isHandoffToolName(tc.function.name))
             : [];
           const allHandoffs = [...ownHandoffs, ...(hoistedHandoffs ?? [])];
-          return allHandoffs.map((toolCall, hIndex) => (
-            <Box
-              key={toolCall.id || `handoff-${message.id}-${hIndex}`}
-              sx={{
-                mt: 1, display: 'flex', alignItems: 'center', gap: 0.5,
-                color: 'secondary.main', fontStyle: 'italic',
-              }}
-            >
-              <ArrowRightAltIcon fontSize="small" />
-              <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                Handoff to
-                <Box component="span" sx={{ fontWeight: 'bold', fontStyle: 'normal' }}>
-                  {handoffTargetLabel(toolCall.function.name, availableNodes)}
-                </Box>
-              </Typography>
+          // Restyled (issue #134): a proper outlined chip instead of small grey
+          // italic text, so a routing handoff reads as a distinct, compact
+          // element rather than looking like an error/aside.
+          return (
+            <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+              {allHandoffs.map((toolCall, hIndex) => (
+                <Chip
+                  key={toolCall.id || `handoff-${message.id}-${hIndex}`}
+                  size="small"
+                  variant="outlined"
+                  color="secondary"
+                  icon={<ArrowRightAltIcon fontSize="small" />}
+                  label={`Handoff → ${handoffTargetLabel(toolCall.function.name, availableNodes)}`}
+                  sx={{ maxWidth: '100%', fontWeight: 500 }}
+                />
+              ))}
             </Box>
-          ));
+          );
         })()}
 
         {/* #95: merged tool-call timeline. The old vertical stack of tool-call
@@ -862,6 +863,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     consumedToolCallIds,
     groups,
   } = useMemo(() => groupToolCallsByAnchor(messages), [messages]);
+
+  // #134: the set of tool_call_ids belonging to handoff assistant calls. Their
+  // `role:'tool'` results are suppressed regardless of body shape (not just the
+  // exact `{handoff:true}` blob), so a handoff never leaves a stray result
+  // bubble cluttering the transcript.
+  const handoffResultToolCallIds = useMemo(() => collectHandoffToolCallIds(messages), [messages]);
 
   // Ids currently mounted (the render window is a suffix of the message list).
   const visibleIdSet = useMemo(
@@ -1010,6 +1017,15 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         // "Handoff to X" marker on the paired assistant call already conveys the
         // routing, so skip the result entirely rather than render an empty bubble.
         if (isHandoffResult(message)) return null;
+        // #134: also suppress a handoff result whose body is NOT the exact
+        // `{handoff:true}` blob, matched via its paired handoff tool-call id.
+        if (
+          message.role === 'tool' &&
+          typeof message.tool_call_id === 'string' &&
+          handoffResultToolCallIds.has(message.tool_call_id)
+        ) {
+          return null;
+        }
         // #95: a tool result that was merged into an assistant timeline is not
         // rendered as its own bubble. Orphan results (parent call outside the
         // window / missing) are NOT consumed, so they fall through to the legacy

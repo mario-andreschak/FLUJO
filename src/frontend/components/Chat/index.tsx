@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom, TextField } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -10,6 +10,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
+import EditIcon from '@mui/icons-material/Edit';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
@@ -177,6 +178,14 @@ const Chat: React.FC = () => {
     null
   );
 
+  // Last flow the user MANUALLY picked in the flow selector (issue #134, item 6).
+  // Persisted so a brand-new conversation defaults to it instead of always
+  // falling back to the favorite/first flow.
+  const [lastPickedFlowId, setLastPickedFlowId] = useLocalStorage<string | null>(
+    StorageKey.LAST_PICKED_FLOW_ID,
+    null
+  );
+
   // State for ongoing chat completion requests (send/poll)
   const [isLoading, setIsLoading] = useState(false);
   // Which conversations currently have a run in flight. This is the per-conversation
@@ -200,6 +209,9 @@ const Chat: React.FC = () => {
   // Other states
   const [flows, setFlows] = useState<Flow[]>([]); // Use the Flow type from shared types
   const [requireApproval, setRequireApproval] = useState<boolean>(false);
+  // Inline conversation-title rename (issue #134, item 2).
+  const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
+  const [titleDraft, setTitleDraft] = useState<string>('');
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
   // Flow the user asked to switch an already-executed conversation to; a
@@ -710,9 +722,14 @@ const Chat: React.FC = () => {
     log.debug('Attempting to create new conversation');
     setError(null); // Clear previous errors
 
-    // Determine the flowId - backend requires a non-null string
-    // Prefer the first favorited flow (#120), falling back to the first flow.
-    const selectedFlowId = (flows.find(f => f.favorite) ?? flows[0])?.id || null;
+    // Determine the flowId - backend requires a non-null string.
+    // Prefer the last MANUALLY picked flow if it still exists (issue #134, item
+    // 6), then the first favorited flow (#120), then the first flow.
+    const rememberedFlow =
+      lastPickedFlowId && !isQuickChatFlowId(lastPickedFlowId)
+        ? flows.find(f => f.id === lastPickedFlowId)
+        : undefined;
+    const selectedFlowId = (rememberedFlow ?? flows.find(f => f.favorite) ?? flows[0])?.id || null;
     if (!selectedFlowId) {
       log.error('Cannot create conversation: No flows available or first flow has no ID.');
       setError('Cannot create a new conversation: No flows available.');
@@ -1177,6 +1194,11 @@ const Chat: React.FC = () => {
       setError('Please select a conversation first.');
       return;
     }
+    // Remember the user's manual pick so the NEXT new conversation defaults to
+    // it (issue #134, item 6). Quick-chat snapshot ids are not real flows.
+    if (!isQuickChatFlowId(flowId)) {
+      setLastPickedFlowId(flowId);
+    }
     const currentFlowId = detailedConversation?.flowId ?? currentConversationSummary?.flowId ?? null;
     const hasMessages = (detailedConversation?.messages?.length ?? 0) > 0;
     if (hasMessages && currentFlowId && flowId !== currentFlowId) {
@@ -1268,6 +1290,40 @@ const Chat: React.FC = () => {
       setDetailedConversation(previousDetailedConversation);
       setConversationList(previousConversationList);
       // --- End Rollback ---
+    }
+  };
+
+  // --- Conversation rename (issue #134, item 2) ---
+  // Enter edit mode, seeding the draft with the current title.
+  const beginEditTitle = () => {
+    const current = detailedConversation?.title ?? currentConversationSummary?.title ?? '';
+    setTitleDraft(current);
+    setIsEditingTitle(true);
+  };
+
+  // Persist a rename (on Enter/blur). Optimistic update of both the detailed view
+  // and the sidebar summary; the backend keeps updatedAt unchanged so a rename
+  // does NOT re-sort the conversation to the top. Empty/unchanged titles are
+  // no-ops; a failed PATCH rolls the title back.
+  const commitEditTitle = async () => {
+    const id = currentConversationId;
+    setIsEditingTitle(false);
+    if (!id) return;
+    const previousTitle = detailedConversation?.title ?? currentConversationSummary?.title ?? '';
+    const newTitle = titleDraft.trim().slice(0, 200);
+    if (!newTitle || newTitle === previousTitle) return;
+
+    setDetailedConversation(prev => (prev && prev.id === id ? { ...prev, title: newTitle } : prev));
+    setConversationList(prevList => prevList.map(c => (c.id === id ? { ...c, title: newTitle } : c)));
+    try {
+      const updated = await chatService.updateConversationTitle(id, newTitle);
+      setDetailedConversation(prev => (prev && prev.id === id ? { ...prev, title: updated.title } : prev));
+      setConversationList(prevList => prevList.map(c => (c.id === id ? { ...c, title: updated.title } : c)));
+    } catch (err) {
+      log.warn('Failed to rename conversation', { conversationId: id, err });
+      setDetailedConversation(prev => (prev && prev.id === id ? { ...prev, title: previousTitle } : prev));
+      setConversationList(prevList => prevList.map(c => (c.id === id ? { ...c, title: previousTitle } : c)));
+      setError('Failed to rename the conversation.');
     }
   };
 
@@ -2343,6 +2399,46 @@ const Chat: React.FC = () => {
       <Box sx={{ flex: 1, height: '100%', display: 'flex', minWidth: 0, minHeight: 0 }}>
         {/* Chat Area */}
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {/* Conversation title header + inline rename (issue #134, item 2).
+              Shown once a conversation is selected. Click the pencil (or the
+              title) to edit; Enter/blur saves, Escape cancels. */}
+          {currentConversationId && (
+            <Box sx={{ px: 2, pt: 2, pb: 1, display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+              {isEditingTitle ? (
+                <TextField
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={commitEditTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); commitEditTitle(); }
+                    else if (e.key === 'Escape') { setIsEditingTitle(false); }
+                  }}
+                  size="small"
+                  autoFocus
+                  fullWidth
+                  inputProps={{ maxLength: 200, 'aria-label': 'Conversation title' }}
+                />
+              ) : (
+                <>
+                  <Typography
+                    variant="h6"
+                    noWrap
+                    onClick={beginEditTitle}
+                    title={detailedConversation?.title || currentConversationSummary?.title || ''}
+                    sx={{ flex: 1, minWidth: 0, cursor: 'text' }}
+                  >
+                    {detailedConversation?.title || currentConversationSummary?.title || 'Untitled Conversation'}
+                  </Typography>
+                  <Tooltip title="Rename conversation">
+                    <IconButton size="small" onClick={beginEditTitle} aria-label="Rename conversation">
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            </Box>
+          )}
+
           {/* Flow selector - Use summary data. Only shown once a conversation is
               selected; with no conversation it's confusing (nothing to assign a
               flow to). */}

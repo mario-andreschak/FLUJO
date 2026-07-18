@@ -45,6 +45,41 @@ function isHandoffToolName(name?: string): boolean {
 }
 
 /**
+ * Collect the `tool_call_id`s of every HANDOFF assistant tool call in the list
+ * (issue #134, item 5). A handoff's `role:'tool'` result should never render as
+ * its own bubble; the slim "Handoff → Target" marker on the paired assistant
+ * call already conveys the routing.
+ *
+ * The renderer previously suppressed handoff results ONLY when the result body
+ * was exactly the `{handoff:true}` blob. Results that were valid JSON with extra
+ * fields, non-JSON payloads, or plain strings slipped through and cluttered the
+ * transcript. Matching by the paired handoff tool call's id (as computed here)
+ * suppresses the result regardless of its body shape.
+ */
+export function collectHandoffToolCallIds<TMessage extends FlujoChatMessage>(
+  messages: TMessage[]
+): Set<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(messages)) return ids;
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    const toolCalls = message.tool_calls;
+    if (!Array.isArray(toolCalls)) continue;
+    for (const toolCall of toolCalls) {
+      if (
+        toolCall.type === 'function' &&
+        isHandoffToolName(toolCall.function?.name) &&
+        typeof toolCall.id === 'string' &&
+        toolCall.id
+      ) {
+        ids.add(toolCall.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
  * Pair every assistant message's non-handoff tool calls with their result
  * messages, matched by `tool_call_id`.
  *
