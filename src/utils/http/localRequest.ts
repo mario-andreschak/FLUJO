@@ -30,9 +30,43 @@ import { NextResponse } from 'next/server';
  * handler as DEFENSE-IN-DEPTH — do not remove those. `assertUnlocked()` alone is
  * a no-op while the app is unlocked and does NOT stop cross-origin drive-by
  * requests.
+ *
+ * HOSTED POSTURE (`FLUJO_EXTRA_LOCAL_HOSTS`, #155): when FLUJO runs behind a trusted
+ * reverse proxy on a private network (e.g. one tenant microVM per customer,
+ * reached only by an authenticating control plane over an internal DNS name),
+ * the localhost-only Host check would 403 every request the proxy forwards.
+ * Deployments may opt in to additional trusted hostnames via the
+ * `FLUJO_EXTRA_LOCAL_HOSTS` env var: a comma-separated list where each entry is
+ * either an exact hostname (`my-host`) or, when it starts with a dot, a domain
+ * suffix (`.vm.my-tenants.internal`). Entries extend what counts as "local" for
+ * BOTH the Host and the Origin hostname — so the rebinding rule is preserved
+ * exactly (an attacker page's Origin still never matches). Unset (the default,
+ * i.e. every standalone install) this changes nothing: localhost-family only.
+ * Only set it when nothing untrusted can reach FLUJO's port at those names.
  */
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/** Parse `FLUJO_EXTRA_LOCAL_HOSTS` (see module doc). Read per call — it is a
+ *  cheap split, and lazy reads keep the guard testable and Edge-safe. */
+function extraLocalHosts(): string[] {
+  const raw = process.env.FLUJO_EXTRA_LOCAL_HOSTS;
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length > 0 && e !== '.');
+}
+
+/** Whether `hostname` (already bare, no port) is localhost-family or matches an
+ *  opted-in `FLUJO_EXTRA_LOCAL_HOSTS` entry (exact, or dot-prefixed suffix). */
+function isTrustedHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (LOCAL_HOSTS.has(h)) return true;
+  return extraLocalHosts().some((entry) =>
+    entry.startsWith('.') ? h.endsWith(entry) : h === entry,
+  );
+}
 
 /** Extract the bare hostname from a Host header value (strips port; handles IPv6 brackets). */
 function hostnameOf(hostHeader: string | null): string | null {
@@ -54,10 +88,10 @@ function hostnameOf(hostHeader: string | null): string | null {
  */
 export function isLocalRequest(host: string | null, origin: string | null): boolean {
   const h = hostnameOf(host);
-  if (!h || !LOCAL_HOSTS.has(h)) return false;
+  if (!h || !isTrustedHostname(h)) return false;
   if (origin) {
     try {
-      if (!LOCAL_HOSTS.has(new URL(origin).hostname)) return false;
+      if (!isTrustedHostname(new URL(origin).hostname)) return false;
     } catch {
       return false;
     }
