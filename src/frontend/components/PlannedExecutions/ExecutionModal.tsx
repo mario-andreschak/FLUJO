@@ -53,6 +53,7 @@ import FileWatchPanel from './FileWatchPanel';
 import WatchToolPanel from './WatchToolPanel';
 import UrlWatchPanel from './UrlWatchPanel';
 import FlowEventPanel from './FlowEventPanel';
+import FlowSelector from '@/frontend/components/Chat/FlowSelector';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -367,27 +368,14 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           2 · What should it run?
         </Typography>
 
-        <FormControl fullWidth margin="normal">
-          <InputLabel id="execution-flow-label">Flow to run</InputLabel>
-          <Select
-            labelId="execution-flow-label"
-            label="Flow to run"
-            value={selectedMissing ? '' : flowId}
-            onChange={(e) => setFlowId(e.target.value)}
-            displayEmpty
-          >
-            {flows.length === 0 && (
-              <MenuItem value="" disabled>
-                {loadingFlows ? 'Loading flows…' : 'No flows available'}
-              </MenuItem>
-            )}
-            {flows.map((f) => (
-              <MenuItem key={f.id} value={f.id}>
-                {f.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <Box sx={{ mt: 2 }}>
+          <FlowSelector
+            selectedFlowId={flowId || null}
+            onSelectFlow={setFlowId}
+            disabled={saving}
+            hideLabel
+          />
+        </Box>
 
         {selectedMissing && (
           <Alert severity="warning" sx={{ mt: 1 }}>

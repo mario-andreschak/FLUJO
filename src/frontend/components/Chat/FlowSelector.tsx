@@ -20,12 +20,15 @@ interface FlowSelectorProps {
   selectedFlowId: string | null;
   onSelectFlow: (flowId: string) => void;
   disabled?: boolean; // Add disabled prop
+  /** Hide the internal "Select Flow" subtitle when the host already renders a heading. */
+  hideLabel?: boolean;
 }
 
 const FlowSelector: React.FC<FlowSelectorProps> = ({
   selectedFlowId,
   onSelectFlow,
-  disabled = false // Default to false
+  disabled = false, // Default to false
+  hideLabel = false
 }) => {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -104,9 +107,11 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
 
   return (
     <Box>
-      <Typography variant="subtitle1" gutterBottom>
-        Select Flow
-      </Typography>
+      {!hideLabel && (
+        <Typography variant="subtitle1" gutterBottom>
+          Select Flow
+        </Typography>
+      )}
 
       {isLoading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
