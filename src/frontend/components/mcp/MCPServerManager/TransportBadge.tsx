@@ -6,6 +6,7 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import WifiIcon from '@mui/icons-material/Wifi';
 import StreamIcon from '@mui/icons-material/Stream';
 import HttpIcon from '@mui/icons-material/Http';
+import { useThemeUtils } from '@/frontend/utils/theme';
 
 interface TransportBadgeProps {
   transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
@@ -13,42 +14,45 @@ interface TransportBadgeProps {
 }
 
 const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'small' }) => {
+  const { colors } = useThemeUtils();
+  const t = colors.domain.transport;
+
   const getTransportConfig = () => {
     switch (transport) {
       case 'stdio':
         return {
           label: 'STDIO',
           icon: <TerminalIcon fontSize="small" />,
-          color: '#1976d2', // Blue
-          bgColor: '#e3f2fd'
+          color: t.stdio.fg,
+          bgColor: t.stdio.bg
         };
       case 'websocket':
         return {
           label: 'WebSocket',
           icon: <WifiIcon fontSize="small" />,
-          color: '#2e7d32', // Green
-          bgColor: '#e8f5e8'
+          color: t.websocket.fg,
+          bgColor: t.websocket.bg
         };
       case 'sse':
         return {
           label: 'SSE',
           icon: <StreamIcon fontSize="small" />,
-          color: '#f57c00', // Orange
-          bgColor: '#fff3e0'
+          color: t.sse.fg,
+          bgColor: t.sse.bg
         };
       case 'streamable':
         return {
           label: 'HTTP Stream',
           icon: <HttpIcon fontSize="small" />,
-          color: '#00796b', // Teal
-          bgColor: '#e0f2f1'
+          color: t.streamable.fg,
+          bgColor: t.streamable.bg
         };
       default:
         return {
           label: 'UNKNOWN',
           icon: <TerminalIcon fontSize="small" />,
-          color: '#757575', // Gray
-          bgColor: '#f5f5f5'
+          color: t.default.fg,
+          bgColor: t.default.bg
         };
     }
   };

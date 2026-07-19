@@ -2,47 +2,19 @@
 
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { createLogger } from '@/utils/logger';
+import { themeColors } from './paletteTokens';
 
 const log = createLogger('frontend/utils/theme');
 
 /**
- * Theme color constants
- * These provide a standardized set of colors for use throughout the application
+ * Theme color constants.
+ *
+ * The raw palette lives in the dependency-free `paletteTokens` module (so it can
+ * be imported in plain Node contexts / tests) and is re-exported here to keep
+ * every existing `import { themeColors } from '@/frontend/utils/theme'` working.
  */
-export const themeColors = {
-  light: {
-    background: '#FFFFFF',
-    foreground: '#2C3E50',
-    paperBackground: '#F5F6FA',
-    textSecondary: '#7F8C8D',
-    border: '#e5e7eb',
-    heading: '#111',
-    text: '#333',
-    secondaryText: '#666',
-    error: {
-      background: '#fef2f2',
-      border: '#fecaca',
-      text: '#dc2626'
-    }
-  },
-  dark: {
-    // Redesigned dark palette (issue #150): layered slate greys create elevation
-    // via lightness rather than pairing a near-black surface with a vivid blue.
-    background: '#12161c',
-    foreground: '#e6e8ec',
-    paperBackground: '#1b212b',
-    textSecondary: '#9aa5b4',
-    border: '#2b323d',
-    heading: '#f0f2f5',
-    text: '#e6e8ec',
-    secondaryText: '#9aa5b4',
-    error: {
-      background: '#3a2222',
-      border: '#5a3333',
-      text: '#f87171'
-    }
-  }
-};
+export { themeColors } from './paletteTokens';
+export type { ThemeColors } from './paletteTokens';
 
 /**
  * Get a CSS variable value based on the current theme

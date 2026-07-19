@@ -6,15 +6,19 @@
   --background: #FFFFFF;
   --foreground: #2C3E50;
   --paper-background: #F5F6FA;
+  --surface-raised: #FFFFFF;
   --text-secondary: #7F8C8D;
+  --border: #e5e7eb;
 }
 
 :root.dark-theme {
-  /* Dark theme variables (redesigned for issue #150) */
-  --background: #12161c;
-  --foreground: #e6e8ec;
-  --paper-background: #1b212b;
-  --text-secondary: #9aa5b4;
+  /* Dark theme variables (layered ramp, redesigned for issue #150) */
+  --background: #0f1319;
+  --foreground: #eef1f5;
+  --paper-background: #1a212b;
+  --surface-raised: #242d3a;
+  --text-secondary: #b4bdca;
+  --border: #37404e;
 }
 
 body {

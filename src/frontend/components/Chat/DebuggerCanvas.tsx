@@ -670,7 +670,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               <Typography variant="caption">Prep Result</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
-              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: '#f5f5f5', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
                 {JSON.stringify(currentStepData.prepResultSnapshot, null, 2)}
               </pre>
             </AccordionDetails>
@@ -690,13 +690,13 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                     <b>Error:</b> {currentStepData.execResultSnapshot.error || 'Unknown error'}
                   </Typography>
                   {currentStepData.execResultSnapshot.errorDetails && (
-                     <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '150px', overflowY: 'auto', background: '#f5f5f5', padding: '4px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                     <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '150px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '4px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
                        {JSON.stringify(currentStepData.execResultSnapshot.errorDetails, null, 2)}
                      </pre>
                   )}
                 </Box>
               ) : (
-                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: '#f5f5f5', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
                   {JSON.stringify(currentStepData.execResultSnapshot, null, 2)}
                 </pre>
               )}
@@ -709,7 +709,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               <Typography variant="caption">State Before</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
-              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: '#f5f5f5', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
                 {JSON.stringify(currentStepData.stateBefore, null, 2)}
               </pre>
             </AccordionDetails>
@@ -721,7 +721,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               <Typography variant="caption">State After</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
-              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: '#f5f5f5', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
                 {JSON.stringify(currentStepData.stateAfter, null, 2)}
               </pre>
             </AccordionDetails>

@@ -199,7 +199,7 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
           p: 1,
           borderRadius: 1,
           border: 1,
-          borderColor: (theme) => (theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'),
+          borderColor: (theme) => theme.palette.divider,
           bgcolor: 'action.hover',
           color: (theme) => theme.palette.text.primary,
           overflow: 'auto',
@@ -258,7 +258,7 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
                         component="pre"
                         sx={{
                           whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', p: 1,
-                          borderRadius: 1, border: 1, borderColor: (theme) => (theme.palette.mode === 'dark' ? '#3a3a3a' : '#e5e7eb'),
+                          borderRadius: 1, border: 1, borderColor: (theme) => theme.palette.divider,
                           bgcolor: 'action.hover', color: (theme) => theme.palette.text.primary, overflow: 'auto', mt: 1,
                         }}
                       >
@@ -613,11 +613,11 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 minHeight: '100px',
                 padding: '8px',
                 borderRadius: '4px',
-                border: '1px solid #ccc',
+                border: '1px solid var(--border)',
                 fontFamily: 'inherit',
                 fontSize: 'inherit',
-                backgroundColor: 'white',
-                color: 'black',
+                backgroundColor: 'var(--surface-raised)',
+                color: 'var(--foreground)',
               }}
             />
             <FormControl fullWidth size="small" sx={{ mt: 1 }}>

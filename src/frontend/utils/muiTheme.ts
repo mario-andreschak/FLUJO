@@ -8,43 +8,52 @@ import { PaletteMode } from '@mui/material';
  * Create a MUI theme based on the current mode (light/dark)
  * @param mode The current theme mode ('light' or 'dark')
  * @returns A configured MUI theme
+ *
+ * Dark mode (issue #150) maps the layered surface ramp onto MUI:
+ *   background.default = base, background.paper = surface (elevation-1).
+ * Menus/popovers/hover use `surfaceRaised` (elevation-2) so overlays visibly
+ * float above panels. Blue is used only as an interactive accent.
  */
 export function createAppTheme(mode: PaletteMode): Theme {
   const colors = mode === 'dark' ? themeColors.dark : themeColors.light;
-  
+  const isDark = mode === 'dark';
+
   return createTheme({
     palette: {
       mode,
-      // Dark mode uses a softer, lighter blue so controls/links read comfortably
-      // on the dark slate surface instead of the harsh black+blue of #007bff (issue #150).
+      // Dark mode uses a softer, AA-compliant blue accent (not the harsh
+      // black+blue of #007bff) confined to interactive controls (issue #150).
       primary: {
-        main: mode === 'dark' ? '#5b9dff' : '#007bff',
+        main: isDark ? '#4f93f5' : '#007bff',
+        light: isDark ? '#6aa6f7' : '#3395ff',
+        dark: isDark ? '#3a7ad4' : '#0056b3',
       },
       secondary: {
-        main: mode === 'dark' ? '#a3adba' : '#6c757d',
+        main: isDark ? '#a3adba' : '#6c757d',
       },
       error: {
-        main: mode === 'dark' ? '#f87171' : '#dc2626',
-        light: mode === 'dark' ? '#5a3333' : '#fecaca',
-        dark: mode === 'dark' ? '#3a2222' : '#b91c1c',
+        main: isDark ? '#ff6b6b' : '#dc2626',
+        light: isDark ? '#5a2a2e' : '#fecaca',
+        dark: isDark ? '#2a1618' : '#b91c1c',
       },
       warning: {
-        main: mode === 'dark' ? '#fbbf24' : '#f59e0b',
+        main: isDark ? '#e0a23c' : '#f59e0b',
       },
       info: {
-        main: mode === 'dark' ? '#60a5fa' : '#3b82f6',
+        main: isDark ? '#56b6d6' : '#3b82f6',
       },
       success: {
-        main: mode === 'dark' ? '#4ade80' : '#16a34a',
+        main: isDark ? '#3fae72' : '#16a34a',
       },
       divider: colors.border,
       background: {
         default: colors.background,
-        paper: colors.paperBackground,
+        paper: colors.surface,
       },
       text: {
         primary: colors.foreground,
         secondary: colors.textSecondary,
+        disabled: colors.textDisabled,
       },
     },
     typography: {
@@ -81,6 +90,7 @@ export function createAppTheme(mode: PaletteMode): Theme {
         styleOverrides: {
           root: {
             borderRadius: '0.5rem',
+            backgroundImage: 'none',
           },
         },
       },
@@ -97,10 +107,35 @@ export function createAppTheme(mode: PaletteMode): Theme {
         styleOverrides: {
           root: {
             borderRadius: '0.5rem',
-            boxShadow: mode === 'dark' 
-              ? '0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1)'
+            border: isDark ? `1px solid ${colors.border}` : undefined,
+            boxShadow: isDark
+              ? '0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3)'
               : '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
           },
+        },
+      },
+      // Overlays float above panels using the raised (elevation-2) surface.
+      MuiMenu: {
+        styleOverrides: {
+          paper: {
+            backgroundColor: colors.surfaceRaised,
+            backgroundImage: 'none',
+          },
+        },
+      },
+      MuiPopover: {
+        styleOverrides: {
+          paper: {
+            backgroundColor: colors.surfaceRaised,
+            backgroundImage: 'none',
+          },
+        },
+      },
+      MuiTooltip: {
+        styleOverrides: {
+          tooltip: isDark
+            ? { backgroundColor: colors.surfaceRaised, border: `1px solid ${colors.border}`, color: colors.foreground }
+            : undefined,
         },
       },
     },
