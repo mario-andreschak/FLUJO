@@ -30,8 +30,8 @@ jest.mock('fs/promises', () => ({
   default: {
     access: jest.fn(async () => undefined),
     mkdir: jest.fn(async () => undefined),
-    readFile: (...args: unknown[]) => fsReadFileMock(...args),
-    rm: (...args: unknown[]) => fsRmMock(...args),
+    readFile: (...args: unknown[]) => fsReadFileMock(...(args as [])),
+    rm: (...args: unknown[]) => fsRmMock(...(args as [])),
     readdir: jest.fn(async () => []),
     stat: jest.fn(async () => ({})),
     writeFile: jest.fn(async () => undefined),
@@ -49,7 +49,7 @@ const simpleGitFactory = jest.fn(() => ({
 }));
 jest.mock('simple-git', () => ({
   __esModule: true,
-  default: (...args: unknown[]) => simpleGitFactory(...args),
+  default: (...args: unknown[]) => simpleGitFactory(...(args as [])),
 }));
 
 // Force the encryption gate open so only the origin guard is under test.
@@ -88,14 +88,14 @@ jest.mock('@/backend/services/mcp', () => ({
 const loadItemMock = jest.fn(async () => ({}));
 const saveItemMock = jest.fn(async () => undefined);
 jest.mock('@/utils/storage/backend', () => ({
-  loadItem: (...args: unknown[]) => loadItemMock(...args),
-  saveItem: (...args: unknown[]) => saveItemMock(...args),
+  loadItem: (...args: unknown[]) => loadItemMock(...(args as [])),
+  saveItem: (...args: unknown[]) => saveItemMock(...(args as [])),
 }));
 const decryptWithPasswordMock = jest.fn(async () => 'decrypted-secret');
 const encryptWithPasswordMock = jest.fn(async () => 'encrypted');
 jest.mock('@/utils/encryption/secure', () => ({
-  encryptWithPassword: (...args: unknown[]) => encryptWithPasswordMock(...args),
-  decryptWithPassword: (...args: unknown[]) => decryptWithPasswordMock(...args),
+  encryptWithPassword: (...args: unknown[]) => encryptWithPasswordMock(...(args as [])),
+  decryptWithPassword: (...args: unknown[]) => decryptWithPasswordMock(...(args as [])),
   isEncryptionInitialized: jest.fn(() => true),
   initializeDefaultEncryption: jest.fn(async () => undefined),
 }));

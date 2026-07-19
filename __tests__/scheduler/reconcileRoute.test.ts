@@ -20,9 +20,9 @@ const isPausedMock = jest.fn(async () => false);
 const setPausedMock = jest.fn(async () => undefined);
 jest.mock('@/backend/services/scheduler', () => ({
   getSchedulerService: () => ({
-    reconcile: (...a: unknown[]) => reconcileMock(...a),
-    isPaused: (...a: unknown[]) => isPausedMock(...a),
-    setPaused: (...a: unknown[]) => setPausedMock(...a),
+    reconcile: (...a: unknown[]) => reconcileMock(...(a as [])),
+    isPaused: (...a: unknown[]) => isPausedMock(...(a as [])),
+    setPaused: (...a: unknown[]) => setPausedMock(...(a as [])),
   }),
 }));
 
