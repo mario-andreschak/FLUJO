@@ -87,6 +87,19 @@ export function toAnthropicImageMediaType(
   }
 }
 
+/**
+ * Truncate a string to `cap` characters, appending a byte-count marker when it
+ * was shortened. Used by self-orchestrating adapters (Claude subscription) that
+ * flatten prior tool calls/results into a single text prompt: an unbounded tool
+ * result (a directory tree, a large file read) would otherwise blow up the
+ * flattened prompt. Returns the input unchanged when it already fits, so the
+ * no-truncation path is byte-identical.
+ */
+export function truncateForPrompt(text: string, cap: number): string {
+  if (typeof text !== 'string' || text.length <= cap) return text ?? '';
+  return `${text.slice(0, cap)}…[truncated ${text.length - cap} chars]`;
+}
+
 /** Safely JSON-parse a tool-call arguments string, defaulting to `{}`. */
 export function parseToolArgs(argsString: string | undefined): Record<string, unknown> {
   if (!argsString) return {};

@@ -130,13 +130,72 @@ describe('gemini translation', () => {
 });
 
 describe('claude subscription buildUserMessage', () => {
-  it('keeps plain-string content when there are no images (unchanged flat prompt)', () => {
+  it('renders prior tool calls AND results as text (issue #160)', () => {
     const { systemPrompt, content } = buildUserMessage(CONVERSATION);
     expect(systemPrompt).toBe('You are helpful.');
     expect(typeof content).toBe('string');
-    // The tool-role message is dropped; user/assistant turns are flattened.
-    expect(content).toContain('Human: Weather in Berlin?');
-    expect(content).toContain('Assistant: Let me check.');
+    const text = content as string;
+    // Plain turns still render as before.
+    expect(text).toContain('Human: Weather in Berlin?');
+    expect(text).toContain('Assistant: Let me check.');
+    // The tool CALL and its RESULT are now rendered (previously dropped).
+    expect(text).toContain('Assistant [tool call] mcp_get_weather_abc({"city":"Berlin"})');
+    expect(text).toContain('Tool result [mcp_get_weather_abc]: {"tempC":18}');
+  });
+
+  it('renders an assistant tool-call turn that carries no text (content: \'\')', () => {
+    const convo: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'do it' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'c1', type: 'function', function: { name: 'list_files', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'c1', content: 'a.txt\nb.txt' },
+    ];
+    const { content } = buildUserMessage(convo);
+    const text = content as string;
+    expect(text).toContain('Assistant [tool call] list_files({})');
+    expect(text).toContain('Tool result [list_files]: a.txt\nb.txt');
+  });
+
+  it('truncates oversized tool results and args with a marker', () => {
+    const bigArgs = JSON.stringify({ content: 'A'.repeat(5000) });
+    const bigResult = 'R'.repeat(9000);
+    const convo: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'c1', type: 'function', function: { name: 'write_file', arguments: bigArgs } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'c1', content: bigResult },
+    ];
+    const { content } = buildUserMessage(convo);
+    const text = content as string;
+    // Args truncated at 2000, result at 4000; both carry the byte marker.
+    // (bigResult is exactly 9000 chars → 9000-4000 = 5000 truncated.)
+    expect(text).toMatch(/\[truncated 5000 chars\]/);
+    // The args payload is truncated too (its exact count depends on JSON overhead).
+    expect(text).toMatch(/write_file\(\{"content":"A+…\[truncated \d+ chars\]/);
+    // The whole oversized payloads are not present verbatim.
+    expect(text).not.toContain('R'.repeat(9000));
+    expect(text).not.toContain('A'.repeat(5000));
+  });
+
+  it('is byte-identical to a raw single user message for a tool-free single turn', () => {
+    const convo: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'just a question' },
+    ];
+    const { systemPrompt, content } = buildUserMessage(convo);
+    expect(systemPrompt).toBe('sys');
+    // No `Human:` prefix for the single-turn tool-free case (prefix-cache stability).
+    expect(content).toBe('just a question');
   });
 
   it('emits text + image content blocks for a multimodal turn', () => {

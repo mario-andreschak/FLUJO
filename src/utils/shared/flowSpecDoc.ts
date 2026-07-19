@@ -27,7 +27,7 @@ NODE TYPES:
     "model": "<model id or name from the catalog>",
     "prompt": "instructions for this step",
     "servers": [ { "name": "<server name>", "tools": ["tool_a"] } ],   // optional; omit "tools" to enable all
-    "inputMode": "full-history" | "latest-message" | "isolated",       // optional, default full-history
+    "inputMode": "full-history" | "latest-message" | "isolated",       // optional, default full-history. NOTE: for Claude-subscription models the whole wire history (incl. prior tool calls/results under full-history) is flattened into one text prompt rather than sent as native tool turns
     "isolatedPrompt": "...",                                            // only with inputMode "isolated"
     "outputMode": "full-conversation" | "latest-message",              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
     "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (50)

@@ -47,6 +47,18 @@ function currentToolTail(messages: FlujoChatMessage[]): FlujoChatMessage[] {
  *     single synthetic user message, then the current in-flight tool tail (so a
  *     tool-using isolated node can continue its loop across re-entries). The
  *     prior conversation is dropped. The synthetic user message is wire-only.
+ *
+ * ADAPTER CAVEAT (issue #160): this narrowing is provider-agnostic, but what a
+ * given provider does with the scoped wire differs. Request/response adapters
+ * (OpenAI-compatible, and the native Anthropic/Gemini translators) deliver the
+ * wire as distinct turns — prior `assistant.tool_calls` + `tool` results keep
+ * their native shape, so `full-history` shows the model the whole conversation
+ * with tool exchanges intact. SELF-ORCHESTRATING adapters (Claude subscription /
+ * `claude-cli`) instead FLATTEN the wire into a single prompt: prior tool calls
+ * and their results are rendered as TEXT (see claudeSubscriptionAdapter
+ * .buildUserMessage), not native tool turns. `full-history` still shows the
+ * model the whole conversation there — including prior tool work — but as
+ * flattened text rather than replayable turns.
  */
 export function scopeMessagesForInput(
   messages: FlujoChatMessage[],
@@ -350,6 +362,14 @@ function idSet(msgs: FlujoChatMessage[]): Set<string> {
  * The `sent` set is exactly what stripHandoffPlumbing(scopedView) produces,
  * which (modulo internal-field stripping) is what toApiMessages sends to the
  * provider. A unit test asserts this equivalence so UI and behaviour stay locked.
+ *
+ * CAVEAT (issue #160): `sent` is faithful for request/response adapters. For
+ * SELF-ORCHESTRATING adapters (Claude subscription / `claude-cli`) the wire is
+ * additionally FLATTENED into one prompt after this point — prior tool calls/
+ * results are rendered as text rather than native tool turns (see
+ * claudeSubscriptionAdapter.buildUserMessage). So for those models this `sent`
+ * set is an over-approximation of the NATIVE wire shape: every message shown is
+ * conveyed to the model, but as flattened text, not as replayable tool turns.
  *
  * @param threaded    The node's full threaded history (buildNodeContext output).
  * @param foldedView  After collapseNodeOutputs (outputMode fold). == threaded when nothing folds.

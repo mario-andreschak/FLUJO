@@ -10,7 +10,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { extractText, extractImageParts, toAnthropicImageMediaType } from './messageUtils';
+import { extractText, extractImageParts, toAnthropicImageMediaType, truncateForPrompt } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import {
@@ -69,6 +69,15 @@ const CLAUDE_BUILTIN_TOOLS = [
 // `mcp__flujo__` prefix the SDK adds.
 const MAX_TOOL_NAME_LEN = 110;
 
+// Per-item caps for the tool exchanges rendered into the flattened prompt
+// (issue #160). A prior tool result (a directory tree, a large file read) or an
+// oversized tool-call args payload (write-file-style calls carry whole file
+// contents) would otherwise dominate the single-user-message prompt. Aligned
+// with the debugger's WIRE_CONTENT_MAX = 4000 spirit; args get a smaller cap
+// because they are usually short and the result is what carries the evidence.
+const TOOL_RESULT_MAX_CHARS = 4000;
+const TOOL_ARGS_MAX_CHARS = 2000;
+
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -103,12 +112,27 @@ function isHandoffName(name: string): boolean {
  * into one text block (the SDK is driven with a single user message, so prior
  * assistant turns are replayed as text rather than as distinct turns). Images
  * from user turns become image content blocks so a vision-capable Claude can
- * see them. Tool-role messages are dropped — Claude runs the tool loop itself
- * here, so prior FLUJO-side tool exchanges aren't replayed.
+ * see them.
  *
- * When there are no images the content is a plain string — byte-for-byte the
- * prompt the old flat-string path produced — so non-image runs are unchanged;
- * only the delivery channel (streaming input) differs.
+ * PRIOR TOOL EXCHANGES ARE RENDERED AS TEXT (issue #160). The SDK's single-
+ * user-message channel has no way to replay prior `tool_use`/`tool_result` as
+ * NATIVE turns (that needs an SDK session `resume`, tracked as #154, and even
+ * then only within the same node). Dropping them entirely — as this adapter
+ * used to — silently violated `full-history`'s documented contract: a
+ * downstream node reading the whole conversation saw only assistant PROSE and
+ * none of a predecessor node's tool calls or their results, so its model
+ * re-enacted the work from scratch. We now serialise each prior assistant
+ * tool-call turn and each `tool` result into the flattened transcript (with
+ * size caps) so the model actually sees the evidence its predecessor gathered.
+ * This is scoped to PRIOR/SETTLED turns only — the SDK owns the current node's
+ * OWN live tool loop and always sees its full params/results (this function is
+ * only ever handed history that precedes that live loop).
+ *
+ * When there are no tool exchanges the tool-rendering branches are never taken,
+ * and when there are also no images the content is a plain string — byte-for-
+ * byte the prompt the old flat-string path produced — so ordinary text/image
+ * runs are unchanged (preserving the #89/#87 prefix-cache stability); only
+ * flows that previously LOST their tool history change.
  *
  * KNOWN LIMITATION (#87) — quadratic re-send: every node call spawns a fresh
  * `query()` (a new `claude` subprocess, no `resume`/`session_id`) and re-sends
@@ -134,8 +158,29 @@ export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]):
   content: string | Anthropic.ContentBlockParam[];
 } {
   const systemParts: string[] = [];
-  const convo: Array<{ role: 'user' | 'assistant'; text: string }> = [];
+  // Each already-formatted transcript line, in original order. A plain text
+  // turn renders as before (`Human: …` / `Assistant: …`); an assistant tool-
+  // call turn and a `tool` result each render as their own line (#160).
+  const lines: string[] = [];
   const images: ReturnType<typeof extractImageParts> = [];
+
+  // Whether any tool exchange was rendered, and how many plain text turns there
+  // were. Together these select the byte-identical no-tool fast paths below.
+  let toolActivity = false;
+  let plainTurns = 0;
+  let firstPlainText = '';
+
+  // Map tool_call_id -> the tool name from the assistant turn that issued it,
+  // so a `tool` result can be labelled with a meaningful name rather than the
+  // opaque call id.
+  const callNames = new Map<string, string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls) {
+        if (tc.type === 'function') callNames.set(tc.id, tc.function.name);
+      }
+    }
+  }
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -143,18 +188,46 @@ export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]):
       if (text) systemParts.push(text);
       continue;
     }
-    if (msg.role === 'tool') continue;
+    if (msg.role === 'tool') {
+      // A prior tool RESULT: render it as text so a downstream full-history
+      // reader sees what the tool returned (#160). Truncated to a cap so a
+      // large payload can't dominate the flattened prompt.
+      toolActivity = true;
+      const name = callNames.get(msg.tool_call_id) ?? msg.tool_call_id;
+      const resultText = truncateForPrompt(extractText(msg.content ?? ''), TOOL_RESULT_MAX_CHARS);
+      lines.push(`Tool result [${name}]: ${resultText}`);
+      continue;
+    }
     if (msg.role !== 'user' && msg.role !== 'assistant') continue;
 
     const text = extractText(msg.content ?? '');
-    if (text) convo.push({ role: msg.role, text });
+    if (text) {
+      plainTurns++;
+      if (plainTurns === 1) firstPlainText = text;
+      lines.push(`${msg.role === 'assistant' ? 'Assistant' : 'Human'}: ${text}`);
+    }
+    // A prior assistant TOOL-CALL turn (content is typically '' so it produced
+    // no text line above): render each call so the model sees the actions its
+    // predecessor took, not just its prose (#160).
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls) {
+        if (tc.type !== 'function') continue;
+        toolActivity = true;
+        const args = truncateForPrompt(tc.function.arguments ?? '', TOOL_ARGS_MAX_CHARS);
+        lines.push(`Assistant [tool call] ${tc.function.name}(${args})`);
+      }
+    }
     if (msg.role === 'user') images.push(...extractImageParts(msg.content));
   }
 
+  // Byte-identical fast path for tool-free histories: a single text turn stays
+  // raw (no `Human:`/`Assistant:` prefix), matching the pre-#160 behaviour and
+  // preserving provider prefix-cache stability. Multi-turn tool-free histories
+  // also render exactly as before (prefixed lines joined by blank lines).
   const promptText =
-    convo.length <= 1
-      ? convo[0]?.text ?? ''
-      : convo.map(c => `${c.role === 'assistant' ? 'Assistant' : 'Human'}: ${c.text}`).join('\n\n');
+    !toolActivity && plainTurns <= 1
+      ? firstPlainText
+      : lines.join('\n\n');
 
   const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
