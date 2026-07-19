@@ -419,7 +419,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                 </Tooltip>
               )}
               {builtIn ? (
-                <Tooltip title="FLUJO's built-in server — always available, cannot be edited or removed.">
+                <Tooltip title="FLUJO's built-in server — can be enabled or disabled below, but not edited or removed.">
                   <Chip label="Built-in" color="primary" size="small" />
                 </Tooltip>
               ) : (
@@ -662,7 +662,31 @@ const ServerCard: React.FC<ServerCardProps> = ({
           </Box>
         )}
       </CardContent>
-      
+
+      {/* Built-in server: only an enable/disable toggle (issue #170) — no edit/delete. */}
+      {builtIn && !pickerMode && onToggle && (
+        <CardActions sx={{ justifyContent: 'flex-start', px: 2, py: 1 }} onClick={(e) => e.stopPropagation()}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Switch
+              checked={enabled}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                log.debug(`Built-in server ${name} toggle changed to: ${e.target.checked}`);
+                onToggle(e.target.checked);
+              }}
+              color="primary"
+              size="small"
+            />
+            <Typography
+              variant="body2"
+              sx={{ ml: 0.5, fontWeight: 500, color: enabled ? 'primary.main' : 'text.secondary' }}
+            >
+              {enabled ? 'Enabled' : 'Disabled'}
+            </Typography>
+          </Box>
+        </CardActions>
+      )}
+
       {!builtIn && !pickerMode && (
       <CardActions sx={{ justifyContent: 'space-between', px: 2, py: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>

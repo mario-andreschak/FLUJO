@@ -26,6 +26,7 @@ import { saveConfig } from '@/backend/services/mcp/config';
 import { INTERNAL_SERVER_NAME, internalServerConfig } from '@/backend/services/mcp/internalServerConfig';
 import { _setRunResourcesDirForTests } from '@/backend/services/runResources';
 import { loadItem, saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 import { MCPServerConfig } from '@/shared/types/mcp';
 
 const loadItemMock = loadItem as jest.Mock;
@@ -125,10 +126,20 @@ describe('tool listing and dispatch', () => {
 });
 
 describe('CRUD guards', () => {
-  it('refuses to update or create the built-in server', async () => {
+  it('allows toggling the built-in server on/off via a persisted override (issue #170)', async () => {
     const result = await mcpService.updateServerConfig(INTERNAL_SERVER_NAME, { disabled: true });
+    // Toggling is NOT an error: it returns the synthetic config, and it is persisted
+    // to the internal-overrides key — never to MCP_SERVERS.
+    expect('error' in result ? result.error : undefined).toBeUndefined();
+    expect(saveItemMock).toHaveBeenCalled();
+    const [key, value] = saveItemMock.mock.calls[0];
+    expect(key).toBe(StorageKey.MCP_INTERNAL_OVERRIDES);
+    expect((value as Record<string, { disabled?: boolean }>)[INTERNAL_SERVER_NAME].disabled).toBe(true);
+  });
+
+  it('still refuses to edit non-toggle fields of the built-in server', async () => {
+    const result = await mcpService.updateServerConfig(INTERNAL_SERVER_NAME, { command: 'evil' } as Partial<MCPServerConfig>);
     expect('error' in result && result.error).toMatch(/built-in/i);
-    expect(saveItemMock).not.toHaveBeenCalled();
   });
 
   it('refuses to delete the built-in server', async () => {
@@ -187,3 +198,42 @@ describe('persistence', () => {
     expect(saved[INTERNAL_SERVER_NAME]).toBeUndefined();
   });
 });
+
+describe('multiple built-in servers (issue #170)', () => {
+  it('injects filesystem and bash as enabled built-in servers', async () => {
+    const configs = (await mcpService.loadServerConfigs()) as MCPServerConfig[];
+    const fsCfg = configs.find((c) => c.name === 'filesystem');
+    const bashCfg = configs.find((c) => c.name === 'bash');
+    expect(fsCfg?.builtIn).toBe(true);
+    expect(fsCfg?.disabled).toBe(false);
+    expect(bashCfg?.builtIn).toBe(true);
+    expect(bashCfg?.disabled).toBe(false);
+  });
+
+  it('applies a persisted disabled override and gates a disabled built-in', async () => {
+    loadItemMock.mockImplementation(async (key: string) =>
+      key === StorageKey.MCP_INTERNAL_OVERRIDES ? { filesystem: { disabled: true } } : {}
+    );
+    const configs = (await mcpService.loadServerConfigs()) as MCPServerConfig[];
+    expect(configs.find((c) => c.name === 'filesystem')?.disabled).toBe(true);
+    const { tools, error } = await mcpService.listServerTools('filesystem');
+    expect(tools).toEqual([]);
+    expect(error).toMatch(/disabled/i);
+  });
+
+  it('lists real filesystem tools when enabled', async () => {
+    const { tools, error } = await mcpService.listServerTools('filesystem');
+    expect(error).toBeUndefined();
+    expect(tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(['read_file', 'write_file', 'edit_file', 'list_dir', 'search'])
+    );
+  });
+
+  it('lists real bash tools when enabled', async () => {
+    const { tools } = await mcpService.listServerTools('bash');
+    expect(tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(['run', 'start', 'status', 'wait', 'kill'])
+    );
+  });
+});
+

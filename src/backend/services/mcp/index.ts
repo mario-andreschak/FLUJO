@@ -100,7 +100,12 @@ import {
   safelyCloseClient
 } from './connection';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
-import { INTERNAL_SERVER_NAME, internalServerConfig } from './internalServerConfig';
+import { INTERNAL_SERVER_NAME } from './internalServerConfig';
+import {
+  isBuiltInServerName,
+  builtInServerConfigsWithOverrides,
+  setInternalServerDisabled,
+} from './internal/registry';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -333,15 +338,19 @@ export class MCPService {
         return serverConfigs;
       }
 
-      // The built-in internal server (FLUJO's own backend API as MCP tools) is
-      // synthesized here rather than stored, so it is always present and always
-      // up to date. A stored config that claims the name wins (legacy user server)
-      // and simply shadows the built-in one. Never persisted: saveConfig() drops
-      // builtIn entries.
-      if (!serverConfigs.some(c => c.name === INTERNAL_SERVER_NAME)) {
-        serverConfigs.push(internalServerConfig());
-      } else {
-        log.warn(`loadServerConfigs: A stored server is named "${INTERNAL_SERVER_NAME}" — it shadows FLUJO's built-in server`);
+      // The built-in internal servers (FLUJO's backend API, filesystem, bash) are
+      // synthesized here rather than stored, so they are always present and always
+      // up to date. A stored config that claims one of the reserved names wins
+      // (legacy user server) and simply shadows the built-in one. Never persisted:
+      // saveConfig() drops builtIn entries. The per-server enable/disable override
+      // (issue #170) is applied here (only the tiny { disabled } flag is stored).
+      const builtIns = await builtInServerConfigsWithOverrides();
+      for (const builtIn of builtIns) {
+        if (serverConfigs.some(c => c.name === builtIn.name)) {
+          log.warn(`loadServerConfigs: A stored server is named "${builtIn.name}" — it shadows FLUJO's built-in server`);
+          continue;
+        }
+        serverConfigs.push(builtIn);
       }
 
       log.debug(`loadServerConfigs: Loaded ${serverConfigs.length} server configs`);
@@ -398,9 +407,9 @@ export class MCPService {
    * storage read only ever happens for the reserved name itself.
    */
   private async isInternalServer(serverName: string): Promise<boolean> {
-    if (serverName !== INTERNAL_SERVER_NAME) return false;
+    if (!isBuiltInServerName(serverName)) return false;
     const stored = await loadServerConfigs();
-    return !Array.isArray(stored) || !stored.some(c => c.name === INTERNAL_SERVER_NAME);
+    return !Array.isArray(stored) || !stored.some(c => c.name === serverName);
   }
 
   /**
@@ -431,7 +440,7 @@ export class MCPService {
     // "connected" by definition. Short-circuit BEFORE the in-flight machinery so the
     // startup sweep (which includes the synthetic config) and flow handlers get an
     // instant success, and clear any "connecting" marker the sweep set for it.
-    if (serverName === INTERNAL_SERVER_NAME) {
+    if (isBuiltInServerName(serverName)) {
       const isBuiltIn =
         typeof configOrName !== 'string'
           ? configOrName.builtIn === true
@@ -1087,8 +1096,14 @@ export class MCPService {
     // machinery. Dynamic import on purpose: internalTools transitively imports
     // modules that import mcpService back (see internalServerConfig.ts).
     if (await this.isInternalServer(serverName)) {
-      const { internalToolDefinitions } = await import('./internalTools');
-      return { tools: internalToolDefinitions() };
+      // A disabled built-in server behaves like any disabled server (issue #170).
+      if (await this.isServerDisabled(serverName)) {
+        const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
+        log.warn(`listServerTools: ${error}`);
+        return { tools: [], error };
+      }
+      const { internalToolDefinitionsFor } = await import('./internal/dispatch');
+      return { tools: await internalToolDefinitionsFor(serverName) };
     }
 
     // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
@@ -1142,9 +1157,15 @@ export class MCPService {
     // resolves to a CallToolResult (tool-level failures come back as isError
     // results), matching how a real server's tool errors flow through `data`.
     if (await this.isInternalServer(serverName)) {
-      const { internalCallTool } = await import('./internalTools');
-      const result = await internalCallTool(this, toolName, args);
-      log.info(`callTool: Dispatched internal tool ${toolName}`);
+      // A disabled built-in server must not be invoked (issue #170).
+      if (await this.isServerDisabled(serverName)) {
+        const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
+        log.warn(`callTool: ${error}`);
+        return { success: false, error };
+      }
+      const { internalCallToolFor } = await import('./internal/dispatch');
+      const result = await internalCallToolFor(this, serverName, toolName, args);
+      log.info(`callTool: Dispatched internal tool ${toolName} on ${serverName}`);
       return { success: true, data: result };
     }
 
@@ -1246,9 +1267,10 @@ export class MCPService {
    */
   async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
     log.debug(`listServerResources: Entering method for server ${serverName}`);
-    // The built-in internal server publishes RUN-SCOPED resources in-process
-    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern.
-    if (await this.isInternalServer(serverName)) {
+    // The built-in `flujo` server publishes RUN-SCOPED resources in-process
+    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern. Other
+    // built-ins (filesystem/bash) publish no resources.
+    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
       const { internalListResources } = await import('./internalResources');
       return internalListResources();
     }
@@ -1260,7 +1282,7 @@ export class MCPService {
    */
   async listServerResourceTemplates(serverName: string): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
     log.debug(`listServerResourceTemplates: Entering method for server ${serverName}`);
-    if (await this.isInternalServer(serverName)) {
+    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
       const { internalListResourceTemplates } = await import('./internalResources');
       return internalListResourceTemplates();
     }
@@ -1272,9 +1294,9 @@ export class MCPService {
    */
   async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
     log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
-    // Run-scoped resources are served in-process by the internal server —
+    // Run-scoped resources are served in-process by the `flujo` server —
     // this also makes `${resource:flujo__flujo://run/...}` pills work.
-    if (await this.isInternalServer(serverName)) {
+    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
       const { internalReadResource } = await import('./internalResources');
       return internalReadResource(uri);
     }
@@ -1400,15 +1422,30 @@ export class MCPService {
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
 
-    // The built-in internal server is synthesized, not stored — there is nothing to
-    // update, and this also blocks CREATING a server under the reserved name (the
-    // POST route funnels through here). Renaming another server onto the reserved
-    // name is caught by the duplicate check below, since loadServerConfigs()
-    // always contains the synthetic entry.
+    // The built-in internal servers are synthesized, not stored — their command/
+    // env/name cannot be edited, and this also blocks CREATING a server under a
+    // reserved name (the POST route funnels through here). Renaming another server
+    // onto a reserved name is caught by the duplicate check below, since
+    // loadServerConfigs() always contains the synthetic entries. The ONE mutation
+    // that IS allowed is toggling `disabled` on/off (issue #170): it is persisted
+    // as a tiny override, never as the synthetic config itself.
     if (await this.isInternalServer(serverName)) {
+      const keys = Object.keys(updates).filter(k => k !== 'name');
+      const onlyDisabledChange =
+        keys.length > 0 &&
+        keys.every(k => k === 'disabled') &&
+        typeof updates.disabled === 'boolean' &&
+        (updates.name === undefined || updates.name === serverName);
+      if (onlyDisabledChange) {
+        await setInternalServerDisabled(serverName, updates.disabled as boolean);
+        log.info(`updateServerConfig: Toggled built-in server ${serverName} disabled=${updates.disabled}`);
+        const refreshed = await this.loadServerConfigs();
+        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
+        return cfg ?? { success: true };
+      }
       return {
         success: false,
-        error: `"${INTERNAL_SERVER_NAME}" is FLUJO's built-in server and cannot be created or edited.`,
+        error: `"${serverName}" is a FLUJO built-in server: only enabling/disabling it is allowed, not editing.`,
       };
     }
 
@@ -1705,8 +1742,12 @@ export class MCPService {
    * Get the connection status of an MCP server
    */
   async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
-    // The built-in internal server runs in-process: it is connected by definition.
+    // The built-in internal server runs in-process: it is connected by definition,
+    // unless it has been toggled off (issue #170).
     if (await this.isInternalServer(serverName)) {
+      if (await this.isServerDisabled(serverName)) {
+        return { status: 'disconnected' };
+      }
       return { status: 'connected' };
     }
 

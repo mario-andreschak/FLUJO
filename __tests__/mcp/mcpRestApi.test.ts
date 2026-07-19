@@ -75,13 +75,14 @@ beforeEach(() => {
 const userServers = (list: MCPServerConfig[]) => list.filter((c) => !c.builtIn);
 
 describe('MCP REST API', () => {
-  it('GET /api/mcp/servers returns only the built-in server initially', async () => {
+  it('GET /api/mcp/servers returns only the built-in servers initially', async () => {
     const res = await listServers();
     expect(res.status).toBe(200);
     const list = (await res.json()) as MCPServerConfig[];
     expect(userServers(list)).toEqual([]);
-    expect(list.map((c) => c.name)).toEqual(['flujo']);
-    expect(list[0].builtIn).toBe(true);
+    // Issue #170: FLUJO now ships three built-in servers.
+    expect(list.map((c) => c.name)).toEqual(['flujo', 'filesystem', 'bash']);
+    expect(list.every((c) => c.builtIn)).toBe(true);
   });
 
   it('POST /api/mcp/servers creates a server (201) and returns the config', async () => {
@@ -182,11 +183,15 @@ describe('MCP REST API', () => {
     const create = await createServer(req(serverFixture({ name: 'flujo' })));
     expect(create.status).toBe(409);
 
-    // PUT/DELETE are refused as forbidden.
-    const put = await updateServer(req({ disabled: true }), ctx('flujo'));
+    // Editing non-toggle fields is refused as forbidden, and so is DELETE.
+    const put = await updateServer(req({ command: 'evil' }), ctx('flujo'));
     expect(put.status).toBe(403);
     const del = await deleteServer(req(), ctx('flujo'));
     expect(del.status).toBe(403);
+
+    // Issue #170: toggling only the `disabled` flag IS allowed (200).
+    const toggle = await updateServer(req({ disabled: true }), ctx('flujo'));
+    expect(toggle.status).toBe(200);
 
     // Renaming another server onto the reserved name is a name collision.
     await createServer(req(serverFixture({ name: 'victim' })));

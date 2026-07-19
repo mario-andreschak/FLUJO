@@ -36,8 +36,6 @@
  */
 import path from 'path';
 import { promises as fs } from 'fs';
-import { spawn } from 'child_process';
-import { killProcessTree } from '@/utils/process/killProcessTree';
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
@@ -81,10 +79,6 @@ declare global {
 }
 const MAX_EXECUTE_FLOW_DEPTH = 4;
 
-/** terminal tool bounds. Output is capped so a chatty build can't flood the model's context. */
-const TERMINAL_DEFAULT_TIMEOUT_MS = 60_000;
-const TERMINAL_MAX_TIMEOUT_MS = 600_000;
-const TERMINAL_MAX_OUTPUT_CHARS = 100_000;
 
 /** read_conversation bounds (same rationale as the terminal output cap). */
 const READ_CONVERSATION_DEFAULT_LIMIT = 50;
@@ -378,27 +372,6 @@ export function internalToolDefinitions(): Tool[] {
           },
         },
         required: ['conversation'],
-      },
-    },
-    {
-      name: 'terminal',
-      description:
-        'Run a shell command on the FLUJO host and return its combined stdout/stderr plus exit code. Runs through a shell, so pipes and chained commands (e.g. "npm install && npm run build") work. Use it to install dependencies, build a cloned MCP server, inspect the filesystem, or run diagnostics. Working directory defaults to the FLUJO data directory (where cloned servers live under mcp-servers/); pass "cwd" to run elsewhere. The command is killed if it exceeds the timeout, and very large output is truncated.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'The shell command line to execute, e.g. "npm install && npm run build".' },
-          cwd: {
-            type: 'string',
-            description:
-              'Optional working directory. Relative paths resolve against the FLUJO data directory. Defaults to the data directory.',
-          },
-          timeout: {
-            type: 'number',
-            description: 'Optional timeout in seconds (default 60, max 600). The command is killed if it runs longer.',
-          },
-        },
-        required: ['command'],
       },
     },
     {
@@ -1180,92 +1153,6 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
   });
 }
 
-/**
- * Run a shell command on the host and return its combined output + exit code.
- *
- * Mirrors the spawn semantics of the LocalServerTab backend (app/api/git/route.ts
- * streamCommandInRepo): `shell: true` so compound commands work, full process env
- * inherited, output buffered (capped) instead of streamed since a CallToolResult is
- * a single response. Unlike the git route this is not tied to a cloned repo — the
- * cwd defaults to the writable data dir. Arbitrary command execution is deliberate:
- * this server is localhost-only + encryption-lock gated, and already installs/runs
- * arbitrary registry packages via install_mcp_server.
- */
-async function runTerminal(args: Record<string, unknown>): Promise<CallToolResult> {
-  const command = String(args?.command ?? '').trim();
-  if (!command) {
-    return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
-  }
-
-  const dataDir = getDataDir();
-  const rawCwd = typeof args?.cwd === 'string' ? args.cwd.trim() : '';
-  const cwd = rawCwd ? (path.isAbsolute(rawCwd) ? rawCwd : path.join(dataDir, rawCwd)) : dataDir;
-
-  const timeoutSec = typeof args?.timeout === 'number' && args.timeout > 0 ? args.timeout : TERMINAL_DEFAULT_TIMEOUT_MS / 1000;
-  const timeoutMs = Math.min(timeoutSec * 1000, TERMINAL_MAX_TIMEOUT_MS);
-
-  return await new Promise<CallToolResult>((resolve) => {
-    let output = '';
-    let truncated = false;
-    let settled = false;
-    let timedOut = false;
-
-    const append = (chunk: string) => {
-      if (truncated) return;
-      output += chunk;
-      if (output.length > TERMINAL_MAX_OUTPUT_CHARS) {
-        output = output.slice(0, TERMINAL_MAX_OUTPUT_CHARS) + '\n…[output truncated]';
-        truncated = true;
-      }
-    };
-
-    let child;
-    // POSIX: spawn detached so the shell wrapper is a process-group leader and
-    // killProcessTree can signal the whole group on timeout. Windows uses
-    // taskkill /T by pid, so no detached flag is needed there.
-    const detached = process.platform !== 'win32';
-    try {
-      child = spawn(command, { cwd, shell: true, env: process.env, detached });
-    } catch (err) {
-      resolve(textResult({ error: `Failed to start command: ${err instanceof Error ? err.message : String(err)}`, cwd }, true));
-      return;
-    }
-
-    // On timeout, kill the ENTIRE process tree (not just the shell wrapper) so
-    // grandchildren the shell launched are not left orphaned/running. Keep the
-    // returned escalation-cleanup so finish() can cancel the pending SIGKILL.
-    let cancelEscalation: (() => void) | undefined;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      cancelEscalation = killProcessTree(child);
-    }, timeoutMs);
-
-    const finish = (result: CallToolResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      cancelEscalation?.();
-      resolve(result);
-    };
-
-    child.stdout?.on('data', (d: Buffer) => append(d.toString()));
-    child.stderr?.on('data', (d: Buffer) => append(d.toString()));
-
-    child.on('error', (err: Error) => {
-      append(`\n${err.message}`);
-      finish(textResult({ error: `Command failed to start: ${err.message}`, cwd, output }, true));
-    });
-
-    child.on('close', (code: number | null) => {
-      if (timedOut) {
-        finish(textResult({ timedOut: true, cwd, exitCode: code, output: `${output}\n[killed after ${timeoutMs / 1000}s timeout]` }, true));
-        return;
-      }
-      finish(textResult({ exitCode: code, cwd, output }, code !== 0));
-    });
-  });
-}
-
 /** Persistent key-value store (${kv:NAME}) tool bounds. Board id and key must be
  *  filesystem-safe / a sane identifier respectively (same gate as the store). */
 const KV_SCOPE_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -1355,8 +1242,6 @@ export async function internalCallTool(
         return await listConversations(args);
       case 'read_conversation':
         return await readConversation(args);
-      case 'terminal':
-        return await runTerminal(args);
       case 'kv_get':
         return await kvGetTool(args);
       case 'kv_set':

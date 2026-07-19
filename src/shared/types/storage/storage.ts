@@ -19,7 +19,10 @@ export enum StorageKey {
   MCP_QUALITY_SETTINGS = 'mcp_quality_settings',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
-  PENDING_APPROVALS = 'pending_approvals'
+  PENDING_APPROVALS = 'pending_approvals',
+  // Per-built-in-server overrides (issue #170). Only a tiny { disabled } flag is
+  // persisted here; the synthetic built-in configs themselves are NEVER stored.
+  MCP_INTERNAL_OVERRIDES = 'mcp_internal_overrides'
 }
 
 export const StorageKeys = {
@@ -41,6 +44,7 @@ export const StorageKeys = {
   RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
+  MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
 } as const;
 
 /**
