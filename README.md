@@ -239,6 +239,36 @@ Then open http://localhost:4200.
 > Do **not** expose it on `0.0.0.0` / publish it publicly unless it sits behind
 > your own authenticating reverse proxy on a trusted network.
 
+### Hosted deployments behind a trusted proxy (`FLUJO_EXTRA_LOCAL_HOSTS`)
+
+FLUJO's `/api/*` routes are guarded by a fail-closed **localhost origin check**
+(the defense against drive-by, cross-origin RCE on its command/secret sinks). By
+default only the localhost family (`localhost`, `127.0.0.1`, `::1`) counts as
+"local", so a request that arrives with any other Host — e.g. an internal DNS
+name like `http://<id>.vm.<tenants>.internal:4200` — gets a `403`. That is a
+problem only when FLUJO is deliberately run **one instance per tenant on a
+private network, reached exclusively by an authenticating reverse proxy /
+control plane** over an internal name. A standalone install never needs this.
+
+For that hosted posture, set the opt-in env var `FLUJO_EXTRA_LOCAL_HOSTS` to
+extend what counts as "local" for **both** the Host and the Origin hostname
+checks:
+
+- **Format:** a comma-separated list. Each entry is either an **exact hostname**
+  (`flujo-box`) or, when it starts with a dot, a **domain suffix**
+  (`.vm.my-tenants.internal` matches any `<sub>.vm.my-tenants.internal`, but not
+  the bare apex and not `...internal.evil.com`). Entries are trimmed and
+  case-insensitive.
+- **Default:** **unset** — behavior is unchanged (localhost family only), so
+  every standalone install is unaffected.
+- **Example:** `FLUJO_EXTRA_LOCAL_HOSTS=.vm.my-tenants.internal`
+
+> ⚠️ **Security precondition:** only set this when **nothing untrusted can reach
+> FLUJO's port at those names**. The DNS-rebinding protection is still enforced
+> — an attacker page's Origin never matches these entries — but widening the
+> trusted-host set is only safe on a private network fronted by your own
+> authenticating proxy.
+
 ### Run via npx (npm package)
 
 ```bash
