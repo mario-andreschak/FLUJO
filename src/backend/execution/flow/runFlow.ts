@@ -1167,6 +1167,33 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   spawnBriefs: briefs.length,
                   fanoutCount: callerFlows?.length ?? 0,
                 });
+              } else {
+                // Issue #169 belt-and-suspenders: a handoff to an isolated,
+                // non-fanout, allowCallerPrompt subflow that has NO authored
+                // promptTemplate WITHOUT a caller-supplied prompt (a provider
+                // ignored the schema `required` we now emit in
+                // ProcessNode.generateHandoffTools) would start the subflow with
+                // an empty prompt and stall silently. Surface a clear, actionable
+                // warning instead of proceeding quietly.
+                try {
+                  const handoffFlow = await flowService.getFlow(sharedState.flowId);
+                  const targetNode = handoffFlow?.nodes?.find(n => n.id === nextNodeId);
+                  const targetProps = targetNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string } | undefined;
+                  if (
+                    targetNode?.type === 'subflow' &&
+                    targetProps?.inputMode === 'isolated' &&
+                    targetProps?.allowCallerPrompt === true &&
+                    targetProps?.allowCallerFanout !== true &&
+                    !(targetProps?.promptTemplate?.trim())
+                  ) {
+                    log.warn(
+                      `Handoff to isolated subflow node ${nextNodeId} has neither a caller-supplied prompt nor an authored promptTemplate; the subflow will start with an empty prompt and may stall. The routing model should have supplied the required "prompt" argument (issue #169).`,
+                      { targetNodeId: nextNodeId },
+                    );
+                  }
+                } catch (guardErr) {
+                  log.debug('Issue #169 empty-prompt handoff guard check failed (non-fatal)', { guardErr });
+                }
               }
 
               // NOTE: we no longer append a synthetic "The handoff was

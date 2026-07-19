@@ -120,7 +120,7 @@ export class ProcessNode extends BaseNode {
       // prefix-cache stability from #89). The param is OPTIONAL: the model may
       // still route with no prompt, in which case the authored promptTemplate is
       // used as the default (see SubflowNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean } | undefined;
+      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string } | undefined;
       // Spawn-with-brief (issue #156, supersedes the #130 `parallelFlows` param):
       // a subflow target that opted into `allowCallerFanout` is a SPAWNABLE
       // sub-agent. Its handoff tool gains an optional `task` string, and the
@@ -136,8 +136,20 @@ export class ProcessNode extends BaseNode {
         target.type === 'subflow' &&
         targetProps?.inputMode === 'isolated' &&
         targetProps?.allowCallerPrompt === true;
+      // Issue #169: for a NON-spawn, isolated, allowCallerPrompt subflow that has
+      // NO authored message on the node itself (empty promptTemplate), the caller
+      // MUST supply a prompt — otherwise the subflow starts with an empty prompt
+      // and the chain dies silently (StartNode asks the user for input). In that
+      // exact configuration we mark `prompt` as JSON-Schema `required`, turning a
+      // silent runtime dead-end into a schema-enforced guarantee. Every other
+      // configuration keeps `prompt` optional exactly as before.
+      const promptIsMandatory =
+        acceptsCallerPrompt &&
+        targetProps?.allowCallerFanout !== true &&
+        !(targetProps?.promptTemplate?.trim());
 
       const paramProps: Record<string, unknown> = {};
+      const requiredParams: string[] = [];
       const descExtras: string[] = [];
       if (acceptsCallerSpawn) {
         // `task` subsumes `prompt` for spawnable targets (a single spawn with a
@@ -152,9 +164,16 @@ export class ProcessNode extends BaseNode {
       } else if (acceptsCallerPrompt) {
         paramProps.prompt = {
           type: "string",
-          description: "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
+          description: promptIsMandatory
+            ? "REQUIRED initial brief/instruction for the target subflow (isolated mode). The subflow has no authored message of its own, so you MUST supply what it should work on — omitting it makes the subflow start with an empty prompt and stall."
+            : "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
         };
-        descExtras.push('Optionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.');
+        if (promptIsMandatory) {
+          requiredParams.push('prompt');
+          descExtras.push('You MUST pass a "prompt" argument instructing the target subflow — it has no authored message of its own.');
+        } else {
+          descExtras.push('Optionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.');
+        }
       }
       const hasParams = Object.keys(paramProps).length > 0;
 
@@ -164,7 +183,7 @@ export class ProcessNode extends BaseNode {
         inputSchema: {
           type: "object",
           properties: hasParams ? paramProps : {}, // parameter-less for a standard handoff
-          required: []
+          required: requiredParams
         }
       });
 

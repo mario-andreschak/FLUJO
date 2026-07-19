@@ -63,7 +63,9 @@ describe('ProcessNode.generateHandoffTools — caller-prompt schema (#96)', () =
 
     getFlowMock.mockResolvedValue({
       nodes: [
-        { id: 'sub-allow', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true } } },
+        // Has an authored promptTemplate, so `prompt` stays OPTIONAL (a caller
+        // brief is a nice-to-have; the authored message is the fallback).
+        { id: 'sub-allow', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'do the default thing' } } },
         { id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated' } } },
         { id: 'sub-fullhist', type: 'subflow', data: { properties: { inputMode: 'full-history', allowCallerPrompt: true } } },
       ],
@@ -141,6 +143,62 @@ describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', 
     // The non-opted subflow keeps the byte-identical empty schema.
     const plain = tools.find((t: any) => nameToId[t.name] === 'sub-plain');
     expect(plain.inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+  });
+
+  it('marks `prompt` REQUIRED for an isolated allowCallerPrompt subflow with NO authored promptTemplate (#169)', async () => {
+    const proc = makeProcessNode([
+      { edgeId: 'e-empty', nodeId: 'sub-empty' },
+      { edgeId: 'e-authored', nodeId: 'sub-authored' },
+      { edgeId: 'e-ws', nodeId: 'sub-ws' },
+    ]);
+
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        // No authored message → caller MUST supply a prompt.
+        { id: 'sub-empty', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true } } },
+        // Authored message → prompt stays optional.
+        { id: 'sub-authored', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'analyze the repo' } } },
+        // Whitespace-only authored message counts as empty → required.
+        { id: 'sub-ws', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: '   \n  ' } } },
+      ],
+    });
+
+    const sharedState = { flowId: 'flow-1' } as SharedState;
+    const tools = await (proc as any).generateHandoffTools(sharedState);
+    const nameToId = sharedState.handoffNameMap!;
+    const byId = (id: string) => tools.find((t: any) => nameToId[t.name] === id);
+
+    // Empty authored template → `prompt` present AND required.
+    const empty = byId('sub-empty');
+    expect(empty.inputSchema.properties.prompt.type).toBe('string');
+    expect(empty.inputSchema.required).toEqual(['prompt']);
+    expect(empty.description).toContain('MUST');
+
+    // Authored template → `prompt` present but optional.
+    const authored = byId('sub-authored');
+    expect(authored.inputSchema.properties.prompt.type).toBe('string');
+    expect(authored.inputSchema.required).toEqual([]);
+
+    // Whitespace-only authored template is treated as empty → required.
+    const ws = byId('sub-ws');
+    expect(ws.inputSchema.required).toEqual(['prompt']);
+  });
+
+  it('keeps `prompt` OPTIONAL for a spawn (allowCallerFanout) target even with no authored message (#169 excludes spawn)', async () => {
+    // Spawn targets expose `task`, not `prompt`, and must never force a required
+    // arg — the #169 mandatory rule applies only to the non-parallel prompt path.
+    const proc = makeProcessNode([{ edgeId: 'e-spawn', nodeId: 'sub-spawn' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'sub-spawn', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, allowCallerFanout: true } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].inputSchema.properties.task.type).toBe('string');
+    expect(tools[0].inputSchema.properties.prompt).toBeUndefined();
+    expect(tools[0].inputSchema.required).toEqual([]);
   });
 
   it('spawn wins over caller-prompt when both are opted in (only `task` is exposed)', async () => {
