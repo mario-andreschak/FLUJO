@@ -322,14 +322,14 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
             onClick={() => handlePropertyChange('inputMode', 'full-history')}
             icon={<HistoryIcon />}
             title="Full conversation"
-            description="The subflow sees the whole conversation so far. Best for a helper that should continue with all the context."
+            description="The subflow sees the whole conversation so far, minus tool plumbing (system messages, tool calls and tool results are always stripped). Best for a helper that should continue with all the context."
           />
           <OptionCard
             selected={inputMode === 'latest-message'}
             onClick={() => handlePropertyChange('inputMode', 'latest-message')}
             icon={<ShortTextIcon />}
             title="Latest message only"
-            description="The subflow sees only the most recent message. Best for an orchestrator that hands off one task at a time, so old tasks don't leak in."
+            description="The subflow sees the conversation from the most recent user message onward (not just one message), with tool plumbing stripped. Best for an orchestrator that hands off one task at a time, so old tasks don't leak in."
           />
           <OptionCard
             selected={inputMode === 'isolated'}

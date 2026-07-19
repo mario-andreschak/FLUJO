@@ -306,7 +306,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
               {inputMode === 'isolated'
                 ? '(the prompt below, as the user message)'
                 : inputMode === 'latest-message'
-                  ? '(only the most recent user message)'
+                  ? '(from the most recent user message onward)'
                   : '(coming from ChatCompletion endpoint)'}
             </Typography>
           </Box>
@@ -331,7 +331,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
             onClick={() => setInputMode('latest-message')}
             icon={<ShortTextIcon fontSize="small" />}
             title="Latest message only"
-            description="The model sees this node's prompt plus only the most recent user message."
+            description="The model sees this node's prompt plus everything from the most recent user message onward — including this turn's own tool calls and results."
           />
           <OptionCard
             selected={inputMode === 'isolated'}
