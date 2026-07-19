@@ -19,7 +19,33 @@ export interface BugReportContextInput {
   installMode?: string;
   mcpServerNames?: string[];
   userAgent?: string;
+  /**
+   * Relative page path (+ hash) only, e.g. `/chat#foo`. SECURITY: never pass an
+   * absolute URL/origin or a query string here (see `sanitizePageUrl`).
+   */
+  pageUrl?: string;
   now?: Date;
+}
+
+/**
+ * Reduce any URL/path to a strictly non-sensitive, relative form: pathname + hash only.
+ * The origin/host and the query string are dropped by construction, so no tunnel domain
+ * or token-bearing `?...` value can ever leak into a public issue. Absent/blank → 'unknown'.
+ */
+export function sanitizePageUrl(raw: string | undefined | null): string {
+  const value = (raw || '').trim();
+  if (!value) return 'unknown';
+  // Strip the query string first (may carry tokens), then keep pathname + hash.
+  // Split off a fragment, then off a query string.
+  const hashIndex = value.indexOf('#');
+  const hash = hashIndex >= 0 ? value.slice(hashIndex) : '';
+  let pathPart = hashIndex >= 0 ? value.slice(0, hashIndex) : value;
+  const queryIndex = pathPart.indexOf('?');
+  if (queryIndex >= 0) pathPart = pathPart.slice(0, queryIndex);
+  // Defensively drop any origin if an absolute URL slipped through.
+  pathPart = pathPart.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '');
+  const result = `${pathPart}${hash}`.trim();
+  return result || 'unknown';
 }
 
 /** Derive a coarse OS label from a user-agent string (no fingerprinting). */
@@ -58,6 +84,7 @@ export function buildBugReportContext(input: BugReportContextInput = {}): SafeBu
     mcpServerNames: Array.isArray(input.mcpServerNames)
       ? input.mcpServerNames.filter((n): n is string => typeof n === 'string' && n.length > 0)
       : [],
+    pageUrl: sanitizePageUrl(input.pageUrl),
     timestamp: (input.now ?? new Date()).toISOString(),
   };
 }
@@ -104,10 +131,18 @@ export async function collectBugReportContext(): Promise<SafeBugContext> {
     /* ignore — degrade gracefully */
   }
 
+  // Relative page location ONLY (pathname + hash). Never the origin/host, and the
+  // query string is dropped in the builder so no token-bearing `?...` can leak.
+  const pageUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.pathname}${window.location.hash}`
+      : 'unknown';
+
   return buildBugReportContext({
     appVersion,
     installMode,
     mcpServerNames,
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+    pageUrl,
   });
 }

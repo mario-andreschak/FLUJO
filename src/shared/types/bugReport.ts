@@ -30,6 +30,12 @@ export interface SafeBugContext {
   os: string;
   browser: string;
   mcpServerNames: string[];
+  /**
+   * The relative page path (+ hash) the user was on when reporting, e.g. `/chat#foo`.
+   * SECURITY: relative only — never the origin/host, and never the query string, so no
+   * tunnel domain or token-bearing `?...` value can leak. Defaults to 'unknown'.
+   */
+  pageUrl: string;
   timestamp: string;
 }
 
@@ -44,6 +50,7 @@ export const SAFE_BUG_CONTEXT_KEYS: ReadonlyArray<keyof SafeBugContext> = [
   'os',
   'browser',
   'mcpServerNames',
+  'pageUrl',
   'timestamp',
 ];
 
@@ -79,6 +86,7 @@ export function formatContextBlock(ctx: SafeBugContext): string {
     `OS: ${ctx.os}`,
     `Browser: ${ctx.browser}`,
     `MCP servers: ${ctx.mcpServerNames.length ? ctx.mcpServerNames.join(', ') : '(none)'}`,
+    `Page: ${ctx.pageUrl}`,
     `Reported: ${ctx.timestamp}`,
     '```',
   ].join('\n');

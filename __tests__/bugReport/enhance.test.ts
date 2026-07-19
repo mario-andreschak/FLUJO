@@ -40,6 +40,7 @@ describe('sanitizeBugContext', () => {
       os: 'Windows',
       browser: 'Chrome',
       mcpServerNames: ['a', 'b', 5],
+      pageUrl: '/chat#thread',
       timestamp: '2026-07-17T18:00:00.000Z',
       apiKey: 'sk-SECRET',
       env: { TOKEN: 'shh' },
@@ -50,6 +51,7 @@ describe('sanitizeBugContext', () => {
       os: 'Windows',
       browser: 'Chrome',
       mcpServerNames: ['a', 'b'],
+      pageUrl: '/chat#thread',
       timestamp: '2026-07-17T18:00:00.000Z',
     });
     expect(JSON.stringify(ctx)).not.toContain('sk-SECRET');
@@ -63,6 +65,7 @@ describe('sanitizeBugContext', () => {
       os: 'unknown',
       browser: 'unknown',
       mcpServerNames: [],
+      pageUrl: 'unknown',
       timestamp: 'unknown',
     });
   });

@@ -6,6 +6,7 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('frontend/components/Navigation');
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { interceptNavigation } from '@/frontend/utils/navigationGuard';
@@ -82,6 +83,8 @@ export default function Navigation() {
             </Typography>
           ))}
         </Box>
+
+        <BugReportButton variant="icon" />
 
         <IconButton 
           onClick={() => {

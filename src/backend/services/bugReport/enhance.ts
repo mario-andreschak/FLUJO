@@ -67,6 +67,7 @@ export function sanitizeBugContext(input: unknown): SafeBugContext {
     mcpServerNames: Array.isArray(src.mcpServerNames)
       ? (src.mcpServerNames as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 100)
       : [],
+    pageUrl: str(src.pageUrl),
     timestamp: str(src.timestamp),
   };
 }

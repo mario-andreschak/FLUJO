@@ -10,6 +10,7 @@ import {
   buildBugReportContext,
   detectOs,
   detectBrowser,
+  sanitizePageUrl,
 } from '@/frontend/utils/bugReportContext';
 import { SAFE_BUG_CONTEXT_KEYS } from '@/shared/types/bugReport';
 
@@ -29,6 +30,32 @@ describe('detectOs / detectBrowser', () => {
   });
 });
 
+describe('sanitizePageUrl', () => {
+  it('keeps a plain relative path', () => {
+    expect(sanitizePageUrl('/models')).toBe('/models');
+  });
+
+  it('drops the query string but keeps the hash', () => {
+    expect(sanitizePageUrl('/chat?access_token=sk-SECRET#msg-1')).toBe('/chat#msg-1');
+  });
+
+  it('strips the origin/host from an absolute URL (no tunnel domain leak)', () => {
+    expect(sanitizePageUrl('https://abc123.trycloudflare.com/settings?x=1')).toBe('/settings');
+  });
+
+  it('never leaks token-shaped query values', () => {
+    const out = sanitizePageUrl('/oauth/callback?code=SECRET-CODE&state=SECRET-STATE');
+    expect(out).toBe('/oauth/callback');
+    expect(out).not.toContain('SECRET');
+  });
+
+  it('defaults blank / missing input to unknown', () => {
+    expect(sanitizePageUrl('')).toBe('unknown');
+    expect(sanitizePageUrl(undefined)).toBe('unknown');
+    expect(sanitizePageUrl(null)).toBe('unknown');
+  });
+});
+
 describe('buildBugReportContext', () => {
   const fixedNow = new Date('2026-07-17T18:00:00.000Z');
 
@@ -38,6 +65,7 @@ describe('buildBugReportContext', () => {
       installMode: 'git',
       mcpServerNames: ['github', 'filesystem'],
       userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120 Safari/537.36',
+      pageUrl: '/chat#thread',
       now: fixedNow,
     });
     expect(ctx).toEqual({
@@ -46,6 +74,7 @@ describe('buildBugReportContext', () => {
       os: 'Windows',
       browser: 'Chrome',
       mcpServerNames: ['github', 'filesystem'],
+      pageUrl: '/chat#thread',
       timestamp: '2026-07-17T18:00:00.000Z',
     });
   });
@@ -55,6 +84,7 @@ describe('buildBugReportContext', () => {
     expect(ctx.appVersion).toBe('unknown');
     expect(ctx.installMode).toBe('unknown');
     expect(ctx.mcpServerNames).toEqual([]);
+    expect(ctx.pageUrl).toBe('unknown');
   });
 
   it('NEVER leaks secret-shaped extra fields (allowlist proof)', () => {
@@ -81,6 +111,18 @@ describe('buildBugReportContext', () => {
     for (const secret of ['sk-SECRET-123', 'sk-SECRET-456', 'shh', 'hunter2', 'Bearer SECRET']) {
       expect(serialized).not.toContain(secret);
     }
+  });
+
+  it('captures a relative page url and drops the query string / origin', () => {
+    // Query string is dropped (may carry tokens); pathname + hash are kept.
+    expect(buildBugReportContext({ pageUrl: '/chat?token=SECRET#a', now: fixedNow }).pageUrl).toBe(
+      '/chat#a'
+    );
+    // An absolute URL that slipped through is reduced to its relative part (no origin/host).
+    expect(
+      buildBugReportContext({ pageUrl: 'https://my-tunnel.example.com/flows?k=v', now: fixedNow })
+        .pageUrl
+    ).toBe('/flows');
   });
 
   it('filters non-string mcp server names', () => {

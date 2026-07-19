@@ -5,6 +5,8 @@ import {
   Box,
   Typography,
   Button,
+  IconButton,
+  Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -30,9 +32,26 @@ import { collectBugReportContext } from '@/frontend/utils/bugReportContext';
 import { openGitHubNewIssue } from '@/frontend/utils/openGitHubIssue';
 import { bugReportService } from '@/frontend/services/bugReport';
 
-const log = createLogger('frontend/components/Settings/BugReportSettings');
+const log = createLogger('frontend/components/BugReport/BugReportButton');
 
-export default function BugReportSettings() {
+export interface BugReportButtonProps {
+  /**
+   * How to render the trigger:
+   *  - 'icon'   → a compact `IconButton` (used in the top navigation bar).
+   *  - 'button' → a labelled `Button` (used inside Settings, if kept).
+   */
+  variant?: 'icon' | 'button';
+}
+
+/**
+ * Self-contained "Report a Bug" trigger + dialog.
+ *
+ * Owns all report logic: dialog open state, title/description fields, model-based
+ * "Enhance with AI", read-only safe-context preview, and submit → openGitHubNewIssue.
+ * The safe context (see collectBugReportContext / SafeBugContext) is collected fresh
+ * every time the dialog opens, so it reflects the page the user was on.
+ */
+export default function BugReportButton({ variant = 'icon' }: BugReportButtonProps) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -103,27 +122,34 @@ export default function BugReportSettings() {
   }, [title, description, context, labels]);
 
   const handleClose = useCallback(() => setOpen(false), []);
+  const handleOpen = useCallback(() => setOpen(true), []);
 
   return (
-    <Box sx={{ maxWidth: 700 }}>
-      <Typography variant="h6" gutterBottom>
-        Report a Bug
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Found a problem? Describe it here. FLUJO attaches only safe, non-sensitive context
-        (app version, install mode, browser/OS, and the <em>names</em> of your configured MCP
-        servers). No API keys, environment variables, or secrets are ever included. You can
-        optionally polish the report with an AI model, then review it on GitHub before submitting.
-      </Typography>
-
-      <Button variant="contained" startIcon={<BugReportIcon />} onClick={() => setOpen(true)}>
-        Report a Bug
-      </Button>
+    <>
+      {variant === 'icon' ? (
+        <Tooltip title="Report a bug">
+          <IconButton onClick={handleOpen} color="inherit" aria-label="Report a bug">
+            <BugReportIcon />
+          </IconButton>
+        </Tooltip>
+      ) : (
+        <Button variant="contained" startIcon={<BugReportIcon />} onClick={handleOpen}>
+          Report a Bug
+        </Button>
+      )}
 
       <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
         <DialogTitle>Report a Bug</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
+            <Typography variant="body2" color="text.secondary">
+              Found a problem? Describe it here. FLUJO attaches only safe, non-sensitive context
+              (app version, install mode, browser/OS, the current page, and the <em>names</em> of
+              your configured MCP servers). No API keys, environment variables, or secrets are ever
+              included. You can optionally polish the report with an AI model, then review it on
+              GitHub before submitting.
+            </Typography>
+
             {notice && <Alert severity={notice.severity}>{notice.text}</Alert>}
 
             <TextField
@@ -206,6 +232,6 @@ export default function BugReportSettings() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </>
   );
 }
