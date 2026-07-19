@@ -79,6 +79,25 @@ export class SchedulerService {
   private queued = new Map<string, QueuedFire[]>();
   /** Hard cap on the per-execution overlap queue depth (issue #121). */
   private static readonly MAX_QUEUE_DEPTH = 50;
+  /**
+   * Execution id currently holding the scheduler-global exclusive lock
+   * (issue #171), or null when no exclusive execution is active. While set,
+   * only fires for THIS id (its own self-overlap) may start; every other
+   * execution's fire is gated per `nonExclusiveBehavior`.
+   */
+  private exclusiveHolder: string | null = null;
+  /** nonExclusiveBehavior of the current exclusive holder (issue #171). */
+  private exclusiveHolderBehavior: 'queue' | 'skip' | 'error' = 'queue';
+  /**
+   * Exclusive executions waiting for the scheduler to drain to idle so they
+   * can acquire the lock (issue #171). FIFO; bounded by MAX_QUEUE_DEPTH.
+   */
+  private exclusiveWaiting: QueuedFire[] = [];
+  /**
+   * Non-exclusive fires deferred because an exclusive execution holds/awaits
+   * the lock with nonExclusiveBehavior 'queue' (issue #171). FIFO; bounded.
+   */
+  private blockedByExclusive: QueuedFire[] = [];
   /** Most recent trigger-level error (watcher/poll failures), for the UI. */
   private lastTriggerErrors = new Map<string, string>();
   /** Serializes reconcile/arm mutations so concurrent API calls can't interleave. */
@@ -360,6 +379,9 @@ export class SchedulerService {
       for (const id of [...this.queued.keys()]) {
         await this.cancelQueued(id, 'scheduler paused', true);
       }
+      // Exclusive waiters and exclusive-blocked fires must not run while paused
+      // either (issue #171); cancel them so their awaiters never hang.
+      await this.cancelAllExclusiveWaiting('scheduler paused', true);
     }
   }
 
@@ -459,6 +481,8 @@ export class SchedulerService {
     // rather than silently running the old config; storage still exists so the
     // skip is audited. Fresh fires re-enqueue against the updated config.
     await this.cancelQueued(id, 'execution updated', true);
+    // Same staleness reasoning for the exclusive-mode global queues (issue #171).
+    await this.cancelExclusiveWaiting(id, 'execution updated', true);
     return { execution: merged };
   }
 
@@ -477,6 +501,9 @@ export class SchedulerService {
     // false so appendRunRecord can't recreate planned-execution-runs/<id>.json
     // — the reported resurrection bug.
     await this.cancelQueued(id, 'execution deleted', false);
+    // Drop any exclusive-mode waiters for this id before erasing history so a
+    // drain can't resurrect storage (issue #171, mirrors cancelQueued).
+    await this.cancelExclusiveWaiting(id, 'execution deleted', false);
     await deleteRunHistory(id);
     await deleteExecutionState(id);
     return { success: true };
@@ -513,6 +540,15 @@ export class SchedulerService {
       !['skip', 'queue', 'parallel', 'error'].includes(input.overlapStrategy)
     ) {
       return 'Overlap strategy must be one of: skip, queue, parallel, error';
+    }
+    if (input.exclusive !== undefined && typeof input.exclusive !== 'boolean') {
+      return 'Exclusive must be true or false';
+    }
+    if (
+      input.nonExclusiveBehavior !== undefined &&
+      !['queue', 'skip', 'error'].includes(input.nonExclusiveBehavior)
+    ) {
+      return 'When exclusive is on, other triggers must be one of: queue, skip, error';
     }
     const trigger = input.trigger;
     if (!trigger || typeof trigger !== 'object') {
@@ -764,6 +800,220 @@ export class SchedulerService {
     })().catch(error => log.error(`Queued fire failed for ${id}:`, error));
   }
 
+  // --- exclusive mode (issue #171) -----------------------------------------
+
+  /** True when NO run is in flight across ANY execution (scheduler-global idle). */
+  private isSchedulerIdle(): boolean {
+    for (const runs of this.running.values()) {
+      if (runs.size > 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** True while an exclusive execution holds OR is waiting to acquire the lock. */
+  private isExclusiveActive(): boolean {
+    return this.exclusiveHolder !== null || this.exclusiveWaiting.length > 0;
+  }
+
+  /**
+   * The nonExclusiveBehavior currently governing non-exclusive fires: the
+   * holder's when the lock is held, otherwise the head waiter's; default
+   * 'queue'. Config is read fresh whenever a fire (re)enters the exclusive gate.
+   */
+  private currentExclusiveBehavior(): 'queue' | 'skip' | 'error' {
+    if (this.exclusiveHolder !== null) {
+      return this.exclusiveHolderBehavior;
+    }
+    return this.exclusiveWaiting[0]?.execution.nonExclusiveBehavior ?? 'queue';
+  }
+
+  /**
+   * For the webhook route (issue #171): if a NON-exclusive fire of this
+   * execution would be gated right now by an active exclusive lock, return the
+   * governing behavior; otherwise null. Lets the HTTP layer answer 423 for the
+   * 'error' behavior without duplicating the gating logic.
+   */
+  exclusiveGateFor(execution: PlannedExecution): 'queue' | 'skip' | 'error' | null {
+    if (execution.exclusive === true || !this.isExclusiveActive()) {
+      return null;
+    }
+    return this.currentExclusiveBehavior();
+  }
+
+  /**
+   * Progress the scheduler-global exclusive machinery after a run ends or a
+   * lifecycle change (issue #171). A waiting exclusive claims the freshly-idle
+   * window FIRST; only when NO exclusive is active are blocked non-exclusive
+   * fires released — so a waiting exclusive never loses the idle window to the
+   * non-exclusive backlog (the issue's "clean tree" guarantee).
+   */
+  private drainExclusive(): void {
+    if (
+      this.exclusiveHolder === null &&
+      this.exclusiveWaiting.length > 0 &&
+      this.isSchedulerIdle()
+    ) {
+      this.acquireNextExclusive();
+      return;
+    }
+    if (!this.isExclusiveActive()) {
+      this.drainBlockedByExclusive();
+    }
+  }
+
+  /**
+   * Pop the next waiting exclusive fire and run it, provided the scheduler is
+   * idle and the lock is free. Claims the lock SYNCHRONOUSLY (before any await)
+   * so no non-exclusive fire can slip through the async config re-check. The
+   * re-fire reloads the fresh config (like drainQueue) and re-validates that the
+   * execution still exists, is enabled, unpaused and still exclusive.
+   */
+  private acquireNextExclusive(): void {
+    if (this.exclusiveHolder !== null || !this.isSchedulerIdle()) {
+      return;
+    }
+    const next = this.exclusiveWaiting.shift();
+    if (!next) {
+      return;
+    }
+    const id = next.execution.id;
+    // Provisionally claim the lock synchronously.
+    this.exclusiveHolder = id;
+    this.exclusiveHolderBehavior = next.execution.nonExclusiveBehavior ?? 'queue';
+    void (async () => {
+      const current = await this.get(id);
+      if (!current || !current.enabled || this.pausedCache || current.exclusive !== true) {
+        const reason = !current
+          ? 'execution deleted'
+          : !current.enabled
+            ? 'execution disabled'
+            : this.pausedCache
+              ? 'scheduler paused'
+              : 'no longer exclusive';
+        if (this.exclusiveHolder === id) {
+          this.exclusiveHolder = null;
+        }
+        next.resolve(this.skippedRecord(next, reason));
+        // Try the next waiter, or release the blocked non-exclusive backlog.
+        this.drainExclusive();
+        return;
+      }
+      // Hold against the freshest config.
+      this.exclusiveHolderBehavior = current.nonExclusiveBehavior ?? 'queue';
+      const record = await this.fire(current, next.payload, next.runId);
+      next.resolve(record);
+    })().catch(error => {
+      if (this.exclusiveHolder === id) {
+        this.exclusiveHolder = null;
+      }
+      log.error(`Exclusive acquire failed for ${id}:`, error);
+      next.resolve(this.skippedRecord(next, 'exclusive acquire failed'));
+      this.drainExclusive();
+    });
+  }
+
+  /**
+   * Release every non-exclusive fire deferred while an exclusive held the lock
+   * (issue #171). Re-fires each against its fresh config, re-checking
+   * existence/enabled/pause so a since-removed execution resolves `skipped`.
+   */
+  private drainBlockedByExclusive(): void {
+    if (this.blockedByExclusive.length === 0) {
+      return;
+    }
+    const pending = this.blockedByExclusive;
+    this.blockedByExclusive = [];
+    for (const fire of pending) {
+      void (async () => {
+        const current = await this.get(fire.execution.id);
+        if (!current || !current.enabled || this.pausedCache) {
+          const reason = !current
+            ? 'execution deleted'
+            : !current.enabled
+              ? 'execution disabled'
+              : 'scheduler paused';
+          fire.resolve(this.skippedRecord(fire, reason));
+          return;
+        }
+        const record = await this.fire(current, fire.payload, fire.runId);
+        fire.resolve(record);
+      })().catch(error =>
+        log.error(`Deferred non-exclusive fire failed for ${fire.execution.id}:`, error)
+      );
+    }
+  }
+
+  /**
+   * Cancel exclusive-mode waiting/blocked fires for ONE id (issue #171),
+   * settling each awaiter with a `skipped` record so poll/url-watch onFire never
+   * hang — the same contract as cancelQueued for the overlap queue.
+   */
+  private async cancelExclusiveWaiting(
+    id: string,
+    reason: string,
+    appendAudit: boolean
+  ): Promise<void> {
+    const matches: QueuedFire[] = [];
+    this.exclusiveWaiting = this.exclusiveWaiting.filter(f => {
+      if (f.execution.id === id) {
+        matches.push(f);
+        return false;
+      }
+      return true;
+    });
+    this.blockedByExclusive = this.blockedByExclusive.filter(f => {
+      if (f.execution.id === id) {
+        matches.push(f);
+        return false;
+      }
+      return true;
+    });
+    if (matches.length === 0) {
+      return;
+    }
+    for (const fire of matches) {
+      const record = this.skippedRecord(fire, reason);
+      if (appendAudit) {
+        try {
+          await appendRunRecord(id, record);
+        } catch (error) {
+          log.warn(`Failed to record cancelled exclusive fire for ${id}:`, error);
+        }
+      }
+      fire.resolve(record);
+    }
+    log.info(`Cancelled ${matches.length} exclusive-related fire(s) for ${id}: ${reason}`);
+  }
+
+  /**
+   * Cancel ALL exclusive-mode waiting/blocked fires regardless of id (issue
+   * #171) — used by the global pause switch. Never recreates deleted storage:
+   * appendAudit is true here because pause leaves every execution's storage in
+   * place.
+   */
+  private async cancelAllExclusiveWaiting(reason: string, appendAudit: boolean): Promise<void> {
+    const all = [...this.exclusiveWaiting, ...this.blockedByExclusive];
+    this.exclusiveWaiting = [];
+    this.blockedByExclusive = [];
+    if (all.length === 0) {
+      return;
+    }
+    for (const fire of all) {
+      const record = this.skippedRecord(fire, reason);
+      if (appendAudit) {
+        try {
+          await appendRunRecord(fire.execution.id, record);
+        } catch (error) {
+          log.warn(`Failed to record cancelled exclusive fire for ${fire.execution.id}:`, error);
+        }
+      }
+      fire.resolve(record);
+    }
+    log.info(`Cancelled ${all.length} exclusive-related fire(s): ${reason}`);
+  }
+
   // --- status --------------------------------------------------------------
 
   getStatus(execution: PlannedExecution): PlannedExecutionStatus {
@@ -788,6 +1038,11 @@ export class SchedulerService {
         : this.pausedCache
           ? 'paused'
           : undefined;
+    // Exclusive-mode live state (issue #171): surface who holds the global lock
+    // and whether this (non-exclusive) execution is currently gated by it, so
+    // the UI can show an "Exclusive" badge and a "blocked by exclusive" hint.
+    const exclusiveHolderId = this.exclusiveHolder ?? undefined;
+    const blockedByExclusive = execution.exclusive !== true && this.isExclusiveActive();
     return {
       armed,
       notArmedReason,
@@ -795,6 +1050,8 @@ export class SchedulerService {
       lastTriggerError: this.lastTriggerErrors.get(execution.id),
       running: runningSince !== undefined,
       runningSince,
+      exclusiveHolderId,
+      blockedByExclusive,
     };
   }
 
@@ -858,6 +1115,103 @@ export class SchedulerService {
       await appendRunRecord(execution.id, record);
       log.info(`Skipped fire for "${execution.name}" — encryption locked`);
       return record;
+    }
+
+    // Exclusive-mode gating (issue #171): a scheduler-GLOBAL mutual-exclusion
+    // lock, layered AFTER the encryption guard and BEFORE the per-execution
+    // overlap policy. A manual run (bypassOverlap) is an explicit user override
+    // and is exempt; a flow-event fire is emitted synchronously as another run
+    // finishes, so gating it here could deadlock the chain — it too is exempt.
+    const isChainedFire = payload.kind === 'flow-event';
+    if (!bypassOverlap && !isChainedFire) {
+      if (execution.exclusive === true) {
+        // Exclusive: only start when the scheduler is globally idle AND the lock
+        // is free — unless this fire already holds it (dequeued from the
+        // exclusive-waiting queue by acquireNextExclusive).
+        if (this.exclusiveHolder !== execution.id) {
+          if (this.exclusiveHolder !== null || !this.isSchedulerIdle()) {
+            const depth = this.exclusiveWaiting.length;
+            if (depth >= SchedulerService.MAX_QUEUE_DEPTH) {
+              const record: RunRecord = {
+                runId,
+                conversationId: '',
+                firedAt,
+                finishedAt: firedAt,
+                status: 'skipped',
+                triggerSummary: payload.summary,
+                error: `Exclusive wait queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
+              };
+              await appendRunRecord(execution.id, record);
+              log.warn(`Exclusive wait queue full for "${execution.name}" — dropped fire`);
+              return record;
+            }
+            log.info(
+              `Exclusive "${execution.name}" waiting for scheduler to idle (depth ${depth + 1})`
+            );
+            return new Promise<RunRecord>(resolve => {
+              this.exclusiveWaiting.push({ execution, payload, runId, resolve });
+            });
+          }
+          // Idle and lock free — acquire it now (synchronously, before any await).
+          this.exclusiveHolder = execution.id;
+          this.exclusiveHolderBehavior = execution.nonExclusiveBehavior ?? 'queue';
+          log.info(`Exclusive "${execution.name}" acquired the scheduler lock`);
+        }
+      } else if (this.isExclusiveActive()) {
+        // Non-exclusive fire while an exclusive holds/awaits the lock: apply the
+        // exclusive execution's nonExclusiveBehavior (default 'queue').
+        const behavior = this.currentExclusiveBehavior();
+        if (behavior === 'skip') {
+          const record: RunRecord = {
+            runId,
+            conversationId: '',
+            firedAt,
+            finishedAt: firedAt,
+            status: 'skipped',
+            triggerSummary: payload.summary,
+            error: 'Skipped — an exclusive execution holds the scheduler lock',
+          };
+          await appendRunRecord(execution.id, record);
+          log.info(`Skipped non-exclusive fire for "${execution.name}" — exclusive lock held`);
+          return record;
+        }
+        if (behavior === 'error') {
+          const record: RunRecord = {
+            runId,
+            conversationId: '',
+            firedAt,
+            finishedAt: firedAt,
+            status: 'error',
+            triggerSummary: payload.summary,
+            error: 'Rejected — an exclusive execution holds the scheduler lock',
+          };
+          await appendRunRecord(execution.id, record);
+          log.info(`Rejected non-exclusive fire for "${execution.name}" — exclusive lock held`);
+          return record;
+        }
+        // behavior === 'queue': defer until the exclusive lock releases.
+        const depth = this.blockedByExclusive.length;
+        if (depth >= SchedulerService.MAX_QUEUE_DEPTH) {
+          const record: RunRecord = {
+            runId,
+            conversationId: '',
+            firedAt,
+            finishedAt: firedAt,
+            status: 'skipped',
+            triggerSummary: payload.summary,
+            error: `Exclusive-block queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
+          };
+          await appendRunRecord(execution.id, record);
+          log.warn(`Exclusive-block queue full for "${execution.name}" — dropped fire`);
+          return record;
+        }
+        log.info(
+          `Deferred non-exclusive fire for "${execution.name}" — exclusive lock held (depth ${depth + 1})`
+        );
+        return new Promise<RunRecord>(resolve => {
+          this.blockedByExclusive.push({ execution, payload, runId, resolve });
+        });
+      }
     }
 
     // Overlap policy (issue #121): decide what to do when a fire arrives while
@@ -997,6 +1351,17 @@ export class SchedulerService {
       log.error(`Run crashed for "${execution.name}":`, error);
     } finally {
       this.removeRunning(execution.id, runId);
+      // Release the scheduler-global exclusive lock once the holder has no more
+      // in-flight runs (issue #171). A self-parallel exclusive keeps the lock
+      // until its LAST run drains.
+      if (this.exclusiveHolder === execution.id && !this.isRunning(execution.id)) {
+        this.exclusiveHolder = null;
+        log.info(`Exclusive "${execution.name}" released the scheduler lock`);
+      }
+      // Drain order (issue #171): a waiting exclusive claims the freshly-idle
+      // window BEFORE blocked non-exclusive fires refill the scheduler; then the
+      // per-execution overlap queue.
+      this.drainExclusive();
       // Start the next queued fire (if any) now that this run has ended.
       this.drainQueue(execution.id);
     }

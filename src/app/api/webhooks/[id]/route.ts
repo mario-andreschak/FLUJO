@@ -103,6 +103,12 @@ export async function POST(
     const overlapRejected =
       (execution.overlapStrategy ?? 'skip') === 'error' &&
       scheduler.isRunning(execution.id);
+    // Exclusive mode (issue #171): if an exclusive execution holds the
+    // scheduler-global lock and its nonExclusiveBehavior is 'error', this
+    // non-exclusive webhook fire is rejected. Surface it as 423 Locked — the
+    // scheduler is locked by an exclusive execution — distinct from the 409 used
+    // for the same-execution overlap 'error' case above.
+    const exclusiveGate = scheduler.exclusiveGateFor(execution);
     // Fire-and-forget: the record lands in run history; fire() never throws.
     void scheduler.fire(
       execution,
@@ -113,6 +119,9 @@ export async function POST(
       },
       runId
     );
+    if (exclusiveGate === 'error') {
+      return json({ error: 'The scheduler is locked by an exclusive execution', runId }, 423);
+    }
     if (overlapRejected) {
       return json({ error: 'A previous run is still in progress', runId }, 409);
     }

@@ -108,6 +108,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [prompt, setPrompt] = useState('');
   const [saveConversations, setSaveConversations] = useState(false);
   const [overlapStrategy, setOverlapStrategy] = useState<OverlapStrategy>('skip');
+  const [exclusive, setExclusive] = useState(false);
+  const [nonExclusiveBehavior, setNonExclusiveBehavior] =
+    useState<'queue' | 'skip' | 'error'>('queue');
   const [trigger, setTrigger] = useState<TriggerConfig>(DEFAULT_SCHEDULE);
   // Pre-generated id for NEW executions, so trigger types whose config is
   // id-derived (the webhook URL) can be shown before the first save.
@@ -126,6 +129,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setPrompt(execution?.prompt ?? '');
     setSaveConversations(execution?.saveConversations === true);
     setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
+    setExclusive(execution?.exclusive === true);
+    setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
     setTrigger(execution?.trigger ?? DEFAULT_SCHEDULE);
     setDraftId(execution ? '' : crypto.randomUUID());
   }, [open, execution]);
@@ -160,6 +165,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       prompt,
       saveConversations,
       overlapStrategy,
+      exclusive,
+      nonExclusiveBehavior,
       trigger,
       enabled: execution?.enabled ?? true,
       // The pre-generated id makes the webhook URL shown in the panel real.
@@ -362,6 +369,41 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                 : 'What happens when this trigger fires while a previous run of it is still going.'}
           </FormHelperText>
         </FormControl>
+
+        <FormControlLabel
+          sx={{ mt: 1 }}
+          control={
+            <Switch
+              checked={exclusive}
+              onChange={(e) => setExclusive(e.target.checked)}
+            />
+          }
+          label="Exclusive — only run when nothing else is running, and block other runs while it does"
+        />
+        {exclusive && (
+          <FormControl fullWidth margin="normal">
+            <InputLabel id="non-exclusive-behavior-label">
+              While this runs, other triggers…
+            </InputLabel>
+            <Select
+              labelId="non-exclusive-behavior-label"
+              label="While this runs, other triggers…"
+              value={nonExclusiveBehavior}
+              onChange={(e) =>
+                setNonExclusiveBehavior(e.target.value as 'queue' | 'skip' | 'error')
+              }
+            >
+              <MenuItem value="queue">Queue — run them after this finishes (default)</MenuItem>
+              <MenuItem value="skip">Skip — drop them</MenuItem>
+              <MenuItem value="error">Fail — reject them (webhook gets 423)</MenuItem>
+            </Select>
+            <FormHelperText>
+              An exclusive run waits until the scheduler is idle, then holds a
+              global lock so no other planned execution can start until it
+              finishes.
+            </FormHelperText>
+          </FormControl>
+        )}
 
         <Divider sx={{ mt: 3 }} />
         <Typography variant="subtitle1" sx={{ mt: 2, mb: 0, fontWeight: 600 }}>

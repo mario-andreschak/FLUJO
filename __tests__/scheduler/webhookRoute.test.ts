@@ -12,12 +12,14 @@ import { POST } from '@/app/api/webhooks/[id]/route';
 const fireMock = jest.fn();
 const getMock = jest.fn();
 const isPausedMock = jest.fn();
+const exclusiveGateForMock = jest.fn();
 
 jest.mock('@/backend/services/scheduler', () => ({
   getSchedulerService: () => ({
     get: (...args: unknown[]) => getMock(...args),
     isPaused: (...args: unknown[]) => isPausedMock(...args),
     fire: (...args: unknown[]) => fireMock(...args),
+    exclusiveGateFor: (...args: unknown[]) => exclusiveGateForMock(...args),
   }),
 }));
 
@@ -57,6 +59,7 @@ beforeEach(() => {
   fireMock.mockReset().mockResolvedValue({ status: 'completed' });
   isPausedMock.mockReset().mockResolvedValue(false);
   getMock.mockReset().mockResolvedValue(execution());
+  exclusiveGateForMock.mockReset().mockReturnValue(null);
 });
 
 describe('webhook route', () => {

@@ -151,6 +151,11 @@ const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRan
               {execution.name}
             </Typography>
             <Chip size="small" label={describeTrigger(execution.trigger)} />
+            {execution.exclusive && (
+              <Tooltip title="Only runs when the scheduler is idle; blocks other runs while active">
+                <Chip size="small" color="secondary" label="Exclusive" />
+              </Tooltip>
+            )}
             {!execution.enabled && <Chip size="small" label="Off" variant="outlined" />}
           </Box>
           {status.running ? (
@@ -163,6 +168,13 @@ const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRan
                 Running…{status.runningSince ? ` — started ${formatTime(status.runningSince)}` : ''}
               </Typography>
             </Box>
+          ) : status.blockedByExclusive ? (
+            // A non-exclusive execution held off because an exclusive one holds
+            // (or is waiting for) the scheduler-global lock (issue #171).
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Blocked — an exclusive execution holds the scheduler
+              {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
+            </Typography>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
               {statusLine(entry)}

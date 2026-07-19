@@ -10,6 +10,12 @@ const log = createLogger('app/api/planned-executions/[id]/run/route');
  * POST /api/planned-executions/{id}/run
  * "Run now": fire the execution immediately (works while disabled or paused).
  * Waits for the run and returns its RunRecord.
+ *
+ * A manual run is an explicit user action, so — exactly like it bypasses the
+ * overlap policy — it also bypasses the scheduler-global exclusive lock
+ * (issue #171): it starts right away rather than waiting for the scheduler to
+ * idle, and it does not itself claim the lock. This keeps "Run now" a
+ * predictable hard override that can never hang behind an exclusive queue.
  */
 export async function POST(
   request: NextRequest,

@@ -193,6 +193,28 @@ export interface PlannedExecution {
    * when absent, so existing persisted configs keep working without migration.
    */
   overlapStrategy?: OverlapStrategy;
+  /**
+   * Exclusive mode (issue #171). When true, this execution may only START when
+   * the scheduler is globally idle (no other execution running). While it runs
+   * it holds a scheduler-global exclusive lock: no other trigger may start a
+   * run. If fired while other executions are running, it waits in the global
+   * exclusive queue and acquires the lock as soon as the scheduler drains to
+   * idle. Orthogonal to `overlapStrategy` (which only governs this execution
+   * overlapping ITSELF); the two compose independently. Defaults to false.
+   */
+  exclusive?: boolean;
+  /**
+   * What NON-exclusive executions' fires do while an exclusive execution holds
+   * (or is waiting to acquire) the scheduler-global lock (issue #171). Lives on
+   * the exclusive execution's config and applies scheduler-wide.
+   *  - 'queue' (default): defer non-exclusive fires (FIFO, bounded) until the
+   *            exclusive lock releases, then run them.
+   *  - 'skip' : drop the non-exclusive fire, recording a `skipped` run.
+   *  - 'error': reject the non-exclusive fire, recording an `error` run (and,
+   *             for the webhook path, a 423 Locked response).
+   * Ignored when `exclusive` is false.
+   */
+  nonExclusiveBehavior?: 'queue' | 'skip' | 'error';
   trigger: TriggerConfig;
   createdAt: string;
   updatedAt: string;
@@ -312,4 +334,17 @@ export interface PlannedExecutionStatus {
   running: boolean;
   /** ISO time the in-flight run started, for a live elapsed timer. */
   runningSince?: string;
+  /**
+   * Id of the execution currently holding the scheduler-global exclusive lock
+   * (issue #171), or undefined when no exclusive execution is active. The same
+   * value is reported on every execution's status so the UI can render a
+   * "blocked by exclusive" hint. When this execution IS the holder,
+   * exclusiveHolderId === execution.id.
+   */
+  exclusiveHolderId?: string;
+  /**
+   * True when an exclusive execution is holding/awaiting the lock AND this
+   * (non-exclusive) execution would be gated by it right now (issue #171).
+   */
+  blockedByExclusive?: boolean;
 }
