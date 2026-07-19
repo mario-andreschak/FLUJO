@@ -28,12 +28,14 @@ import type {
 // implementation and cannot drift apart.
 import {
   directSubflowIds,
+  directTopics,
   reachableTopics,
 } from '@/shared/utils/signalTopics';
 import type {
   Wave,
   WaveChainEdge,
   WaveChainNode,
+  WaveEmittedSignal,
   WaveGrouping,
   WaveNodeTiming,
   WaveSubflowRef,
@@ -132,6 +134,26 @@ function buildTiming(
   return { mode: 'fixed' };
 }
 
+/**
+ * Build the sorted, de-duped list of signal topics a node's bound flow can emit
+ * (#144): its OWN `signal` nodes are `direct: true`; topics only reachable
+ * through a statically-reachable subflow are `direct: false`. `topicsOf` is the
+ * memoized reachable-topic set (own + subflow), so this stays deterministic and
+ * consistent with the signal edge matcher.
+ */
+function emittedSignalsFor(
+  flowId: string,
+  flow: Flow | undefined,
+  topicsOf: (flowId: string) => Set<string>,
+): WaveEmittedSignal[] {
+  const direct = new Set(directTopics(flow));
+  const reachable = topicsOf(flowId);
+  const topics = new Set<string>([...direct, ...reachable]);
+  return [...topics]
+    .sort()
+    .map((topic) => ({ topic, direct: direct.has(topic) }));
+}
+
 /** Detect every execution id that participates in a directed cycle. */
 function findCycleNodes(edges: WaveChainEdge[], nodeIds: string[]): Set<string> {
   const adj = new Map<string, string[]>();
@@ -227,6 +249,7 @@ export function resolveWaves(input: ResolveWavesInput): WavesResponse {
       isRoot: isRootKind(kind),
       timing,
       subflows: buildSubflowTree(exec.flowId, flowsById, maxSubflowDepth, new Set([exec.flowId]), 0),
+      emittedSignals: emittedSignalsFor(exec.flowId, flow, topicsOf),
     });
   }
 

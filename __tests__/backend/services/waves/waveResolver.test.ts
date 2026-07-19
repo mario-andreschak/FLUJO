@@ -273,6 +273,33 @@ describe('resolveWaves', () => {
     expect(JSON.stringify(shuffled.orphans)).toEqual(JSON.stringify(first.orphans));
   });
 
+  test('emittedSignals surfaces direct + via-subflow topics, sorted (#144)', () => {
+    const flows = [
+      flow('fMulti', 'Multi', [
+        node('signal', { topic: 'produce-improvement' }),
+        node('signal', { topic: 'plan-available' }),
+        node('subflow', { subflowId: 'fChild' }),
+      ]),
+      flowWithSignal('fChild', 'Child', 'child-topic'),
+      flow('fNone', 'None'),
+    ];
+    const executions = [
+      exec('e1', 'fMulti', schedule()),
+      exec('e2', 'fNone', onFlow('fMulti')),
+    ];
+    const res = resolveWaves({ executions, flows, now: NOW });
+    const wave = res.waves.find((w) => w.id === 'e1')!;
+    const e1 = wave.nodes.find((n) => n.executionId === 'e1')!;
+    // Sorted alphabetically; child-topic only reachable via the subflow.
+    expect(e1.emittedSignals).toEqual([
+      { topic: 'child-topic', direct: false },
+      { topic: 'plan-available', direct: true },
+      { topic: 'produce-improvement', direct: true },
+    ]);
+    const e2 = wave.nodes.find((n) => n.executionId === 'e2')!;
+    expect(e2.emittedSignals).toEqual([]);
+  });
+
   test('connected-component grouping merges shared-downstream roots into one wave', () => {
     const flows = [flow('fP', 'Planner'), flow('fC', 'Coder')];
     const executions = [

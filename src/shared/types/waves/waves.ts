@@ -26,6 +26,20 @@ export type WaveTriggerKind =
   /** Never a root; always a chain link resolved from a signal/completion. */
   | 'flow-event';
 
+/**
+ * A signal topic a chain node's bound flow can emit at runtime. Surfaced on the
+ * card next to the subflow tree so producers show their signals (e.g.
+ * `plan-available`, `produce-improvement`) even when no consumer edge exists
+ * (#144).
+ */
+export interface WaveEmittedSignal {
+  /** The emitted signal topic. */
+  topic: string;
+  /** True when one of the flow's OWN `signal` nodes emits it; false when the
+   *  topic is only reachable through a statically-reachable subflow. */
+  direct: boolean;
+}
+
 /** A statically-resolved subflow call, nested under a chain node. */
 export interface WaveSubflowRef {
   flowId: string;
@@ -57,6 +71,9 @@ export interface WaveChainNode {
   timing: WaveNodeTiming;
   /** Statically-resolved subflow calls of the bound flow. */
   subflows: WaveSubflowRef[];
+  /** Signal topics this node's bound flow can emit (direct + via subflow),
+   *  sorted and de-duped. Additive field (#144). */
+  emittedSignals: WaveEmittedSignal[];
 }
 
 /** A directed link between two chain nodes. */

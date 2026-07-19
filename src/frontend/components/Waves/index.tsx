@@ -71,7 +71,9 @@ export default function WavesManager() {
       </Box>
       <Typography variant="body2" sx={{ opacity: 0.75, mb: 2 }}>
         A read-only picture of how your Planned Executions chain together via signals and completion
-        events. Nothing here arms or fires anything.
+        events. Each lane reads as a timeline — the clock on the left is “now”, and scheduled runs
+        approach from the right. Hover a card to follow its chain; use the window control to zoom the
+        timeline out and reveal upcoming runs. Nothing here arms or fires anything.
       </Typography>
 
       {waves.length === 0 && orphans.length === 0 && (
