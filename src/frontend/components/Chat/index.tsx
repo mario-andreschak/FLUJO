@@ -238,6 +238,19 @@ const Chat: React.FC = () => {
     const saved = Number(window.localStorage.getItem('flujo-debugger-width'));
     return Number.isFinite(saved) && saved > 0 ? saved : 0;
   });
+  // Whether the debugger is shown in the large full-screen modal layout instead
+  // of the docked side panel (issue #162). Persisted so the preference survives
+  // reloads, like the docked width.
+  const [debuggerExpanded, setDebuggerExpanded] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('flujo-debugger-expanded') === '1';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('flujo-debugger-expanded', debuggerExpanded ? '1' : '0');
+    }
+  }, [debuggerExpanded]);
+
   const startDebuggerResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const previousUserSelect = document.body.style.userSelect;
@@ -2716,8 +2729,10 @@ const Chat: React.FC = () => {
         </Box>
         </Box> {/* End Chat Area */}
 
-        {/* Debugger Area (open for the whole debug session, not only when paused) */}
-        {debugPanelOpen && (
+        {/* Debugger Area (open for the whole debug session, not only when paused).
+            Docked side-panel layout — shown unless the user expanded it into the
+            full-screen modal (issue #162). */}
+        {debugPanelOpen && debugState && currentConversationId && !debuggerExpanded && (
           <>
             {/* Draggable divider: resizes the debugger panel. */}
             <Box
@@ -2756,11 +2771,39 @@ const Chat: React.FC = () => {
                 breakpoints={breakpoints}
                 onToggleBreakpoint={handleToggleBreakpoint}
                 onClose={handleDebugClose}
+                isExpanded={debuggerExpanded}
+                onToggleExpand={() => setDebuggerExpanded(v => !v)}
               />
             </Box>
           </>
         )}
       </Box> {/* End Main Content */}
+
+      {/* Debugger full-screen modal (issue #162): the same DebuggerCanvas, given
+          the whole viewport so the 3 sections (Conversation / Execution Tracker
+          / Detail) have room. Toggled by the expand button in the debugger
+          header; the debug session/state is untouched. */}
+      {debugPanelOpen && debugState && currentConversationId && debuggerExpanded && (
+        <Dialog fullScreen open onClose={() => setDebuggerExpanded(false)}>
+          <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <DebuggerCanvas
+              debugState={debugState}
+              conversationId={currentConversationId}
+              liveActivity={liveActivity}
+              onStep={handleDebugStep}
+              onStepOver={handleStepOver}
+              onContinue={handleDebugContinue}
+              onCancel={handleCancelRequest}
+              isLoading={isLoading}
+              breakpoints={breakpoints}
+              onToggleBreakpoint={handleToggleBreakpoint}
+              onClose={handleDebugClose}
+              isExpanded={debuggerExpanded}
+              onToggleExpand={() => setDebuggerExpanded(v => !v)}
+            />
+          </Box>
+        </Dialog>
+      )}
 
       {/* Flow-switch confirmation: switching an already-executed conversation
           to another flow restarts execution on that flow's Start node. Cancel

@@ -62,6 +62,18 @@ const contentPre: React.CSSProperties = {
   fontFamily: 'inherit',
 };
 
+/**
+ * One-line summary of how the persisted history maps onto the wire the model
+ * receives (shared by the inspector accordion and the #162 Conversation
+ * section so both read identically).
+ */
+export function wireSummary(counts: ModelInputSnapshot['counts']): string {
+  return `${counts.threaded} in history → ${counts.sent} sent`
+    + (counts.folded ? ` · ${counts.folded} folded` : '')
+    + (counts.scopedOut ? ` · ${counts.scopedOut} scoped out` : '')
+    + (counts.handoffStripped ? ` · ${counts.handoffStripped} handoff-stripped` : '');
+}
+
 /** One message row in the wire view (or annotated history). */
 const MessageRow: React.FC<{
   role: string;
@@ -104,6 +116,36 @@ const MessageRow: React.FC<{
   );
 };
 
+/**
+ * Annotated full-history view: the entire threaded history with per-message
+ * provenance badges (folded / scoped-out / handoff-stripped). Extracted so the
+ * #162 Conversation section can offer it as the "Full history (annotated)"
+ * companion to the real-chat wire render.
+ */
+export const AnnotatedHistory: React.FC<{ provenance: ModelInputProvenanceEntry[] }> = ({ provenance }) => (
+  <Box>
+    <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 0.5 }}>
+      Full threaded history — greyed rows are not sent to the model.
+    </Typography>
+    {provenance.map((p: ModelInputProvenanceEntry, i: number) => (
+      <MessageRow
+        key={p.id ?? `hist-${i}`}
+        role={p.role}
+        content={p.preview ?? ''}
+        toolCallNames={p.toolCallNames}
+        status={p.status}
+        faded={p.status !== 'sent' && p.status !== 'system'}
+      />
+    ))}
+    {provenance.some((p) => p.status !== 'sent' && p.status !== 'system') && (
+      <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>
+        Hover a badge label to understand why a message is not on the wire:
+        folded (outputMode), scoped out (inputMode), or handoff plumbing (tool-call strip).
+      </Typography>
+    )}
+  </Box>
+);
+
 const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ modelInput }) => {
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
 
@@ -116,10 +158,7 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
     [wireMessages],
   );
 
-  const summary = `${counts.threaded} in history → ${counts.sent} sent`
-    + (counts.folded ? ` · ${counts.folded} folded` : '')
-    + (counts.scopedOut ? ` · ${counts.scopedOut} scoped out` : '')
-    + (counts.handoffStripped ? ` · ${counts.handoffStripped} handoff-stripped` : '');
+  const summary = wireSummary(counts);
 
   return (
     <Box sx={{ p: 1 }}>
@@ -186,27 +225,7 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
           )}
         </Box>
       ) : (
-        <Box>
-          <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 0.5 }}>
-            Full threaded history — greyed rows are not sent to the model.
-          </Typography>
-          {provenance.map((p: ModelInputProvenanceEntry, i: number) => (
-            <MessageRow
-              key={p.id ?? `hist-${i}`}
-              role={p.role}
-              content={p.preview ?? ''}
-              toolCallNames={p.toolCallNames}
-              status={p.status}
-              faded={p.status !== 'sent' && p.status !== 'system'}
-            />
-          ))}
-          {provenance.some((p) => p.status !== 'sent' && p.status !== 'system') && (
-            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>
-              Hover a badge label to understand why a message is not on the wire:
-              folded (outputMode), scoped out (inputMode), or handoff plumbing (tool-call strip).
-            </Typography>
-          )}
-        </Box>
+        <AnnotatedHistory provenance={provenance} />
       )}
     </Box>
   );
