@@ -428,6 +428,30 @@ export function useServerStatus() {
   }, []);
 
   /**
+   * Toggle (or set) a server's favorite flag (#146). Like {@link setServerFolder}
+   * this is a cosmetic, frontend-only field persisted through a lightweight
+   * partial config update, patching local state in place rather than re-fetching
+   * status. Missing/false reads as "not a favorite".
+   */
+  const setServerFavorite = useCallback(async (serverName: string, favorite: boolean) => {
+    log.debug(`Setting favorite for server ${serverName} to ${favorite}`);
+    try {
+      const result = await mcpService.updateServerConfig(serverName, { favorite });
+      if ('error' in result && result.error) {
+        log.warn('Failed to update server favorite:', result.error);
+        return false;
+      }
+      setServers((prev) =>
+        prev.map((s) => (s.name === serverName ? { ...s, favorite } : s))
+      );
+      return true;
+    } catch (error) {
+      log.warn('Failed to set server favorite:', error);
+      return false;
+    }
+  }, []);
+
+  /**
    * Save environment variables for a server
    */
   const saveEnv = useCallback(async (
@@ -508,6 +532,7 @@ export function useServerStatus() {
     addServer,
     updateServer,
     setServerFolder,
+    setServerFavorite,
     saveEnv
   };
 }

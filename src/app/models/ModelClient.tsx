@@ -185,6 +185,37 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     }
   };
 
+  // Toggle a model's favorite flag (#146). Reuses the same update seam as folders:
+  // re-load the fresh record (whose ApiKey arrives MASKED from the backend) and
+  // PUT it back with the flipped flag. The backend treats the masked placeholder
+  // as "keep the stored key unchanged", so a favorite-only save can neither leak
+  // nor clobber an API key. Missing/false reads as "not a favorite".
+  const handleToggleFavorite = async (modelId: string) => {
+    log.info('Toggling model favorite', { modelId });
+    setIsLoading(true);
+    try {
+      const service = getModelService();
+      const model = await service.getModel(modelId);
+      if (!model) {
+        setError('Model not found.');
+        return;
+      }
+      const nextFavorite = !model.favorite;
+      const result = await service.updateModel({ ...model, favorite: nextFavorite || undefined });
+      if (!result.success) {
+        setError(result.error || 'Failed to update favorite.');
+        return;
+      }
+      const updatedModels = await service.loadModels();
+      setModels(updatedModels);
+    } catch (error: any) {
+      log.error('Failed to toggle model favorite', error);
+      setError(error?.message || 'Failed to update favorite. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleCloseModal = async () => {
     // Nothing to clean up: an unsaved new model only ever lived in memory.
     setNewModelDraft(null);
@@ -259,6 +290,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
         onDelete={handleDelete}
         folders={collectFolders(models, (m) => m.folder)}
         onSetFolder={handleSetFolder}
+        onToggleFavorite={handleToggleFavorite}
       />
 
       {/* Only render modal when we have a valid model ID */}

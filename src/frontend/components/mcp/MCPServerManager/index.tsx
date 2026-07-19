@@ -47,7 +47,7 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
-import { ServerSortOption, deriveServerSortGroup, sortServers } from '@/utils/shared/serverGrouping';
+import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
@@ -73,6 +73,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     addServer,
     updateServer,
     setServerFolder,
+    setServerFavorite,
     saveEnv
   } = useServerStatus();
 
@@ -362,8 +363,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       });
     }
     
-    // Finally sort (shared helper — see utils/shared/serverGrouping.ts)
-    return sortServers(result, sortOption);
+    // Finally sort favorites-first (#146), then by the active key (shared helper —
+    // see utils/shared/serverGrouping.ts).
+    return sortServersFavoritesFirst(result, sortOption);
   }, [servers, searchTerm, sortOption, filterOption]);
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
@@ -463,6 +465,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       onServerUpdated={handleServerUpdated}
       folders={folders}
       onServerSetFolder={setServerFolder}
+      onServerToggleFavorite={setServerFavorite}
     />
   );
 

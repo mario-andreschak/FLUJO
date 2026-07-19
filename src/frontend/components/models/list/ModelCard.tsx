@@ -11,12 +11,16 @@ import {
   Box,
   Chip,
   Tooltip,
+  alpha,
+  useTheme,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { Model } from '@/shared/types';
 import { getProviderProfile } from '@/shared/types/model/provider';
 import { ModelTestResult } from '@/shared/types/model/response';
@@ -47,6 +51,11 @@ export interface ModelCardProps {
   selectable?: boolean;
   selected?: boolean;
   onSelect?: (modelId: string) => void;
+  /**
+   * Toggle this model's favorite flag (#146, mirrors flows #120). When provided,
+   * a star button is shown (top-left) on both the management and picker cards.
+   */
+  onToggleFavorite?: (modelId: string) => void;
 }
 
 export const ModelCard = ({
@@ -59,7 +68,9 @@ export const ModelCard = ({
   selectable = false,
   selected = false,
   onSelect,
+  onToggleFavorite,
 }: ModelCardProps) => {
+  const theme = useTheme();
   const [testOpen, setTestOpen] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
@@ -87,6 +98,37 @@ export const ModelCard = ({
     setTestOpen(true);
     runTest();
   };
+
+  const handleFavoriteClick = (e: React.MouseEvent) => {
+    // The card body is a click target (select in picker mode / test-dialog
+    // trigger elsewhere) — don't let the star toggle bubble into it.
+    e.stopPropagation();
+    onToggleFavorite?.(model.id);
+  };
+
+  // Star overlay (#146): identical placement/styling to FlowCard's favorite star
+  // (top-left, warning color when active). Shown whenever a toggle handler is
+  // provided — on the management card and in picker mode alike.
+  const favoriteButton = onToggleFavorite ? (
+    <Tooltip title={model.favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+      <IconButton
+        size="small"
+        aria-label={model.favorite ? 'remove from favorites' : 'add to favorites'}
+        onClick={handleFavoriteClick}
+        sx={{
+          position: 'absolute',
+          top: 4,
+          left: 4,
+          zIndex: 2,
+          color: model.favorite ? theme.palette.warning.main : theme.palette.text.secondary,
+          backgroundColor: alpha(theme.palette.background.paper, 0.6),
+          '&:hover': { backgroundColor: alpha(theme.palette.background.paper, 0.9) },
+        }}
+      >
+        {model.favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+      </IconButton>
+    </Tooltip>
+  ) : null;
 
   const body = (
     <>
@@ -156,10 +198,12 @@ export const ModelCard = ({
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
+          position: 'relative',
           border: (theme) => (selected ? `2px solid ${theme.palette.primary.main}` : '2px solid transparent'),
           transition: 'border-color 120ms, box-shadow 120ms',
         }}
       >
+        {favoriteButton}
         <CardActionArea
           onClick={() => onSelect?.(model.id)}
           sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
@@ -171,7 +215,8 @@ export const ModelCard = ({
   }
 
   return (
-    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      {favoriteButton}
       {body}
       <CardActions disableSpacing>
         <Tooltip title="Test model (direct SDK call, no flow)" arrow>

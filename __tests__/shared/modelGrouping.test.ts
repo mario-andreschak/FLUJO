@@ -3,6 +3,7 @@ import {
   bucketContextWindow,
   deriveModelSortGroup,
   sortModels,
+  sortModelsFavoritesFirst,
   compareModels,
 } from '@/utils/shared/modelGrouping';
 import { Model } from '@/shared/types';
@@ -95,5 +96,61 @@ describe('compareModels', () => {
   it('returns 0 for equal names under a name sort', () => {
     const cmp = compareModels('name-asc' as ModelSortOption);
     expect(cmp(model({ displayName: 'X' }), model({ displayName: 'X' }))).toBe(0);
+  });
+});
+
+describe('sortModelsFavoritesFirst (#146)', () => {
+  it('floats favorites to the top, keeping the active sort within each partition', () => {
+    const models = [
+      model({ displayName: 'Charlie' }),
+      model({ displayName: 'Alpha', favorite: true }),
+      model({ displayName: 'Bravo' }),
+      model({ displayName: 'Zulu', favorite: true }),
+    ];
+    // Favorites (Alpha, Zulu) first — A–Z within — then non-favorites A–Z.
+    expect(sortModelsFavoritesFirst(models, 'name-asc').map((m) => m.displayName)).toEqual([
+      'Alpha',
+      'Zulu',
+      'Bravo',
+      'Charlie',
+    ]);
+  });
+
+  it('respects a non-alphabetical secondary sort (context) within partitions', () => {
+    const models = [
+      model({ id: 'fav-small', displayName: 'S', contextWindow: 8_000, favorite: true }),
+      model({ id: 'plain-big', displayName: 'B', contextWindow: 200_000 }),
+      model({ id: 'fav-big', displayName: 'FB', contextWindow: 128_000, favorite: true }),
+      model({ id: 'plain-small', displayName: 'PS', contextWindow: 32_000 }),
+    ];
+    expect(sortModelsFavoritesFirst(models, 'context-desc').map((m) => m.id)).toEqual([
+      'fav-big',
+      'fav-small',
+      'plain-big',
+      'plain-small',
+    ]);
+  });
+
+  it('is equivalent to sortModels when nothing is favorited', () => {
+    const models = [
+      model({ displayName: 'Charlie' }),
+      model({ displayName: 'Alpha' }),
+      model({ displayName: 'Bravo' }),
+    ];
+    expect(sortModelsFavoritesFirst(models, 'name-asc').map((m) => m.displayName)).toEqual(
+      sortModels(models, 'name-asc').map((m) => m.displayName),
+    );
+  });
+
+  it('treats missing favorite (undefined) as not-favorite', () => {
+    const models = [model({ displayName: 'Alpha' }), model({ displayName: 'Bravo', favorite: true })];
+    expect(sortModelsFavoritesFirst(models, 'name-asc').map((m) => m.displayName)).toEqual(['Bravo', 'Alpha']);
+  });
+
+  it('does not mutate the input array', () => {
+    const models = [model({ displayName: 'B' }), model({ displayName: 'A', favorite: true })];
+    const before = models.map((m) => m.displayName);
+    sortModelsFavoritesFirst(models, 'name-asc');
+    expect(models.map((m) => m.displayName)).toEqual(before);
   });
 });

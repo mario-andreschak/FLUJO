@@ -3,6 +3,7 @@ import {
   ServerSortOption,
   deriveServerSortGroup,
   sortServers,
+  sortServersFavoritesFirst,
   compareServers,
 } from '@/utils/shared/serverGrouping';
 
@@ -11,6 +12,7 @@ const server = (partial: Partial<ServerGroupingItem>): ServerGroupingItem => ({
   name: partial.name ?? 'server',
   status: partial.status,
   transport: partial.transport,
+  favorite: partial.favorite,
 });
 
 describe('deriveServerSortGroup', () => {
@@ -95,5 +97,58 @@ describe('compareServers', () => {
   it('returns 0 for an unknown sort key', () => {
     const cmp = compareServers('bogus' as ServerSortOption);
     expect(cmp(server({ name: 'a' }), server({ name: 'b' }))).toBe(0);
+  });
+});
+
+describe('sortServersFavoritesFirst (#146)', () => {
+  it('floats favorites to the top, keeping the active sort within each partition', () => {
+    const servers = [
+      server({ name: 'charlie' }),
+      server({ name: 'alpha', favorite: true }),
+      server({ name: 'bravo' }),
+      server({ name: 'zulu', favorite: true }),
+    ];
+    // Favorites (alpha, zulu) first — A–Z within — then non-favorites A–Z.
+    expect(sortServersFavoritesFirst(servers, 'name-asc').map((s) => s.name)).toEqual([
+      'alpha',
+      'zulu',
+      'bravo',
+      'charlie',
+    ]);
+  });
+
+  it('respects a non-alphabetical secondary sort (status) within partitions', () => {
+    const servers = [
+      server({ name: 'fav-disc', status: 'disconnected', favorite: true }),
+      server({ name: 'plain-conn', status: 'connected' }),
+      server({ name: 'fav-conn', status: 'connected', favorite: true }),
+      server({ name: 'plain-disc', status: 'disconnected' }),
+    ];
+    // Favorites first (connected-first within), then non-favorites (connected-first).
+    expect(sortServersFavoritesFirst(servers, 'status-connected').map((s) => s.name)).toEqual([
+      'fav-conn',
+      'fav-disc',
+      'plain-conn',
+      'plain-disc',
+    ]);
+  });
+
+  it('is equivalent to sortServers when nothing is favorited', () => {
+    const servers = [server({ name: 'charlie' }), server({ name: 'alpha' }), server({ name: 'bravo' })];
+    expect(sortServersFavoritesFirst(servers, 'name-asc').map((s) => s.name)).toEqual(
+      sortServers(servers, 'name-asc').map((s) => s.name),
+    );
+  });
+
+  it('treats missing favorite (undefined) as not-favorite', () => {
+    const servers = [server({ name: 'alpha' }), server({ name: 'bravo', favorite: true })];
+    expect(sortServersFavoritesFirst(servers, 'name-asc').map((s) => s.name)).toEqual(['bravo', 'alpha']);
+  });
+
+  it('does not mutate the input array', () => {
+    const servers = [server({ name: 'b' }), server({ name: 'a', favorite: true })];
+    const before = servers.map((s) => s.name);
+    sortServersFavoritesFirst(servers, 'name-asc');
+    expect(servers.map((s) => s.name)).toEqual(before);
   });
 });

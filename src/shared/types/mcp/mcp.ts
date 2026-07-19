@@ -61,6 +61,13 @@ export type MCPManagerConfig = {
    */
   folder?: string;
   /**
+   * Optional favorite flag (#146, mirrors flows #120). When true the server floats
+   * to the top of the MCP manager and of every server picker. Additive and
+   * optional: absence reads as "not a favorite". Frontend-only organization —
+   * has no effect on the server connection.
+   */
+  favorite?: boolean;
+  /**
    * Marks FLUJO's own built-in in-process server (the synthetic "flujo" entry
    * that exposes FLUJO's backend API as MCP tools to its own flows). Built-in
    * configs are synthesized at load time, never persisted (saveConfig drops

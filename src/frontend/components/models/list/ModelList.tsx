@@ -30,7 +30,7 @@ import {
   ModelSortOption,
   MODEL_SORT_LABELS,
   deriveModelSortGroup,
-  sortModels,
+  sortModelsFavoritesFirst,
 } from '@/utils/shared/modelGrouping';
 import { Model } from '@/shared/types';
 import { ModelResult } from '@/frontend/services/model';
@@ -48,12 +48,14 @@ interface ModelListProps {
   folders?: string[];
   /** Assign/clear a model's organizing folder (#80). When omitted the action is hidden. */
   onSetFolder?: (modelId: string, folder: string | undefined) => void;
+  /** Toggle a model's favorite flag (#146). When omitted the star is hidden. */
+  onToggleFavorite?: (modelId: string) => void;
 }
 
 /** How cards are grouped into collapsible sections: none, by user folder, or by the active sort key. */
 type GroupMode = 'none' | 'folder' | 'sort';
 
-export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folders = [], onSetFolder }: ModelListProps) => {
+export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folders = [], onSetFolder, onToggleFavorite }: ModelListProps) => {
     const theme = useTheme();
     // Persisted view preferences (#93): retained across navigation.
     const [sortOption, setSortOption] = useUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
@@ -88,8 +90,9 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
         }
     };
 
-    // Sort the incoming (already search-filtered) models by the active sort key.
-    const sortedModels = useMemo(() => sortModels(models, sortOption), [models, sortOption]);
+    // Sort the incoming (already search-filtered) models by the active sort key,
+    // floating favorites to the top (#146).
+    const sortedModels = useMemo(() => sortModelsFavoritesFirst(models, sortOption), [models, sortOption]);
 
     // Grouped view of the sorted models, driven by the active group mode.
     const groups = useMemo<CardGroup<Model>[]>(() => {
@@ -122,6 +125,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
                         folder={model.folder}
                         folders={folders}
                         onSetFolder={onSetFolder ? (folder) => onSetFolder(model.id, folder) : undefined}
+                        onToggleFavorite={onToggleFavorite}
                     />
                 </Grid>
             ))}

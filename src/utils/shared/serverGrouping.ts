@@ -34,6 +34,8 @@ export interface ServerGroupingItem {
   name: string;
   status?: string;
   transport?: string;
+  /** Optional favorite flag (#146). Favorites float to the top of the list. */
+  favorite?: boolean;
 }
 
 /** Preferred transport ordering for the "Transport type" sort. */
@@ -113,4 +115,23 @@ export function compareServers(
 /** Sort a copy of `servers` by the active sort key, leaving the input untouched. */
 export function sortServers<T extends ServerGroupingItem>(servers: T[], sortOption: ServerSortOption): T[] {
   return [...servers].sort(compareServers(sortOption));
+}
+
+/**
+ * Sort a copy of `servers` favorites-first (#146, mirrors flows #120): favorited
+ * servers are grouped ahead of the rest, and within each partition the active
+ * `sortOption` ordering still applies. Pure/React-free so it can be shared by
+ * the MCP manager AND every server picker, and unit-tested in the node-env Jest
+ * harness. The input is left untouched.
+ */
+export function sortServersFavoritesFirst<T extends ServerGroupingItem>(
+  servers: T[],
+  sortOption: ServerSortOption,
+): T[] {
+  const cmp = compareServers(sortOption);
+  return [...servers].sort((a, b) => {
+    const favDelta = Number(Boolean(b.favorite)) - Number(Boolean(a.favorite));
+    if (favDelta !== 0) return favDelta;
+    return cmp(a, b);
+  });
 }

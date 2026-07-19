@@ -28,6 +28,8 @@ interface ServerListProps {
   folders?: string[];
   /** Assign/clear a server's organizing folder (#71). */
   onServerSetFolder?: (serverName: string, folder: string | undefined) => void;
+  /** Toggle a server's favorite flag (#146). When omitted the star is hidden. */
+  onServerToggleFavorite?: (serverName: string, favorite: boolean) => void;
 }
 
 const ServerList: React.FC<ServerListProps> = ({
@@ -46,6 +48,7 @@ const ServerList: React.FC<ServerListProps> = ({
   onServerUpdated,
   folders = [],
   onServerSetFolder,
+  onServerToggleFavorite,
 }) => {
   log.debug('Rendering ServerList', { 
     serverCount: servers.length, 
@@ -125,6 +128,8 @@ const ServerList: React.FC<ServerListProps> = ({
               folder={server.folder}
               folders={folders}
               onSetFolder={onServerSetFolder && !server.builtIn ? (f) => onServerSetFolder(server.name, f) : undefined}
+              favorite={server.favorite}
+              onToggleFavorite={onServerToggleFavorite && !server.builtIn ? () => onServerToggleFavorite(server.name, !server.favorite) : undefined}
               builtIn={server.builtIn}
               serverConfig={server}
             />

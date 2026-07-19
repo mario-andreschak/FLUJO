@@ -96,3 +96,19 @@ export function compareModels(sortOption: ModelSortOption): (a: Model, b: Model)
 export function sortModels(models: Model[], sortOption: ModelSortOption): Model[] {
   return [...models].sort(compareModels(sortOption));
 }
+
+/**
+ * Sort a copy of `models` favorites-first (#146, mirrors flows #120): favorited
+ * models are grouped ahead of the rest, and within each partition the active
+ * `sortOption` ordering still applies. Pure/React-free so it can be shared by
+ * the Models dashboard AND every model picker, and unit-tested in the node-env
+ * Jest harness. The input is left untouched.
+ */
+export function sortModelsFavoritesFirst(models: Model[], sortOption: ModelSortOption): Model[] {
+  const cmp = compareModels(sortOption);
+  return [...models].sort((a, b) => {
+    const favDelta = Number(Boolean(b.favorite)) - Number(Boolean(a.favorite));
+    if (favDelta !== 0) return favDelta;
+    return cmp(a, b);
+  });
+}

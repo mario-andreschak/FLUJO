@@ -6,13 +6,13 @@ import { CardGroup, groupByFolder, groupItems } from '@/utils/shared/cardGroupin
 import {
   ModelSortOption,
   deriveModelSortGroup,
-  sortModels,
+  sortModelsFavoritesFirst,
   modelDisplayName,
 } from '@/utils/shared/modelGrouping';
 import {
   ServerSortOption,
   deriveServerSortGroup,
-  sortServers,
+  sortServersFavoritesFirst,
 } from '@/utils/shared/serverGrouping';
 import {
   FlowSortOption,
@@ -49,14 +49,18 @@ interface DomainAdapter {
 const ADAPTERS: Record<CardPickerDomain, DomainAdapter> = {
   models: {
     defaultSort: 'name-asc',
-    sort: (items, s) => sortModels(items, s as ModelSortOption),
+    // Favorites-first (#146) so favorited models surface at the top of every
+    // model picker routed through the hook, matching the dashboard's ordering.
+    sort: (items, s) => sortModelsFavoritesFirst(items, s as ModelSortOption),
     deriveSortGroup: (item, s) => deriveModelSortGroup(item, s as ModelSortOption),
     getFolder: (item) => item.folder,
     getSearchText: (item) => `${modelDisplayName(item)} ${item.name ?? ''}`,
   },
   mcp: {
     defaultSort: 'name-asc',
-    sort: (items, s) => sortServers(items, s as ServerSortOption),
+    // Favorites-first (#146) so favorited servers surface at the top of every
+    // server picker routed through the hook, matching the manager's ordering.
+    sort: (items, s) => sortServersFavoritesFirst(items, s as ServerSortOption),
     deriveSortGroup: (item, s) => deriveServerSortGroup(item, s as ServerSortOption),
     getFolder: (item) => item.folder,
     getSearchText: (item) => `${item.name ?? ''} ${item.rootPath ?? item.path ?? ''}`,

@@ -20,6 +20,8 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DataObjectIcon from '@mui/icons-material/DataObject';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
 import Spinner from '@/frontend/components/shared/Spinner';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { mcpService } from '@/frontend/services/mcp';
@@ -41,6 +43,7 @@ import {
   IconButton,
   Tooltip,
   useTheme,
+  alpha,
   Card,
   CardContent,
   CardActions,
@@ -84,6 +87,8 @@ interface ServerCardProps {
   folder?: string; // Organizing folder (#71)
   folders?: string[]; // Existing folders on the surface, for the picker
   onSetFolder?: (folder: string | undefined) => void; // Assign/clear folder
+  favorite?: boolean; // Favorite flag (#146): floats the card to the top
+  onToggleFavorite?: () => void; // Toggle favorite. When omitted the star is hidden.
   builtIn?: boolean; // FLUJO's built-in internal server: not editable/deletable, always on
   /**
    * Full server config, used to build a single-server, copy-to-clipboard MCP
@@ -122,6 +127,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
   folder,
   folders = [],
   onSetFolder,
+  favorite = false,
+  onToggleFavorite,
   builtIn = false,
   serverConfig,
 }) => {
@@ -337,6 +344,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
       aria-pressed={pickerMode ? selected : undefined}
       sx={{ 
         cursor: 'pointer',
+        position: 'relative',
         height: pickerMode ? '100%' : undefined,
         transition: 'box-shadow 0.3s ease, border-color 0.12s ease',
         border: (theme) =>
@@ -350,6 +358,31 @@ const ServerCard: React.FC<ServerCardProps> = ({
         onClick();
       }}
     >
+      {/* Favorite star (#146): mirrors FlowCard — top-left, warning color when
+          active. Hidden for the built-in server (its config is never persisted). */}
+      {onToggleFavorite && !builtIn && (
+        <Tooltip title={favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+          <IconButton
+            size="small"
+            aria-label={favorite ? 'remove from favorites' : 'add to favorites'}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite();
+            }}
+            sx={{
+              position: 'absolute',
+              top: 4,
+              left: 4,
+              zIndex: 2,
+              color: favorite ? muiTheme.palette.warning.main : muiTheme.palette.text.secondary,
+              backgroundColor: alpha(muiTheme.palette.background.paper, 0.6),
+              '&:hover': { backgroundColor: alpha(muiTheme.palette.background.paper, 0.9) },
+            }}
+          >
+            {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+      )}
       <CardContent sx={{ pb: 1 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', flex: 1 }}>

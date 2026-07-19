@@ -45,4 +45,11 @@ export interface Model {
      * means "Ungrouped". Frontend-only organization — has no effect on the model.
      */
     folder?: string;
+    /**
+     * Optional favorite flag (#146, mirrors flows #120). When true the model floats
+     * to the top of the Models dashboard and of every model picker. Additive and
+     * optional: absence reads as "not a favorite". Frontend-only organization —
+     * has no effect on the model.
+     */
+    favorite?: boolean;
   }
