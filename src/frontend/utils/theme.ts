@@ -26,14 +26,16 @@ export const themeColors = {
     }
   },
   dark: {
-    background: '#1a1a1a',
-    foreground: '#f0f0f0',
-    paperBackground: '#2a2a2a',
-    textSecondary: '#aaaaaa',
-    border: '#3a3a3a',
-    heading: '#f8f8f8',
-    text: '#f0f0f0',
-    secondaryText: '#aaa',
+    // Redesigned dark palette (issue #150): layered slate greys create elevation
+    // via lightness rather than pairing a near-black surface with a vivid blue.
+    background: '#12161c',
+    foreground: '#e6e8ec',
+    paperBackground: '#1b212b',
+    textSecondary: '#9aa5b4',
+    border: '#2b323d',
+    heading: '#f0f2f5',
+    text: '#e6e8ec',
+    secondaryText: '#9aa5b4',
     error: {
       background: '#3a2222',
       border: '#5a3333',

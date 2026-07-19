@@ -15,11 +15,13 @@ export function createAppTheme(mode: PaletteMode): Theme {
   return createTheme({
     palette: {
       mode,
+      // Dark mode uses a softer, lighter blue so controls/links read comfortably
+      // on the dark slate surface instead of the harsh black+blue of #007bff (issue #150).
       primary: {
-        main: '#007bff',
+        main: mode === 'dark' ? '#5b9dff' : '#007bff',
       },
       secondary: {
-        main: '#6c757d',
+        main: mode === 'dark' ? '#a3adba' : '#6c757d',
       },
       error: {
         main: mode === 'dark' ? '#f87171' : '#dc2626',
@@ -27,14 +29,15 @@ export function createAppTheme(mode: PaletteMode): Theme {
         dark: mode === 'dark' ? '#3a2222' : '#b91c1c',
       },
       warning: {
-        main: '#f59e0b',
+        main: mode === 'dark' ? '#fbbf24' : '#f59e0b',
       },
       info: {
-        main: '#3b82f6',
+        main: mode === 'dark' ? '#60a5fa' : '#3b82f6',
       },
       success: {
         main: mode === 'dark' ? '#4ade80' : '#16a34a',
       },
+      divider: colors.border,
       background: {
         default: colors.background,
         paper: colors.paperBackground,

@@ -10,11 +10,11 @@
 }
 
 :root.dark-theme {
-  /* Dark theme variables */
-  --background: #1a1a1a;
-  --foreground: #f0f0f0;
-  --paper-background: #2a2a2a;
-  --text-secondary: #aaaaaa;
+  /* Dark theme variables (redesigned for issue #150) */
+  --background: #12161c;
+  --foreground: #e6e8ec;
+  --paper-background: #1b212b;
+  --text-secondary: #9aa5b4;
 }
 
 body {
