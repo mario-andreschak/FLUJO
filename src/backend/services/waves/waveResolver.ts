@@ -18,11 +18,18 @@
  * If either file changes, keep the two in sync.
  */
 
-import type { Flow, FlowNode } from '@/shared/types/flow/flow';
+import type { Flow } from '@/shared/types/flow/flow';
 import type {
   PlannedExecution,
   TriggerConfig,
 } from '@/shared/types/plannedExecution';
+// The pure topic/subflow-scan helpers live in a shared, dependency-free module
+// so the frontend trigger editor (#165) and this resolver share ONE matcher
+// implementation and cannot drift apart.
+import {
+  directSubflowIds,
+  reachableTopics,
+} from '@/shared/utils/signalTopics';
 import type {
   Wave,
   WaveChainEdge,
@@ -70,42 +77,6 @@ function isRootKind(kind: WaveTriggerKind): boolean {
   return kind !== 'flow-event';
 }
 
-/** Collect the direct subflow ids a flow calls (single, map-over, fan-out). */
-function directSubflowIds(flow: Flow | undefined): string[] {
-  if (!flow || !Array.isArray(flow.nodes)) return [];
-  const ids: string[] = [];
-  for (const node of flow.nodes as FlowNode[]) {
-    if (node?.data?.type !== 'subflow') continue;
-    const props = node.data.properties ?? {};
-    if (typeof props.subflowId === 'string' && props.subflowId.trim()) {
-      ids.push(props.subflowId.trim());
-    }
-    if (Array.isArray(props.parallelSubflowIds)) {
-      for (const id of props.parallelSubflowIds) {
-        if (typeof id === 'string' && id.trim()) ids.push(id.trim());
-      }
-    }
-    // Dynamic fan-out (issue #130, `parallelSubflowIdsVar`) selects its targets
-    // from a run variable AT RUNTIME, so the concrete set is unknowable here.
-    // Waves degrades gracefully: those runtime-only lanes simply do not appear in
-    // the static graph (there is nothing deterministic to draw).
-  }
-  // De-dupe while preserving first-seen order.
-  return Array.from(new Set(ids));
-}
-
-/** Collect the topics emitted by a flow's own `signal` nodes. */
-function directTopics(flow: Flow | undefined): string[] {
-  if (!flow || !Array.isArray(flow.nodes)) return [];
-  const topics: string[] = [];
-  for (const node of flow.nodes as FlowNode[]) {
-    if (node?.data?.type !== 'signal') continue;
-    const topic = node.data.properties?.topic;
-    if (typeof topic === 'string' && topic.trim()) topics.push(topic.trim());
-  }
-  return topics;
-}
-
 /**
  * Build a recursive, depth-capped subflow tree for a flow. Cycles (a flow that
  * transitively calls itself) are flagged with `truncated: true` and not
@@ -141,28 +112,6 @@ function buildSubflowTree(
     refs.push(ref);
   }
   return refs;
-}
-
-/**
- * Compute the full set of topics a flow can emit at runtime: its own signal
- * nodes plus those of every statically-reachable subflow (depth/cycle-capped).
- */
-function reachableTopics(
-  flowId: string,
-  flowsById: Map<string, Flow>,
-  maxDepth: number,
-): Set<string> {
-  const topics = new Set<string>();
-  const visited = new Set<string>();
-  const walk = (id: string, depth: number): void => {
-    if (visited.has(id) || depth > maxDepth) return;
-    visited.add(id);
-    const flow = flowsById.get(id);
-    for (const t of directTopics(flow)) topics.add(t);
-    for (const childId of directSubflowIds(flow)) walk(childId, depth + 1);
-  };
-  walk(flowId, 0);
-  return topics;
 }
 
 /** Build the timing descriptor for a chain node from its trigger. */

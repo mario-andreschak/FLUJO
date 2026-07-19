@@ -132,7 +132,7 @@ const nodeTypes: Array<{
   {
     type: 'signal',
     label: 'Signal Node',
-    description: 'Emit an event to trigger another flow',
+    description: 'Emit a named signal to trigger another flow',
   },
 ];
 

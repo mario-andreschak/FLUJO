@@ -170,9 +170,23 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
   const nodeData = data || { label: 'No Label', properties: {} };
-  const label = typeof nodeData.label === 'string' ? nodeData.label : 'No Label';
-  const properties = nodeData.properties || {};
-  const propCount = Object.keys(properties).length;
+  const properties = (nodeData.properties || {}) as Record<string, unknown>;
+  // Signal nodes (issue #164) are just a *named* signal: the display name IS the
+  // signal name (topic). Stay defensive so freshly-dropped / legacy nodes still
+  // render a sensible caption when the topic hasn't been set yet.
+  const label =
+    nodeType === 'signal'
+      ? (typeof properties.topic === 'string' && properties.topic.trim()
+          ? properties.topic.trim()
+          : (typeof nodeData.label === 'string' && nodeData.label ? nodeData.label : 'Signal'))
+      : (typeof nodeData.label === 'string' ? nodeData.label : 'No Label');
+  // For signal nodes the topic is already shown as the header/display name, so
+  // hide it from the expandable property rows to avoid showing it twice.
+  const displayProperties =
+    nodeType === 'signal'
+      ? Object.fromEntries(Object.entries(properties).filter(([key]) => key !== 'topic'))
+      : properties;
+  const propCount = Object.keys(displayProperties).length;
   
   const handleExpand = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -390,7 +404,7 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
         
         <Collapse in={expanded}>
           <NodeDetails>
-            {Object.entries(properties).map(([key, value]) => (
+            {Object.entries(displayProperties).map(([key, value]) => (
               <PropertyRow key={key}>
                 <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
                   {key}:

@@ -186,7 +186,12 @@ export interface SignalNodeProperties {
     topic?: string;
     /** The payload template emitted with the signal. `${var:NAME}` (run-scoped
      *  scratchpad) is resolved at emit time via resolveRunVars; the result is the
-     *  signal's `payload`. */
+     *  signal's `payload`.
+     *  NOTE (issue #164): this is no longer surfaced in the primary manual
+     *  FlowBuilder UI (a signal is authored as just a *named* signal). It stays
+     *  in the data model / FlowSpec authoring path and is preserved on existing
+     *  nodes, so payload-carrying signals and `flow-event` payload filters keep
+     *  working; the modal exposes it behind an "Advanced" disclosure. */
     payloadTemplate?: string;
 }
 

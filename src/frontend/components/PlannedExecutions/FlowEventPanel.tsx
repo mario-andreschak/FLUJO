@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Checkbox,
   Divider,
@@ -21,7 +22,16 @@ import {
   plannedExecutionsService,
   PlannedExecutionListEntry,
 } from '@/frontend/services/plannedExecutions';
+import { buildTopicEmitterIndex } from '@/shared/utils/signalTopics';
 import { createLogger } from '@/utils/logger';
+
+/** One planned execution that already subscribes to a given signal topic. */
+interface TopicSubscriber {
+  executionId: string;
+  executionName: string;
+  flowId: string;
+  flowName?: string;
+}
 
 const log = createLogger('frontend/components/PlannedExecutions/FlowEventPanel');
 
@@ -55,6 +65,73 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
     ? 'execution'
     : 'flow';
   const isTopic = sourceKind === 'topic';
+
+  // Signal-topic discovery (issue #165): derive, entirely client-side from data
+  // already loaded by the modal, which topics are emitted where and which other
+  // triggers already consume them — no new API calls.
+  const topicIndex = useMemo(() => buildTopicEmitterIndex(flows), [flows]);
+
+  const flowNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const f of flows) if (f?.id) m.set(f.id, f.name);
+    return m;
+  }, [flows]);
+
+  const subscribersByTopic = useMemo(() => {
+    const m = new Map<string, TopicSubscriber[]>();
+    for (const entry of executions) {
+      const exec = entry.execution;
+      if (exec.id === currentExecutionId) continue; // don't list the execution being edited
+      if (exec.trigger?.type !== 'flow-event') continue;
+      const topic = exec.trigger.source?.topic;
+      if (typeof topic !== 'string' || !topic.trim()) continue;
+      const key = topic.trim();
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push({
+        executionId: exec.id,
+        executionName: exec.name,
+        flowId: exec.flowId,
+        flowName: flowNameById.get(exec.flowId),
+      });
+    }
+    return m;
+  }, [executions, currentExecutionId, flowNameById]);
+
+  // Option list = every emitted topic ∪ every topic already subscribed to.
+  const topicOptions = useMemo(
+    () =>
+      Array.from(new Set([...topicIndex.keys(), ...subscribersByTopic.keys()])).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [topicIndex, subscribersByTopic],
+  );
+
+  const describeEmitters = (topic: string): string | null => {
+    const emitters = topicIndex.get(topic);
+    if (!emitters || emitters.length === 0) return null;
+    const names = Array.from(
+      new Set(
+        emitters.map(
+          (e) => (e.flowName || e.flowId) + (e.viaSubflow ? ' (via subflow)' : ''),
+        ),
+      ),
+    );
+    return `Emitted in: ${names.join(', ')}`;
+  };
+
+  const describeSubscribers = (topic: string): string | null => {
+    const subs = subscribersByTopic.get(topic);
+    if (!subs || subs.length === 0) return null;
+    const startedFlows = Array.from(
+      new Set(subs.map((s) => s.flowName || s.flowId)),
+    );
+    return `Used by ${subs.length} trigger${subs.length === 1 ? '' : 's'} → starts ${startedFlows.join(
+      ', ',
+    )}`;
+  };
+
+  const currentTopic = (config.source?.topic ?? '').trim();
+  const topicHasEmitter = currentTopic ? topicIndex.has(currentTopic) : true;
 
   useEffect(() => {
     let cancelled = false;
@@ -108,12 +185,57 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
 
         {sourceKind === 'topic' ? (
           <FormControl fullWidth>
-            <TextField
-              label="Signal topic"
+            <Autocomplete
+              freeSolo
+              autoHighlight
+              options={topicOptions}
               value={config.source?.topic ?? ''}
-              onChange={(e) => onChange({ ...config, source: { topic: e.target.value } })}
-              placeholder="e.g. review-blocked"
-              helperText="React when a signal node in any flow emits this topic."
+              inputValue={config.source?.topic ?? ''}
+              onInputChange={(_, value) =>
+                onChange({ ...config, source: { topic: value } })
+              }
+              renderOption={(props, option) => {
+                const emitters = describeEmitters(option);
+                const subs = describeSubscribers(option);
+                return (
+                  <Box component="li" {...props} key={option}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', py: 0.25 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {option}
+                      </Typography>
+                      {emitters && (
+                        <Typography variant="caption" color="text.secondary">
+                          {emitters}
+                        </Typography>
+                      )}
+                      {subs && (
+                        <Typography variant="caption" color="text.secondary">
+                          {subs}
+                        </Typography>
+                      )}
+                      {!emitters && (
+                        <Typography variant="caption" color="warning.main">
+                          No flow currently emits this signal
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
+                );
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Signal topic"
+                  placeholder="e.g. review-blocked"
+                  helperText={
+                    !currentTopic
+                      ? 'React when a signal node in any flow emits this topic. Suggestions come from your existing flows.'
+                      : topicHasEmitter
+                      ? describeEmitters(currentTopic) ?? 'React when this signal is emitted.'
+                      : 'No flow currently emits this signal — the trigger will stay idle until one does.'
+                  }
+                />
+              )}
             />
           </FormControl>
         ) : sourceKind === 'flow' ? (
