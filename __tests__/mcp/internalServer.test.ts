@@ -18,9 +18,13 @@ jest.mock('@/backend/services/mcp/internalTools', () => ({
   internalCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'pong' }] })),
 }));
 
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { INTERNAL_SERVER_NAME, internalServerConfig } from '@/backend/services/mcp/internalServerConfig';
+import { _setRunResourcesDirForTests } from '@/backend/services/runResources';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { MCPServerConfig } from '@/shared/types/mcp';
 
@@ -99,12 +103,24 @@ describe('tool listing and dispatch', () => {
   });
 
   it('listServerResources/Prompts return empty without errors', async () => {
-    const resources = await mcpService.listServerResources(INTERNAL_SERVER_NAME);
-    expect(resources.resources).toEqual([]);
-    expect(resources.error).toBeUndefined();
-    const prompts = await mcpService.listServerPrompts(INTERNAL_SERVER_NAME);
-    expect(prompts.prompts).toEqual([]);
-    expect(prompts.error).toBeUndefined();
+    // The internal server's listServerResources reads the REAL on-disk Tier-3
+    // run-resource store (db/run-resources), so isolate it to an empty temp dir
+    // via the store's test seam to make the emptiness assertion deterministic on
+    // any machine that has ever produced run artifacts.
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-internal-'));
+    const prevDir = _setRunResourcesDirForTests(tmp);
+    try {
+      const resources = await mcpService.listServerResources(INTERNAL_SERVER_NAME);
+      expect(resources.error).toBeUndefined();
+      expect(Array.isArray(resources.resources)).toBe(true);
+      expect(resources.resources).toEqual([]);
+      const prompts = await mcpService.listServerPrompts(INTERNAL_SERVER_NAME);
+      expect(prompts.prompts).toEqual([]);
+      expect(prompts.error).toBeUndefined();
+    } finally {
+      _setRunResourcesDirForTests(prevDir);
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 

@@ -82,6 +82,42 @@ function generateRandomDEK(): CryptoJS.lib.WordArray {
 }
 
 /**
+ * Verify that an unwrapped DEK is genuine and not garbage produced by
+ * decrypting with the WRONG key/password.
+ *
+ * crypto-js AES-CBC/Pkcs7 does NOT reliably fail on a wrong key: it strips
+ * padding heuristically from the last byte and commonly returns a NON-EMPTY
+ * garbage WordArray. So the historical `if (!decrypted.toString())` check let
+ * wrong passwords through data-dependently (see issue #158 — a wrong password
+ * could authenticate/unlock the server). The only trustworthy validation is to
+ * confirm the recovered plaintext has the canonical DEK shape: the exact
+ * lowercase-hex string produced by `generateRandomDEK().toString()` (whose
+ * width is `KEY_SIZE * 2` hex chars — see the pattern below).
+ *
+ * Returns the verified hex plaintext, or null when the DEK is invalid /
+ * undecryptable. This adds no metadata, changes no stored format and does not
+ * alter the effective key for a correct password — it is a pure reject gate.
+ */
+function verifiedDekPlaintext(decryptedDEK: CryptoJS.lib.WordArray): string | null {
+  let plaintext: string;
+  try {
+    // A wrong key can yield bytes that are not valid UTF-8, which crypto-js
+    // signals by throwing "Malformed UTF-8 data" — treat that as invalid.
+    plaintext = decryptedDEK.toString(CryptoJS.enc.Utf8);
+  } catch {
+    return null;
+  }
+  // Width is derived from KEY_SIZE, NOT hardcoded: the DEK is
+  // `WordArray.random(KEY_SIZE)` and `WordArray.random` treats its argument as a
+  // BYTE count, so the stored plaintext is `KEY_SIZE` bytes hex-encoded =
+  // `KEY_SIZE * 2` lowercase-hex chars (16 with today's KEY_SIZE). Deriving it
+  // keeps the gate correct if KEY_SIZE changes and, critically, makes it accept
+  // every LEGITIMATE DEK while still rejecting wrong-key garbage.
+  const dekHexPattern = new RegExp(`^[0-9a-f]{${KEY_SIZE * 2}}$`);
+  return dekHexPattern.test(plaintext) ? plaintext : null;
+}
+
+/**
  * Initialize the default encryption system
  * This creates a DEK encrypted with the default key
  */
@@ -246,7 +282,8 @@ async function getDefaultDEK(): Promise<CryptoJS.lib.WordArray | null> {
       }
     );
     
-    if (!decryptedDEK.toString()) {
+    // Reject a wrong/garbage unwrap deterministically (see verifiedDekPlaintext).
+    if (!verifiedDekPlaintext(decryptedDEK)) {
       log.error('getDefaultDEK: Failed to decrypt DEK with default key');
       return null;
     }
@@ -304,7 +341,9 @@ async function getUserDEK(password: string): Promise<CryptoJS.lib.WordArray | nu
       }
     );
     
-    if (!decryptedDEK.toString()) {
+    // A truthy string is NOT sufficient: a wrong password yields non-empty
+    // garbage under AES-CBC, so verify the canonical DEK shape (issue #158).
+    if (!verifiedDekPlaintext(decryptedDEK)) {
       log.error('getUserDEK: Failed to decrypt DEK with provided password');
       return null;
     }
@@ -447,7 +486,9 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
       }
     );
     
-    if (!decryptedDEK.toString()) {
+    // Reject a wrong old password deterministically before re-wrapping the DEK
+    // (see verifiedDekPlaintext); a truthy garbage string must not pass here.
+    if (!verifiedDekPlaintext(decryptedDEK)) {
       log.error('changeEncryptionPassword: Failed to decrypt DEK with old password');
       return false;
     }
