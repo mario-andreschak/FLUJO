@@ -216,18 +216,24 @@ function buildChildEmit(
   nodeRef: NodeRef,
   subflowId: string,
   subflowName: string | undefined,
-  lane?: { index: number; count: number },
+  lane?: { index: number; count: number; title?: string; conversationId?: string },
 ): EmitFn | undefined {
   if (!parentEmit || !showSteps) return undefined;
   const laneFields = lane ? { laneIndex: lane.index, laneCount: lane.count } : {};
+  // Lane identity rides ONLY on the synthesized subflow:start / subflow:done
+  // (both, so a late-joining client that missed start still gets label + link)
+  // — never on every forwarded event.
+  const laneIdentity = lane
+    ? { ...(lane.title ? { laneTitle: lane.title } : {}), ...(lane.conversationId ? { laneConversationId: lane.conversationId } : {}) }
+    : {};
   return (raw) => {
     const depth = (raw.depth ?? 0) + 1;
     if (raw.type === 'run:start') {
-      parentEmit({ type: 'subflow:start', node: nodeRef, subflowId, subflowName, depth, ...laneFields });
+      parentEmit({ type: 'subflow:start', node: nodeRef, subflowId, subflowName, depth, ...laneFields, ...laneIdentity });
       return;
     }
     if (raw.type === 'run:done') {
-      parentEmit({ type: 'subflow:done', node: nodeRef, subflowId, status: raw.status, depth, ...laneFields });
+      parentEmit({ type: 'subflow:done', node: nodeRef, subflowId, status: raw.status, depth, ...laneFields, ...laneIdentity });
       return;
     }
     if (raw.type === 'message') {
@@ -728,6 +734,13 @@ export class SubflowNode extends BaseNode {
 
     const runLane = async (i: number): Promise<void> => {
       const lane = lanes[i];
+      // Pre-generate the lane's conversation id so the live view can deep-link
+      // into the lane's sidebar conversation (issue #157). Safe: runFlow treats
+      // a fresh caller-supplied id as memory-miss → storage-miss → create-new.
+      const laneConversationId = prepResult.persistConversation ? crypto.randomUUID() : undefined;
+      // Static fan-out lanes have no brief; fall back to the subflow name so
+      // live-view row labels and sidebar titles agree (and are non-empty).
+      const laneTitle = lane.laneTitle ?? lane.subflowName;
       // Map-over-list lanes carry an explicit item index/count; fan-out lanes use
       // the plain lane position. Either way the live view separates concurrent
       // runs by laneIndex/laneCount, so per-item runs are separable like fan-out.
@@ -737,7 +750,12 @@ export class SubflowNode extends BaseNode {
         nodeRef,
         lane.subflowId,
         lane.subflowName,
-        { index: lane.itemIndex ?? i, count: lane.itemCount ?? laneCount },
+        {
+          index: lane.itemIndex ?? i,
+          count: lane.itemCount ?? laneCount,
+          title: laneTitle,
+          conversationId: laneConversationId,
+        },
       );
       try {
         // Spawn/map-over-list lanes carry their OWN input (one per brief/item);
@@ -751,7 +769,8 @@ export class SubflowNode extends BaseNode {
           flowId: lane.subflowId,
           ...(lane.input ?? runInput),
           mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
-          ...(prepResult.persistConversation && lane.laneTitle ? { title: lane.laneTitle } : {}),
+          ...(laneConversationId ? { conversationId: laneConversationId } : {}),
+          ...(prepResult.persistConversation && laneTitle ? { title: laneTitle } : {}),
           flujo: true,
           requireApproval: false,
           debug: false,
@@ -770,6 +789,12 @@ export class SubflowNode extends BaseNode {
           success: false,
           error: err instanceof Error ? err.message : String(err),
         };
+        // runFlow THREW (rather than returning status 'error'), so the child
+        // never emitted run:done and no subflow:done reached the live view —
+        // the lane's row would spin until run end and the partial-failure
+        // count would undercount. Synthesize the terminal event through the
+        // same wrapper (it translates run:done → subflow:done + lane fields).
+        emit?.({ type: 'run:done', status: 'error' });
       }
       if (!results[i]!.success && errorStrategy === 'fail-fast') {
         aborted = true; // stop the pool from starting any further lanes

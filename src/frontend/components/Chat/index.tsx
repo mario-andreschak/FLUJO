@@ -37,6 +37,7 @@ import {
   pruneLiveActivity,
   resourceActivityKey,
 } from '@/utils/shared/liveActivity';
+import { LiveLanes, EMPTY_LIVE_LANES, applyLaneEvent } from '@/utils/shared/liveLanes';
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
@@ -320,6 +321,9 @@ const Chat: React.FC = () => {
   // touching RIGHT NOW, for canvas highlighting in the debugger. Entries decay
   // by age (LIVE_HIGHLIGHT_TTL_MS); pruned on each event application.
   const [liveActivity, setLiveActivity] = useState<LiveActivity>(EMPTY_LIVE_ACTIVITY);
+  // Per-lane progress rows for parallel subflow fan-outs (issue #157). Pure
+  // reducer state rebuilt from the SSE replay (from seq 0) on re-attach.
+  const [liveLanes, setLiveLanes] = useState<LiveLanes>(EMPTY_LIVE_LANES);
   // Breakpoint node IDs for the visual debugger (mirrors server state).
   const [breakpoints, setBreakpoints] = useState<string[]>([]);
   // Which conversation currently has an active run (so the live indicator only
@@ -907,10 +911,41 @@ const Chat: React.FC = () => {
         return pruneLiveActivity(draft, now);
       });
 
+    // Parallel-lane events (issue #157): fold into the per-lane progress rows
+    // instead of the single activeNode string — concurrent lanes overwriting
+    // activeNode is what made the header flicker between lanes. The lane
+    // reducer owns node/tool/subflow activity for these events; everything
+    // else (message, usage, resource highlighting, error) still falls through
+    // to the switch below. run:start/run:done never carry laneIndex (child run
+    // boundaries are translated to subflow:* by the emit wrapper).
+    if (event.laneIndex != null) {
+      setLiveLanes(prev => applyLaneEvent(prev, event));
+      switch (event.type) {
+        case 'node:enter':
+          // Keep the canvas highlight (per-node, lane-agnostic) — only the
+          // activeNode label is lane-scoped now.
+          if (event.node?.nodeId) {
+            const nodeId = event.node.nodeId;
+            touchActivity(draft => { draft.byNode[nodeId] = { kind: 'active', ts: Date.now() }; });
+          }
+          touch({});
+          return;
+        case 'tool:call':
+        case 'tool:progress':
+        case 'subflow:start':
+        case 'handoff':
+          touch({}); // refresh lastEventAt without overwriting activeNode
+          return;
+        default:
+          break; // message/usage/resource/error/subflow:done → main switch
+      }
+    }
+
     switch (event.type) {
       case 'run:start':
         setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
+        setLiveLanes(EMPTY_LIVE_LANES);
         if (event.conversationId) {
           patchConversationStatus(event.conversationId, 'running');
           markConversationStopped(event.conversationId, false); // a new run clears the prior Stop notice
@@ -1031,6 +1066,7 @@ const Chat: React.FC = () => {
         }
         setLiveStats(null);
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
+        setLiveLanes(EMPTY_LIVE_LANES);
         setIsLoading(false);
         setLoadingConversationId(null);
         closeEventStream();
@@ -1063,6 +1099,9 @@ const Chat: React.FC = () => {
     closeEventStream();
     // Accept events at/after the replay position (fromSeq) or everything (-1).
     lastSeqRef.current = fromSeq !== undefined ? fromSeq - 1 : -1;
+    // Lane rows are rebuilt from the replay; without this, rows from a
+    // previously-viewed conversation would merge with the replayed ones.
+    setLiveLanes(EMPTY_LIVE_LANES);
     return new Promise<void>((resolve) => {
       let settled = false;
       const settle = () => {
@@ -1141,6 +1180,7 @@ const Chat: React.FC = () => {
       setIsLoading(false);
       setLoadingConversationId(null);
       setLiveStats(null);
+      setLiveLanes(EMPTY_LIVE_LANES);
     }
     markConvRunning(conversationId, false);
 
@@ -2583,6 +2623,8 @@ const Chat: React.FC = () => {
               {viewedConversationRunning && !isDebugPaused && (
                 <LiveRunIndicator
                   liveStats={liveStats}
+                  lanes={liveLanes}
+                  onOpenLane={setCurrentConversationId}
                   onStop={handleCancelRequest}
                   stopDisabled={!currentConversationId}
                 />
@@ -2595,6 +2637,8 @@ const Chat: React.FC = () => {
               {!viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && (
                 <LiveRunIndicator
                   liveStats={liveStats}
+                  lanes={liveLanes}
+                  onOpenLane={setCurrentConversationId}
                   awaitingApproval
                   onStop={handleCancelRequest}
                   stopDisabled={!currentConversationId}

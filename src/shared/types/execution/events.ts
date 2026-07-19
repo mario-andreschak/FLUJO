@@ -173,6 +173,14 @@ export interface SubflowStartEvent extends ExecutionEventBase {
   node?: NodeRef;
   subflowId: string;
   subflowName?: string;
+  /** The lane's brief / map item title (falls back to the subflow name for
+   *  static fan-out lanes) — labels the lane's live-view row (issue #157).
+   *  Carried on subflow:done too so a late-joining client that missed start
+   *  still gets label + link. */
+  laneTitle?: string;
+  /** The lane's persisted sidebar conversation (present only when
+   *  saveConversation is on) — lets the live view deep-link into the lane. */
+  laneConversationId?: string;
 }
 /** The child run of a SubflowNode reached a terminal state. */
 export interface SubflowDoneEvent extends ExecutionEventBase {
@@ -180,6 +188,9 @@ export interface SubflowDoneEvent extends ExecutionEventBase {
   node?: NodeRef;
   subflowId: string;
   status: 'completed' | 'error';
+  /** See SubflowStartEvent — duplicated here for late-joining clients. */
+  laneTitle?: string;
+  laneConversationId?: string;
 }
 /**
  * A resource was read during execution. `source` says through which mechanism:
