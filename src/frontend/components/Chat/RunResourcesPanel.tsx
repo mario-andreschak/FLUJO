@@ -45,6 +45,7 @@ function producerLabel(entry: RunResourceEntry): string {
   const p = entry.producedBy;
   switch (p.source) {
     case 'tool-result': return `tool ${p.server ?? '?'}/${p.toolName ?? '?'}`;
+    case 'tool-args': return `tool args ${p.server ?? '?'}/${p.toolName ?? '?'}`;
     case 'capture': return `step ${p.nodeName ?? p.nodeId ?? '?'}`;
     case 'mcp-link': return `link from ${p.server ?? '?'}`;
     default: return 'run';

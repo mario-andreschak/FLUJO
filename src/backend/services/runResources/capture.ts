@@ -50,7 +50,7 @@ function formatKb(bytes: number): string {
 
 function stubText(entry: RunResourceEntry): string {
   return `[FLUJO stored this ${entry.mimeType ?? entry.kind} (${formatKb(entry.size)}) as run resource ${entry.uri}. ` +
-    `Read it back via the 'flujo' MCP server (resources/read) if needed.]`;
+    `Read it back with the 'read_resource' tool (or the 'flujo' MCP server's resources/read) if needed.]`;
 }
 
 export async function captureToolResult(input: CaptureToolResultInput): Promise<CaptureOutcome> {

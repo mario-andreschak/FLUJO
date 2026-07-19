@@ -207,13 +207,15 @@ export interface ResourceReadEvent extends ExecutionEventBase {
   name?: string;
   mimeType?: string;
   size?: number;
-  source: 'pill' | 'res-ref' | 'node' | 'mcp-read';
+  source: 'pill' | 'res-ref' | 'node' | 'mcp-read' | 'tool-read';
 }
 /**
  * A resource was written to the run-scoped store: a tool result auto-captured
  * (`tool-result`, carries the producing `toolCallId` — stable across runFlow's
  * tool-message id rewrite), a node's `captureResource` output (`capture`), or
- * an MCP-app write (`mcp-app`, reserved).
+ * an MCP-app write (`mcp-app`, reserved), or oversized tool-call PARAMETERS
+ * captured for later dereference (`tool-args`, carries the producing
+ * `toolCallId` — issue #168).
  */
 export interface ResourceWriteEvent extends ExecutionEventBase {
   type: 'resource:write';
@@ -223,7 +225,7 @@ export interface ResourceWriteEvent extends ExecutionEventBase {
   name?: string;
   mimeType?: string;
   size?: number;
-  source: 'tool-result' | 'capture' | 'mcp-app';
+  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args';
   toolCallId?: string;
 }
 export interface BreakpointHitEvent extends ExecutionEventBase {

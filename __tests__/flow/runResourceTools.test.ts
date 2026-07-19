@@ -11,15 +11,26 @@
  */
 
 const writeRunResourceMock = jest.fn();
+const readRunResourceMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
+  readRunResource: (...args: unknown[]) => readRunResourceMock(...args),
+  parseRunResourceUri: (uri: unknown) => {
+    const SCHEME = 'flujo://run/';
+    if (typeof uri !== 'string' || !uri.startsWith(SCHEME)) return null;
+    const parts = uri.slice(SCHEME.length).split('/');
+    if (parts.length !== 2) return null;
+    return { conversationId: parts[0], id: parts[1] };
+  },
 }));
 
 import {
   buildRunResourceTools,
+  buildReadResourceTool,
   executeRunResourceTool,
   isRunResourceToolName,
   WRITE_RESOURCE_TOOL_NAME,
+  READ_RESOURCE_TOOL_NAME,
 } from '@/backend/execution/flow/handlers/runResourceTools';
 import type { ResourceNodeReference } from '@/backend/execution/flow/types';
 
@@ -65,9 +76,79 @@ describe('buildRunResourceTools', () => {
 });
 
 describe('isRunResourceToolName', () => {
-  it('matches write_resource only', () => {
+  it('matches the synthetic run-resource tools', () => {
     expect(isRunResourceToolName(WRITE_RESOURCE_TOOL_NAME)).toBe(true);
+    expect(isRunResourceToolName(READ_RESOURCE_TOOL_NAME)).toBe(true);
     expect(isRunResourceToolName('handoff_to_x')).toBe(false);
+  });
+});
+
+describe('buildReadResourceTool (#168)', () => {
+  it('is deterministic and takes a single required uri', () => {
+    const a = buildReadResourceTool();
+    const b = buildReadResourceTool();
+    expect(a).toEqual(b); // no per-run interpolation → prefix-cache stable
+    expect(a.name).toBe(READ_RESOURCE_TOOL_NAME);
+    expect(a.inputSchema).toMatchObject({ required: ['uri'] });
+  });
+});
+
+describe('read_resource execution (#168)', () => {
+  const node = { nodeId: 'proc-1', nodeName: 'Step', nodeType: 'process' as const };
+  const uri = 'flujo://run/conv-1/res-9';
+
+  beforeEach(() => {
+    readRunResourceMock.mockReset();
+    readRunResourceMock.mockResolvedValue({
+      entry: { uri, name: 'evidence', mimeType: 'text/plain', size: 12, kind: 'text' },
+      contents: { contents: [{ uri, mimeType: 'text/plain', text: 'FULL CONTENT' }] },
+    });
+  });
+
+  it('reads a stored URI, emits resource:read (tool-read) and appends tool-read lineage', async () => {
+    const emit = jest.fn();
+    const outcome = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId: 'conv-1', node, emit },
+    );
+    expect(readRunResourceMock).toHaveBeenCalledWith(
+      uri,
+      expect.objectContaining({ source: 'tool-read', nodeId: 'proc-1' }),
+    );
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resource:read', server: 'flujo', uri, source: 'tool-read',
+    }));
+    expect(outcome).toMatchObject({ success: true, data: { uri, content: 'FULL CONTENT' } });
+  });
+
+  it('rejects a non-run URI', async () => {
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri: 'http://example.com' }, { conversationId: 'conv-1' });
+    expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty uri', async () => {
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, {}, { conversationId: 'conv-1' });
+    expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a URI from a different conversation', async () => {
+    const outcome = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri: 'flujo://run/other-conv/res-9' },
+      { conversationId: 'conv-1' },
+    );
+    expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing resource', async () => {
+    readRunResourceMock.mockResolvedValue(null);
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri }, { conversationId: 'conv-1' });
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toContain('not found');
   });
 });
 

@@ -1,6 +1,20 @@
 import OpenAI from 'openai';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import { RunResourceEntry } from '@/shared/types/runResources';
+
+/**
+ * Captured run resources for oversized PRIOR tool results/args, keyed by the
+ * producing `tool_call_id` (issue #168). A single call id can have both an
+ * oversized RESULT and oversized ARGS captured, so each slot carries them
+ * separately.
+ */
+export interface ToolResourceMarker {
+  /** Captured oversized tool RESULT for this tool_call_id. */
+  result?: RunResourceEntry;
+  /** Captured oversized tool-call ARGS for this tool_call_id. */
+  args?: RunResourceEntry;
+}
 
 /**
  * Everything an adapter needs to perform a single chat completion. The caller
@@ -87,6 +101,14 @@ export interface CompletionInput {
    * persisted copy dedupe in the UI rather than duplicating.
    */
   onTranscriptMessage?: (message: FlujoChatMessage) => void;
+  /**
+   * Captured run resources for oversized PRIOR tool results/args, keyed by the
+   * producing `tool_call_id` (issue #168). Self-orchestrating adapters (Claude
+   * subscription) use this to replace inline `…[truncated]` with a head excerpt
+   * + `flujo://run/...` marker a model can dereference via the `read_resource`
+   * tool. Request/response adapters ignore it. Omitted ⇒ plain truncation.
+   */
+  runResourceMarkers?: Map<string, ToolResourceMarker>;
 }
 
 /**

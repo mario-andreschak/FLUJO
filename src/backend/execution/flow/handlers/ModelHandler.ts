@@ -19,9 +19,11 @@ import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
-import { getRunResourceSettings } from '@/backend/services/runResources';
+import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
-import { isRunResourceToolName, executeRunResourceTool, WRITE_RESOURCE_TOOL_NAME } from './runResourceTools';
+import { isRunResourceToolName, executeRunResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
+import type { RunResourceSettings } from '@/shared/types/runResources';
+import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
@@ -198,6 +200,38 @@ export class ModelHandler {
   }
 
   /**
+   * Build the resource-aware truncation-marker lookup (issue #168): captured
+   * run resources for oversized PRIOR tool results/args, keyed by the producing
+   * tool_call_id. Only `tool-result` / `tool-args` captures carry a toolCallId
+   * and are relevant here. Best-effort — any failure yields `undefined` and the
+   * adapter falls back to plain truncation. The store index is cached, so this
+   * is cheap per call.
+   */
+  private static async buildRunResourceMarkers(
+    conversationId: string
+  ): Promise<Map<string, ToolResourceMarker> | undefined> {
+    try {
+      const entries = await listRunResources(conversationId);
+      let markers: Map<string, ToolResourceMarker> | undefined;
+      for (const entry of entries) {
+        const id = entry.producedBy?.toolCallId;
+        if (!id) continue;
+        const source = entry.producedBy.source;
+        if (source !== 'tool-result' && source !== 'tool-args') continue;
+        if (!markers) markers = new Map();
+        const slot = markers.get(id) ?? {};
+        if (source === 'tool-result') slot.result = entry;
+        else slot.args = entry;
+        markers.set(id, slot);
+      }
+      return markers;
+    } catch (error) {
+      log.warn(`Failed to build run-resource markers for conversation ${conversationId}`, error);
+      return undefined;
+    }
+  }
+
+  /**
    * Call model with tool support - performs a SINGLE API call.
    * Does NOT handle tool execution loops internally.
    */
@@ -307,8 +341,29 @@ export class ModelHandler {
               if (!outcome.success) throw new Error(outcome.error ?? 'write_resource failed');
               return outcome.data;
             },
+            // read_resource (issue #168): lets a self-orchestrating model
+            // dereference a flujo://run/... marker back to full content in-loop.
+            [READ_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, args, {
+                conversationId,
+                node: runResourceNode,
+                emit,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
+              return outcome.data;
+            },
           }
         : undefined;
+
+    // Resource-aware truncation markers (issue #168): build a lookup of captured
+    // run resources for oversized PRIOR tool results/args, keyed by the producing
+    // tool_call_id, so the Claude-subscription adapter can emit a head excerpt +
+    // a dereferenceable flujo://run/... marker instead of a plain `…[truncated]`.
+    // Built once here (cheap — the store index is cached) and passed to the
+    // adapter; request/response adapters ignore it.
+    const runResourceMarkers = conversationId
+      ? await ModelHandler.buildRunResourceMarkers(conversationId)
+      : undefined;
 
     // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
     // scoped its input (latest-message / isolated); otherwise it sees the full
@@ -323,6 +378,7 @@ export class ModelHandler {
       conversationId,
       nodeId,
       localToolExecutors,
+      runResourceMarkers,
     });
 
     if (!response.success) {
@@ -461,6 +517,10 @@ export class ModelHandler {
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+      /** Captured run resources for oversized prior tool results/args, keyed by
+       * the producing tool_call_id; used by self-orchestrating adapters for
+       * resource-aware truncation markers (issue #168). */
+      runResourceMarkers?: Map<string, ToolResourceMarker>;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -606,6 +666,7 @@ export class ModelHandler {
           signal: abortController.signal,
           conversationId: opts?.conversationId,
           nodeId: opts?.nodeId,
+          runResourceMarkers: opts?.runResourceMarkers,
         }));
       } finally {
         stopCancelWatch();
@@ -929,6 +990,63 @@ export class ModelHandler {
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
 
+          // Run-resource settings drive both the tool-args capture (below,
+          // before the call) and the tool-result auto-capture (after the call).
+          // Fetched once here, only when we have a conversation to scope writes
+          // to — so legacy/ephemeral call sites keep byte-identical behaviour.
+          let runResourceSettings: RunResourceSettings | undefined;
+          if (conversationId) {
+            try {
+              runResourceSettings = await getRunResourceSettings();
+            } catch (error) {
+              log.warn('Failed to load run-resource settings; skipping capture', error);
+            }
+          }
+
+          // Tier 3 / issue #168: capture oversized tool-call PARAMETERS as a run
+          // resource (source 'tool-args', keyed by the toolCallId) so a
+          // downstream self-orchestrating adapter can render a dereferenceable
+          // marker instead of dropping them. Lineage-only at execution time —
+          // the active call below still runs with the FULL args. Never fails the
+          // run: any store error is logged and skipped.
+          if (
+            conversationId &&
+            runResourceSettings?.autoCaptureEnabled &&
+            typeof argsString === 'string' &&
+            argsString.length >= runResourceSettings.textThresholdChars
+          ) {
+            try {
+              const writtenArgs = await writeRunResource({
+                conversationId,
+                mimeType: 'application/json',
+                kind: 'text',
+                data: { text: argsString },
+                producedBy: {
+                  source: 'tool-args',
+                  nodeId: node?.nodeId,
+                  server: serverName,
+                  toolName,
+                  toolCallId: id,
+                },
+              });
+              if (!('skipped' in writtenArgs)) {
+                emit?.({
+                  type: 'resource:write',
+                  node,
+                  server: 'flujo',
+                  uri: writtenArgs.uri,
+                  name: writtenArgs.name,
+                  mimeType: writtenArgs.mimeType,
+                  size: writtenArgs.size,
+                  source: 'tool-args',
+                  toolCallId: id,
+                });
+              }
+            } catch (error) {
+              log.error('Tool-args capture failed; continuing with the call', error);
+            }
+          }
+
           // Call the tool via MCP service. The timeout comes from the tool's MCP
           // node (properties.toolTimeout, seconds; -1 = none), defaulting to 5
           // minutes. Server progress notifications are forwarded as live
@@ -959,10 +1077,9 @@ export class ModelHandler {
           // Capture never breaks the run: on any failure the original result
           // is kept untouched.
           let effectiveData = result.data;
-          if (result.success && conversationId) {
+          if (result.success && conversationId && runResourceSettings) {
             try {
-              const settings = await getRunResourceSettings();
-              if (settings.autoCaptureEnabled) {
+              if (runResourceSettings.autoCaptureEnabled) {
                 const outcome = await captureToolResult({
                   conversationId,
                   server: serverName,
@@ -970,7 +1087,7 @@ export class ModelHandler {
                   toolCallId: id,
                   nodeId: node?.nodeId,
                   result: result.data as CallToolResult,
-                  settings,
+                  settings: runResourceSettings,
                 });
                 effectiveData = outcome.result;
                 for (const entry of outcome.captured) {

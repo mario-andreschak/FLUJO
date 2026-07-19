@@ -21,8 +21,15 @@ export const RUN_RESOURCE_SCHEME = 'flujo://run/';
 
 export type RunResourceKind = 'text' | 'image' | 'audio' | 'blob' | 'link';
 
-/** How a resource came to exist. */
-export type RunResourceSource = 'tool-result' | 'capture' | 'mcp-link';
+/**
+ * How a resource came to exist.
+ *  - 'tool-result': an MCP tool result auto-captured (image/audio/blob/large text).
+ *  - 'capture': a node's explicit write_resource / captureResource output.
+ *  - 'mcp-link': a native MCP resource_link a tool returned.
+ *  - 'tool-args': oversized tool-call PARAMETERS captured for later dereference
+ *    (issue #168), keyed by the producing `toolCallId`.
+ */
+export type RunResourceSource = 'tool-result' | 'capture' | 'mcp-link' | 'tool-args';
 
 export interface RunResourceProducer {
   source: RunResourceSource;
@@ -44,8 +51,9 @@ export interface RunResourceAccess {
   /** ms since epoch. */
   at: number;
   /** Mechanism of the read — mirrors ResourceReadEvent['source'] minus 'pill'
-   * (pills read via the MCP layer and arrive here as 'mcp-read'). */
-  source: 'res-ref' | 'node' | 'mcp-read';
+   * (pills read via the MCP layer and arrive here as 'mcp-read'). 'tool-read'
+   * is a model-initiated read via the synthetic `read_resource` tool (#168). */
+  source: 'res-ref' | 'node' | 'mcp-read' | 'tool-read';
   nodeId?: string;
 }
 

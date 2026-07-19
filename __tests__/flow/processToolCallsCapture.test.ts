@@ -18,8 +18,10 @@ jest.mock('@/backend/services/mcp', () => ({
 }));
 
 const getRunResourceSettingsMock = jest.fn();
+const writeRunResourceMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   getRunResourceSettings: () => getRunResourceSettingsMock(),
+  writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
 }));
 
 const captureToolResultMock = jest.fn();
@@ -61,6 +63,19 @@ beforeEach(() => {
   getRunResourceSettingsMock.mockReset();
   captureToolResultMock.mockReset();
   getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS });
+  writeRunResourceMock.mockReset();
+  writeRunResourceMock.mockResolvedValue({
+    id: 'args-1',
+    uri: 'flujo://run/conv-1/args-1',
+    conversationId: 'conv-1',
+    mimeType: 'application/json',
+    size: 9000,
+    kind: 'text',
+    encoding: 'utf8',
+    createdAt: 1,
+    producedBy: { source: 'tool-args', toolCallId: 'call1' },
+    readBy: [],
+  });
   callToolMock.mockResolvedValue({ success: true, data: imageResult });
   captureToolResultMock.mockResolvedValue({
     result: { content: [{ type: 'text', text: '[FLUJO stored this image/png as flujo://run/conv-1/res-1]' }] },
@@ -155,5 +170,84 @@ describe('processToolCalls auto-capture', () => {
 
     expect(result.success).toBe(true);
     expect(captureToolResultMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('processToolCalls tool-args capture (#168)', () => {
+  // A short tool result so the tool-RESULT capture path stays quiet — this suite
+  // is about the tool-ARGS capture, keyed by toolCallId.
+  const quietResult = { content: [{ type: 'text', text: 'ok' }] };
+  // Args whose JSON string comfortably exceeds the 8192-char threshold.
+  const bigArgs = { blob: 'A'.repeat(9000) };
+
+  beforeEach(() => {
+    callToolMock.mockResolvedValue({ success: true, data: quietResult });
+    captureToolResultMock.mockResolvedValue({ result: quietResult, captured: [] });
+  });
+
+  it('captures oversized args as a tool-args resource and still calls the tool with full args', async () => {
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', bigArgs)],
+      toolNameMap,
+      emit,
+      conversationId: 'conv-1',
+      node: { nodeId: 'node-9' },
+    });
+
+    expect(result.success).toBe(true);
+
+    // Captured as a run resource with source 'tool-args', keyed by toolCallId.
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-1',
+      kind: 'text',
+      mimeType: 'application/json',
+      producedBy: expect.objectContaining({
+        source: 'tool-args',
+        toolCallId: 'call1',
+        server: 'srv',
+        toolName: 'screenshot',
+        nodeId: 'node-9',
+      }),
+    }));
+
+    // resource:write emitted with the tool-args source + producing toolCallId.
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'resource:write',
+      source: 'tool-args',
+      toolCallId: 'call1',
+      uri: 'flujo://run/conv-1/args-1',
+    }));
+
+    // The active call still executes with the FULL args (capture is lineage-only).
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'screenshot', bigArgs, expect.anything(), expect.anything());
+  });
+
+  it('does NOT capture sub-threshold args', async () => {
+    await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', { small: 'x' })],
+      toolNameMap,
+      conversationId: 'conv-1',
+    });
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('a tool-args capture failure never fails the run', async () => {
+    writeRunResourceMock.mockRejectedValue(new Error('store exploded'));
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', bigArgs)],
+      toolNameMap,
+      conversationId: 'conv-1',
+    });
+    expect(result.success).toBe(true);
+    expect(callToolMock).toHaveBeenCalled();
+  });
+
+  it('does NOT capture args without a conversationId (backcompat)', async () => {
+    await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', bigArgs)],
+      toolNameMap,
+    });
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
   });
 });

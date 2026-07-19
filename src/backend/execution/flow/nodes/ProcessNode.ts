@@ -5,7 +5,8 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
-import { buildRunResourceTools } from '../handlers/runResourceTools';
+import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
+import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
@@ -415,6 +416,27 @@ export class ProcessNode extends BaseNode {
         inputMode,
         resolvedIsolatedPrompt,
       );
+    }
+
+    // Issue #168: auto-expose the `read_resource` tool when the wire history
+    // actually references a run resource (a `flujo://run/...` marker left by an
+    // oversized captured tool result/args), so the model can dereference it back
+    // to full content — even when the flujo MCP server isn't attached. Gated on
+    // the marker being present so resource-free flows keep a byte-identical tool
+    // set (preserving the #89 provider prefix-cache stability). Scanned over the
+    // SCOPED wire view the model actually receives; the node's own live loop has
+    // produced nothing yet at prep time, so only PRIOR history is inspected.
+    const wireForScan = prepResult.wireMessages ?? wireBase;
+    const historyHasRunResourceUri = wireForScan.some(
+      (m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME),
+    );
+    if (
+      historyHasRunResourceUri &&
+      !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
+    ) {
+      // prepResult.availableTools is the same array reference, so this is picked
+      // up by execCore's toolNameMap build and the model call.
+      availableTools.push(buildReadResourceTool());
     }
 
     log.info('Assembled node context', {

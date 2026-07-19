@@ -9,7 +9,7 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType, truncateForPrompt } from './messageUtils';
 import { jsonSchemaToZodShape } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
@@ -153,7 +153,19 @@ function isHandoffName(name: string): boolean {
  * token-curve verification because it touches conversation-context correctness.
  * Until then this flatten path remains the always-correct behaviour and fallback.
  */
-export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]): {
+export function buildUserMessage(
+  messages: OpenAI.ChatCompletionMessageParam[],
+  /**
+   * Captured run resources for oversized PRIOR tool results/args, keyed by the
+   * producing tool_call_id (issue #168). When an oversized result/args has a
+   * captured entry, render a head excerpt + a `flujo://run/...` marker the model
+   * can dereference via `read_resource`, instead of a plain `…[truncated]`.
+   * Absent (or no matching entry) ⇒ byte-identical plain truncation. This only
+   * ever sees PRIOR/SETTLED turns (the SDK owns the current node's live loop),
+   * so the current node's in-flight args/results are never rewritten.
+   */
+  resourceMarkers?: Map<string, ToolResourceMarker>,
+): {
   systemPrompt?: string;
   content: string | Anthropic.ContentBlockParam[];
 } {
@@ -194,8 +206,19 @@ export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]):
       // large payload can't dominate the flattened prompt.
       toolActivity = true;
       const name = callNames.get(msg.tool_call_id) ?? msg.tool_call_id;
-      const resultText = truncateForPrompt(extractText(msg.content ?? ''), TOOL_RESULT_MAX_CHARS);
-      lines.push(`Tool result [${name}]: ${resultText}`);
+      const fullResult = extractText(msg.content ?? '');
+      const entry = resourceMarkers?.get(msg.tool_call_id)?.result;
+      if (entry && fullResult.length > TOOL_RESULT_MAX_CHARS) {
+        // Head excerpt + dereferenceable marker (#168): the full payload was
+        // captured as a run resource, so point the model at it via read_resource
+        // instead of silently dropping the tail.
+        lines.push(
+          `Tool result [${name}]: ${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
+          `[full content stored as run resource ${entry.uri} — call read_resource with this uri to read it]`,
+        );
+      } else {
+        lines.push(`Tool result [${name}]: ${truncateForPrompt(fullResult, TOOL_RESULT_MAX_CHARS)}`);
+      }
       continue;
     }
     if (msg.role !== 'user' && msg.role !== 'assistant') continue;
@@ -213,8 +236,18 @@ export function buildUserMessage(messages: OpenAI.ChatCompletionMessageParam[]):
       for (const tc of msg.tool_calls) {
         if (tc.type !== 'function') continue;
         toolActivity = true;
-        const args = truncateForPrompt(tc.function.arguments ?? '', TOOL_ARGS_MAX_CHARS);
-        lines.push(`Assistant [tool call] ${tc.function.name}(${args})`);
+        const fullArgs = tc.function.arguments ?? '';
+        const argsEntry = resourceMarkers?.get(tc.id)?.args;
+        if (argsEntry && fullArgs.length > TOOL_ARGS_MAX_CHARS) {
+          // Head excerpt + marker for oversized captured args (#168).
+          lines.push(
+            `Assistant [tool call] ${tc.function.name}(${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
+            `[full arguments stored as run resource ${argsEntry.uri} — call read_resource with this uri to read them])`,
+          );
+        } else {
+          const args = truncateForPrompt(fullArgs, TOOL_ARGS_MAX_CHARS);
+          lines.push(`Assistant [tool call] ${tc.function.name}(${args})`);
+        }
       }
     }
     if (msg.role === 'user') images.push(...extractImageParts(msg.content));
@@ -295,13 +328,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     signal,
     conversationId,
     nodeId,
+    runResourceMarkers,
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
 
-    const { systemPrompt, content: userContent } = buildUserMessage(messages);
+    const { systemPrompt, content: userContent } = buildUserMessage(messages, runResourceMarkers);
 
     // #154 session tracking. When the caller identifies the conversation+node,
     // key a reusable Agent SDK session on a hash of the reusable prefix
