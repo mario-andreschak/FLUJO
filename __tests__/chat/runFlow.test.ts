@@ -96,6 +96,7 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
+import { flowService } from '@/backend/services/flow/index';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -373,5 +374,139 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 
     await persistConversationState('conversations/parent-1', base);
     expect(persistedStates.length).toBe(1);
+  });
+});
+
+describe('resume after error — turn replay (issue #151)', () => {
+  // The reported bug: Retrying an errored conversation whose parked node uses
+  // `latest-message` re-runs that node directly, so it sees only the current
+  // turn's tail and "loses all context about the conversation as a whole". The
+  // fix (P1) re-enters the turn at its ENTRY node (the last user message's
+  // processNodeId; the flow start node when unstamped) so a full-history entry
+  // node rebuilds context before routing forward — but ONLY on an
+  // error-recovery resume, so normal resumes are untouched.
+  const ERRORED_CONV = 'conv-resume-after-error';
+
+  // Errored conversation parked at the (latest-message) PROCESS node that
+  // failed. The errored node wrote no message, so history ends on interim
+  // output from the entry node.
+  function seedErrored(status: 'error' | 'completed') {
+    conversationStates.set(ERRORED_CONV, {
+      trackingInfo: { executionId: 'e-err', startTime: 1, nodeExecutionTracker: [] },
+      messages: [],
+      flowId: FLOW_ID,
+      conversationId: ERRORED_CONV,
+      currentNodeId: PROCESS,
+      status,
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as SharedState);
+  }
+
+  // What the client re-sends on Retry: a user turn stamped with the ENTRY node
+  // (START) + interim assistant output from it; NO fresh trailing user turn.
+  const retryMessages = [
+    { role: 'user', content: 'question', id: 'u1', timestamp: 1, processNodeId: START },
+    { role: 'assistant', content: 'interim from start node', id: 'a1', timestamp: 2, processNodeId: START },
+  ];
+
+  // Record which node currentNodeId held when each step began.
+  function captureStepNodes(): { seen: Array<string | undefined>; restore: () => void } {
+    const seen: Array<string | undefined> = [];
+    const stub = FlowExecutor.executeStep as jest.Mock;
+    const impl = stub.getMockImplementation()!;
+    stub.mockImplementation(async (sharedState: any) => {
+      seen.push(sharedState.currentNodeId);
+      return impl(sharedState);
+    });
+    return { seen, restore: () => stub.mockImplementation(impl) };
+  }
+
+  it('re-enters at the turn ENTRY node instead of the errored node on Retry', async () => {
+    seedErrored('error');
+    const { seen, restore } = captureStepNodes();
+    try {
+      const result = await runFlow({
+        flowId: FLOW_ID,
+        conversationId: ERRORED_CONV,
+        messages: retryMessages, // Retry re-sends history; no new user turn
+        userTurn: true,
+        mode: 'conversation',
+      });
+      expect(result.status).toBe('completed');
+      // Restarted at START (full-history entry node), NOT the parked
+      // latest-message PROCESS node.
+      expect(seen[0]).toBe(START);
+    } finally {
+      restore();
+    }
+  });
+
+  it('does NOT redirect on a normal (non-error) resume', async () => {
+    seedErrored('completed');
+    const { seen, restore } = captureStepNodes();
+    try {
+      const result = await runFlow({
+        flowId: FLOW_ID,
+        conversationId: ERRORED_CONV,
+        messages: retryMessages,
+        userTurn: true,
+        mode: 'conversation',
+      });
+      expect(result.status).toBe('completed');
+      // Stays parked at PROCESS: the error-recovery redirect is dormant.
+      expect(seen[0]).toBe(PROCESS);
+    } finally {
+      restore();
+    }
+  });
+
+  it('falls back to the flow start node when the last user message is unstamped', async () => {
+    seedErrored('error');
+    (flowService.getFlow as jest.Mock).mockResolvedValueOnce({
+      id: FLOW_ID,
+      name: 'TestFlow',
+      nodes: [{ id: START, type: 'start' }, { id: PROCESS, type: 'process' }],
+    });
+    const { seen, restore } = captureStepNodes();
+    try {
+      const result = await runFlow({
+        flowId: FLOW_ID,
+        conversationId: ERRORED_CONV,
+        // Unstamped user turn + interim assistant output: the entry-node lookup
+        // misses, so the start-node fallback (via flowService.getFlow) supplies START.
+        messages: [
+          { role: 'user', content: 'question', id: 'u1', timestamp: 1 },
+          { role: 'assistant', content: 'interim', id: 'a1', timestamp: 2 },
+        ],
+        userTurn: true,
+        mode: 'conversation',
+      });
+      expect(result.status).toBe('completed');
+      expect(seen[0]).toBe(START);
+    } finally {
+      restore();
+    }
+  });
+
+  it('an ephemeral error-resume is NOT redirected (persisted conversations only)', async () => {
+    // Ephemeral runs never adopt a persisted conversation, so seed via memory
+    // and confirm the guard's !ephemeral clause keeps it parked at PROCESS.
+    seedErrored('error');
+    conversationStates.get(ERRORED_CONV)!.ephemeral = true as any;
+    const { seen, restore } = captureStepNodes();
+    try {
+      const result = await runFlow({
+        flowId: FLOW_ID,
+        conversationId: ERRORED_CONV,
+        messages: retryMessages,
+        userTurn: true,
+        mode: 'ephemeral',
+      });
+      expect(result.status).toBe('completed');
+      expect(seen[0]).toBe(PROCESS);
+    } finally {
+      restore();
+    }
   });
 });

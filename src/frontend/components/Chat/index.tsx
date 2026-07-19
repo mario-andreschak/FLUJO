@@ -1416,6 +1416,21 @@ const Chat: React.FC = () => {
       } else {
         log.warn(`Could not find start node for flow ${currentFlowId}. User message will not have a processNodeId.`);
       }
+    } else if (currentConversationSummary?.status === 'error') {
+      // Post-error new message (issue #151): do NOT inherit the most recent
+      // *successful* assistant's node. After an error the errored node wrote no
+      // message, so the last assistant message belongs to an EARLIER node/turn —
+      // a stale target that makes the backend resume at the wrong place. Re-drive
+      // the turn from the flow start node instead; the backend then replays the
+      // turn from its full-history entry node (see runFlow issue #151 block).
+      const currentFlow = flows.find(f => f.id === currentFlowId);
+      const startNode = currentFlow?.nodes?.[0];
+      if (startNode) {
+        nodeIdToAssign = startNode.id;
+        log.debug(`Post-error message: re-driving turn from start node ID: ${nodeIdToAssign}`);
+      } else {
+        log.warn(`Could not find start node for post-error message in flow ${currentFlowId}. User message will not have a processNodeId.`);
+      }
     } else {
       // For subsequent messages, use the processNodeId from the most recent assistant message
       for (let i = existingMessages.length - 1; i >= 0; i--) {

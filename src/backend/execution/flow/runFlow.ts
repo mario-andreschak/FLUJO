@@ -240,6 +240,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const storageKey = `conversations/${effectiveConvId}` as StorageKey;
   let stateSource: 'storage' | 'memory' | 'new' = 'new';
   let loadedState: SharedState | undefined = undefined;
+  // Issue #151: captured BEFORE the status reset below so the turn-replay guard
+  // downstream can tell an error-recovery resume apart from a normal resume.
+  let resumingAfterError = false;
 
   log.info(`Effective Conversation ID for this run: ${effectiveConvId}`, { providedId: input.conversationId });
 
@@ -286,6 +289,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // list poll).
     if (stateSource !== 'new' && (sharedState.status === 'completed' || sharedState.status === 'error' || sharedState.status === undefined)) {
       log.info(`Resuming completed/errored/fresh conversation ${effectiveConvId}. Resetting status to 'running'.`);
+      // Issue #151: remember this was an error-recovery resume before the status
+      // is cleared, so the turn-replay redirect below can act only on it.
+      resumingAfterError = sharedState.status === 'error';
       sharedState.status = 'running';
       sharedState.lastResponse = undefined;
       sharedState.isCancelled = false;
@@ -541,6 +547,47 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       log.info(`New user turn for ${effectiveConvId}: directing execution to node ${lastMsg.processNodeId} (was ${sharedState.currentNodeId}).`);
       sharedState.currentNodeId = lastMsg.processNodeId;
       FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    }
+  }
+
+  // --- Replay an errored turn from its entry node (issue #151) ---
+  // The Retry button re-sends the existing history with NO new user message, so
+  // the redirect above (which only fires for a fresh trailing user turn) leaves
+  // execution parked at the errored mid-flow node. Resuming directly there when
+  // that node uses `latest-message`/`isolated` narrows the wire to just the
+  // current turn's tail and drops all prior conversation — the reported context
+  // loss. Instead, when resuming an ERRORED conversation with no fresh user turn
+  // and no explicit edit target, re-enter at the turn's ENTRY node (the
+  // processNodeId of the last user message) so a full-history entry node rebuilds
+  // context before routing forward. Falls back to the flow's start node when that
+  // message is unstamped. Persisted conversations only (never ephemeral runs).
+  if (resumingAfterError && userTurn && !ephemeral && stateSource !== 'new' && !data.processNodeId) {
+    const lastMsg = sharedState.messages.length > 0
+      ? sharedState.messages[sharedState.messages.length - 1]
+      : undefined;
+    // A fresh trailing user turn is already handled by the redirect above; only
+    // act on a Retry (history ends on an assistant/tool message).
+    if (lastMsg?.role !== 'user') {
+      let entryNodeId: string | undefined;
+      for (let i = sharedState.messages.length - 1; i >= 0; i--) {
+        if (sharedState.messages[i].role === 'user') {
+          entryNodeId = sharedState.messages[i].processNodeId;
+          break;
+        }
+      }
+      if (!entryNodeId && sharedState.flowId) {
+        try {
+          const flow = await flowService.getFlow(sharedState.flowId);
+          entryNodeId = flow?.nodes?.find((n) => n.type === 'start')?.id;
+        } catch (err) {
+          log.warn(`Could not resolve start node for error-resume of ${effectiveConvId}`, err);
+        }
+      }
+      if (entryNodeId && entryNodeId !== sharedState.currentNodeId) {
+        log.info(`Error-resume for ${effectiveConvId}: replaying turn from entry node ${entryNodeId} (was ${sharedState.currentNodeId}).`);
+        sharedState.currentNodeId = entryNodeId;
+        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      }
     }
   }
 
