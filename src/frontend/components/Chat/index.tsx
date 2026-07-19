@@ -703,6 +703,17 @@ const Chat: React.FC = () => {
     (conv) => conv.id === currentConversationId
   ) || null;
 
+  // flowId → flow name map for the sidebar, so each conversation can show which
+  // flow it used (issue #147). Memoized off the loaded flows list; quick-chat
+  // pseudo-flows are labelled from their id inside ChatHistory.
+  const flowNames = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const f of flows) {
+      if (f.id) map[f.id] = f.name;
+    }
+    return map;
+  }, [flows]);
+
   // Nodes of the conversation's flow, for message attribution + the edit
   // dropdown. Memoized: a fresh array per render would defeat the memoized
   // message bubbles (prop identity would change on every SSE event).
@@ -2433,6 +2444,7 @@ const Chat: React.FC = () => {
           ) : (
             <ChatHistory
               conversations={conversationList} // Pass the list state (ConversationListItem[])
+              flowNames={flowNames}
               currentConversationId={currentConversationId}
               onSelectConversation={setCurrentConversationId}
               onDeleteConversation={deleteConversation}
