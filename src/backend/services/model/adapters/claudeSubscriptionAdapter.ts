@@ -34,6 +34,37 @@ const DEFAULT_MAX_TURNS = DEFAULT_AGENTIC_MAX_TURNS;
 // SDK prefixes the model-facing tool names as `mcp__<server>__<tool>`.
 const SDK_SERVER_NAME = 'flujo';
 
+// Claude Code's built-in tool suite. The Agent SDK advertises these to the model
+// BY DEFAULT, independent of which FLUJO tools a node bound — so without explicit
+// suppression even a tools-less Process Node is offered Bash/Read/Write/etc., the
+// model tries to call them, and `canUseTool` denies each with
+// "...is not permitted for this node." (issue #166). We suppress them two ways:
+// `options.tools = []` (SDK 0.3.x: "[] disables all built-in tools") AND this
+// explicit `disallowedTools` list as drift-proof defence-in-depth, so a future
+// SDK default can't silently re-expose one. Names taken from the Claude Code /
+// Agent SDK built-in set; harmless if a name isn't present in a given version.
+const CLAUDE_BUILTIN_TOOLS = [
+  'Bash',
+  'BashOutput',
+  'KillShell',
+  'KillBash',
+  'Read',
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookRead',
+  'NotebookEdit',
+  'Glob',
+  'Grep',
+  'LS',
+  'WebFetch',
+  'WebSearch',
+  'Task',
+  'Agent',
+  'TodoWrite',
+  'ExitPlanMode',
+];
+
 // Keep tool names under Anthropic's 128-char limit with room for the
 // `mcp__flujo__` prefix the SDK adds.
 const MAX_TOOL_NAME_LEN = 110;
@@ -413,7 +444,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
         ...(systemPrompt ? { systemPrompt } : {}),
-        tools: [], // disable Claude's built-in tools; only FLUJO's MCP tools apply
+        // Disable Claude Code's built-in tool suite so ONLY FLUJO's MCP tools are
+        // offered to the model (issue #166). `tools: []` is the SDK-documented
+        // "disable all built-ins" switch; `disallowedTools` explicitly removes the
+        // known built-ins from the model's context as drift-proof defence-in-depth
+        // (belt-and-suspenders with the canUseTool deny below). A tools-less node
+        // therefore exposes zero tools and the model can't "know about" any it
+        // isn't permitted to call.
+        tools: [],
+        disallowedTools: CLAUDE_BUILTIN_TOOLS,
         // NOTE: deliberately NOT setting `allowedTools` — entries there are
         // auto-allowed and BYPASS canUseTool, which would skip the approval gate.
         // canUseTool is the sole authority: it auto-allows our tools when no gate
