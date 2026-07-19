@@ -17,7 +17,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
-import { SharedState, DebugStep } from '@/backend/execution/flow/types'; // Import backend types
+import { SharedState, DebugStep, ModelInputSnapshot } from '@/backend/execution/flow/types'; // Import backend types
 import { Flow } from '@/shared/types/flow'; // Import shared Flow type
 import { flowService } from '@/frontend/services/flow'; // Import flow service
 import { createLogger } from '@/utils/logger';
@@ -359,6 +359,24 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
 
+  // Per-model-call wire snapshots for the selected step (issue #167, Phase 2 of
+  // #162). Prefer the plural `modelInputs` array; fall back to the singular
+  // `modelInput` for older traces / non-plural producers so nothing regresses.
+  const modelInputs: ModelInputSnapshot[] | undefined = useMemo(() => {
+    if (currentStepData?.modelInputs && currentStepData.modelInputs.length > 0) {
+      return currentStepData.modelInputs;
+    }
+    return currentStepData?.modelInput ? [currentStepData.modelInput] : undefined;
+  }, [currentStepData]);
+
+  // Which model call within the selected step is shown. Reset to the first call
+  // whenever the step changes so paging never points past a shorter step.
+  const [callIndex, setCallIndex] = useState<number>(0);
+  useEffect(() => { setCallIndex(0); }, [currentStepIndex]);
+
+  const safeCallIndex = modelInputs ? Math.min(callIndex, modelInputs.length - 1) : 0;
+  const selectedModelInput: ModelInputSnapshot | undefined = modelInputs?.[safeCallIndex];
+
   // Decay repaint (Tier 3 live highlighting): while any live-activity entry is
   // younger than the TTL, a low-frequency interval bumps `now` so highlights
   // fade out; it self-stops once everything has aged out.
@@ -518,8 +536,45 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const conversationBody = (
     <Box sx={{ flexGrow: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {currentStepData ? (
-        currentStepData.modelInput ? (
-          <DebuggerConversation modelInput={currentStepData.modelInput} conversationId={conversationId} />
+        selectedModelInput && modelInputs ? (
+          <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Per-model-call pager (issue #167): only shown when the node made
+                more than one captured model call this step. */}
+            {modelInputs.length > 1 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
+                <Tooltip title="Previous model call">
+                  <span>
+                    <IconButton
+                      size="small"
+                      onClick={() => setCallIndex((i) => Math.max(0, Math.min(i, modelInputs.length - 1) - 1))}
+                      disabled={safeCallIndex <= 0}
+                      aria-label="Previous model call"
+                    >
+                      <ChevronLeftIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Typography variant="caption" color="textSecondary">
+                  Model call {safeCallIndex + 1} / {modelInputs.length}
+                </Typography>
+                <Tooltip title="Next model call">
+                  <span>
+                    <IconButton
+                      size="small"
+                      onClick={() => setCallIndex((i) => Math.min(modelInputs.length - 1, Math.min(i, modelInputs.length - 1) + 1))}
+                      disabled={safeCallIndex >= modelInputs.length - 1}
+                      aria-label="Next model call"
+                    >
+                      <ChevronRightIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+            )}
+            <Box sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <DebuggerConversation modelInput={selectedModelInput} conversationId={conversationId} />
+            </Box>
+          </Box>
         ) : (
           <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
             No model call for this step.

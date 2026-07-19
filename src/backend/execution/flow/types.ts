@@ -78,6 +78,13 @@ export interface DebugStep {
   /** Model-input visualization for a Process node's model call (issue #153).
    *  Populated only in debug mode; absent for non-model nodes / older traces. */
   modelInput?: ModelInputSnapshot;
+  /** Per-model-call wire snapshots captured across the node's tool loop
+   *  (issue #167, Phase 2 of #162). One entry per model call the node made
+   *  during this visit, in call order. `modelInput` above remains the FIRST /
+   *  representative snapshot for backward compatibility with older traces and
+   *  the singular renderer. Populated only in debug mode; absent for non-model
+   *  nodes / older traces. The frontend pages through this array. */
+  modelInputs?: ModelInputSnapshot[];
 }
 
 // --- Core Flow Types ---
@@ -777,10 +784,14 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
     /** Debugger model-input visualization (issue #153). Computed in prep (where
-     *  the threaded/folded/scoped views are all in scope) and promoted onto the
-     *  DebugStep by FlowExecutor. Populated only when the run is in debug mode /
-     *  the execution tracker is on; unset otherwise so normal runs pay nothing. */
+    *  the threaded/folded/scoped views are all in scope) and promoted onto the
+    *  DebugStep by FlowExecutor. Populated only when the run is in debug mode /
+    *  the execution tracker is on; unset otherwise so normal runs pay nothing. */
     modelInput?: ModelInputSnapshot;
+    /** Issue #167 (Phase 2 of #162): every per-model-call wire snapshot this
+     *  node produced during the visit, in call order (see DebugStep.modelInputs).
+     *  `modelInput` above is the first/representative entry. Same debug gate. */
+    modelInputs?: ModelInputSnapshot[];
 }
 
 // FinishNode prep result

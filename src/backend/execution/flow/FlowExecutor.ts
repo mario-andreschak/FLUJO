@@ -36,8 +36,9 @@ declare global {
  *  ('emit' is the transient event callback a SubflowNode captures in prep).
  *  'modelInput' is the debugger model-input snapshot (issue #153) — it is
  *  promoted to its own DebugStep.modelInput field, so drop it from the raw
- *  prep snapshot to avoid embedding it twice per step. */
-const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput'] as const;
+ *  prep snapshot to avoid embedding it twice per step. 'modelInputs' is the
+ *  per-model-call array (issue #167) — promoted the same way, so strip it too. */
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs'] as const;
 
 /** Lightweight state snapshot: everything except the conversation/tool payloads. */
 function slimStateSnapshot(state: SharedState): Partial<SharedState> {
@@ -215,6 +216,10 @@ export class FlowExecutor {
           // ProcessNode prep result to its own field (survives the slimming that
           // deletes it from prepResultSnapshot). Absent for non-model nodes.
           modelInput: (prepResult as ProcessNodePrepResult | undefined)?.modelInput,
+          // Per-model-call wire snapshots (issue #167): promoted alongside the
+          // singular field (also stripped from prepResultSnapshot via
+          // HEAVY_RESULT_KEYS). The frontend pages through this array.
+          modelInputs: (prepResult as ProcessNodePrepResult | undefined)?.modelInputs,
         };
         sharedState.executionTrace.push(debugStep);
         log.verbose(`Appended step ${stepIndex} to execution trace for conversation ${conversationId}`);
@@ -275,6 +280,8 @@ export class FlowExecutor {
           // (which builds it) ran before the model call, so it explains exactly
           // what was about to be sent when the call failed.
           modelInput: (prepResult as ProcessNodePrepResult | undefined)?.modelInput,
+          // Per-model-call wire snapshots (issue #167), same rationale.
+          modelInputs: (prepResult as ProcessNodePrepResult | undefined)?.modelInputs,
         };
         sharedState.executionTrace.push(errorStep);
         log.verbose(`Appended ERROR step ${stepIndex} to execution trace for conversation ${conversationId}`);

@@ -462,6 +462,18 @@ export class ProcessNode extends BaseNode {
           systemContent: completePrompt,
           inputMode,
         });
+        // Issue #167 (Phase 2 of #162): expose the per-model-call wire snapshots
+        // this visit produced as an ordered array the debugger can page through,
+        // keeping `modelInput` as the first/representative entry for backward
+        // compatibility. A Process node makes exactly ONE model call per visit:
+        // the FLUJO-driven tool loop re-runs the whole node each iteration (each
+        // becomes its own DebugStep with its own snapshot), and a self-
+        // orchestrating adapter (Claude subscription) runs its additional turns
+        // internally where FLUJO cannot recompute the wire — so the outer wire is
+        // the faithful representative and the array has a single entry today. The
+        // plural shape lets the frontend page uniformly and is ready for any
+        // future in-node multi-call loop.
+        prepResult.modelInputs = [prepResult.modelInput];
       } catch (err) {
         // Observability must never break a run.
         log.warn('Could not derive model-input debug view', { err });
