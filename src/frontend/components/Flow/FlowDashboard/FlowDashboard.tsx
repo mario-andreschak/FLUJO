@@ -49,6 +49,8 @@ interface FlowDashboardProps {
   onDeleteFlow: (flowId: string) => void;
   onCopyFlow?: (flowId: string) => void;
   onEditFlow?: (flowId: string) => void;
+  /** Start a new chat conversation bound to a flow (#148). */
+  onOpenInChat?: (flowId: string) => void;
   onCreateFlow?: () => void;
   /** Assign/clear a flow's organizing folder (#71). */
   onSetFolder?: (flowId: string, folder: string | undefined) => void;
@@ -67,6 +69,7 @@ const FlowDashboard = ({
   onDeleteFlow,
   onCopyFlow,
   onEditFlow,
+  onOpenInChat,
   onCreateFlow,
   onSetFolder,
   onToggleFavorite,
@@ -239,6 +242,7 @@ const FlowDashboard = ({
             onDelete={onDeleteFlow}
             onCopy={onCopyFlow}
             onEdit={onEditFlow}
+            onOpenInChat={onOpenInChat}
             onSetFolder={onSetFolder}
             onToggleFavorite={onToggleFavorite}
             folders={folders}

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   Box, 
   Typography, 
@@ -23,6 +24,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import ChatIcon from '@mui/icons-material/Chat';
 import FlowBuilder, { FlowBuilderHandle } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import GenerateFlowDialog, { GeneratedFlowInfo } from '@/frontend/components/Flow/FlowManager/GenerateFlowDialog';
 import { setNavigationGuard, clearNavigationGuard, NavigationGuard } from '@/frontend/utils/navigationGuard';
@@ -38,6 +40,7 @@ const log = createLogger('app/flows/page');
 const FlowsPage = () => {
   log.debug('Rendering FlowsPage');
   const theme = useTheme();
+  const router = useRouter();
   const [flows, setFlows] = useState<Flow[]>([]);
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -108,6 +111,25 @@ const FlowsPage = () => {
     setSelectedFlow(flowId);
     setIsEditing(true); // Auto-enter edit mode when a flow is selected
   }, []);
+
+  // Start a new chat conversation bound to a flow (#148). The Chat page reads
+  // the `?flow=<id>` param, creates a conversation for it, then clears the param.
+  const handleOpenInChat = useCallback((flowId: string) => {
+    log.debug('Opening flow in chat', { flowId });
+    router.push(`/chat?flow=${encodeURIComponent(flowId)}`);
+  }, [router]);
+
+  // "Chat with this flow" from the editor header (#148). Route through the
+  // builder's navigation guard so unsaved edits get a Save/Discard prompt first.
+  const handleOpenSelectedFlowInChat = useCallback(() => {
+    if (!selectedFlow) return;
+    const go = () => router.push(`/chat?flow=${encodeURIComponent(selectedFlow)}`);
+    if (flowBuilderRef.current) {
+      flowBuilderRef.current.requestNavigation(go);
+    } else {
+      go();
+    }
+  }, [selectedFlow, router]);
 
   // Deep link: ?flow=<id> opens that flow straight in the editor (used by the
   // brain viewer's "Open in Editor" link). Runs once the flows have loaded so
@@ -537,6 +559,7 @@ const FlowsPage = () => {
             onCreateFlow={createNewFlow}
             onSetFolder={handleSetFlowFolder}
             onToggleFavorite={handleToggleFavorite}
+            onOpenInChat={handleOpenInChat}
             isLoading={isLoading}
           />
         </Box>
@@ -582,6 +605,23 @@ const FlowsPage = () => {
           </Box>
         </Box>
         
+        {/* When editing a SAVED flow, offer a jump to a new chat bound to it (#148).
+            Hidden for unsaved generated drafts, which have no backend flow to chat with. */}
+        {isEditing && selectedFlow && draftFlow?.id !== selectedFlow && (
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Tooltip title="Start a new conversation with this flow">
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<ChatIcon />}
+                onClick={handleOpenSelectedFlowInChat}
+              >
+                Chat with this flow
+              </Button>
+            </Tooltip>
+          </Box>
+        )}
+
         {!isEditing && (
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Tooltip title="Describe a flow in plain language and let a model draft it">

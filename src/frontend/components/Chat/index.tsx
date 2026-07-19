@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
+import { useRouter } from 'next/navigation';
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom, TextField } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import BoltIcon from '@mui/icons-material/Bolt';
@@ -11,6 +12,7 @@ import StopCircleIcon from '@mui/icons-material/StopCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import EditIcon from '@mui/icons-material/Edit';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
@@ -162,6 +164,7 @@ const isCancellationError = (err: unknown): boolean => {
 };
 
 const Chat: React.FC = () => {
+  const router = useRouter();
   // --- State Management ---
   // List of conversation summaries for the sidebar, fetched from backend
   const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
@@ -746,18 +749,26 @@ const Chat: React.FC = () => {
   }, [nodeOverride, detailedConversation, availableNodes]);
 
   // Create a new conversation (now persists to backend immediately)
-  const createNewConversation = async () => {
+  const createNewConversation = async (explicitFlowId?: string) => {
     log.debug('Attempting to create new conversation');
     setError(null); // Clear previous errors
 
     // Determine the flowId - backend requires a non-null string.
-    // Prefer the last MANUALLY picked flow if it still exists (issue #134, item
-    // 6), then the first favorited flow (#120), then the first flow.
+    // An explicit flow (the "Start conversation" deep link from the Flow
+    // Dashboard / FlowBuilder header, issue #148) wins when it points at a real
+    // flow; otherwise prefer the last MANUALLY picked flow if it still exists
+    // (issue #134, item 6), then the first favorited flow (#120), then the first
+    // flow. `explicitFlowId` is guarded with typeof because this handler is also
+    // wired directly to a button onClick, which would otherwise pass a MouseEvent.
+    const explicitFlow =
+      typeof explicitFlowId === 'string' && !isQuickChatFlowId(explicitFlowId)
+        ? flows.find(f => f.id === explicitFlowId)
+        : undefined;
     const rememberedFlow =
       lastPickedFlowId && !isQuickChatFlowId(lastPickedFlowId)
         ? flows.find(f => f.id === lastPickedFlowId)
         : undefined;
-    const selectedFlowId = (rememberedFlow ?? flows.find(f => f.favorite) ?? flows[0])?.id || null;
+    const selectedFlowId = (explicitFlow ?? rememberedFlow ?? flows.find(f => f.favorite) ?? flows[0])?.id || null;
     if (!selectedFlowId) {
       log.error('Cannot create conversation: No flows available or first flow has no ID.');
       setError('Cannot create a new conversation: No flows available.');
@@ -813,6 +824,24 @@ const Chat: React.FC = () => {
       // Do not update UI state if backend creation failed
     }
   };
+
+  // Deep link: ?flow=<id> starts a NEW conversation bound to that flow (issue
+  // #148 — the "Start conversation" buttons on the Flow Dashboard and the
+  // FlowBuilder header route here). Fires once flows have loaded so we only bind
+  // to a flow that actually exists; an unknown or quick-chat id is ignored. The
+  // param is cleared afterward so a refresh doesn't spawn another conversation.
+  const chatDeepLinkDone = useRef(false);
+  useEffect(() => {
+    if (chatDeepLinkDone.current || flows.length === 0) return;
+    const wanted = new URLSearchParams(window.location.search).get('flow');
+    if (!wanted) { chatDeepLinkDone.current = true; return; }
+    chatDeepLinkDone.current = true;
+    if (flows.some(f => f.id === wanted) && !isQuickChatFlowId(wanted)) {
+      createNewConversation(wanted);
+    }
+    router.replace('/chat');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flows]);
 
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
   const [quickChatOpen, setQuickChatOpen] = useState<boolean>(false);
@@ -2539,6 +2568,23 @@ const Chat: React.FC = () => {
                   />
                 )}
               </Box>
+              {/* Open this flow in the FlowBuilder (#148). Hidden for quick-chat
+                  pseudo-flows, which have no editable saved flow. */}
+              {(() => {
+                const builderFlowId =
+                  currentConversationSummary?.flowId || detailedConversation?.flowId || null;
+                if (!builderFlowId || isQuickChatFlowId(builderFlowId)) return null;
+                return (
+                  <Tooltip title="Open this flow in the FlowBuilder">
+                    <IconButton
+                      color="primary"
+                      onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
+                    >
+                      <AccountTreeIcon />
+                    </IconButton>
+                  </Tooltip>
+                );
+              })()}
               {/* Token totals + context meter (persisted usage; refreshed with the conversation) */}
               <ConversationStats
                 usage={detailedConversation?.usage}

@@ -22,6 +22,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
+import ChatIcon from '@mui/icons-material/Chat';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Flow } from '@/frontend/types/flow/flow';
@@ -40,6 +41,8 @@ interface FlowCardProps {
   onDelete?: (flowId: string) => void;
   onCopy?: (flowId: string) => void;
   onEdit?: (flowId: string) => void;
+  /** Start a new chat conversation bound to this flow (#148). Management mode only. */
+  onOpenInChat?: (flowId: string) => void;
   /** Assign/clear this flow's organizing folder (#71). */
   onSetFolder?: (flowId: string, folder: string | undefined) => void;
   /** Toggle this flow's favorite flag (#120). Available in picker mode too. */
@@ -102,6 +105,7 @@ const FlowCard = ({
   onDelete,
   onCopy,
   onEdit,
+  onOpenInChat,
   onSetFolder,
   onToggleFavorite,
   folders = [],
@@ -151,6 +155,11 @@ const FlowCard = ({
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onEdit) onEdit(flow.id);
+  };
+
+  const handleOpenInChatClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onOpenInChat) onOpenInChat(flow.id);
   };
 
   const handleFolderClick = (e: React.MouseEvent) => {
@@ -384,6 +393,14 @@ const FlowCard = ({
           opacity: 1
         }
       }}>
+        {onOpenInChat && (
+          <Tooltip title="Start a conversation with this flow">
+            <IconButton size="small" onClick={handleOpenInChatClick} color="primary">
+              <ChatIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
+
         {onEdit && (
           <Tooltip title="Edit flow metadata">
             <IconButton size="small" onClick={handleEditClick}>
