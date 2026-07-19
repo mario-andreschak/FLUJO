@@ -27,6 +27,7 @@ import NodeConfiguration from './ProcessNodePropertiesModal/NodeConfiguration'; 
 import ModelBinding from './ProcessNodePropertiesModal/ModelBinding/index'; // Adjusted path
 import ServerTools from './ProcessNodePropertiesModal/ServerTools/ServerTools'; // Adjusted path
 import ServerResources from './ProcessNodePropertiesModal/ServerTools/ServerResources'; // Adjusted path
+import WiredResources, { WiredResource } from './ProcessNodePropertiesModal/ServerTools/WiredResources';
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
@@ -70,6 +71,39 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     handleRestartServer
   } = useServerConnection(open, node, flowEdges, flowNodes);
   
+  // Tier 3 (issue #161 item 3): resource NODES wired to this process node on
+  // the canvas. Direction encodes role (resource→process = consume;
+  // process→resource = produce). Derived from the same flowEdges/flowNodes the
+  // MCP hooks use, so no extra data plumbing is needed. Declared with the other
+  // hooks (before any early return) to respect the Rules of Hooks.
+  const wiredResources: WiredResource[] = React.useMemo(() => {
+    if (!node) return [];
+    const out: WiredResource[] = [];
+    for (const e of flowEdges) {
+      if ((e.data as { edgeType?: string } | undefined)?.edgeType !== 'resource') continue;
+      let resId: string | undefined;
+      let role: 'consume' | 'produce' | undefined;
+      if (e.target === node.id) { resId = e.source; role = 'consume'; }
+      else if (e.source === node.id) { resId = e.target; role = 'produce'; }
+      if (!resId || !role) continue;
+      const rn = flowNodes.find((n) => n.id === resId);
+      if (!rn || rn.type !== 'resource') continue;
+      const p = (rn.data?.properties ?? {}) as {
+        name?: string; scope?: 'mcp' | 'run'; runName?: string; uri?: string; boundServer?: string;
+      };
+      out.push({
+        id: resId,
+        role,
+        label: p.name || p.runName || p.uri || resId,
+        scope: p.scope,
+        runName: p.runName,
+        uri: p.uri,
+        boundServer: p.boundServer,
+      });
+    }
+    return out;
+  }, [node, flowEdges, flowNodes]);
+
   // Get handoff tools for agent tab
   const handoffToolsResult = useHandoffTools(open, node, flowEdges, flowNodes);
   const handoffTools = handoffToolsResult?.handoffTools || [];
@@ -287,11 +321,17 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               
               {/* Show Resources tab content */}
               {activeTab === 'resources' && (
-                <ServerResources
-                  connectedMcpNodes={connectedMcpNodes}
-                  handleInsertResourceBinding={handleInsertResourceBinding}
-                  promptBuilderRef={promptBuilderRef}
-                />
+                <>
+                  <WiredResources
+                    wiredResources={wiredResources}
+                    promptBuilderRef={promptBuilderRef}
+                  />
+                  <ServerResources
+                    connectedMcpNodes={connectedMcpNodes}
+                    handleInsertResourceBinding={handleInsertResourceBinding}
+                    promptBuilderRef={promptBuilderRef}
+                  />
+                </>
               )}
 
               {/* Show Agent Tools tab content */}

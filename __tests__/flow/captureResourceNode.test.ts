@@ -1,18 +1,17 @@
 /**
- * Tier 3 — `captureResource` at the node seams (ProcessNode.post / SubflowNode.post).
+ * Tier 3 — `captureResource` at the SubflowNode.post seam.
  *
- * Mirrors namedVariables.test.ts's structure: promptRenderer/flowService are
- * mocked so prep/post run without a real flow store; the run-resource store is
- * mocked so post's writes are observable without disk. Pins:
- *  - post() stores the node's final output as a NAMED run resource and emits
- *    resource:write (source 'capture') via sharedState.emit;
- *  - ephemeral runs and missing conversationIds never write (policy chokepoint);
- *  - a store failure never breaks post (the action still returns).
+ * NOTE (issue #161): ProcessNode's passive `captureResource` was REMOVED — a
+ * process step that hands off ends with empty content, so the passive capture
+ * wrote empty artifacts. The produce side of a process node is now an explicit
+ * `write_resource` tool (see runResourceTools.test.ts). SubflowNode keeps its
+ * passive capture: a subflow's folded child output is a real, non-empty result
+ * and there is no in-loop tool seam for a subflow node.
+ *
+ * flowService is mocked so post runs without a real flow store; the
+ * run-resource store is mocked so post's writes are observable without disk.
  */
 
-jest.mock('@/backend/utils/PromptRenderer', () => ({
-  promptRenderer: { renderPrompt: jest.fn(async () => 'SYS') },
-}));
 jest.mock('@/backend/services/flow/index', () => ({
   flowService: { getFlow: jest.fn(async () => ({ id: 'flow-1', name: 'f', nodes: [], edges: [] })) },
 }));
@@ -24,13 +23,9 @@ jest.mock('@/backend/services/runResources', () => ({
   readRunResource: jest.fn(),
 }));
 
-import { ProcessNode } from '@/backend/execution/flow/nodes/ProcessNode';
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import type {
   SharedState,
-  ProcessNodeParams,
-  ProcessNodePrepResult,
-  ProcessNodeExecResult,
   SubflowNodeParams,
   SubflowNodeExecResult,
 } from '@/backend/execution/flow/types';
@@ -65,72 +60,6 @@ const writtenEntry = {
 beforeEach(() => {
   writeRunResourceMock.mockReset();
   writeRunResourceMock.mockResolvedValue(writtenEntry);
-});
-
-describe('ProcessNode.post — captureResource', () => {
-  const params = {
-    id: 'proc-1',
-    label: 'P',
-    type: 'process',
-    properties: { boundModel: 'm', name: 'Step', captureResource: 'artifact' },
-  } as ProcessNodeParams;
-
-  const prepResult = { nodeId: 'proc-1', nodeType: 'process' } as ProcessNodePrepResult;
-  const okExec = { success: true, content: 'OUTPUT' } as ProcessNodeExecResult;
-
-  it('stores the output as a named run resource and emits resource:write', async () => {
-    const node = new ProcessNode();
-    const emit = jest.fn();
-    const state = makeState({ emit });
-
-    await node.post(prepResult, okExec, state, params);
-
-    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
-      conversationId: 'conv-1',
-      name: 'artifact',
-      kind: 'text',
-      data: { text: 'OUTPUT' },
-      producedBy: expect.objectContaining({ source: 'capture', nodeId: 'proc-1', nodeName: 'Step' }),
-    }));
-    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'resource:write',
-      server: 'flujo',
-      uri: writtenEntry.uri,
-      name: 'artifact',
-      source: 'capture',
-      node: expect.objectContaining({ nodeId: 'proc-1' }),
-    }));
-  });
-
-  it('never writes on ephemeral runs (policy chokepoint)', async () => {
-    const node = new ProcessNode();
-    await node.post(prepResult, okExec, makeState({ ephemeral: true }), params);
-    expect(writeRunResourceMock).not.toHaveBeenCalled();
-  });
-
-  it('never writes without a conversationId', async () => {
-    const node = new ProcessNode();
-    await node.post(prepResult, okExec, makeState({ conversationId: undefined }), params);
-    expect(writeRunResourceMock).not.toHaveBeenCalled();
-  });
-
-  it('never writes on a failed exec, and a store failure never breaks post', async () => {
-    const node = new ProcessNode();
-    await node.post(prepResult, { success: false, error: 'x' } as ProcessNodeExecResult, makeState(), params);
-    expect(writeRunResourceMock).not.toHaveBeenCalled();
-
-    writeRunResourceMock.mockRejectedValue(new Error('store down'));
-    const action = await node.post(prepResult, okExec, makeState(), params);
-    expect(typeof action).toBe('string'); // post still returns an action
-  });
-
-  it('skipped writes (caps) emit nothing', async () => {
-    writeRunResourceMock.mockResolvedValue({ skipped: 'size-cap' });
-    const node = new ProcessNode();
-    const emit = jest.fn();
-    await node.post(prepResult, okExec, makeState({ emit }), params);
-    expect(emit.mock.calls.map(([e]) => e.type)).not.toContain('resource:write');
-  });
 });
 
 describe('SubflowNode.post — captureResource', () => {

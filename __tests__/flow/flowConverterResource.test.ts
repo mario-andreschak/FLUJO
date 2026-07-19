@@ -4,9 +4,9 @@
  * Pins the engine contract:
  *  - consume edge (resource→process) → an entry in the process node's
  *    `properties.resourceNodes` with role 'consume';
- *  - produce edge (process→resource, run scope) → role 'produce' AND
- *    `captureResource` derived from the artifact's runName (explicit
- *    captureResource wins);
+ *  - produce edge (process→resource, run scope) → role 'produce' (issue #161:
+ *    NO passive `captureResource` is derived any more — the produce side is an
+ *    explicit `write_resource` tool gated on the folded resourceNodes);
  *  - resource edges NEVER become successors (no phantom control flow).
  */
 import { FlowConverter } from '@/backend/execution/flow/FlowConverter';
@@ -85,37 +85,24 @@ describe('FlowConverter resource edges', () => {
     expect((proc.node_params.properties as { captureResource?: string }).captureResource).toBeUndefined();
   });
 
-  it('produce edge folds role produce AND derives captureResource from runName', () => {
+  it('produce edge folds role produce and does NOT derive captureResource', () => {
     const flow = buildFlow(
       [node('res', 'resource', { scope: 'run', runName: 'report' })],
       [resourceEdge('proc', 'res')]
     );
     const converted = FlowConverter.convert(flow);
     const proc = collectNodes(converted).get('proc')!;
-    const props = proc.node_params.properties as { resourceNodes?: Array<{ role: string }>; captureResource?: string };
-    expect(props.resourceNodes?.[0]).toMatchObject({ id: 'res', role: 'produce' });
-    expect(props.captureResource).toBe('report');
-  });
-
-  it('an explicit captureResource wins over the derived one', () => {
-    const flow: ReactFlow = {
-      id: 'flow-1',
-      name: 'f',
-      nodes: [
-        node('start', 'start', { promptTemplate: '' }),
-        node('proc', 'process', { boundModel: 'm', captureResource: 'explicit' }),
-        node('finish', 'finish'),
-        node('res', 'resource', { scope: 'run', runName: 'derived' }),
-      ],
-      edges: [
-        controlEdge('start', 'proc'),
-        controlEdge('proc', 'finish'),
-        resourceEdge('proc', 'res'),
-      ],
-    } as unknown as ReactFlow;
-    const converted = FlowConverter.convert(flow);
-    const proc = collectNodes(converted).get('proc')!;
-    expect((proc.node_params.properties as { captureResource?: string }).captureResource).toBe('explicit');
+    const props = proc.node_params.properties as {
+      resourceNodes?: Array<{ role: string; properties?: { runName?: string } }>;
+      captureResource?: string;
+    };
+    expect(props.resourceNodes?.[0]).toMatchObject({
+      id: 'res',
+      role: 'produce',
+      properties: expect.objectContaining({ runName: 'report' }),
+    });
+    // Issue #161: the produce side no longer derives a passive captureResource.
+    expect(props.captureResource).toBeUndefined();
   });
 
   it('resource edges never create successors', () => {

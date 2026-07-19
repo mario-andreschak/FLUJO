@@ -21,6 +21,7 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
+import { isRunResourceToolName, executeRunResourceTool, WRITE_RESOURCE_TOOL_NAME } from './runResourceTools';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
@@ -287,6 +288,28 @@ export class ModelHandler {
       ? () => ModelHandler.isConversationCancelled(conversationId)
       : undefined;
 
+    // Run-resource tools (issue #161): self-orchestrating adapters (Claude
+    // subscription) run their own tool loop and never surface tool calls to
+    // FLUJO's loop, so the synthetic `write_resource` tool must be executed
+    // in-loop via a localToolExecutor. Built only when the tool is actually
+    // present + we have a conversation to scope the write to; the request/
+    // response path handles the same tool in processToolCalls instead.
+    const runResourceNode = nodeId ? { nodeId, nodeName: nodeDisplayName, nodeType: 'process' as const } : undefined;
+    const localToolExecutors =
+      conversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name))
+        ? {
+            [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
+                conversationId,
+                node: runResourceNode,
+                emit,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'write_resource failed');
+              return outcome.data;
+            },
+          }
+        : undefined;
+
     // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
     // scoped its input (latest-message / isolated); otherwise it sees the full
     // `messages`. `finalMessages` below is always built from `messages`, so the
@@ -299,6 +322,7 @@ export class ModelHandler {
       shouldAbort,
       conversationId,
       nodeId,
+      localToolExecutors,
     });
 
     if (!response.success) {
@@ -434,6 +458,9 @@ export class ModelHandler {
        * reusable Agent SDK session per (conversationId, nodeId) — issue #154. */
       conversationId?: string;
       nodeId?: string;
+      /** Executors for caller-defined virtual tools (e.g. write_resource, issue
+       * #161) run in-loop by self-orchestrating adapters. */
+      localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -572,6 +599,7 @@ export class ModelHandler {
           tools: sanitizedTools,
           temperature,
           toolNameMap: opts?.toolNameMap,
+          localToolExecutors: opts?.localToolExecutors,
           maxTurns: opts?.maxTurns,
           requestToolApproval: opts?.requestToolApproval,
           onTranscriptMessage: opts?.onTranscriptMessage,
@@ -856,6 +884,34 @@ export class ModelHandler {
             });
 
             // Skip to the next tool call
+            continue;
+          }
+
+          // Run-resource tools (issue #161): synthetic FLUJO tools that write a
+          // run artifact, dispatched here (not via mcpService) using the run's
+          // conversationId already in scope. Only offered when a produce node is
+          // wired (ProcessNode.prep), so this branch is inert for other flows.
+          if (isRunResourceToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeRunResourceTool(name, args, { conversationId, node, emit });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
             continue;
           }
 

@@ -5,6 +5,7 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
+import { buildRunResourceTools } from '../handlers/runResourceTools';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
@@ -29,7 +30,6 @@ import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeCondi
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
-import { writeRunResource } from '@/backend/services/runResources';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -313,6 +313,18 @@ export class ProcessNode extends BaseNode {
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
+
+    // Tier 3 (issue #161): when a PRODUCE-role run-artifact resource node is
+    // wired to this step, offer an explicit `write_resource` tool so the model
+    // can write the artifact's real content — replacing the old passive capture
+    // of the node's final text (which was empty when the step handed off). Only
+    // added when such a node is wired, so resource-free steps keep byte-identical
+    // tools (preserving #89 prefix-cache stability). Dispatch is handled by name
+    // in ModelHandler (OpenAI path) / localToolExecutors (subscription path).
+    const runResourceTools = buildRunResourceTools(node_params?.properties?.resourceNodes);
+    if (runResourceTools.length > 0) {
+      availableTools = [...availableTools, ...runResourceTools];
+    }
 
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
@@ -782,45 +794,12 @@ export class ProcessNode extends BaseNode {
       log.info('Captured node output into run variable', { captureVariable, nodeId: node_params?.id });
     }
 
-    // Tier 3 (resource-tracked data flow): also store the output as a NAMED
-    // run-scoped resource with lineage, addressable by `${res:NAME}` and via
-    // the internal "flujo" MCP server. Ephemeral (subflow-child) runs never
-    // write resources — same policy as persistConversationState. Capture must
-    // never break the run: failures log and move on.
-    const captureResource = node_params?.properties?.captureResource?.trim();
-    if (execResult.success && captureResource && sharedState.conversationId && !sharedState.ephemeral) {
-      try {
-        const written = await writeRunResource({
-          conversationId: sharedState.conversationId,
-          name: captureResource,
-          mimeType: 'text/markdown',
-          kind: 'text',
-          data: { text: execResult.content ?? '' },
-          producedBy: {
-            source: 'capture',
-            nodeId: node_params?.id,
-            nodeName: node_params?.properties?.name,
-          },
-        });
-        if ('skipped' in written) {
-          log.warn('captureResource skipped by store cap', { captureResource, reason: written.skipped });
-        } else {
-          sharedState.emit?.({
-            type: 'resource:write',
-            node: { nodeId: node_params?.id ?? 'unknown', nodeName: node_params?.properties?.name, nodeType: 'process' },
-            server: 'flujo',
-            uri: written.uri,
-            name: captureResource,
-            mimeType: written.mimeType,
-            size: written.size,
-            source: 'capture',
-          });
-          log.info('Captured node output into run resource', { captureResource, uri: written.uri, nodeId: node_params?.id });
-        }
-      } catch (error) {
-        log.error('captureResource failed; continuing run', error);
-      }
-    }
+    // Tier 3 (issue #161): the produce side of a run artifact is now an EXPLICIT
+    // `write_resource` tool the model calls (see ProcessNode.prep +
+    // handlers/runResourceTools.ts), NOT a passive capture of this node's final
+    // text. The old passive `captureResource` write lived here; it was removed
+    // because a step that hands off ends with empty content, so it wrote empty
+    // artifacts under the wrong name (the reported "artifacts don't work" bug).
 
     // Tier 4 (persistent kv): also save this node's output to a PERSISTENT
     // cross-run key with `captureKv: "NAME"` (scope-prefixable as folder/flow/

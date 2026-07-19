@@ -102,9 +102,11 @@ export class FlowConverter {
           // Tier 3: a resource edge is DATA wiring, never a successor.
           // Direction encodes role: resource→process = the step CONSUMES the
           // artifact; process→resource = the step PRODUCES it. Fold the
-          // resource node onto the process node's params like mcpNodes; a
-          // produce edge onto a run artifact additionally derives
-          // captureResource (unless the step set one explicitly).
+          // resource node onto the process node's params like mcpNodes. A
+          // produce edge no longer derives a passive `captureResource` (issue
+          // #161): the produce side is now an explicit `write_resource` tool
+          // offered to the step (see ProcessNode.prep). The folded resourceNodes
+          // are what gate that tool.
           log.info(`Handling resource connection: ${edge.id} (${edge.source} -> ${edge.target})`);
 
           let processNode: BaseNode | undefined;
@@ -134,17 +136,6 @@ export class FlowConverter {
               role,
               properties: resourceProps,
             });
-
-            // Produce edge onto a run artifact ⇒ the step's output is captured
-            // under the artifact's name. An explicit captureResource wins.
-            if (role === 'produce' && resourceProps.scope === 'run' && resourceProps.runName
-                && !processNode.node_params.properties.captureResource) {
-              processNode.node_params.properties.captureResource = resourceProps.runName;
-              log.info(`Derived captureResource from produce edge`, {
-                processNodeId: processNode.node_params.id,
-                runName: resourceProps.runName,
-              });
-            }
 
             log.info(`Stored resource node in Process node properties`, {
               processNodeId: processNode.node_params.id,
