@@ -62,7 +62,7 @@ NODE TYPES:
     "captureResource": "NAME",                     // optional; ALSO save the subflow's output as a tracked run resource (\${res:NAME}, rule 9b)
     "captureKv": "NAME",                           // optional; ALSO save the subflow's output to a PERSISTENT cross-run key (\${kv:NAME}, rule 9d)
     "outputMode": "steps" | "final-only" }
-- { "key": "...", "type": "finish", "label": "..." }
+- { "key": "...", "type": "finish" }                              // a finish node is ALWAYS named "Finish Node"; omit "label" (any label you supply is ignored)
 - { "key": "...", "type": "signal", "label": "...",                // fire-and-forget event (rule 11): emits {topic, payload} then passes through unchanged
     "topic": "<event topic other flows' triggers listen for>",     // REQUIRED — a signal with no topic emits nothing
     "payloadTemplate": "event body, may use \${var:NAME}" }         // optional; defaults to the node prompt

@@ -377,6 +377,15 @@ function defaultLabel(type: string): string {
   return `${type.charAt(0).toUpperCase()}${type.slice(1)} Node`;
 }
 
+/**
+ * Canonical label for finish nodes. Auto-generated flows must ALWAYS name their
+ * finish node exactly this, regardless of what the model emitted, to stay
+ * consistent with the UI FlowBuilder, auto-repair and the runtime fallback
+ * (issue #188).
+ */
+const FINISH_NODE_LABEL = 'Finish Node';
+
+
 /** Resolve a model reference: exact id, then case-insensitive displayName, then name. */
 function resolveModel(
   ref: string,
@@ -720,7 +729,7 @@ export function compileFlowSpec(
         type,
         position: { x: 0, y: 0 }, // layout pass below
         data: {
-          label: specNode.label || defaultLabel(type),
+          label: type === 'finish' ? FINISH_NODE_LABEL : (specNode.label || defaultLabel(type)),
           type,
           ...(specNode.description ? { description: specNode.description } : {}),
           properties,
@@ -1236,7 +1245,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
     const specNode: FlowSpecNode = {
       key: node.id,
       type,
-      ...(node.data?.label ? { label: node.data.label } : {}),
+      // Finish nodes always carry the canonical name; never round-trip a custom label for them (issue #188).
+      ...(type !== 'finish' && node.data?.label ? { label: node.data.label } : {}),
       ...(node.data?.description ? { description: node.data.description } : {}),
     };
     if (type === 'start') {

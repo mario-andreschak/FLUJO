@@ -8,6 +8,7 @@
  */
 import {
   compileFlowSpec,
+  flowToSpec,
   applyGenerationDefaults,
   sanitizeFlowName,
   FlowSpec,
@@ -166,7 +167,7 @@ describe('compileFlowSpec — happy path', () => {
     const start = byLabel(flow, 'Start');
     const research = byLabel(flow, 'Researcher');
     const sum = byLabel(flow, 'Summarize');
-    const end = byLabel(flow, 'Done');
+    const end = byLabel(flow, 'Finish Node'); // finish label is forced canonical, even though the spec said 'Done'
     const mcp = byLabel(flow, 'brave-search');
     expect(start.position.y).toBeLessThan(research.position.y);
     expect(research.position.y).toBeLessThan(sum.position.y);
@@ -184,6 +185,41 @@ describe('compileFlowSpec — happy path', () => {
     expect(validation.issues).toEqual([]);
     expect(validation.isRunnable).toBe(true);
   });
+
+// ---------------------------------------------------------------------------
+// Finish node canonical naming (issue #188)
+// ---------------------------------------------------------------------------
+
+describe('compileFlowSpec — finish nodes are always named "Finish Node"', () => {
+  it('forces the canonical label even when the spec supplies a custom one', () => {
+    // happySpec's finish node is authored with label 'Done'.
+    const { flow } = compileFlowSpec(happySpec, context);
+    const finish = flow!.nodes.find((n) => n.type === 'finish')!;
+    expect(finish.data.label).toBe('Finish Node');
+  });
+
+  it('uses the canonical label when the spec omits label entirely', () => {
+    const spec = {
+      name: 'f',
+      nodes: [
+        { key: 's', type: 'start' as const, prompt: 'go' },
+        { key: 'end', type: 'finish' as const },
+      ],
+      edges: [{ from: 's', to: 'end' }],
+    };
+    const { flow } = compileFlowSpec(spec, context);
+    const finish = flow!.nodes.find((n) => n.type === 'finish')!;
+    expect(finish.data.label).toBe('Finish Node');
+  });
+
+  it('flowToSpec never emits a custom label for finish nodes', () => {
+    const { flow } = compileFlowSpec(happySpec, context);
+    const spec = flowToSpec(flow!);
+    const finishSpec = spec.nodes.find((n) => n.type === 'finish')!;
+    expect(finishSpec.label).toBeUndefined();
+  });
+});
+
 });
 
 // ---------------------------------------------------------------------------

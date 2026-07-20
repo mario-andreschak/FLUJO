@@ -146,6 +146,9 @@ describe('generateFlow — happy path', () => {
     expect(result.validation.errorCount).toBe(0);
     expect(result.flow.name).toBe('research_flow');
     expect(result.flow.nodes.map((n) => n.type).sort()).toEqual(['finish', 'mcp', 'process', 'start']);
+    // Auto-generated finish nodes are always named 'Finish Node' (issue #188).
+    const finish = result.flow.nodes.find((n) => n.type === 'finish')!;
+    expect(finish.data.label).toBe('Finish Node');
   });
 
   it('parses a fenced, prefaced model reply', async () => {
