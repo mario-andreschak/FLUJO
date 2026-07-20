@@ -17,6 +17,7 @@
  * checks that need them are simply skipped when absent.
  */
 import { findBindings } from './mcpBinding';
+import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
@@ -133,6 +134,41 @@ export function mcpServersConnectedToProcess(
     if (typeof server === 'string' && server) servers.add(server);
   }
   return servers;
+}
+
+/**
+ * The set of handoff tool names a Process node currently exposes, derived the SAME
+ * way the runtime does (ProcessNode.generateHandoffTools) and the FlowBuilder preview
+ * (useHandoffTools): one tool per unique flow-control successor (outgoing edges, plus
+ * the source of a bidirectional edge pointing at this node), named via the shared
+ * buildHandoffToolNameMap. This lets the checker detect prompt pills that reference a
+ * handoff tool which no longer exists — the target was removed, or it was renamed/retyped
+ * so its slug (and thus the tool name) shifted.
+ */
+export function handoffToolNamesForNode(
+  nodeId: string,
+  nodes: VNode[],
+  edges: VEdge[]
+): Set<string> {
+  const nodesById = new Map(nodes.map((n) => [n.id, n]));
+  const targetIds: string[] = [];
+  const seen = new Set<string>();
+  for (const edge of edges) {
+    if (isAttachmentEdge(edge)) continue; // tool/resource wiring is not a handoff route
+    let otherId: string | null = null;
+    if (edge.source === nodeId) otherId = edge.target;
+    else if (edge.target === nodeId && edge.data?.bidirectional) otherId = edge.source;
+    if (!otherId || seen.has(otherId)) continue;
+    seen.add(otherId);
+    targetIds.push(otherId);
+  }
+  const targets: HandoffTargetRef[] = targetIds
+    .map((id) => nodesById.get(id))
+    .filter((n): n is VNode => !!n)
+    // Pass the raw label (may be undefined) so slugifyHandoffTarget falls back to the
+    // node type exactly like the runtime/preview — getNodeLabel would substitute the id.
+    .map((n) => ({ id: n.id, label: n.data?.label, type: getNodeType(n) }));
+  return new Set(buildHandoffToolNameMap(targets).values());
 }
 
 /** Build adjacency (source -> targets) over flow-control (non-attachment) edges
@@ -353,6 +389,12 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   // --- Signal nodes (issue #117: deterministic in-flow event emission) ---
   // A signal node emits {topic, payload} onto the flow-run bus when traversed.
   // Without a topic nothing can listen, so the node is inert — advisory only.
+  //
+  // Note (issue #180): signals have no PILL/reference form in a prompt — they are
+  // emitted, never referenced by name from a template — so "signal name changed"
+  // has no dangling-reference surface to obsolete the way handoff/MCP tool pills do.
+  // The empty-topic check below is the meaningful signal coverage; a renamed topic
+  // simply changes who can listen, which a flow-event trigger surfaces separately.
   const signalNodes = nodes.filter((n) => getNodeType(n) === 'signal');
   for (const node of signalNodes) {
     const props = node.data?.properties ?? {};
@@ -725,10 +767,30 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     if (typeof promptTemplate !== 'string' || !promptTemplate) continue;
 
     const connectedServers = mcpServersConnectedToProcess(node.id, nodes, edges);
+    // Built lazily (only if a handoff pill actually appears) so nodes without
+    // handoff pills pay nothing.
+    let handoffNames: Set<string> | null = null;
     const seen = new Set<string>();
     for (const binding of findBindings(promptTemplate)) {
-      // Handoff pills aren't server-bound; they're validated by flow control, not here.
-      if (binding.server === 'handoff') continue;
+      // Handoff pills aren't server-bound: their validity is whether the named
+      // handoff tool still exists for THIS node's current successors. A pill that
+      // no longer resolves (target removed, or renamed/retyped so the slug shifted)
+      // is dead — warn (non-blocking: the flow can still route via other paths).
+      if (binding.server === 'handoff') {
+        const hkey = `handoff:${binding.name}`;
+        if (seen.has(hkey)) continue;
+        seen.add(hkey);
+        if (!handoffNames) handoffNames = handoffToolNamesForNode(node.id, nodes, edges);
+        if (!handoffNames.has(binding.name)) {
+          add(
+            'warning',
+            'handoff-pill-obsolete',
+            `Process node "${getNodeLabel(node)}" references handoff tool "${binding.name}", which no longer exists (the target node was removed, or renamed so the tool name changed). Update or remove the pill.`,
+            node
+          );
+        }
+        continue;
+      }
       const key = `${binding.kind}:${binding.server}:${binding.name}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -752,6 +814,29 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" no longer provides.`,
           node
         );
+      }
+    }
+  }
+
+  // --- Process nodes wired to an MCP server that currently exposes 0 tools ---
+  // A dead attachment: the mcp edge is there but the server provides nothing, so the
+  // node gains no callable tools from it. Only flagged when we positively KNOW the
+  // server is connected with an empty tool list (serverTools[name] === []). An
+  // undefined entry means "not gathered / offline / disconnected" — which the pill and
+  // server-binding checks already cover — so we never guess a zero-tools warning there.
+  if (context.serverTools) {
+    for (const node of processNodes) {
+      const connected = mcpServersConnectedToProcess(node.id, nodes, edges);
+      for (const server of connected) {
+        const tools = context.serverTools[server];
+        if (Array.isArray(tools) && tools.length === 0) {
+          add(
+            'warning',
+            'mcp-server-no-tools',
+            `Process node "${getNodeLabel(node)}" is connected to MCP server "${server}", which currently exposes 0 tools. The connection has no effect until the server provides tools.`,
+            node
+          );
+        }
       }
     }
   }

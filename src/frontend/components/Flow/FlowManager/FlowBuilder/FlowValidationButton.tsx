@@ -65,7 +65,38 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
         ? (configs as MCPServerConfig[]).map(s => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }))
         : undefined;
 
-      const result = validateFlow({ nodes, edges } as any, { models, servers });
+      // Gather the live tool list for each MCP server THIS flow attaches to, so the
+      // checker can flag obsolete tool pills (tool-unavailable) and process nodes
+      // wired to a server exposing 0 tools (mcp-server-no-tools). We only query
+      // servers referenced by an MCP node in this flow, and never disabled ones
+      // (leaving them undefined so the checker treats them as "unknown", not empty).
+      // listServerTools never starts a server — an offline one returns an error and
+      // is left out of the map, so it can't produce a false zero-tools warning.
+      const serverTools: Record<string, string[]> = {};
+      try {
+        const disabledByName = new Map(
+          (Array.isArray(configs) ? (configs as MCPServerConfig[]) : []).map(s => [s.name, !!s.disabled])
+        );
+        const flowServers = new Set<string>();
+        for (const n of nodes as any[]) {
+          const nodeType = n?.data?.type ?? n?.type;
+          const bound = n?.data?.properties?.boundServer;
+          if (nodeType === 'mcp' && typeof bound === 'string' && bound) flowServers.add(bound);
+        }
+        await Promise.all([...flowServers].map(async (name) => {
+          if (disabledByName.get(name)) return; // disabled → leave undefined (unknown)
+          const res = await mcpService.listServerTools(name);
+          if (!res.error && Array.isArray(res.tools)) {
+            serverTools[name] = res.tools
+              .map((tool: { name?: string }) => tool?.name)
+              .filter((x): x is string => typeof x === 'string');
+          }
+        }));
+      } catch (error) {
+        log.debug('Could not gather MCP tool lists for the flow check', error);
+      }
+
+      const result = validateFlow({ nodes, edges } as any, { models, servers, serverTools });
       setIssues(result.issues);
     } catch (error) {
       log.warn('Flow validation failed to run', error);

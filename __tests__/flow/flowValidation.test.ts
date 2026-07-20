@@ -474,7 +474,7 @@ describe('validateFlow — dangling tool pills', () => {
     expect(codes(r)).toContain('tool-unavailable');
   });
 
-  it('ignores handoff pills (not server-bound)', () => {
+  it('does not treat handoff pills as server-bound (no tool-pill-disconnected)', () => {
     const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_xyz')}`;
     const flow: VFlow = {
       nodes: [startNode(), processNode('p', { boundModel: 'm1', promptTemplate: prompt }), finishNode()],
@@ -482,6 +482,96 @@ describe('validateFlow — dangling tool pills', () => {
     };
     const r = validateFlow(flow, { models: [{ id: 'm1' }] });
     expect(codes(r)).not.toContain('tool-pill-disconnected');
+  });
+});
+
+describe('validateFlow — obsolete handoff pills (issue #180)', () => {
+  it('warns when a handoff pill names a tool that no longer exists', () => {
+    // p's only successor is finish (handoff_to_finish); the stale pill names a
+    // target that was removed/renamed, so its tool name no longer resolves.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_xyz')}`;
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1', promptTemplate: prompt }), finishNode()],
+      edges: [edge('start', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-pill-obsolete');
+    expect(codes(r)).not.toContain('tool-pill-disconnected');
+    expect(r.isRunnable).toBe(true); // warning only — never blocks a run
+  });
+
+  it('accepts a handoff pill that matches a current successor', () => {
+    // p -> q gives p the handoff tool handoff_to_q (q's label is its id 'q').
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_q')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-pill-obsolete');
+  });
+
+  it('accepts a handoff pill reachable via a bidirectional back-edge', () => {
+    // A bidirectional edge b <> p gives p a handoff route to b as well.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_b')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('b', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), biEdge('b', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-pill-obsolete');
+  });
+});
+
+describe('validateFlow — MCP server with zero tools (issue #180)', () => {
+  it('warns when a process node is wired to a connected server exposing 0 tools', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode(), mcpNode('mcp1', 'empty')],
+      edges: [edge('start', 'p'), edge('p', 'finish'), edge('p', 'mcp1', true)],
+    };
+    const r = validateFlow(flow, {
+      models: [{ id: 'm1' }],
+      servers: [{ name: 'empty', status: 'connected' }],
+      serverTools: { empty: [] },
+    });
+    expect(codes(r)).toContain('mcp-server-no-tools');
+    expect(r.isRunnable).toBe(true); // warning only
+  });
+
+  it('does not warn when the connected server provides tools', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode(), mcpNode('mcp1', 'srv')],
+      edges: [edge('start', 'p'), edge('p', 'finish'), edge('p', 'mcp1', true)],
+    };
+    const r = validateFlow(flow, {
+      models: [{ id: 'm1' }],
+      servers: [{ name: 'srv', status: 'connected' }],
+      serverTools: { srv: ['read', 'write'] },
+    });
+    expect(codes(r)).not.toContain('mcp-server-no-tools');
+  });
+
+  it('does not warn when the tool list for a server is unknown (undefined, not gathered)', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode(), mcpNode('mcp1', 'srv')],
+      edges: [edge('start', 'p'), edge('p', 'finish'), edge('p', 'mcp1', true)],
+    };
+    const r = validateFlow(flow, {
+      models: [{ id: 'm1' }],
+      servers: [{ name: 'srv', status: 'connected' }],
+      serverTools: {}, // defined map, but no entry for 'srv' => unknown, not empty
+    });
+    expect(codes(r)).not.toContain('mcp-server-no-tools');
   });
 });
 
