@@ -3,6 +3,16 @@ import { toAnthropicMessages, toAnthropicTools } from '@/backend/services/model/
 import { toGeminiContents, toGeminiTools } from '@/backend/services/model/adapters/geminiAdapter';
 import { buildUserMessage } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
 
+// A single shared logger mock so tests can assert `log.warn` was emitted when a
+// remote image fetch fails. The factory builds the object internally (no outer
+// reference) to avoid a TDZ crash from jest.mock hoisting; createLogger always
+// returns the same singleton, which we then grab for our assertions.
+jest.mock('@/utils/logger', () => {
+  const log = { verbose: jest.fn(), debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  return { createLogger: () => log };
+});
+const mockLog = (jest.requireMock('@/utils/logger') as { createLogger: () => Record<string, jest.Mock> }).createLogger();
+
 // A 1x1 PNG as a base64 data URL — the shape a pasted screenshot arrives in.
 const PNG_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -89,8 +99,8 @@ describe('anthropic translation', () => {
 });
 
 describe('gemini translation', () => {
-  it('hoists system, uses model role, and maps tool_calls/results to function parts', () => {
-    const { systemInstruction, contents } = toGeminiContents(CONVERSATION);
+  it('hoists system, uses model role, and maps tool_calls/results to function parts', async () => {
+    const { systemInstruction, contents } = await toGeminiContents(CONVERSATION);
     expect(systemInstruction).toBe('You are helpful.');
     expect(contents.map(c => c.role)).toEqual(['user', 'model', 'user']);
 
@@ -117,14 +127,154 @@ describe('gemini translation', () => {
     });
   });
 
-  it('maps a multipart user turn to a text part + inlineData image part', () => {
-    const { contents } = toGeminiContents(MULTIMODAL_CONVERSATION);
+  it('maps a multipart user turn to a text part + inlineData image part', async () => {
+    const { contents } = await toGeminiContents(MULTIMODAL_CONVERSATION);
     expect(contents).toHaveLength(1);
     const parts = contents[0].parts!;
     expect(parts[0]).toMatchObject({ text: 'What is in this image?' });
     expect((parts[1] as any).inlineData).toMatchObject({
       mimeType: 'image/png',
       data: PNG_DATA_URL.split(',')[1],
+    });
+  });
+
+  describe('remote (http/https) image URLs (issue #172)', () => {
+    // A user turn carrying text plus a REMOTE image URL (not a data: URL).
+    const REMOTE_IMAGE_CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Describe this' },
+          { type: 'image_url', image_url: { url: 'https://example.com/cat.png' } },
+        ],
+      },
+    ];
+
+    // Build a minimal Response-like object for the mocked global fetch.
+    function fakeResponse(opts: {
+      ok?: boolean;
+      status?: number;
+      contentType?: string;
+      body?: Buffer;
+    }): Response {
+      const { ok = true, status = 200, contentType = 'image/png', body = Buffer.from([1, 2, 3]) } = opts;
+      return {
+        ok,
+        status,
+        headers: {
+          get: (k: string) => {
+            const key = k.toLowerCase();
+            if (key === 'content-type') return contentType;
+            if (key === 'content-length') return String(body.length);
+            return null;
+          },
+        },
+        arrayBuffer: async () =>
+          body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+      } as unknown as Response;
+    }
+
+    beforeEach(() => {
+      mockLog.warn.mockClear();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('fetches a remote image URL and inlines it as base64', async () => {
+      const body = Buffer.from('hello-image-bytes');
+      const spy = jest
+        .spyOn(global, 'fetch')
+        .mockResolvedValue(fakeResponse({ contentType: 'image/png', body }));
+
+      const { contents } = await toGeminiContents(REMOTE_IMAGE_CONVERSATION);
+
+      expect(spy).toHaveBeenCalledWith(
+        'https://example.com/cat.png',
+        expect.objectContaining({ cache: 'no-store' })
+      );
+      const parts = contents[0].parts!;
+      expect(parts[0]).toMatchObject({ text: 'Describe this' });
+      expect((parts[1] as any).inlineData).toMatchObject({
+        mimeType: 'image/png',
+        data: body.toString('base64'),
+      });
+    });
+
+    it('normalizes image/jpg content-type to image/jpeg', async () => {
+      jest
+        .spyOn(global, 'fetch')
+        .mockResolvedValue(fakeResponse({ contentType: 'image/jpg', body: Buffer.from('jpg') }));
+      const { contents } = await toGeminiContents(REMOTE_IMAGE_CONVERSATION);
+      expect((contents[0].parts![1] as any).inlineData.mimeType).toBe('image/jpeg');
+    });
+
+    it('skips a remote image on fetch failure but keeps the text and warns', async () => {
+      jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network down'));
+
+      const { contents } = await toGeminiContents(REMOTE_IMAGE_CONVERSATION);
+
+      const parts = contents[0].parts!;
+      expect(parts).toHaveLength(1);
+      expect(parts[0]).toMatchObject({ text: 'Describe this' });
+      expect(parts.some(p => 'inlineData' in p)).toBe(false);
+      expect(mockLog.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips a non-image content-type response and warns', async () => {
+      jest
+        .spyOn(global, 'fetch')
+        .mockResolvedValue(fakeResponse({ contentType: 'text/html', body: Buffer.from('<html>') }));
+
+      const { contents } = await toGeminiContents(REMOTE_IMAGE_CONVERSATION);
+
+      const parts = contents[0].parts!;
+      expect(parts).toHaveLength(1);
+      expect(parts.some(p => 'inlineData' in p)).toBe(false);
+      expect(mockLog.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips an oversized image (Content-Length over the cap) and warns', async () => {
+      const spy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (k: string) => {
+            const key = k.toLowerCase();
+            if (key === 'content-type') return 'image/png';
+            if (key === 'content-length') return String(11 * 1024 * 1024); // 11 MB > 10 MB cap
+            return null;
+          },
+        },
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as unknown as Response);
+
+      const { contents } = await toGeminiContents(REMOTE_IMAGE_CONVERSATION);
+
+      expect(spy).toHaveBeenCalled();
+      const parts = contents[0].parts!;
+      expect(parts.some(p => 'inlineData' in p)).toBe(false);
+      expect(mockLog.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('blocks a private/loopback host without fetching and warns', async () => {
+      const spy = jest.spyOn(global, 'fetch');
+      const convo: OpenAI.ChatCompletionMessageParam[] = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'ssrf?' },
+            { type: 'image_url', image_url: { url: 'http://169.254.169.254/latest/meta-data' } },
+          ],
+        },
+      ];
+
+      const { contents } = await toGeminiContents(convo);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(contents[0].parts!.some(p => 'inlineData' in p)).toBe(false);
+      expect(mockLog.warn).toHaveBeenCalledTimes(1);
     });
   });
 });
