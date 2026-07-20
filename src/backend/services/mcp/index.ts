@@ -107,6 +107,7 @@ import {
   setInternalServerDisabled,
   setInternalServerRoots,
   FILESYSTEM_SERVER_NAME,
+  BASH_SERVER_NAME,
 } from './internal/registry';
 
 // Define a type for tool arguments
@@ -1436,10 +1437,11 @@ export class MCPService {
       const nameOk = updates.name === undefined || updates.name === serverName;
       const onlyDisabledChange =
         keys.length > 0 && keys.every(k => k === 'disabled') && typeof updates.disabled === 'boolean' && nameOk;
-      // The `filesystem` built-in additionally allows configuring its confinement
-      // roots (issue #170): persisted as a tiny override, never as the synthetic config.
+      // The `filesystem` and `bash` built-ins additionally allow configuring their
+      // confinement roots (issues #170 + #175): persisted as a tiny override, never
+      // as the synthetic config.
       const onlyRootsChange =
-        serverName === FILESYSTEM_SERVER_NAME &&
+        (serverName === FILESYSTEM_SERVER_NAME || serverName === BASH_SERVER_NAME) &&
         keys.length > 0 &&
         keys.every(k => k === 'roots') &&
         Array.isArray(updates.roots) &&

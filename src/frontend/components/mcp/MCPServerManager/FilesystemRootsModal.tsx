@@ -1,13 +1,15 @@
 'use client';
 
 /**
- * Roots configuration modal for the built-in `filesystem` MCP server (issue #170).
+ * Roots configuration modal for the confinable built-in MCP servers
+ * (`filesystem` — issue #170; `bash` — issue #175).
  *
  * Lets the user view/add/remove the confinement roots the server is scoped to.
  * The roots are persisted as a tiny per-server override (never as the synthetic
  * config) via the standard PUT /api/mcp/servers/{name} path with `{ roots }`.
- * Note: when the operator has set the FLUJO_FS_ROOTS environment variable it
- * remains a HARD CEILING — roots configured here can only narrow within it.
+ * Note: when the operator has set the ceiling environment variable
+ * (FLUJO_FS_ROOTS, or FLUJO_BASH_ROOTS for bash) it remains a HARD CEILING —
+ * roots configured here can only narrow within it.
  */
 import React, { useEffect, useState } from 'react';
 import { createLogger } from '@/utils/logger';
@@ -38,6 +40,10 @@ const FilesystemRootsModal: React.FC<FilesystemRootsModalProps> = ({ open, serve
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isBash = serverName === 'bash';
+  // The env HARD CEILING that applies to this server (bash also honors FLUJO_FS_ROOTS).
+  const ceilingEnv = isBash ? 'FLUJO_BASH_ROOTS' : 'FLUJO_FS_ROOTS';
 
   useEffect(() => {
     if (open) {
@@ -72,7 +78,7 @@ const FilesystemRootsModal: React.FC<FilesystemRootsModalProps> = ({ open, serve
         setError(typeof result.error === 'string' ? result.error : 'Failed to save roots.');
         return;
       }
-      log.info(`Saved ${roots.length} filesystem root(s) for ${serverName}`);
+      log.info(`Saved ${roots.length} root(s) for ${serverName}`);
       onSaved?.(roots);
       onClose();
     } catch (err) {
@@ -85,13 +91,20 @@ const FilesystemRootsModal: React.FC<FilesystemRootsModalProps> = ({ open, serve
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth onClick={(e) => e.stopPropagation()}>
-      <DialogTitle>Configure filesystem roots</DialogTitle>
+      <DialogTitle>Configure {serverName} roots</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Confine the built-in <b>filesystem</b> server to these folders. Leave the list empty for
-          full host access (unless the <code>FLUJO_FS_ROOTS</code> environment variable is set, which
+          Confine the built-in <b>{serverName}</b> server to these folders. Leave the list empty for
+          full host access (unless the <code>{ceilingEnv}</code> environment variable is set, which
           always acts as a hard ceiling).
         </Typography>
+        {isBash && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            The bash <code>cwd</code> fence is best-effort: a shell can still <code>cd</code> elsewhere
+            or use absolute paths, so <code>FLUJO_FS_ROOTS</code>/<code>FLUJO_BASH_ROOTS</code> and OS
+            permissions remain the real boundary.
+          </Alert>
+        )}
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>

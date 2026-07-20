@@ -25,7 +25,8 @@ import { promises as fs } from 'fs';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
-import { FILESYSTEM_SERVER_NAME, getInternalServerRoots } from './registry';
+import { FILESYSTEM_SERVER_NAME } from './registry';
+import { isInside, loadEffectiveRoots } from './confinement';
 
 const log = createLogger('backend/services/mcp/internal/filesystemTools');
 
@@ -61,47 +62,6 @@ function errorResult(message: string): CallToolResult {
     content: [{ type: 'text', text: JSON.stringify({ error: message }, null, 2) }],
     isError: true,
   };
-}
-
-/** Confinement roots read from the FLUJO_FS_ROOTS env (the hard ceiling), or null. */
-function envRoots(): string[] | null {
-  const raw = process.env.FLUJO_FS_ROOTS;
-  if (!raw || !raw.trim()) return null;
-  const list = raw
-    .split(path.delimiter)
-    .map((r) => r.trim())
-    .filter(Boolean)
-    .map((r) => path.resolve(r));
-  return list.length ? list : null;
-}
-
-function isInside(root: string, candidate: string): boolean {
-  const rel = path.relative(root, candidate);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-/**
- * The effective confinement roots for this call, or null when unconfined.
- *
- * Precedence (per issue #170 D5): the FLUJO_FS_ROOTS env is a HARD CEILING.
- *  - No env, no persisted roots  -> null (full host access).
- *  - No env, persisted roots     -> confine to the persisted roots.
- *  - Env set                     -> persisted roots may only NARROW within the
- *                                   ceiling; any persisted root outside the env
- *                                   is dropped, and if none remain the env roots
- *                                   themselves are the effective set.
- */
-async function loadEffectiveRoots(): Promise<string[] | null> {
-  const env = envRoots();
-  let persisted: string[] = [];
-  try {
-    persisted = (await getInternalServerRoots(FILESYSTEM_SERVER_NAME)).map((r) => path.resolve(r));
-  } catch (err) {
-    log.warn('loadEffectiveRoots: could not read persisted roots', err);
-  }
-  if (!env) return persisted.length ? persisted : null;
-  const confined = persisted.filter((p) => env.some((root) => isInside(root, p)));
-  return confined.length ? confined : env;
 }
 
 /**
@@ -797,7 +757,7 @@ async function deleteTool(args: Record<string, unknown>, roots: string[] | null)
 
 export async function filesystemCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
-    const roots = await loadEffectiveRoots();
+    const roots = await loadEffectiveRoots(FILESYSTEM_SERVER_NAME, 'FLUJO_FS_ROOTS');
     switch (toolName) {
       case 'read_file':
         return await readFileTool(args, roots);

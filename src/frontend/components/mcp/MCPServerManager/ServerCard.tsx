@@ -691,9 +691,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
             >
               {enabled ? 'Enabled' : 'Disabled'}
             </Typography>
-            {/* The built-in filesystem server can be scoped to specific roots (issue #170). */}
-            {name === 'filesystem' && (
-              <Tooltip title="Configure filesystem roots">
+            {/* The built-in filesystem and bash servers can be scoped to specific roots (issues #170 + #175). */}
+            {(name === 'filesystem' || name === 'bash') && (
+              <Tooltip title={`Configure ${name} roots`}>
                 <Button
                   size="small"
                   variant="text"
@@ -712,7 +712,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </CardActions>
       )}
 
-      {name === 'filesystem' && (
+      {(name === 'filesystem' || name === 'bash') && (
         <FilesystemRootsModal
           open={showRootsModal}
           serverName={name}

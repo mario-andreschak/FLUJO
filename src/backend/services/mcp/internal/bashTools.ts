@@ -11,6 +11,16 @@
  *   - orphan cleanup: every live session is force-killed on FLUJO process exit,
  *     and idle finished sessions are swept after a TTL.
  *
+ * Confinement + env hygiene (issue #175): the `cwd` is confined to the same
+ * effective roots as the built-in `filesystem` server (a HARD CEILING from
+ * `FLUJO_BASH_ROOTS`, falling back to `FLUJO_FS_ROOTS`, plus UI-persisted roots
+ * that may only narrow within it). This is a best-effort guardrail — a shell can
+ * `cd` elsewhere or use absolute paths, so `FLUJO_FS_ROOTS`/`FLUJO_BASH_ROOTS`
+ * and OS permissions remain the real boundary. Spawned commands also DO NOT
+ * inherit the full backend `process.env` by default (which would leak secrets);
+ * only a minimal allow-list is passed. Set `FLUJO_BASH_INHERIT_ENV=1` to restore
+ * full inheritance.
+ *
  * Every tool returns a machine-readable JSON envelope in a single text content
  * block; failures come back as `isError: true` rather than thrown.
  */
@@ -20,6 +30,8 @@ import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { killProcessTree } from '@/utils/process/killProcessTree';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
+import { BASH_SERVER_NAME } from './registry';
+import { isInside, loadEffectiveRoots } from './confinement';
 
 const log = createLogger('backend/services/mcp/internal/bashTools');
 
@@ -91,10 +103,61 @@ function textResult(payload: unknown, isError = false): CallToolResult {
   };
 }
 
-function resolveCwd(input: unknown): string {
+/** Env var names that supply the bash confinement ceiling (checked in order). */
+const BASH_ROOT_ENV_VARS = ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'];
+
+/**
+ * Resolve the working directory against the FLUJO data dir (for relative paths)
+ * and enforce the effective confinement roots when present. Throws on a
+ * confinement violation so callers surface a precise error (issue #175).
+ */
+function resolveCwd(input: unknown, roots: string[] | null): string {
   const dataDir = getDataDir();
   const raw = typeof input === 'string' ? input.trim() : '';
-  return raw ? (path.isAbsolute(raw) ? raw : path.join(dataDir, raw)) : dataDir;
+  const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
+  if (roots && !roots.some((root) => isInside(root, resolved))) {
+    throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
+  }
+  return resolved;
+}
+
+/**
+ * A truthy env flag: "1", "true", "yes", "on" (case-insensitive).
+ */
+function isTruthyEnv(value: string | undefined): boolean {
+  return typeof value === 'string' && /^(1|true|yes|on)$/i.test(value.trim());
+}
+
+/**
+ * Names of environment variables that are safe (and often necessary) to pass to
+ * a spawned shell. Anything not on this list — notably API keys / secrets — is
+ * withheld by default so a command like `env` / `printenv` / `Get-ChildItem Env:`
+ * cannot read them back (issue #175). `LC_*` locale vars are allowed by prefix.
+ */
+const ENV_ALLOWLIST = new Set([
+  'PATH', 'Path',
+  'HOME', 'USERPROFILE',
+  'TMP', 'TEMP', 'TMPDIR',
+  'LANG', 'LC_ALL',
+  // Windows essentials so the default shell can even start.
+  'SystemRoot', 'windir', 'ComSpec', 'PATHEXT', 'SystemDrive',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE',
+]);
+
+/**
+ * Build the child process environment. By default only the minimal allow-list is
+ * passed (secrets never leave the backend). Setting `FLUJO_BASH_INHERIT_ENV` to a
+ * truthy value restores full `process.env` inheritance for power users.
+ */
+function buildChildEnv(): NodeJS.ProcessEnv {
+  if (isTruthyEnv(process.env.FLUJO_BASH_INHERIT_ENV)) return process.env;
+  const out = {} as NodeJS.ProcessEnv;
+  for (const key of Object.keys(process.env)) {
+    if (ENV_ALLOWLIST.has(key) || /^LC_/.test(key)) {
+      out[key] = process.env[key];
+    }
+  }
+  return out;
 }
 
 /**
@@ -129,7 +192,7 @@ function startChild(command: string, cwd: string, shell: ShellKind): SpawnOutcom
   // POSIX: detached so killProcessTree can signal the whole group (see killProcessTree).
   const detached = process.platform !== 'win32';
   try {
-    const child = spawn(file, args, { cwd, shell: useShell, env: process.env, detached });
+    const child = spawn(file, args, { cwd, shell: useShell, env: buildChildEnv(), detached });
     return { child };
   } catch (err) {
     return { child: undefined as unknown as ChildProcess, startError: err instanceof Error ? err.message : String(err) };
@@ -156,7 +219,7 @@ export function bashToolDefinitions(): Tool[] {
     enum: ['default', 'pwsh', 'bash'],
     description: 'Which shell to use: "default" (the OS shell), "pwsh" (PowerShell 7+), or "bash". Falls back to the default shell if the requested one is unavailable.',
   };
-  const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve against the FLUJO data directory. Defaults to the data directory.' };
+  const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve against the FLUJO data directory. Defaults to the data directory. When bash roots are configured (via the MCP manager, or the FLUJO_BASH_ROOTS / FLUJO_FS_ROOTS env hard ceiling) a cwd outside them is rejected.' };
   return [
     {
       name: 'run',
@@ -242,11 +305,11 @@ function maybeNormalize(text: string, normalize: boolean): string {
   return normalize ? text.replace(/\r\n?/g, '\n') : text;
 }
 
-async function runTool(args: Record<string, unknown>): Promise<CallToolResult> {
+async function runTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
-  const cwd = resolveCwd(args.cwd);
+  const cwd = resolveCwd(args.cwd, roots);
   const shell = coerceShell(args.shell);
   const normalize = args.normalizeNewlines === true;
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
@@ -308,7 +371,7 @@ function scheduleReap(session: BashSession): void {
   session.reapTimer.unref?.();
 }
 
-function startTool(args: Record<string, unknown>): CallToolResult {
+function startTool(args: Record<string, unknown>, roots: string[] | null): CallToolResult {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
@@ -326,7 +389,7 @@ function startTool(args: Record<string, unknown>): CallToolResult {
 
   registerExitCleanup();
 
-  const cwd = resolveCwd(args.cwd);
+  const cwd = resolveCwd(args.cwd, roots);
   const shell = coerceShell(args.shell);
   const { child, startError } = startChild(command, cwd, shell);
   if (startError || !child) {
@@ -445,10 +508,14 @@ function listSessionsTool(): CallToolResult {
 export async function bashCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
     switch (toolName) {
-      case 'run':
-        return await runTool(args);
-      case 'start':
-        return startTool(args);
+      case 'run': {
+        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS);
+        return await runTool(args, roots);
+      }
+      case 'start': {
+        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS);
+        return startTool(args, roots);
+      }
       case 'status':
         return statusTool(args);
       case 'wait':
