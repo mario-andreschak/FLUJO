@@ -94,6 +94,11 @@ export async function GET(request: NextRequest) {
             createdAt: state.createdAt || 0,
             updatedAt: state.updatedAt || 0,
             status: state.status,
+            // Wave grouping (issue #181): expose the already-persisted planned-
+            // execution id so the sidebar can bucket conversations by wave.
+            // null for ad-hoc chat/API runs. Read-only pass-through; no schema
+            // change. Included in the cached summary shape below.
+            plannedExecutionId: state.plannedExecutionId ?? null,
           };
           listSummaryCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
         }
@@ -107,6 +112,8 @@ export async function GET(request: NextRequest) {
         let status = live?.status ?? base.status;
         const title = live?.title ?? base.title;
         const updatedAt = live?.updatedAt ?? base.updatedAt;
+        // Prefer the live in-memory wave id for a running scheduler run (#181).
+        const plannedExecutionId = live?.plannedExecutionId ?? base.plannedExecutionId ?? null;
 
         // Reconcile a stale 'running' status. A conversation persists as
         // 'running' while a flow executes, but a process restart drops the
@@ -121,7 +128,7 @@ export async function GET(request: NextRequest) {
           status = 'error';
         }
 
-        return { ...base, title, updatedAt, status };
+        return { ...base, title, updatedAt, status, plannedExecutionId };
       } catch (parseError) {
         log.error(`Error reading or parsing conversation file: ${file}`, { requestId, filePath, error: parseError });
         // Try getting file system time as a fallback for sorting?
@@ -133,7 +140,8 @@ export async function GET(request: NextRequest) {
               flowId: null,
               createdAt: stats.birthtimeMs,
               updatedAt: stats.mtimeMs,
-              status: 'error'
+              status: 'error',
+              plannedExecutionId: null,
            }
         } catch (statError) {
            log.error(`Could not get stats for errored file: ${file}`, { requestId, statError });

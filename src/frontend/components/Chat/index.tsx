@@ -144,6 +144,11 @@ export interface ConversationListItem {
   createdAt: number;
   updatedAt: number;
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
+  /** Id of the scheduler planned-execution that originated this conversation
+   *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
+   *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
+   *  chat/API conversations. */
+  plannedExecutionId?: string | null;
 }
 
 /** Field-wise list equality, so the periodic silent refresh can keep the
@@ -157,6 +162,7 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.title === y.title &&
       x.flowId === y.flowId &&
       x.status === y.status &&
+      x.plannedExecutionId === y.plannedExecutionId &&
       x.createdAt === y.createdAt &&
       x.updatedAt === y.updatedAt
     );

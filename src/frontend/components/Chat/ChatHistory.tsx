@@ -33,6 +33,8 @@ import { ConversationListItem } from './index'; // Import ConversationListItem i
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
 import { groupItems, CardGroup } from '@/utils/shared/cardGrouping';
+import { buildWaveLookup, waveBucket, orderWaveGroups } from '@/utils/shared/waveGrouping';
+import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 
 interface ChatHistoryProps {
@@ -56,7 +58,7 @@ interface ChatHistoryProps {
   flowNames?: Record<string, string>;
 }
 
-type GroupMode = 'none' | 'date' | 'flow';
+type GroupMode = 'none' | 'date' | 'flow' | 'wave';
 type StatusFilter = 'all' | NonNullable<ConversationListItem['status']>;
 type DateFilter = 'all' | 'today' | '7d' | '30d';
 
@@ -91,6 +93,7 @@ const GROUP_OPTIONS: { value: GroupMode; label: string }[] = [
   { value: 'none', label: 'No grouping' },
   { value: 'date', label: 'Group by date' },
   { value: 'flow', label: 'Group by flow' },
+  { value: 'wave', label: 'Group by wave' },
 ];
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
@@ -115,6 +118,23 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     PREF.collapsed,
     {},
   );
+
+  // Wave grouping (issue #181): the wave graph is only needed while grouping by
+  // wave, so fetch it lazily and refresh it when the conversation list changes
+  // (the sidebar polls periodically). Failures / empty responses are tolerated
+  // silently — grouping just falls back to the Ad-hoc / Archived buckets.
+  const [waves, setWaves] = React.useState<WavesResponse | null>(null);
+  React.useEffect(() => {
+    if (groupMode !== 'wave') return;
+    let cancelled = false;
+    fetch('/api/waves')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (!cancelled && data) setWaves(data as WavesResponse); })
+      .catch(() => { /* ignore — sidebar still renders fallback buckets */ });
+    return () => { cancelled = true; };
+  }, [groupMode, conversations]);
+
+  const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
 
   // Format date for display
   const formatDate = (timestamp: number) => {
@@ -208,10 +228,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     if (groupMode === 'none') {
       return [{ key: 'all', label: '', items: filtered }];
     }
+    if (groupMode === 'wave') {
+      // Bucket by wave; keep the Ad-hoc / Archived fallback buckets last.
+      return orderWaveGroups(
+        groupItems(filtered, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
+      );
+    }
     return groupItems(filtered, (c) =>
       groupMode === 'date' ? recencyBucket(c.updatedAt) : flowMeta(c.flowId),
     );
-  }, [filtered, groupMode, flowMeta]);
+  }, [filtered, groupMode, flowMeta, waveLookup]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
