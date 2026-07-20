@@ -12,6 +12,7 @@ This section provides detailed documentation for Flujo's features.
 
 - **[Creating Flows](./flows/creating-flows.md)**: How to create and design flows
 - **[Running Flows](./flows/running-flows.md)**: How to run and monitor flows
+- **[FlowSpec ↔ FlowBuilder UI Coverage](./flowspec-ui-coverage.md)**: Which DSL capabilities the visual FlowBuilder can author vs. what still requires the generator / `POST /api/flow/compile` (Issue #186)
 - **[Flow Templates](./flows/templates.md)**: Using and creating flow templates
 
 ### Process Node vs Subflow Node: input/output modes

@@ -11,6 +11,10 @@
  * This ONE text is shared by the generator's system prompt, the MCP authoring tool
  * descriptions, and the in-app /docs API reference, so the three can never drift.
  * Keep it model-friendly: compact, imperative, no prose padding.
+ *
+ * For the authoritative audit of which of these DSL capabilities the FlowBuilder UI
+ * can currently author (and which still require the generator / POST /api/flow/compile),
+ * see docs/features/flowspec-ui-coverage.md (issue #186).
  */
 
 export const FLOWSPEC_DOC = `A FlowSpec is a JSON object describing a FLUJO flow semantically — node keys and edges, no coordinates, no ids, no layout:

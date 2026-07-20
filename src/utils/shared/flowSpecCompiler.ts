@@ -1361,6 +1361,14 @@ export function flowToSpec(flow: Flow): FlowSpec {
  */
 export function applyGenerationDefaults(flow: Flow): void {
   for (const node of flow.nodes) {
+    // Finish nodes are identified by type, not label. The UI always renders the
+    // canonical "Finish Node" label, so normalize any custom label the generator
+    // may have emitted so authored and generated flows stay consistent (#188).
+    if (node.type === 'finish') {
+      node.data.label = 'Finish Node';
+      continue;
+    }
+
     if (node.type !== 'process') continue;
     const properties = (node.data.properties ?? {}) as Record<string, unknown>;
     if (properties.inputMode === undefined) properties.inputMode = 'latest-message';
