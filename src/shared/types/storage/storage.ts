@@ -26,7 +26,10 @@ export enum StorageKey {
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
-  PACKAGE_INSTALLS = 'package_installs'
+  PACKAGE_INSTALLS = 'package_installs',
+  // Experimental features toggle (issue #184): a single boolean gating
+  // in-progress/unstable UI (e.g. the Waves nav entry). UI-only flag.
+  EXPERIMENTAL_SETTINGS = 'experimental_settings'
 }
 
 export const StorageKeys = {
@@ -50,6 +53,7 @@ export const StorageKeys = {
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
+  EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
 } as const;
 
 /**
@@ -77,10 +81,23 @@ export interface OnboardingSettings {
 }
 
 /**
+ * Experimental-features settings interface (issue #184)
+ */
+export interface ExperimentalSettings {
+  /** When true, experimental UI (e.g. the Waves nav entry) is revealed. */
+  enabled: boolean;
+}
+
+/**
  * Settings interface containing all application settings
  */
 export interface Settings {
   speech: SpeechSettings;
   update?: UpdateSettings;
   onboarding?: OnboardingSettings;
+  /**
+   * Optional so existing persisted settings load unchanged; a missing value is
+   * treated as disabled (experimental features hidden).
+   */
+  experimental?: ExperimentalSettings;
 }

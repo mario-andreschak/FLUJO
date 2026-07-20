@@ -10,13 +10,22 @@ import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { interceptNavigation } from '@/frontend/utils/navigationGuard';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 
-const navItems = [
+interface NavItem {
+  name: string;
+  path: string;
+  tour: string;
+  /** When true, the item is only shown if experimental features are enabled (#184). */
+  experimental?: boolean;
+}
+
+const navItems: NavItem[] = [
   { name: 'Models', path: '/models', tour: 'nav-models' },
   { name: 'MCP', path: '/mcp', tour: 'nav-mcp' },
   { name: 'Flows', path: '/flows', tour: 'nav-flows' },
   { name: 'Executions', path: '/executions', tour: 'nav-executions' },
-  { name: 'Waves', path: '/waves', tour: 'nav-waves' },
+  { name: 'Waves', path: '/waves', tour: 'nav-waves', experimental: true },
   { name: 'Chat', path: '/chat', tour: 'nav-chat' },
   { name: 'Docs', path: '/docs', tour: 'nav-docs' },
   { name: 'Settings', path: '/settings', tour: 'nav-settings' },
@@ -27,8 +36,17 @@ export default function Navigation() {
   const muiTheme = useMuiTheme();
   const pathname = usePathname();
   const router = useRouter();
+  const { settings, settingsHydrated } = useStorage();
 
   log.debug(`Rendering Navigation component with pathname: ${pathname}`);
+
+  // Experimental features default OFF (#184). Until settings are actually
+  // hydrated from storage we render the default (hidden) state to avoid a
+  // flash of the experimental Waves entry.
+  const experimentalEnabled = settingsHydrated && (settings?.experimental?.enabled ?? false);
+  const visibleNavItems = navItems.filter(
+    (item) => !item.experimental || experimentalEnabled
+  );
 
   // Route nav clicks through the navigation guard so a page with unsaved
   // work (e.g. the flow editor) can show its Save/Discard dialog instead of
@@ -63,7 +81,7 @@ export default function Navigation() {
         </Typography>
 
         <Box sx={{ flexGrow: 1, display: 'flex', gap: 2 }}>
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <Typography
               key={item.path}
               component={Link}

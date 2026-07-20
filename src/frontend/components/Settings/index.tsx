@@ -16,6 +16,7 @@ import BackupSettings from './BackupSettings';
 import SpeechRecognitionSettings from './SpeechRecognitionSettings';
 import UpdateSettings from './UpdateSettings';
 import OnboardingSettings from './OnboardingSettings';
+import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -140,6 +141,22 @@ export default function Settings() {
           </AccordionSummary>
           <AccordionDetails>
             <OnboardingSettings />
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          expanded={expanded === 'experimental'}
+          onChange={handleChange('experimental')}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="experimental-content"
+            id="experimental-header"
+          >
+            <Typography variant="h6">Experimental Features</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <ExperimentalFeaturesSettings />
           </AccordionDetails>
         </Accordion>
 
