@@ -16,6 +16,9 @@ function text(r: CallToolResult): string {
 function parse(r: CallToolResult): Record<string, unknown> {
   return JSON.parse(text(r));
 }
+function structured(r: CallToolResult): Record<string, unknown> | undefined {
+  return (r as { structuredContent?: Record<string, unknown> }).structuredContent;
+}
 
 describe('filesystem tool definitions', () => {
   it('exposes the expected tool set', () => {
@@ -106,6 +109,75 @@ describe('filesystem operations', () => {
     expect((await filesystemCallTool('delete', { path: dst })).isError).toBeUndefined();
     const info = await filesystemCallTool('get_file_info', { path: madeDir });
     expect(parse(info).isDirectory).toBe(true);
+  });
+
+  it('returns structured content alongside the text fallback', async () => {
+    const p = path.join(dir, 'struct.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'x\ny\n' });
+    const r = await filesystemCallTool('read_file', { path: p });
+    const sc = structured(r);
+    expect(sc).toBeDefined();
+    // structuredContent must mirror the JSON text fallback exactly.
+    expect(sc).toEqual(parse(r));
+    expect((sc as { totalLines: number }).totalLines).toBeGreaterThanOrEqual(2);
+  });
+
+  it('write_file appends, inserts and replaces a line range', async () => {
+    const p = path.join(dir, 'lt.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'a\nb\nc\n' });
+
+    // append
+    await filesystemCallTool('write_file', { path: p, content: 'z', mode: 'append' });
+    expect(parse(await filesystemCallTool('read_file', { path: p })).content).toBe('a\nb\nc\nz');
+
+    // insert before line 1
+    await filesystemCallTool('write_file', { path: p, content: 'HEAD', mode: 'insert', startLine: 1 });
+    expect(parse(await filesystemCallTool('read_file', { path: p })).content).toBe('HEAD\na\nb\nc\nz');
+
+    // overwrite line range 2..3 (a,b) with a single line
+    await filesystemCallTool('write_file', { path: p, content: 'MID', startLine: 2, endLine: 3 });
+    expect(parse(await filesystemCallTool('read_file', { path: p })).content).toBe('HEAD\nMID\nc\nz');
+  });
+
+  it('edit_file scopes a literal edit to a line range to disambiguate', async () => {
+    const p = path.join(dir, 'scoped.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'foo\nfoo\nfoo\n' });
+    // Unscoped edit of an ambiguous token is rejected.
+    const ambiguous = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'foo', newText: 'bar' }] });
+    expect(ambiguous.isError).toBe(true);
+    // Scoping to line 2 makes it unambiguous.
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'foo', newText: 'bar', startLine: 2, endLine: 2 }] });
+    expect(ok.isError).toBeUndefined();
+    expect(parse(await filesystemCallTool('read_file', { path: p })).content).toBe('foo\nbar\nfoo\n');
+  });
+
+  it('edit_file applies a unified diff and rejects a context mismatch', async () => {
+    const p = path.join(dir, 'diff.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'one\ntwo\nthree\n' });
+    const goodDiff = ['@@ -1,3 +1,3 @@', ' one', '-two', '+TWO', ' three', ''].join('\n');
+    const applied = await filesystemCallTool('edit_file', { path: p, diff: goodDiff });
+    expect(applied.isError).toBeUndefined();
+    expect((parse(applied).diff as { added: number; removed: number })).toEqual({ added: 1, removed: 1 });
+    expect(parse(await filesystemCallTool('read_file', { path: p })).content).toContain('TWO');
+
+    // A diff whose context does not match the file is rejected with no write.
+    const badDiff = ['@@ -1,2 +1,2 @@', ' NOPE', '-TWO', '+X', ''].join('\n');
+    const before = parse(await filesystemCallTool('read_file', { path: p })).content;
+    const rejected = await filesystemCallTool('edit_file', { path: p, diff: badDiff });
+    expect(rejected.isError).toBe(true);
+    expect(parse(await filesystemCallTool('read_file', { path: p })).content).toBe(before);
+  });
+
+  it('edit_file rejects diff and edits together', async () => {
+    const p = path.join(dir, 'mutex.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'a\n' });
+    const r = await filesystemCallTool('edit_file', {
+      path: p,
+      diff: '@@ -1 +1 @@\n-a\n+b\n',
+      edits: [{ oldText: 'a', newText: 'b' }],
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/not both/i);
   });
 
   it('enforces FLUJO_FS_ROOTS confinement when configured', async () => {

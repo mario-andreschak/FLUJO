@@ -71,11 +71,12 @@ export function builtInServerConfigs(): MCPStdioConfig[] {
 }
 
 /**
- * Persisted per-built-in-server overrides. Only the `disabled` flag is stored;
- * the synthetic configs themselves are never persisted (invariant preserved by
- * config.ts saveConfig(), which drops builtIn entries).
+ * Persisted per-built-in-server overrides. Only the small `disabled` flag and
+ * (for the `filesystem` server) the user-configured `roots` allow-list are
+ * stored; the synthetic configs themselves are never persisted (invariant
+ * preserved by config.ts saveConfig(), which drops builtIn entries).
  */
-export type InternalServerOverride = { disabled?: boolean };
+export type InternalServerOverride = { disabled?: boolean; roots?: string[] };
 export type InternalServerOverrides = Record<string, InternalServerOverride>;
 
 export async function loadInternalOverrides(): Promise<InternalServerOverrides> {
@@ -96,6 +97,28 @@ export async function setInternalServerDisabled(name: string, disabled: boolean)
   log.info(`setInternalServerDisabled: ${name} -> disabled=${disabled}`);
 }
 
+/** Read the persisted, user-configured confinement roots for a built-in server. */
+export async function getInternalServerRoots(name: string): Promise<string[]> {
+  const overrides = await loadInternalOverrides();
+  const roots = overrides[name]?.roots;
+  return Array.isArray(roots) ? roots.filter((r): r is string => typeof r === 'string' && r.trim().length > 0) : [];
+}
+
+/**
+ * Persist the user-configured confinement roots for a built-in server (issue #170).
+ * Entries are trimmed and de-duplicated; an empty array clears the override so the
+ * server falls back to the FLUJO_FS_ROOTS env (or unconfined full-host access).
+ */
+export async function setInternalServerRoots(name: string, roots: string[]): Promise<void> {
+  const clean = Array.from(
+    new Set((Array.isArray(roots) ? roots : []).map((r) => (typeof r === 'string' ? r.trim() : '')).filter(Boolean))
+  );
+  const overrides = await loadInternalOverrides();
+  overrides[name] = { ...(overrides[name] ?? {}), roots: clean };
+  await saveItem(StorageKey.MCP_INTERNAL_OVERRIDES, overrides);
+  log.info(`setInternalServerRoots: ${name} -> ${clean.length} root(s)`);
+}
+
 /**
  * Synthesize built-in configs with any persisted `disabled` override applied.
  * Used by MCPService.loadServerConfigs().
@@ -104,6 +127,12 @@ export async function builtInServerConfigsWithOverrides(): Promise<MCPStdioConfi
   const overrides = await loadInternalOverrides();
   return builtInServerConfigs().map((cfg) => {
     const ov = overrides[cfg.name];
-    return ov?.disabled ? { ...cfg, disabled: true } : cfg;
+    if (!ov) return cfg;
+    // Surface persisted roots on the synthetic config so the manager UI can read the
+    // current allow-list (the roots themselves are never persisted as part of the config).
+    const next = { ...cfg };
+    if (ov.disabled) next.disabled = true;
+    if (Array.isArray(ov.roots) && ov.roots.length) next.roots = ov.roots;
+    return next;
   });
 }

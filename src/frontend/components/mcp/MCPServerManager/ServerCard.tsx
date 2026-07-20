@@ -27,8 +27,10 @@ import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { buildSingleServerJson } from '@/utils/mcp/mcpFormats';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import TransportBadge from './TransportBadge';
 import ServerUpdateDialog from './ServerUpdateDialog';
+import FilesystemRootsModal from './FilesystemRootsModal';
 import { ServerUpdateInfo, shortSha } from './utils/serverUpdates';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -140,6 +142,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [toastSeverity, setToastSeverity] = useState<'success' | 'error'>('success');
   const [isPolling, setIsPolling] = useState(false);
   const [isResettingTokens, setIsResettingTokens] = useState(false);
+  // Roots-configuration modal for the built-in `filesystem` server (issue #170).
+  const [showRootsModal, setShowRootsModal] = useState(false);
+  const [rootsOverride, setRootsOverride] = useState<string[] | undefined>(serverConfig?.roots);
+  useEffect(() => {
+    setRootsOverride(serverConfig?.roots);
+  }, [serverConfig?.roots]);
   // Local optimistic state for the "expose as MCP server" toggle (#17A).
   const [exposed, setExposed] = useState(exposeAsMcpServer);
   // Local optimistic state for the "MCP Apps" opt-in toggle (#97).
@@ -683,8 +691,35 @@ const ServerCard: React.FC<ServerCardProps> = ({
             >
               {enabled ? 'Enabled' : 'Disabled'}
             </Typography>
+            {/* The built-in filesystem server can be scoped to specific roots (issue #170). */}
+            {name === 'filesystem' && (
+              <Tooltip title="Configure filesystem roots">
+                <Button
+                  size="small"
+                  variant="text"
+                  startIcon={<FolderOpenIcon fontSize="small" />}
+                  sx={{ ml: 1.5, textTransform: 'none' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowRootsModal(true);
+                  }}
+                >
+                  Configure roots{rootsOverride && rootsOverride.length ? ` (${rootsOverride.length})` : ''}
+                </Button>
+              </Tooltip>
+            )}
           </Box>
         </CardActions>
+      )}
+
+      {name === 'filesystem' && (
+        <FilesystemRootsModal
+          open={showRootsModal}
+          serverName={name}
+          initialRoots={rootsOverride}
+          onClose={() => setShowRootsModal(false)}
+          onSaved={(next) => setRootsOverride(next)}
+        />
       )}
 
       {!builtIn && !pickerMode && (

@@ -105,6 +105,8 @@ import {
   isBuiltInServerName,
   builtInServerConfigsWithOverrides,
   setInternalServerDisabled,
+  setInternalServerRoots,
+  FILESYSTEM_SERVER_NAME,
 } from './internal/registry';
 
 // Define a type for tool arguments
@@ -1431,14 +1433,27 @@ export class MCPService {
     // as a tiny override, never as the synthetic config itself.
     if (await this.isInternalServer(serverName)) {
       const keys = Object.keys(updates).filter(k => k !== 'name');
+      const nameOk = updates.name === undefined || updates.name === serverName;
       const onlyDisabledChange =
+        keys.length > 0 && keys.every(k => k === 'disabled') && typeof updates.disabled === 'boolean' && nameOk;
+      // The `filesystem` built-in additionally allows configuring its confinement
+      // roots (issue #170): persisted as a tiny override, never as the synthetic config.
+      const onlyRootsChange =
+        serverName === FILESYSTEM_SERVER_NAME &&
         keys.length > 0 &&
-        keys.every(k => k === 'disabled') &&
-        typeof updates.disabled === 'boolean' &&
-        (updates.name === undefined || updates.name === serverName);
+        keys.every(k => k === 'roots') &&
+        Array.isArray(updates.roots) &&
+        nameOk;
       if (onlyDisabledChange) {
         await setInternalServerDisabled(serverName, updates.disabled as boolean);
         log.info(`updateServerConfig: Toggled built-in server ${serverName} disabled=${updates.disabled}`);
+        const refreshed = await this.loadServerConfigs();
+        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
+        return cfg ?? { success: true };
+      }
+      if (onlyRootsChange) {
+        await setInternalServerRoots(serverName, updates.roots as string[]);
+        log.info(`updateServerConfig: Set built-in ${serverName} roots (${(updates.roots as string[]).length})`);
         const refreshed = await this.loadServerConfigs();
         const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
         return cfg ?? { success: true };

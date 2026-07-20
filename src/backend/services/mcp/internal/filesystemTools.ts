@@ -1,23 +1,31 @@
 /**
  * Built-in `filesystem` MCP server (issue #170).
  *
- * Cross-platform (Windows/macOS/Linux) filesystem access with structured JSON
- * outputs, line-targeted reads, diff-style edits, directory listing/tree, and
- * search. Relative paths resolve against the FLUJO data directory; absolute
- * paths are honored as-is (same host-access posture as the legacy `terminal`
- * tool). When FLUJO_FS_ROOTS is set (path-list separated by the OS path
- * delimiter), every resolved path must live inside one of those roots or the
- * operation is refused — this lets an operator confine the server.
+ * Cross-platform (Windows/macOS/Linux) filesystem access with:
+ *  - structured JSON outputs (MCP `structuredContent` + a text fallback block),
+ *  - line-targeted reads AND writes/edits,
+ *  - literal find/replace edits AND real unified-diff (`@@`) patch apply,
+ *  - directory listing/tree and name/content search.
  *
- * Every tool returns a machine-readable JSON envelope in a single text content
- * block (mirroring the existing internal tools), and errors are returned as
- * `isError: true` results rather than thrown.
+ * Relative paths resolve against the FLUJO data directory; absolute paths are
+ * honored as-is (same host-access posture as the legacy `terminal` tool). Two
+ * layers of confinement can narrow that:
+ *  - the FLUJO_FS_ROOTS env (path-list separated by the OS path delimiter) acts
+ *    as a HARD CEILING an operator sets — no path may ever escape it, and
+ *  - user-configured roots persisted via the MCP manager UI (issue #170), which
+ *    may only narrow WITHIN the env ceiling (never widen it).
+ * When neither is set the server has full host access.
+ *
+ * Every tool returns a machine-readable JSON envelope both as MCP
+ * `structuredContent` and as a single text content block (for backward-compat
+ * clients); errors are returned as `isError: true` results rather than thrown.
  */
 import path from 'path';
 import { promises as fs } from 'fs';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
+import { FILESYSTEM_SERVER_NAME, getInternalServerRoots } from './registry';
 
 const log = createLogger('backend/services/mcp/internal/filesystemTools');
 
@@ -28,43 +36,88 @@ const DEFAULT_TREE_DEPTH = 3;
 const MAX_TREE_DEPTH = 10;
 const MAX_TREE_ENTRIES = 5_000;
 
-function textResult(payload: unknown, isError = false): CallToolResult {
+/** SDK 1.29's exported CallToolResult predates `structuredContent`; widen locally. */
+type StructuredResult = CallToolResult & { structuredContent?: Record<string, unknown> };
+
+/** Return a structured payload as BOTH MCP structuredContent and a text fallback. */
+function dualResult(payload: Record<string, unknown>): StructuredResult {
   return {
-    content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+    structuredContent: payload,
+  };
+}
+
+/** Return a plain string/error message (no structuredContent). */
+function textResult(message: string, isError = false): CallToolResult {
+  return {
+    content: [{ type: 'text', text: message }],
     ...(isError ? { isError: true } : {}),
   };
 }
 
-/** Configured confinement roots, or null when unconfined (full host access). */
-function configuredRoots(): string[] | null {
+/** Return an error envelope (JSON text + isError). */
+function errorResult(message: string): CallToolResult {
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: message }, null, 2) }],
+    isError: true,
+  };
+}
+
+/** Confinement roots read from the FLUJO_FS_ROOTS env (the hard ceiling), or null. */
+function envRoots(): string[] | null {
   const raw = process.env.FLUJO_FS_ROOTS;
   if (!raw || !raw.trim()) return null;
-  return raw
+  const list = raw
     .split(path.delimiter)
     .map((r) => r.trim())
     .filter(Boolean)
     .map((r) => path.resolve(r));
+  return list.length ? list : null;
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * The effective confinement roots for this call, or null when unconfined.
+ *
+ * Precedence (per issue #170 D5): the FLUJO_FS_ROOTS env is a HARD CEILING.
+ *  - No env, no persisted roots  -> null (full host access).
+ *  - No env, persisted roots     -> confine to the persisted roots.
+ *  - Env set                     -> persisted roots may only NARROW within the
+ *                                   ceiling; any persisted root outside the env
+ *                                   is dropped, and if none remain the env roots
+ *                                   themselves are the effective set.
+ */
+async function loadEffectiveRoots(): Promise<string[] | null> {
+  const env = envRoots();
+  let persisted: string[] = [];
+  try {
+    persisted = (await getInternalServerRoots(FILESYSTEM_SERVER_NAME)).map((r) => path.resolve(r));
+  } catch (err) {
+    log.warn('loadEffectiveRoots: could not read persisted roots', err);
+  }
+  if (!env) return persisted.length ? persisted : null;
+  const confined = persisted.filter((p) => env.some((root) => isInside(root, p)));
+  return confined.length ? confined : env;
 }
 
 /**
  * Resolve a user-supplied path against the data dir (for relative paths) and
- * enforce the confinement roots when configured. Throws on a confinement
+ * enforce the effective confinement roots when present. Throws on a confinement
  * violation so callers surface a precise error.
  */
-function resolvePath(input: unknown): string {
+function resolvePath(input: unknown, roots: string[] | null): string {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('Provide "path".');
   const dataDir = getDataDir();
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw);
 
-  const roots = configuredRoots();
   if (roots) {
-    const ok = roots.some((root) => {
-      const rel = path.relative(root, resolved);
-      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-    });
-    if (!ok) {
-      throw new Error(`Path "${resolved}" is outside the configured filesystem roots (FLUJO_FS_ROOTS).`);
+    if (!roots.some((root) => isInside(root, resolved))) {
+      throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);
     }
   }
   return resolved;
@@ -86,41 +139,90 @@ export function filesystemToolDefinitions(): Tool[] {
         },
         required: ['path'],
       },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          from: { type: 'number' },
+          to: { type: 'number' },
+          totalLines: { type: 'number' },
+          truncated: { type: 'boolean' },
+          content: { type: 'string' },
+        },
+        required: ['path', 'from', 'to', 'totalLines', 'truncated', 'content'],
+      },
     },
     {
       name: 'write_file',
-      description: 'Create or overwrite a text file with the given content (parent directories are created). Returns { path, bytesWritten }.',
+      description:
+        'Create or write a text file (parent directories are created). "mode": "overwrite" (default) replaces the whole file, or a line range when "startLine"/"endLine" (1-based inclusive) are given; "append" adds content at the end; "insert" inserts content before "startLine". Returns { path, bytesWritten, mode, ... }.',
       inputSchema: {
         type: 'object',
         properties: {
           path: pathProp,
-          content: { type: 'string', description: 'The full new file contents.' },
+          content: { type: 'string', description: 'The content to write/insert/append.' },
+          mode: { type: 'string', enum: ['overwrite', 'append', 'insert'], description: 'Write mode (default "overwrite").' },
+          startLine: { type: 'number', description: 'For "insert": line to insert before. For "overwrite": first line of the range to replace (1-based).' },
+          endLine: { type: 'number', description: 'For "overwrite": last line (inclusive, 1-based) of the range to replace.' },
         },
         required: ['path', 'content'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          bytesWritten: { type: 'number' },
+          mode: { type: 'string' },
+          startLine: { type: 'number' },
+          endLine: { type: 'number' },
+          linesReplaced: { type: 'number' },
+          linesInserted: { type: 'number' },
+        },
+        required: ['path', 'bytesWritten', 'mode'],
       },
     },
     {
       name: 'edit_file',
       description:
-        'Apply one or more literal find/replace edits to a text file. Each edit replaces the first occurrence of "oldText" with "newText". Fails (no partial write) if any "oldText" is missing or ambiguous. Returns { path, editsApplied, diff }.',
+        'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the first (unambiguous) occurrence, optionally scoped to a line range; or (2) "diff": a unified diff string (standard "@@ -a,b +c,d @@" hunks) applied atomically. Fails with no partial write on any mismatch. Returns { path, editsApplied|applied, diff:{added,removed} }.',
       inputSchema: {
         type: 'object',
         properties: {
           path: pathProp,
           edits: {
             type: 'array',
-            description: 'List of { oldText, newText } edits applied in order.',
+            description: 'List of literal { oldText, newText } edits applied in order (optionally scoped with startLine/endLine).',
             items: {
               type: 'object',
               properties: {
                 oldText: { type: 'string', description: 'Exact text to find.' },
                 newText: { type: 'string', description: 'Replacement text.' },
+                startLine: { type: 'number', description: 'Optional 1-based first line to scope this edit to.' },
+                endLine: { type: 'number', description: 'Optional 1-based last line (inclusive) to scope this edit to.' },
               },
               required: ['oldText', 'newText'],
             },
           },
+          diff: { type: 'string', description: 'A unified diff to apply atomically. Mutually exclusive with "edits".' },
+          startLine: { type: 'number', description: 'Optional default 1-based first line to scope all literal edits to.' },
+          endLine: { type: 'number', description: 'Optional default 1-based last line (inclusive) to scope all literal edits to.' },
         },
-        required: ['path', 'edits'],
+        required: ['path'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          mode: { type: 'string' },
+          editsApplied: { type: 'number' },
+          applied: { type: 'boolean' },
+          diff: {
+            type: 'object',
+            properties: { added: { type: 'number' }, removed: { type: 'number' } },
+            required: ['added', 'removed'],
+          },
+        },
+        required: ['path', 'diff'],
       },
     },
     {
@@ -130,6 +232,21 @@ export function filesystemToolDefinitions(): Tool[] {
         type: 'object',
         properties: { path: pathProp },
         required: ['path'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, type: { type: 'string' }, size: { type: 'number' } },
+              required: ['name', 'type', 'size'],
+            },
+          },
+        },
+        required: ['path', 'entries'],
       },
     },
     {
@@ -142,6 +259,16 @@ export function filesystemToolDefinitions(): Tool[] {
           depth: { type: 'number', description: `Maximum recursion depth (default ${DEFAULT_TREE_DEPTH}, max ${MAX_TREE_DEPTH}).` },
         },
         required: ['path'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          depth: { type: 'number' },
+          truncated: { type: 'boolean' },
+          tree: { type: 'array' },
+        },
+        required: ['path', 'depth', 'tree'],
       },
     },
     {
@@ -157,6 +284,21 @@ export function filesystemToolDefinitions(): Tool[] {
         },
         required: ['path'],
       },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          matches: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { path: { type: 'string' }, line: { type: 'number' }, text: { type: 'string' } },
+              required: ['path'],
+            },
+          },
+          truncated: { type: 'boolean' },
+        },
+        required: ['matches', 'truncated'],
+      },
     },
     {
       name: 'get_file_info',
@@ -166,6 +308,19 @@ export function filesystemToolDefinitions(): Tool[] {
         properties: { path: pathProp },
         required: ['path'],
       },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          type: { type: 'string' },
+          size: { type: 'number' },
+          isFile: { type: 'boolean' },
+          isDirectory: { type: 'boolean' },
+          createdAt: { type: 'string' },
+          modifiedAt: { type: 'string' },
+        },
+        required: ['path', 'type', 'size', 'isFile', 'isDirectory', 'createdAt', 'modifiedAt'],
+      },
     },
     {
       name: 'create_directory',
@@ -174,6 +329,11 @@ export function filesystemToolDefinitions(): Tool[] {
         type: 'object',
         properties: { path: pathProp },
         required: ['path'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string' }, created: { type: 'boolean' } },
+        required: ['path', 'created'],
       },
     },
     {
@@ -185,6 +345,11 @@ export function filesystemToolDefinitions(): Tool[] {
           source: { type: 'string', description: 'Existing path to move.' },
           destination: { type: 'string', description: 'Target path.' },
         },
+        required: ['source', 'destination'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: { source: { type: 'string' }, destination: { type: 'string' } },
         required: ['source', 'destination'],
       },
     },
@@ -199,6 +364,11 @@ export function filesystemToolDefinitions(): Tool[] {
         },
         required: ['path'],
       },
+      outputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string' }, deleted: { type: 'boolean' } },
+        required: ['path', 'deleted'],
+      },
     },
   ];
 }
@@ -208,8 +378,13 @@ function splitLines(content: string): string[] {
   return content.replace(/\r\n?/g, '\n').split('\n');
 }
 
-async function readFileTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const filePath = resolvePath(args.path);
+/** Detect the dominant line ending of an existing file so writes stay consistent. */
+function detectEol(content: string): string {
+  return content.includes('\r\n') ? '\r\n' : '\n';
+}
+
+async function readFileTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const filePath = resolvePath(args.path, roots);
   const content = await fs.readFile(filePath, 'utf8');
   const lines = splitLines(content);
   const totalLines = lines.length;
@@ -226,43 +401,228 @@ async function readFileTool(args: Record<string, unknown>): Promise<CallToolResu
     out = out.slice(0, MAX_READ_CHARS) + '\n…[truncated]';
     truncated = true;
   }
-  return textResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out });
+  return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out });
 }
 
-async function writeFileTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const filePath = resolvePath(args.path);
+async function writeFileTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const filePath = resolvePath(args.path, roots);
   const content = typeof args.content === 'string' ? args.content : '';
+  const mode = args.mode === 'append' || args.mode === 'insert' ? args.mode : 'overwrite';
+  const hasRange = typeof args.startLine === 'number' || typeof args.endLine === 'number';
+
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, 'utf8');
-  return textResult({ path: filePath, bytesWritten: Buffer.byteLength(content, 'utf8') });
+
+  // Whole-file overwrite (default, backward-compatible).
+  if (mode === 'overwrite' && !hasRange) {
+    await fs.writeFile(filePath, content, 'utf8');
+    return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(content, 'utf8'), mode: 'overwrite' });
+  }
+
+  // The remaining modes operate relative to the existing file (empty if absent).
+  let existing = '';
+  try {
+    existing = await fs.readFile(filePath, 'utf8');
+  } catch {
+    existing = '';
+  }
+
+  if (mode === 'append') {
+    const sep = existing.length && !existing.endsWith('\n') && !existing.endsWith('\r\n') ? detectEol(existing) : '';
+    const next = existing + sep + content;
+    await fs.writeFile(filePath, next, 'utf8');
+    return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'append' });
+  }
+
+  const eol = detectEol(existing);
+  const lines = existing.length ? existing.split(/\r?\n/) : [];
+  const insertLines = content.split(/\r?\n/);
+  const total = lines.length;
+
+  if (mode === 'insert') {
+    const at = typeof args.startLine === 'number' ? Math.max(1, Math.floor(args.startLine)) : total + 1;
+    const idx = Math.min(at - 1, total);
+    lines.splice(idx, 0, ...insertLines);
+    const next = lines.join(eol);
+    await fs.writeFile(filePath, next, 'utf8');
+    return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'insert', startLine: at, linesInserted: insertLines.length });
+  }
+
+  // overwrite a specific line range
+  let start = typeof args.startLine === 'number' ? Math.max(1, Math.floor(args.startLine)) : 1;
+  let end = typeof args.endLine === 'number' ? Math.floor(args.endLine) : start;
+  if (end < start) [start, end] = [end, start];
+  end = Math.min(end, total);
+  const linesReplaced = Math.max(0, end - start + 1);
+  lines.splice(start - 1, linesReplaced, ...insertLines);
+  const next = lines.join(eol);
+  await fs.writeFile(filePath, next, 'utf8');
+  return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'overwrite', startLine: start, endLine: end, linesReplaced });
 }
 
-async function editFileTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const filePath = resolvePath(args.path);
-  const edits = Array.isArray(args.edits) ? args.edits : [];
-  if (edits.length === 0) return textResult({ error: 'Provide a non-empty "edits" array of { oldText, newText }.' }, true);
+/**
+ * Char offsets [lo, hi) of the 1-based inclusive line range [start, end] within
+ * `text`. When both bounds are absent the whole string is returned. Offsets are
+ * computed by counting `\n`; a `\r` (CRLF) stays part of the preceding line's
+ * length so offsets into the ORIGINAL string remain exact.
+ */
+function regionOffsets(text: string, start?: number, end?: number): { lo: number; hi: number } {
+  if (start === undefined && end === undefined) return { lo: 0, hi: text.length };
+  const lines = text.split('\n');
+  const s = Math.max(1, Math.floor(start ?? 1));
+  const e = Math.min(lines.length, Math.floor(end ?? lines.length));
+  let lo = 0;
+  for (let k = 0; k < s - 1 && k < lines.length; k++) lo += lines[k].length + 1;
+  let hi = lo;
+  for (let k = s - 1; k < e && k < lines.length; k++) hi += lines[k].length + (k < lines.length - 1 ? 1 : 0);
+  return { lo, hi: Math.max(lo, hi) };
+}
+
+async function editFileTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const filePath = resolvePath(args.path, roots);
+  const hasDiff = typeof args.diff === 'string' && args.diff.trim().length > 0;
+  const hasEdits = Array.isArray(args.edits) && args.edits.length > 0;
+
+  if (hasDiff && hasEdits) {
+    return errorResult('Provide either "diff" or "edits", not both.');
+  }
 
   const original = await fs.readFile(filePath, 'utf8');
+
+  // (2) Unified-diff apply — atomic.
+  if (hasDiff) {
+    let out: { result: string; added: number; removed: number };
+    try {
+      out = applyUnifiedDiff(original, args.diff as string);
+    } catch (err) {
+      return errorResult(`Diff apply failed: ${err instanceof Error ? err.message : String(err)}. No changes written.`);
+    }
+    await fs.writeFile(filePath, out.result, 'utf8');
+    return dualResult({ path: filePath, applied: true, mode: 'diff', diff: { added: out.added, removed: out.removed } });
+  }
+
+  // (1) Literal find/replace edits.
+  const edits = Array.isArray(args.edits) ? args.edits : [];
+  if (edits.length === 0) {
+    return errorResult('Provide a non-empty "edits" array of { oldText, newText } or a "diff" string.');
+  }
+
+  const gStart = typeof args.startLine === 'number' ? args.startLine : undefined;
+  const gEnd = typeof args.endLine === 'number' ? args.endLine : undefined;
+
   let working = original;
   let applied = 0;
   for (const raw of edits) {
-    const edit = raw as { oldText?: unknown; newText?: unknown };
+    const edit = raw as { oldText?: unknown; newText?: unknown; startLine?: unknown; endLine?: unknown };
     const oldText = typeof edit.oldText === 'string' ? edit.oldText : '';
     const newText = typeof edit.newText === 'string' ? edit.newText : '';
-    if (!oldText) return textResult({ error: `Edit #${applied + 1} has an empty "oldText".` }, true);
-    const idx = working.indexOf(oldText);
-    if (idx === -1) return textResult({ error: `Edit #${applied + 1}: "oldText" not found in ${filePath}. No changes written.` }, true);
-    if (working.indexOf(oldText, idx + 1) !== -1) {
-      return textResult({ error: `Edit #${applied + 1}: "oldText" is ambiguous (appears more than once). No changes written.` }, true);
+    if (!oldText) return errorResult(`Edit #${applied + 1} has an empty "oldText".`);
+
+    const start = typeof edit.startLine === 'number' ? edit.startLine : gStart;
+    const end = typeof edit.endLine === 'number' ? edit.endLine : gEnd;
+    const scoped = start !== undefined || end !== undefined;
+    const { lo, hi } = regionOffsets(working, start, end);
+
+    const idx = working.indexOf(oldText, lo);
+    if (idx === -1 || idx >= hi || idx + oldText.length > hi) {
+      return errorResult(
+        `Edit #${applied + 1}: "oldText" not found${scoped ? ' in the specified line range' : ''} in ${filePath}. No changes written.`
+      );
+    }
+    const next = working.indexOf(oldText, idx + 1);
+    if (next !== -1 && next < hi && next + oldText.length <= hi) {
+      return errorResult(
+        `Edit #${applied + 1}: "oldText" is ambiguous (appears more than once${scoped ? ' in the specified line range' : ''}). No changes written.`
+      );
     }
     working = working.slice(0, idx) + newText + working.slice(idx + oldText.length);
     applied += 1;
   }
   await fs.writeFile(filePath, working, 'utf8');
-  return textResult({ path: filePath, editsApplied: applied, diff: buildLineDiff(original, working) });
+  return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff: buildLineDiff(original, working) });
 }
 
-/** Minimal line-level diff summary (added/removed counts + a small changed sample). */
+/**
+ * Minimal, dependency-free unified-diff applier (issue #170 D1). Parses standard
+ * `@@ -oldStart,oldLen +newStart,newLen @@` hunks and applies them atomically:
+ * context (' ') and removed ('-') lines must match the original exactly or the
+ * whole apply throws (no partial write). Added ('+') lines are inserted;
+ * "\ No newline at end of file" markers are ignored. Throws on any mismatch.
+ */
+function applyUnifiedDiff(original: string, diffText: string): { result: string; added: number; removed: number } {
+  const origLines = original.split('\n');
+  const diffLines = diffText.split(/\r?\n/);
+  const hunkHeader = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+  const out: string[] = [];
+  let cursor = 0; // 0-based index into origLines already consumed/emitted
+  let added = 0;
+  let removed = 0;
+  let sawHunk = false;
+  let i = 0;
+
+  while (i < diffLines.length) {
+    const line = diffLines[i];
+    if (line === undefined) break;
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      i++;
+      continue;
+    }
+    const m = hunkHeader.exec(line);
+    if (!m) {
+      i++;
+      continue;
+    }
+    sawHunk = true;
+    const oldStart = parseInt(m[1], 10);
+    const hunkStartIdx = Math.max(0, oldStart - 1);
+    if (hunkStartIdx < cursor) throw new Error('overlapping or out-of-order hunks');
+    while (cursor < hunkStartIdx && cursor < origLines.length) {
+      out.push(origLines[cursor]);
+      cursor++;
+    }
+    i++;
+
+    // Consume the hunk body until the next hunk header or file header.
+    while (i < diffLines.length && !hunkHeader.test(diffLines[i]) && !diffLines[i].startsWith('--- ')) {
+      const hl = diffLines[i];
+      const tag = hl.length ? hl[0] : ' ';
+      const body = hl.length ? hl.slice(1) : '';
+      if (tag === ' ') {
+        const expected = origLines[cursor];
+        if (expected !== body) {
+          throw new Error(`context mismatch at line ${cursor + 1}: expected ${JSON.stringify(expected)}, diff has ${JSON.stringify(body)}`);
+        }
+        out.push(origLines[cursor]);
+        cursor++;
+      } else if (tag === '-') {
+        const expected = origLines[cursor];
+        if (expected !== body) {
+          throw new Error(`removed-line mismatch at line ${cursor + 1}: expected ${JSON.stringify(expected)}, diff has ${JSON.stringify(body)}`);
+        }
+        cursor++;
+        removed++;
+      } else if (tag === '+') {
+        out.push(body);
+        added++;
+      } else if (tag === '\\') {
+        // "\ No newline at end of file" — nothing to apply.
+      } else {
+        throw new Error(`unexpected diff line: ${JSON.stringify(hl)}`);
+      }
+      i++;
+    }
+  }
+
+  if (!sawHunk) throw new Error('no unified-diff hunks (@@ ... @@) found');
+
+  while (cursor < origLines.length) {
+    out.push(origLines[cursor]);
+    cursor++;
+  }
+  return { result: out.join('\n'), added, removed };
+}
+
+/** Minimal line-level diff summary (added/removed counts). */
 function buildLineDiff(before: string, after: string): { added: number; removed: number } {
   const a = splitLines(before);
   const b = splitLines(after);
@@ -288,8 +648,8 @@ async function entryType(full: string): Promise<'file' | 'directory' | 'other'> 
   }
 }
 
-async function listDirTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const dirPath = resolvePath(args.path);
+async function listDirTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const dirPath = resolvePath(args.path, roots);
   const names = await fs.readdir(dirPath);
   const entries = await Promise.all(
     names.map(async (name) => {
@@ -305,7 +665,7 @@ async function listDirTool(args: Record<string, unknown>): Promise<CallToolResul
     })
   );
   entries.sort((x, y) => (x.type === y.type ? x.name.localeCompare(y.name) : x.type === 'directory' ? -1 : 1));
-  return textResult({ path: dirPath, entries });
+  return dualResult({ path: dirPath, entries });
 }
 
 interface TreeNode {
@@ -314,8 +674,8 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-async function dirTreeTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const rootPath = resolvePath(args.path);
+async function dirTreeTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const rootPath = resolvePath(args.path, roots);
   const depth = Math.min(typeof args.depth === 'number' ? Math.max(1, Math.floor(args.depth)) : DEFAULT_TREE_DEPTH, MAX_TREE_DEPTH);
   let count = 0;
   let truncated = false;
@@ -347,15 +707,15 @@ async function dirTreeTool(args: Record<string, unknown>): Promise<CallToolResul
   }
 
   const tree = await walk(rootPath, 1);
-  return textResult({ path: rootPath, depth, truncated, tree });
+  return dualResult({ path: rootPath, depth, truncated, tree });
 }
 
-async function searchTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const rootPath = resolvePath(args.path);
+async function searchTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const rootPath = resolvePath(args.path, roots);
   const namePattern = typeof args.namePattern === 'string' ? args.namePattern.toLowerCase() : '';
   const contentPattern = typeof args.content === 'string' ? args.content.toLowerCase() : '';
   if (!namePattern && !contentPattern) {
-    return textResult({ error: 'Provide "namePattern" and/or "content" to search for.' }, true);
+    return errorResult('Provide "namePattern" and/or "content" to search for.');
   }
   const matches: Array<{ path: string; line?: number; text?: string }> = [];
   let truncated = false;
@@ -397,13 +757,13 @@ async function searchTool(args: Record<string, unknown>): Promise<CallToolResult
   }
 
   await walk(rootPath);
-  return textResult({ matches, truncated });
+  return dualResult({ matches, truncated });
 }
 
-async function getFileInfoTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const target = resolvePath(args.path);
+async function getFileInfoTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const target = resolvePath(args.path, roots);
   const st = await fs.stat(target);
-  return textResult({
+  return dualResult({
     path: target,
     type: st.isFile() ? 'file' : st.isDirectory() ? 'directory' : 'other',
     size: st.size,
@@ -414,55 +774,56 @@ async function getFileInfoTool(args: Record<string, unknown>): Promise<CallToolR
   });
 }
 
-async function createDirectoryTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const dirPath = resolvePath(args.path);
+async function createDirectoryTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const dirPath = resolvePath(args.path, roots);
   await fs.mkdir(dirPath, { recursive: true });
-  return textResult({ path: dirPath, created: true });
+  return dualResult({ path: dirPath, created: true });
 }
 
-async function moveTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const source = resolvePath(args.source);
-  const destination = resolvePath(args.destination);
+async function moveTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const source = resolvePath(args.source, roots);
+  const destination = resolvePath(args.destination, roots);
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.rename(source, destination);
-  return textResult({ source, destination });
+  return dualResult({ source, destination });
 }
 
-async function deleteTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const target = resolvePath(args.path);
+async function deleteTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+  const target = resolvePath(args.path, roots);
   const recursive = args.recursive === true;
   await fs.rm(target, { recursive, force: false });
-  return textResult({ path: target, deleted: true });
+  return dualResult({ path: target, deleted: true });
 }
 
 export async function filesystemCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
+    const roots = await loadEffectiveRoots();
     switch (toolName) {
       case 'read_file':
-        return await readFileTool(args);
+        return await readFileTool(args, roots);
       case 'write_file':
-        return await writeFileTool(args);
+        return await writeFileTool(args, roots);
       case 'edit_file':
-        return await editFileTool(args);
+        return await editFileTool(args, roots);
       case 'list_dir':
-        return await listDirTool(args);
+        return await listDirTool(args, roots);
       case 'dir_tree':
-        return await dirTreeTool(args);
+        return await dirTreeTool(args, roots);
       case 'search':
-        return await searchTool(args);
+        return await searchTool(args, roots);
       case 'get_file_info':
-        return await getFileInfoTool(args);
+        return await getFileInfoTool(args, roots);
       case 'create_directory':
-        return await createDirectoryTool(args);
+        return await createDirectoryTool(args, roots);
       case 'move':
-        return await moveTool(args);
+        return await moveTool(args, roots);
       case 'delete':
-        return await deleteTool(args);
+        return await deleteTool(args, roots);
       default:
-        return textResult({ error: `Unknown tool on the built-in filesystem server: ${toolName}` }, true);
+        return errorResult(`Unknown tool on the built-in filesystem server: ${toolName}`);
     }
   } catch (err) {
     log.warn('filesystemCallTool failed', { toolName, err });
-    return textResult({ error: `Tool failed: ${err instanceof Error ? err.message : String(err)}` }, true);
+    return textResult(`Tool failed: ${err instanceof Error ? err.message : String(err)}`, true);
   }
 }
