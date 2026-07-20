@@ -422,8 +422,9 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[] | nu
 /**
  * Char offsets [lo, hi) of the 1-based inclusive line range [start, end] within
  * `text`. When both bounds are absent the whole string is returned. Offsets are
- * computed by counting `\n`; a `\r` (CRLF) stays part of the preceding line's
- * length so offsets into the ORIGINAL string remain exact.
+ * computed by counting `\n`. PRECONDITION: `text` must be LF-normalized (the
+ * caller in `editFileTool` normalizes CR/CRLF to LF before matching), so every
+ * newline is exactly one character and the `+ 1` advance stays byte-exact.
  */
 function regionOffsets(text: string, start?: number, end?: number): { lo: number; hi: number } {
   if (start === undefined && end === undefined) return { lo: 0, hi: text.length };
@@ -469,12 +470,16 @@ async function editFileTool(args: Record<string, unknown>, roots: string[] | nul
   const gStart = typeof args.startLine === 'number' ? args.startLine : undefined;
   const gEnd = typeof args.endLine === 'number' ? args.endLine : undefined;
 
-  let working = original;
+  // Match/apply in LF space so CR/CRLF differences between the file on disk and
+  // the model-supplied oldText don't produce spurious "not found" errors (#187).
+  // The file's original EOL is detected here and restored on write below.
+  const eol = detectEol(original);
+  let working = original.replace(/\r\n?/g, '\n');
   let applied = 0;
   for (const raw of edits) {
     const edit = raw as { oldText?: unknown; newText?: unknown; startLine?: unknown; endLine?: unknown };
-    const oldText = typeof edit.oldText === 'string' ? edit.oldText : '';
-    const newText = typeof edit.newText === 'string' ? edit.newText : '';
+    const oldText = typeof edit.oldText === 'string' ? edit.oldText.replace(/\r\n?/g, '\n') : '';
+    const newText = typeof edit.newText === 'string' ? edit.newText.replace(/\r\n?/g, '\n') : '';
     if (!oldText) return errorResult(`Edit #${applied + 1} has an empty "oldText".`);
 
     const start = typeof edit.startLine === 'number' ? edit.startLine : gStart;
@@ -497,8 +502,12 @@ async function editFileTool(args: Record<string, unknown>, roots: string[] | nul
     working = working.slice(0, idx) + newText + working.slice(idx + oldText.length);
     applied += 1;
   }
-  await fs.writeFile(filePath, working, 'utf8');
-  return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff: buildLineDiff(original, working) });
+  const diff = buildLineDiff(original, working);
+  // Restore the file's original line-ending style so unchanged lines keep their
+  // bytes and we don't rewrite the whole file just because EOLs differ (#187).
+  const finalContent = eol === '\r\n' ? working.replace(/\n/g, '\r\n') : working;
+  await fs.writeFile(filePath, finalContent, 'utf8');
+  return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff });
 }
 
 /**

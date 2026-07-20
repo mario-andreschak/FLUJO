@@ -180,6 +180,48 @@ describe('filesystem operations', () => {
     expect(text(r)).toMatch(/not both/i);
   });
 
+  // --- CR/CRLF line-break resilience (issue #187) ---
+  it('edit_file matches an LF oldText against a CRLF file and preserves CRLF', async () => {
+    const p = path.join(dir, 'crlf.txt');
+    // overwrite mode writes bytes verbatim, so this is a genuine CRLF file.
+    await filesystemCallTool('write_file', { path: p, content: 'alpha\r\nbeta\r\ngamma\r\n' });
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'beta', newText: 'BETA' }] });
+    expect(ok.isError).toBeUndefined();
+    // Read raw bytes (not the normalized read_file view) to assert EOL preservation.
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw).toBe('alpha\r\nBETA\r\ngamma\r\n');
+    expect(raw).not.toMatch(/[^\r]\n/); // no lone LF slipped in
+  });
+
+  it('edit_file matches a CRLF oldText against an LF file and preserves LF', async () => {
+    const p = path.join(dir, 'lf.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'alpha\nbeta\ngamma\n' });
+    // Model supplies CRLF in oldText/newText though the file uses LF.
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'alpha\r\nbeta', newText: 'A\r\nB' }] });
+    expect(ok.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw).toBe('A\nB\ngamma\n');
+    expect(raw).not.toContain('\r');
+  });
+
+  it('edit_file matches a multi-line oldText spanning a CRLF boundary', async () => {
+    const p = path.join(dir, 'multi.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'one\r\ntwo\r\nthree\r\n' });
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'one\ntwo', newText: 'ONE\nTWO' }] });
+    expect(ok.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw).toBe('ONE\r\nTWO\r\nthree\r\n');
+  });
+
+  it('edit_file scopes a line-range edit on a CRLF file (regionOffsets)', async () => {
+    const p = path.join(dir, 'scoped-crlf.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'foo\r\nfoo\r\nfoo\r\n' });
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'foo', newText: 'bar', startLine: 2, endLine: 2 }] });
+    expect(ok.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw).toBe('foo\r\nbar\r\nfoo\r\n');
+  });
+
   it('enforces FLUJO_FS_ROOTS confinement when configured', async () => {
     const prev = process.env.FLUJO_FS_ROOTS;
     process.env.FLUJO_FS_ROOTS = dir;
