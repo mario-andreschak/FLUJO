@@ -13,10 +13,22 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import EditIcon from '@mui/icons-material/Edit';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ScheduleIcon from '@mui/icons-material/Schedule';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
+import {
+  QueueMap,
+  QueuedMessage,
+  enqueue as enqueueMsg,
+  dequeue as dequeueMsg,
+  clearQueue as clearMsgQueue,
+  removeQueued as removeQueuedMsg,
+  getQueue as getMsgQueue,
+  peekQueue as peekMsgQueue,
+  canDrain as canDrainQueue,
+} from './chatQueue';
 import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
 import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
@@ -208,6 +220,12 @@ const Chat: React.FC = () => {
       return next;
     });
   }, []);
+  // Per-conversation FIFO queue of messages the user submitted while a run was
+  // in flight (issue #177). Keyed by conversation id; drained one-at-a-time by
+  // the drain effect once the conversation is idle and unblocked.
+  const [queuedMessages, setQueuedMessages] = useState<QueueMap>({});
+  // Guards the drain effect against re-entrancy (one dequeue per idle window).
+  const drainingRef = useRef<boolean>(false);
   const [error, setError] = useState<string | null>(null); // General error display
 
   // Other states
@@ -1236,6 +1254,8 @@ const Chat: React.FC = () => {
       setLiveLanes(EMPTY_LIVE_LANES);
     }
     markConvRunning(conversationId, false);
+    // Drop any queued (not-yet-sent) messages for the deleted conversation (#177).
+    setQueuedMessages(prev => clearMsgQueue(prev, conversationId));
 
     // Optimistic UI update for the list
     const updatedList = previousList.filter((conv) => conv.id !== conversationId);
@@ -1422,12 +1442,37 @@ const Chat: React.FC = () => {
 
 
   // Handle sending a message
-  const handleSendMessage = async (content: string, attachments: Attachment[] = []) => {
+  const handleSendMessage = async (
+    content: string,
+    attachments: Attachment[] = [],
+    opts?: { fromQueue?: boolean; nodeOverride?: string | null },
+  ) => {
     if (!content.trim() && attachments.length === 0) return;
     if (!detailedConversation) {
        log.error("Cannot send message, detailed conversation not loaded.");
        setError("Cannot send message: conversation details not loaded.");
        return;
+    }
+
+    // Message queueing (issue #177): if a run is already in flight for this
+    // conversation, park the message in the per-conversation queue instead of
+    // POSTing a concurrent run. The drain effect auto-sends it once the
+    // conversation is idle. Messages arriving from the drain (fromQueue) skip
+    // this gate so they actually send. The approval / debug-pause gates keep the
+    // input disabled, so we never reach here while blocked.
+    if (!opts?.fromQueue && runningConvs.has(detailedConversation.id)) {
+      const queued: QueuedMessage = {
+        id: uuidv4(),
+        content,
+        attachments,
+        // Capture the one-shot node pick now so it applies only to THIS message.
+        nodeOverride: nodeOverride ?? null,
+        timestamp: Date.now(),
+      };
+      setQueuedMessages(prev => enqueueMsg(prev, detailedConversation.id, queued));
+      setNodeOverride(null);
+      log.debug('Run in progress — queued message', { conversationId: detailedConversation.id, queuedId: queued.id });
+      return;
     }
 
     log.debug('Sending message', { conversationId: detailedConversation.id, contentLength: content.length, attachmentsCount: attachments.length });
@@ -1438,11 +1483,14 @@ const Chat: React.FC = () => {
     const isFirstUserMessage = !existingMessages.some(msg => msg.role === 'user');
     const currentFlowId = detailedConversation.flowId;
 
-    if (nodeOverride) {
+    // A queued message carries the node pick captured at enqueue time; a live
+    // send reads the current one-shot nodeOverride state (and clears it).
+    const manualNode = opts?.fromQueue ? (opts.nodeOverride ?? null) : nodeOverride;
+    if (manualNode) {
       // The user manually picked a node in the chat input's node picker: the
       // message resumes execution there. One-shot — consumed by this send.
-      nodeIdToAssign = nodeOverride;
-      setNodeOverride(null);
+      nodeIdToAssign = manualNode;
+      if (!opts?.fromQueue) setNodeOverride(null);
       log.debug(`Assigning manually picked node ID to user message: ${nodeIdToAssign}`);
     } else if (isFirstUserMessage) {
       // For the first user message, use the start node ID from the current flow
@@ -2427,6 +2475,55 @@ const Chat: React.FC = () => {
     !viewedConversationRunning &&
     !!currentConversationId &&
     stoppedConversationIds.has(currentConversationId);
+  // Drain the queued messages of the VIEWED conversation once it becomes idle
+  // and unblocked (issue #177). FIFO, one run at a time: pop the head and push
+  // it through the normal send path. Never drains while a run is in flight,
+  // awaiting tool approval, paused in the debugger, ended in error, or was just
+  // stopped by the user. `drainingRef` guards against re-entrancy so a single
+  // idle window sends exactly one queued message; the next drains after that
+  // run's run:done flips runningConvs back off.
+  useEffect(() => {
+    const convId = currentConversationId;
+    if (!convId || drainingRef.current) return;
+    // Sending relies on detailedConversation being the viewed conversation.
+    if (!detailedConversation || detailedConversation.id !== convId) return;
+    const head = peekMsgQueue(queuedMessages, convId);
+    if (!head) return;
+    const eligible = canDrainQueue({
+      running: runningConvs.has(convId),
+      pendingApproval: !!pendingToolCalls,
+      debugPaused: isDebugPaused,
+      hasError: currentConversationSummary?.status === 'error',
+      stopped: viewedConversationStopped,
+    });
+    if (!eligible) return;
+    drainingRef.current = true;
+    // Remove the head now; defer the actual send so the state update settles
+    // and re-entrancy is impossible within this tick.
+    setQueuedMessages(prev => dequeueMsg(prev, convId).queues);
+    const timer = setTimeout(() => {
+      drainingRef.current = false;
+      void handleSendMessage(head.content, head.attachments, {
+        fromQueue: true,
+        nodeOverride: head.nodeOverride,
+      });
+    }, 0);
+    return () => clearTimeout(timer);
+    // handleSendMessage is intentionally omitted (stable behavior; including it
+    // would re-run this effect every render on its fresh identity).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentConversationId,
+    detailedConversation,
+    queuedMessages,
+    runningConvs,
+    pendingToolCalls,
+    isDebugPaused,
+    currentConversationSummary?.status,
+    viewedConversationStopped,
+  ]);
+
+
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
@@ -2781,13 +2878,35 @@ const Chat: React.FC = () => {
 
         {/* Chat input */}
         <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
+          {/* Queued messages (issue #177): follow-ups submitted while a run is in
+              flight. Shown as removable chips; auto-sent one at a time once the
+              conversation is idle. */}
+          {currentConversationId && getMsgQueue(queuedMessages, currentConversationId).length > 0 && (
+            <Box
+              data-testid="queued-messages"
+              sx={{ mb: 1, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}
+            >
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <ScheduleIcon fontSize="inherit" /> Queued:
+              </Typography>
+              {getMsgQueue(queuedMessages, currentConversationId).map((q) => (
+                <Chip
+                  key={q.id}
+                  size="small"
+                  variant="outlined"
+                  label={q.content.trim().slice(0, 40) || (q.attachments.length ? `${q.attachments.length} attachment(s)` : 'message')}
+                  onDelete={() => setQueuedMessages(prev => removeQueuedMsg(prev, currentConversationId, q.id))}
+                />
+              ))}
+            </Box>
+          )}
+
           <ChatInput
             onSendMessage={handleSendMessage}
-            // Disable only when the VIEWED conversation is busy, so a run in one
-            // conversation no longer blocks typing/sending in another (parallel use).
-            // runningConvs scopes "busy" per-conversation; pendingToolCalls /
-            // isDebugPaused are viewed-conversation states.
-            disabled={isLoadingDetails || (!!currentConversationId && runningConvs.has(currentConversationId)) || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
+            // Keep the input enabled while a run is in flight so the user can type and
+            // QUEUE follow-up messages (issue #177); still disabled for load, missing
+            // flow, a pending tool approval, or a debugger pause.
+            disabled={isLoadingDetails || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
             onRequireApprovalChange={handleRequireApprovalChange}
             executeInDebugger={executeInDebugger} // Pass debugger state
