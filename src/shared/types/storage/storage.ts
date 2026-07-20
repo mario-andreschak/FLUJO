@@ -22,7 +22,11 @@ export enum StorageKey {
   PENDING_APPROVALS = 'pending_approvals',
   // Per-built-in-server overrides (issue #170). Only a tiny { disabled } flag is
   // persisted here; the synthetic built-in configs themselves are NEVER stored.
-  MCP_INTERNAL_OVERRIDES = 'mcp_internal_overrides'
+  MCP_INTERNAL_OVERRIDES = 'mcp_internal_overrides',
+  // Package installs ledger (issue #198): last install summary + the ids of the
+  // entities each installed package created, so re-installs are idempotent and
+  // the status endpoint can report the last outcome. Never stores secret values.
+  PACKAGE_INSTALLS = 'package_installs'
 }
 
 export const StorageKeys = {
@@ -45,6 +49,7 @@ export const StorageKeys = {
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
+  PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
 } as const;
 
 /**
