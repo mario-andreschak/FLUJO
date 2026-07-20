@@ -35,6 +35,7 @@ import FlowSelector from './FlowSelector';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import { getStartNode } from '@/utils/shared/getStartNode';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
@@ -1510,9 +1511,7 @@ const Chat: React.FC = () => {
     } else if (isFirstUserMessage) {
       // For the first user message, use the start node ID from the current flow
       const currentFlow = flows.find(f => f.id === currentFlowId);
-      // Assuming the first node in the array is the start node
-      // TODO: Consider a more reliable way to identify the start node (e.g., by type)
-      const startNode = currentFlow?.nodes?.[0];
+      const startNode = getStartNode(currentFlow);
       if (startNode) {
         nodeIdToAssign = startNode.id;
         log.debug(`Assigning start node ID to first user message: ${nodeIdToAssign}`);
@@ -1527,7 +1526,7 @@ const Chat: React.FC = () => {
       // the turn from the flow start node instead; the backend then replays the
       // turn from its full-history entry node (see runFlow issue #151 block).
       const currentFlow = flows.find(f => f.id === currentFlowId);
-      const startNode = currentFlow?.nodes?.[0];
+      const startNode = getStartNode(currentFlow);
       if (startNode) {
         nodeIdToAssign = startNode.id;
         log.debug(`Post-error message: re-driving turn from start node ID: ${nodeIdToAssign}`);
@@ -1548,7 +1547,7 @@ const Chat: React.FC = () => {
       // Fallback: If no prior assistant message had a processNodeId, try to use the start node
       if (!nodeIdToAssign) {
         const currentFlow = flows.find(f => f.id === currentFlowId);
-        const startNode = currentFlow?.nodes?.[0];
+        const startNode = getStartNode(currentFlow);
         if (startNode) {
           nodeIdToAssign = startNode.id;
           log.debug(`No prior assistant node ID found, falling back to start node ID: ${nodeIdToAssign}`);
