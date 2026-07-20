@@ -133,3 +133,30 @@ code.tool-reference.handoff {
   color: rgba(0, 0, 0, 0.7);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
+
+/* Run-resource ("Temporary Data", ${res:NAME}) reference — teal, distinct from
+   MCP tool (blue) and handoff (grey) pills. */
+.tool-reference-container.runres {
+  background-color: #e0f2f1;
+  border: 1px solid #b2dfdb;
+}
+
+.tool-reference.runres {
+  color: #00796b;
+}
+
+.tool-reference-delete.runres {
+  color: #00796b;
+}
+
+.tool-reference-preview.runres {
+  background-color: #e0f2f1;
+  border-color: #b2dfdb;
+  color: #00796b;
+}
+
+code.tool-reference.runres {
+  background-color: #e0f2f1;
+  color: #00796b;
+  border: 1px solid #b2dfdb;
+}

@@ -21,13 +21,14 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { mcpService } from '@/frontend/services/mcp';
 import './promptBuilder.css';
 import {
-  BindingKind,
-  ParsedBinding,
-  encodeBindingPill,
-  parsePill,
-  findBindings,
-  bindingLabel,
-} from '@/utils/shared/mcpBinding';
+  PromptRefKind,
+  PromptRef,
+  PromptRefMatch,
+  encodePromptRefPill,
+  parsePromptRefPill,
+  findPromptRefs,
+  promptRefLabel,
+} from '@/utils/shared/promptRefs';
 
 export interface PromptBuilderRef {
   insertText: (text: string) => void;
@@ -43,12 +44,12 @@ interface PromptBuilderProps {
   customPreviewRenderer?: () => React.ReactNode;
 }
 
-// A binding reference (tool or resource pill) rendered as an inline void element.
+// A binding reference (tool / resource / run-resource pill) rendered as an inline void element.
 interface BindingReferenceElement {
   type: 'binding-reference';
-  kind: BindingKind;
+  kind: PromptRefKind;
   server: string;
-  name: string; // tool name or resource URI
+  name: string; // tool name, resource URI, or run-resource NAME
   children: CustomText[];
 }
 
@@ -72,11 +73,11 @@ declare module 'slate' {
   }
 }
 
-const isHandoffBinding = (b: ParsedBinding): boolean => b.kind === 'tool' && b.server === 'handoff';
+const isHandoffBinding = (b: PromptRef): boolean => b.kind === 'tool' && b.server === 'handoff';
 
 // Build the inline children for a single line: plain text interleaved with binding pills.
 const lineToChildren = (line: string): CustomElement['children'] => {
-  const matches = findBindings(line);
+  const matches = findPromptRefs(line);
   if (matches.length === 0) {
     return [{ text: line }];
   }
@@ -130,7 +131,7 @@ const serialize = (nodes: Descendant[]): string => {
           } else if (child.type === 'binding-reference') {
             const ref = child as BindingReferenceElement;
             bindingCount++;
-            return encodeBindingPill(ref.kind, ref.server, ref.name);
+            return encodePromptRefPill(ref.kind, ref.server, ref.name);
           }
           return '';
         })
@@ -156,7 +157,8 @@ const Element = (props: {
     const editor = useSlate();
     const ref = element as BindingReferenceElement;
     const handoff = isHandoffBinding(ref);
-    const cls = ref.kind === 'resource' ? 'resource' : handoff ? 'handoff' : '';
+    const cls =
+      ref.kind === 'runres' ? 'runres' : ref.kind === 'resource' ? 'resource' : handoff ? 'handoff' : '';
 
     const remove = () => {
       const path = ReactEditor.findPath(editor, element);
@@ -167,7 +169,7 @@ const Element = (props: {
     return (
       <span contentEditable={false} className={`tool-reference-container ${cls}`}>
         <span className={`tool-reference ${cls}`}>
-          {bindingLabel(ref)}
+          {promptRefLabel(ref)}
         </span>
         <span
           className={`tool-reference-delete ${cls}`}
@@ -293,22 +295,30 @@ const ResourcePreview = ({ server, name }: { server: string; name: string }) => 
   );
 };
 
-const BindingPreview = ({ binding }: { binding: ParsedBinding }) =>
-  binding.kind === 'resource' ? (
-    <ResourcePreview server={binding.server} name={binding.name} />
-  ) : (
-    <ToolPreview server={binding.server} name={binding.name} />
-  );
+// Preview component for a run-resource reference (`${res:NAME}`, "Temporary Data").
+// Unlike a resource pill this is NOT an MCP-server resource, so there is nothing
+// to fetch — it is resolved from the run's data store at run time.
+const RunResourcePreview = ({ name }: { name: string }) => (
+  <span className="tool-reference-preview runres">
+    [The contents of the Temporary Data `{name}` will be inserted here at run time]
+  </span>
+);
+
+const BindingPreview = ({ binding }: { binding: PromptRef }) => {
+  if (binding.kind === 'runres') return <RunResourcePreview name={binding.name} />;
+  if (binding.kind === 'resource') return <ResourcePreview server={binding.server} name={binding.name} />;
+  return <ToolPreview server={binding.server} name={binding.name} />;
+};
 
 // Preview renderer for the entire document
 const PreviewRenderer = ({ value }: { value: string }) => {
   log.debug('Rendering preview');
 
   // Build a tagged segment list: text runs and binding pills, in order.
-  type Segment = { type: 'text'; value: string } | { type: 'binding'; binding: ParsedBinding; key: number };
+  type Segment = { type: 'text'; value: string } | { type: 'binding'; binding: PromptRefMatch; key: number };
   const segments: Segment[] = [];
   let currentIndex = 0;
-  for (const m of findBindings(value)) {
+  for (const m of findPromptRefs(value)) {
     if (m.index > currentIndex) {
       segments.push({ type: 'text', value: value.slice(currentIndex, m.index) });
     }
@@ -374,8 +384,8 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
     insertText: (text: string) => {
       log.info(`insertText called with text length: ${text.length}`);
 
-      // Is this a complete binding pill (tool or resource)?
-      const parsed = parsePill(text);
+      // Is this a complete reference pill (tool / resource / run-resource)?
+      const parsed = parsePromptRefPill(text);
 
       if (parsed) {
         log.info(`Inserting ${parsed.kind} reference: ${parsed.server}:${parsed.name}`);

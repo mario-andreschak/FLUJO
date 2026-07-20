@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -23,21 +23,32 @@ import {
   ListItemText,
   CircularProgress,
   FormHelperText,
+  Collapse,
+  Link,
+  Autocomplete,
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { mcpService } from '@/frontend/services/mcp';
 import { isValidRunVarName } from '@/utils/shared/resolveRunVars';
+import { extractResourceRefNames } from '@/utils/shared/promptRefs';
 import { createLogger } from '@/utils/logger/index';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ResourceNodePropertiesModal');
+
+// The default label createNode() gives a fresh resource node. Used to decide
+// whether the (now hidden) Advanced section should auto-open on edit.
+const DEFAULT_RESOURCE_LABEL = 'Resource Node';
 
 interface ResourceNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
   onSave: (nodeId: string, data: any) => void;
+  /** All nodes on the current canvas — used to auto-suggest `${res:NAME}` names
+   *  already referenced elsewhere in this flow (issue #183 item 4). */
+  flowNodes?: FlowNode[];
 }
 
 interface BrowsedResource {
@@ -51,14 +62,18 @@ interface BrowsedResource {
  * Properties modal for the resource node (Tier 3).
  *
  * Two binding scopes:
- *  - 'mcp': a STATIC resource on an MCP server (server + uri, with a browser
- *    over the server's published resources plus a free-text URI field for
- *    templates/unlisted URIs);
- *  - 'run': a RUN artifact — a named piece of data some step produces
- *    (process → resource edge, equivalent to captureResource) and other steps
- *    consume (resource → process edge, or `${res:NAME}`).
+ *  - 'run' (user-facing: "Temporary Data"): a RUN artifact — a named piece of
+ *    data some step produces (process → resource edge, equivalent to
+ *    captureResource) and other steps consume (resource → process edge, or
+ *    `${res:NAME}`). This is the DEFAULT (issue #183) — it is the common case.
+ *  - 'mcp' (user-facing: "MCP resource"): a STATIC resource on an MCP server
+ *    (server + uri, with a browser over the server's published resources plus a
+ *    free-text URI field for templates/unlisted URIs).
+ *
+ * NOTE: the internal scope values ('run' / 'mcp') are STABLE and part of the
+ * persisted contract — only their human-facing labels changed in #183.
  */
-export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave }: ResourceNodePropertiesModalProps) => {
+export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowNodes }: ResourceNodePropertiesModalProps) => {
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
@@ -71,20 +86,45 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave }: Res
   const [browsed, setBrowsed] = useState<BrowsedResource[]>([]);
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+  // Name/Description are advanced (#183 item 1): hidden by default, revealed on
+  // demand. Auto-open when the node already carries a custom label/description
+  // so re-editing an existing node keeps them visible.
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     if (node) {
       setNodeData({
         ...node.data,
-        properties: { scope: 'mcp', ...node.data.properties },
+        // #183 item 2: new resource nodes default to the run-scoped ("Temporary
+        // Data") type; an existing node's explicit scope is preserved by the spread.
+        properties: { scope: 'run', ...node.data.properties },
       });
+      const hasCustomLabel = !!node.data.label && node.data.label.trim() !== DEFAULT_RESOURCE_LABEL;
+      const hasDescription = !!node.data.description && node.data.description.trim().length > 0;
+      setShowAdvanced(hasCustomLabel || hasDescription);
     }
   }, [node, open]);
 
-  const scope: 'mcp' | 'run' = nodeData?.properties?.scope === 'run' ? 'run' : 'mcp';
+  const scope: 'mcp' | 'run' = nodeData?.properties?.scope === 'mcp' ? 'mcp' : 'run';
   const boundServer: string = nodeData?.properties?.boundServer || '';
   const uri: string = nodeData?.properties?.uri || '';
   const runName: string = nodeData?.properties?.runName || '';
+
+  // Temporary Data names already referenced (`${res:NAME}`) elsewhere in this
+  // flow, to auto-suggest as the artifact name (#183 item 4). Scan every OTHER
+  // node's properties (promptTemplate, spawnBriefs, subflow inputs, …).
+  const nameSuggestions = useMemo(() => {
+    const texts = (flowNodes ?? [])
+      .filter((n) => n.id !== node?.id)
+      .map((n) => {
+        try {
+          return JSON.stringify(n.data?.properties ?? {});
+        } catch {
+          return '';
+        }
+      });
+    return extractResourceRefNames(texts);
+  }, [flowNodes, node?.id]);
 
   const setProperty = useCallback((key: string, value: unknown) => {
     setNodeData((prev) => prev ? { ...prev, properties: { ...prev.properties, [key]: value } } : prev);
@@ -145,7 +185,12 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave }: Res
       delete properties.runName;
       properties.scope = 'mcp';
     }
-    onSave(node.id, { ...nodeData, properties });
+    // Name is now optional/advanced (#183 item 1): fall back to a sensible
+    // header so a name-less node still reads clearly on the canvas.
+    const trimmedLabel = (nodeData.label ?? '').trim();
+    const label = trimmedLabel
+      || (scope === 'run' ? (runName.trim() || 'Temporary Data') : 'MCP resource');
+    onSave(node.id, { ...nodeData, label, properties });
   };
 
   const runNameInvalid = scope === 'run' && !!runName.trim() && !isValidRunVarName(runName.trim());
@@ -157,29 +202,14 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave }: Res
       <DialogTitle>Resource Node Properties</DialogTitle>
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
-          <TextField
-            label="Label"
-            value={nodeData.label}
-            onChange={(e) => setNodeData({ ...nodeData, label: e.target.value })}
-            fullWidth
-          />
-          <TextField
-            label="Description"
-            value={nodeData.description ?? ''}
-            onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
-            fullWidth
-            multiline
-            minRows={2}
-          />
-
           <FormControl>
             <RadioGroup
               row
               value={scope}
-              onChange={(e) => setProperty('scope', e.target.value === 'run' ? 'run' : 'mcp')}
+              onChange={(e) => setProperty('scope', e.target.value === 'mcp' ? 'mcp' : 'run')}
             >
+              <FormControlLabel value="run" control={<Radio />} label="Temporary Data" />
               <FormControlLabel value="mcp" control={<Radio />} label="MCP resource" />
-              <FormControlLabel value="run" control={<Radio />} label="Run artifact" />
             </RadioGroup>
             <FormHelperText>
               {scope === 'mcp'
@@ -255,23 +285,61 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave }: Res
             </>
           ) : (
             <>
-              <TextField
-                label="Artifact name"
-                value={runName}
-                onChange={(e) => setProperty('runName', e.target.value)}
-                fullWidth
-                error={runNameInvalid}
-                helperText={runNameInvalid
-                  ? 'Letters, digits, _ and - only; must not start with a digit.'
-                  : 'Steps reference it as ${res:NAME}; a producing edge saves the step output under this name.'}
+              <Autocomplete
+                freeSolo
+                options={nameSuggestions}
+                inputValue={runName}
+                onInputChange={(_e, value) => setProperty('runName', value)}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Temporary Data name"
+                    fullWidth
+                    error={runNameInvalid}
+                    helperText={runNameInvalid
+                      ? 'Letters, digits, _ and - only; must not start with a digit.'
+                      : nameSuggestions.length > 0
+                        ? 'Steps reference it as ${res:NAME}. Suggestions are names already used in this flow.'
+                        : 'Steps reference it as ${res:NAME}; a producing edge saves the step output under this name.'}
+                  />
+                )}
               />
               {runName.trim() && !runNameInvalid && (
                 <Typography variant="caption" color="text.secondary">
-                  URI at run time: flujo://run/&lt;conversation&gt;/… (named "{runName.trim()}")
+                  URI at run time: flujo://run/&lt;conversation&gt;/… (named &quot;{runName.trim()}&quot;)
                 </Typography>
               )}
             </>
           )}
+
+          <Link
+            component="button"
+            type="button"
+            underline="hover"
+            onClick={() => setShowAdvanced((v) => !v)}
+            sx={{ alignSelf: 'flex-start' }}
+          >
+            {showAdvanced ? 'Hide advanced' : 'Advanced — name & description'}
+          </Link>
+          <Collapse in={showAdvanced} unmountOnExit>
+            <Box display="flex" flexDirection="column" gap={2}>
+              <TextField
+                label="Label"
+                value={nodeData.label}
+                onChange={(e) => setNodeData({ ...nodeData, label: e.target.value })}
+                fullWidth
+                helperText="Optional. The node's name on the canvas; defaults to the Temporary Data name."
+              />
+              <TextField
+                label="Description"
+                value={nodeData.description ?? ''}
+                onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
+                fullWidth
+                multiline
+                minRows={2}
+              />
+            </Box>
+          </Collapse>
         </Box>
       </DialogContent>
       <DialogActions>

@@ -1044,6 +1044,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         node={nodeToEdit}
         onClose={() => setResourceModalOpen(false)}
         onSave={handleNodeUpdate}
+        flowNodes={nodes}
       />
 
       <SignalNodePropertiesModal

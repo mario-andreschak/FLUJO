@@ -71,7 +71,7 @@ const WiredResources: React.FC<WiredResourcesProps> = ({ wiredResources, promptB
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, wordBreak: 'break-all' }}>
                     {r.scope === 'run'
-                      ? `Run artifact${r.runName ? ` "${r.runName}"` : ' (no name set)'}`
+                      ? `Temporary Data${r.runName ? ` "${r.runName}"` : ' (no name set)'}`
                       : `MCP resource${r.uri ? ` ${r.uri}` : ''}${r.boundServer ? ` on ${r.boundServer}` : ''}`}
                   </Typography>
                 </Box>
