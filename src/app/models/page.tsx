@@ -4,6 +4,7 @@ import { Box, Typography } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import * as serverAdapter from '@/app/api/model/backend-model-adapter';
 import Spinner from '@/frontend/components/shared/Spinner';
+import ScrollArea from '@/frontend/components/shared/ScrollArea';
 
 // Use dynamic import to prevent SSR issues with client-side code
 const ModelClient = dynamicImport(() => import('./ModelClient'), {
@@ -37,11 +38,11 @@ async function ModelsPage() {
         >
           <Typography variant="h5">Models</Typography>
         </Box>
-        <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+        <ScrollArea storageKey="flujo-ui:scroll:models" sx={{ p: 2, flex: 1 }}>
           <Suspense fallback={<Spinner />}>
             <ModelClient initialModels={models} />
           </Suspense>
-        </Box>
+        </ScrollArea>
       </Box>
     );
   } catch (error) {

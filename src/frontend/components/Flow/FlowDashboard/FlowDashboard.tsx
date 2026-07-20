@@ -37,6 +37,8 @@ import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCard
 import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
+import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
 
@@ -200,6 +202,12 @@ const FlowDashboard = ({
     // utils/shared/flowGrouping.ts). Favorites (#120) float to the top.
     return sortFlowsFavoritesFirst(result, sortOption);
   }, [flows, searchTerm, sortOption]);
+
+  // Persist scroll position + back-to-top (#185); re-restore once the cards load.
+  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+    'flujo-ui:scroll:flows',
+    { deps: [isLoading, filteredFlows.length] },
+  );
 
   // Distinct folders currently in use, for the "Move to folder" picker.
   const folders = useMemo(() => collectFolders(flows, (f) => f.folder), [flows]);
@@ -378,7 +386,7 @@ const FlowDashboard = ({
       </Box>
       
       {/* Main content - Flow cards in grid */}
-      <Box sx={{ 
+      <Box ref={scrollRef} sx={{ 
         flex: 1, 
         overflow: 'auto',
         px: 1,
@@ -530,6 +538,8 @@ const FlowDashboard = ({
           <ListItemText primary="Least nodes" />
         </MenuItem>
       </Menu>
+
+      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
     </Box>
   );
 };

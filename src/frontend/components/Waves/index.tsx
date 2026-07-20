@@ -15,6 +15,8 @@ import WavesIcon from '@mui/icons-material/Waves';
 import type { WavesResponse } from '@/shared/types/waves/waves';
 import { wavesService } from '@/frontend/services/waves';
 import { createLogger } from '@/utils/logger';
+import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
+import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import WaveCanvas from './WaveCanvas';
 
 const log = createLogger('frontend/components/Waves');
@@ -31,6 +33,11 @@ const POLL_INTERVAL_MS = 30_000;
 export default function WavesManager() {
   const [data, setData] = useState<WavesResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  // Persist scroll position + back-to-top (#185); re-restore once data arrives.
+  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+    'flujo-ui:scroll:waves',
+    { deps: [data] },
+  );
 
   const refresh = useCallback(async () => {
     const response = await wavesService.list();
@@ -61,7 +68,7 @@ export default function WavesManager() {
   const orphans = data?.orphans ?? [];
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
+    <Box ref={scrollRef} sx={{ p: 3, height: '100%', overflow: 'auto' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <WavesIcon color="primary" />
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
@@ -120,6 +127,8 @@ export default function WavesManager() {
           </Stack>
         </>
       )}
+
+      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
     </Box>
   );
 }

@@ -49,6 +49,8 @@ import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCard
 import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
+import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
@@ -368,6 +370,12 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     return sortServersFavoritesFirst(result, sortOption);
   }, [servers, searchTerm, sortOption, filterOption]);
 
+  // Persist scroll position + back-to-top (#185); re-restore once the list loads.
+  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+    'flujo-ui:scroll:mcp',
+    { deps: [isLoading, filteredAndSortedServers.length] },
+  );
+
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
   const folders = useMemo(() => collectFolders(servers, (s: any) => s.folder), [servers]);
 
@@ -686,7 +694,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         </Typography>
       </Box>
 
-      <Box sx={{ px: 2, flex: 1, overflow: 'auto' }}>
+      <Box ref={scrollRef} sx={{ px: 2, flex: 1, overflow: 'auto' }}>
         {groupMode === 'none' || isLoading || loadError || filteredAndSortedServers.length === 0 ? (
           renderServers(filteredAndSortedServers)
         ) : (
@@ -884,6 +892,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         onSaveEnv={saveEnv}
         onServerRestart={handleEnvRestart}
       />
+
+      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
     </Box>
   );
 };
