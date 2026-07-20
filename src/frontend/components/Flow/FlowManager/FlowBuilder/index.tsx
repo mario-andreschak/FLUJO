@@ -47,6 +47,7 @@ import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { createEdgeFromConnection } from './Canvas/utils/edgeUtils';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
+import { migrateHandoffPills } from './utils/handoffPillMigration';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { FlowValidationButton } from './FlowValidationButton';
@@ -676,15 +677,20 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const handleNodeUpdate = useCallback((nodeId: string, data: any) => {
     log.debug(`handleNodeUpdate: Updating node ${nodeId} properties`);
     
-    setNodes((nds) =>
-      nds.map((node) => {
+    setNodes((nds) => {
+      const nextNodes = nds.map((node) => {
         if (node.id === nodeId) {
           log.info(`handleNodeUpdate: Node ${nodeId} properties updated`);
           return { ...node, data };
         }
         return node;
-      })
-    );
+      });
+      // If this edit renamed a handoff-target node, rewrite the handoff pills
+      // referencing it in every predecessor's promptTemplate — as part of THIS
+      // same state update, so the rewrite and the rename are one undo step
+      // (issue #178). No-op when nothing was renamed.
+      return migrateHandoffPills(nds, nextNodes, edges);
+    });
     
     // Close any open modals
     setProcessModalOpen(false);
@@ -696,7 +702,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setSignalModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
-  }, []);
+  }, [edges]);
   
   // Connect-a-server shortcut from the Process node properties modal: create
   // an MCP node bound to the server, place it next to the process node, and
