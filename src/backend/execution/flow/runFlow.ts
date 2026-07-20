@@ -389,6 +389,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // top conversation stops every descendant subflow at its next iteration.
   if (input.parentRunId) {
     sharedState.parentRunId = input.parentRunId;
+    // Conversation-level parent link (issue #182): formalize the subflow
+    // parentage at the conversation record so the chat sidebar can render
+    // Flow->Subflow->... chains without reverse-engineering run internals.
+    // Additive/optional -- a conversation without these fields renders as a
+    // root, so no migration is needed. Compute rootConversationId eagerly
+    // (O(1) sidebar grouping) from the parent's own root, falling back to the
+    // parent id when the parent state isn't resident (treat parent as root).
+    sharedState.parentConversationId = input.parentRunId;
+    if (!sharedState.rootConversationId) {
+      const parentState = FlowExecutor.conversationStates.get(input.parentRunId);
+      sharedState.rootConversationId =
+        parentState?.rootConversationId ?? parentState?.conversationId ?? input.parentRunId;
+    }
   }
 
   // Subflow re-entrancy guard: record this run's depth and refuse to start if

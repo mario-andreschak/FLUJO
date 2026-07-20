@@ -649,6 +649,27 @@ export interface SharedState {
     parentRunId?: string;
 
     /**
+     * Conversation-level parent link (issue #182): the conversationId of the
+     * conversation that spawned this one (subflow child conversations). This is
+     * the conversation-record equivalent of `parentRunId` (set on the same
+     * subflow-invocation path), surfaced explicitly so the chat sidebar can
+     * render Flow->Subflow->... chains without reverse-engineering run internals.
+     * Additive/optional: a conversation without it renders as a root, so no
+     * migration of existing db/conversations/*.json is needed. `parentRunId`
+     * still drives cancellation ancestry; this field is purely for the sidebar.
+     */
+    parentConversationId?: string;
+
+    /**
+     * Top-level conversation of this chain (issue #182): computed eagerly at
+     * creation as `parent.rootConversationId ?? parent.conversationId`, so the
+     * sidebar can bucket a whole chain by root in O(1) without walking the
+     * ancestor chain on every list request. Unset (or equal to its own id) for
+     * a top-level conversation.
+     */
+    rootConversationId?: string;
+
+    /**
      * Where this run originated (issue #113): 'schedule' for a planned-execution
      * fire, 'api' for an ad-hoc /v1/chat/completions call, 'chat' for the in-app
      * chat UI. Set by runFlow from FlowRunInput.source at run start and surfaced

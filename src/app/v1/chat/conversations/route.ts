@@ -28,6 +28,37 @@ interface ConversationListItem extends FrontendConversationListItem {}
 // replace, so a content change always moves the mtime).
 const listSummaryCache = new Map<string, { mtimeMs: number; size: number; item: ConversationListItem }>();
 
+// Content search (issue #182). Message bodies are not all resident on the
+// client, so a `?search=<term>&dimension=content` request scans the on-disk
+// conversation files server-side. Bounds keep the scan cheap and abuse-proof:
+//  - reject over-long terms outright (they can't be a legitimate title/keyword)
+//  - skip pathologically large conversation files (can't be scanned cheaply)
+// Only id/metadata is ever returned — the matched message text never leaves
+// the server.
+const MAX_SEARCH_TERM_LEN = 256;
+const MAX_CONTENT_SCAN_BYTES = 8 * 1024 * 1024; // 8 MiB per conversation file
+
+/** Case-insensitive substring test against a conversation's message CONTENT.
+ *  Handles plain-string content and the multimodal array/object shapes (by
+ *  stringifying non-string content). Short-circuits on the first match and
+ *  never returns the matched text. */
+function messageContentMatches(state: SharedState, qLower: string): boolean {
+  const messages = Array.isArray(state?.messages) ? state.messages : [];
+  for (const m of messages) {
+    const content: unknown = (m as any)?.content;
+    if (typeof content === 'string') {
+      if (content.toLowerCase().includes(qLower)) return true;
+    } else if (content != null) {
+      try {
+        if (JSON.stringify(content).toLowerCase().includes(qLower)) return true;
+      } catch {
+        /* ignore unstringifiable content */
+      }
+    }
+  }
+  return false;
+}
+
 // Define the expected structure for the POST request body
 interface CreateConversationPayload {
   id: string;
@@ -56,6 +87,22 @@ export async function GET(request: NextRequest) {
   const requestId = `conv-list-${Date.now()}`;
   log.info('Handling GET request for conversation list', { requestId });
 
+  // Content search (issue #182). `dimension=content` triggers a server-side
+  // scan of message bodies; `dimension=title` (default) preserves the existing
+  // cheap summary listing the client filters itself. The `search` value is only
+  // ever used as a substring needle (never as a path), so it needs no path-
+  // traversal guard — just a length bound to keep the scan cheap.
+  const url = new URL(request.url);
+  const rawSearch = (url.searchParams.get('search') ?? '').trim();
+  const dimension = url.searchParams.get('dimension') ?? 'title';
+  if (rawSearch.length > MAX_SEARCH_TERM_LEN) {
+    return NextResponse.json(
+      { error: `search term too long (max ${MAX_SEARCH_TERM_LEN} chars)` },
+      { status: 400 });
+  }
+  const contentSearch = dimension === 'content' && rawSearch.length > 0;
+  const contentQuery = rawSearch.toLowerCase();
+
   const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
   log.debug('Conversations directory path', { requestId, path: conversationsDir });
 
@@ -75,11 +122,21 @@ export async function GET(request: NextRequest) {
         const stats = await fs.stat(filePath);
         const cached = listSummaryCache.get(file);
         let base: ConversationListItem;
-        if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
-          base = cached.item;
+        // Content search always needs the parsed body, so it bypasses the
+        // summary-only cache-hit fast path (it still repopulates the cache).
+        let parsedState: SharedState | undefined;
+        const cacheHit = !!cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size;
+        if (cacheHit && !contentSearch) {
+          base = cached!.item;
         } else {
+          // Skip pathologically large files under content search — they can't be
+          // scanned cheaply and would blow the per-request cost budget.
+          if (contentSearch && stats.size > MAX_CONTENT_SCAN_BYTES) {
+            return null;
+          }
           const fileContent = await fs.readFile(filePath, 'utf-8');
           const state = JSON.parse(fileContent) as SharedState;
+          parsedState = state;
 
           // Ensure ID consistency if possible
           if (state.conversationId && state.conversationId !== conversationIdFromFile) {
@@ -99,8 +156,21 @@ export async function GET(request: NextRequest) {
             // null for ad-hoc chat/API runs. Read-only pass-through; no schema
             // change. Included in the cached summary shape below.
             plannedExecutionId: state.plannedExecutionId ?? null,
+            // Chains/hierarchy (issue #182): expose the persisted conversation-
+            // level parent link + eagerly-computed chain root so the sidebar
+            // can render Flow->Subflow->... trees when grouping "by chain".
+            // Absent on legacy conversations => they render as roots.
+            parentConversationId: state.parentConversationId ?? null,
+            rootConversationId: state.rootConversationId ?? null,
           };
           listSummaryCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
+        }
+
+        // Content search (issue #182): exclude conversations whose message
+        // bodies don't contain the term. Only the id/metadata projection is
+        // returned below — the matched text itself never leaves the server.
+        if (contentSearch && (!parsedState || !messageContentMatches(parsedState, contentQuery))) {
+          return null;
         }
 
         // Live override: while a run is in flight the in-memory state is ahead
@@ -131,6 +201,9 @@ export async function GET(request: NextRequest) {
         return { ...base, title, updatedAt, status, plannedExecutionId };
       } catch (parseError) {
         log.error(`Error reading or parsing conversation file: ${file}`, { requestId, filePath, error: parseError });
+        // Under content search an unparseable file can't be said to match, so
+        // drop it rather than surfacing an "Error Loading" placeholder (#182).
+        if (contentSearch) return null;
         // Try getting file system time as a fallback for sorting?
         try {
            const stats = await fs.stat(filePath);

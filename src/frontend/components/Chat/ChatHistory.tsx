@@ -36,6 +36,8 @@ import { groupItems, CardGroup } from '@/utils/shared/cardGrouping';
 import { buildWaveLookup, waveBucket, orderWaveGroups } from '@/utils/shared/waveGrouping';
 import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import ConversationTree from './ConversationTree';
+import { buildChainIndex } from '@/utils/shared/conversationChains';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -58,7 +60,7 @@ interface ChatHistoryProps {
   flowNames?: Record<string, string>;
 }
 
-type GroupMode = 'none' | 'date' | 'flow' | 'wave';
+type GroupMode = 'none' | 'date' | 'flow' | 'wave' | 'chain';
 type StatusFilter = 'all' | NonNullable<ConversationListItem['status']>;
 type DateFilter = 'all' | 'today' | '7d' | '30d';
 
@@ -71,6 +73,7 @@ const PREF = {
   flow: 'flujo-ui:chat-sidebar:flow',
   date: 'flujo-ui:chat-sidebar:date',
   collapsed: 'flujo-ui:chat-sidebar:collapsed',
+  searchDim: 'flujo-ui:chat-sidebar:search-dim',
 } as const;
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
@@ -94,6 +97,7 @@ const GROUP_OPTIONS: { value: GroupMode; label: string }[] = [
   { value: 'date', label: 'Group by date' },
   { value: 'flow', label: 'Group by flow' },
   { value: 'wave', label: 'Group by wave' },
+  { value: 'chain', label: 'Group by chain' },
 ];
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
@@ -110,6 +114,17 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // Search text is intentionally ephemeral (not persisted): a stale filter
   // silently hiding conversations after a reload would be surprising.
   const [search, setSearch] = React.useState('');
+  // Search dimension (issue #182): 'title' filters client-side over titles+flow
+  // (Phase 1); 'content' resolves matches server-side against message bodies
+  // (which aren't all resident on the client). Persisted so the choice sticks.
+  const [searchDimension, setSearchDimension] = useUiPreference<'title' | 'content'>(
+    PREF.searchDim,
+    'title',
+  );
+  // Ids the backend content-search matched; null while a request is in flight
+  // (or when content search is inactive) so `filtered` shows nothing until the
+  // result lands rather than flashing the whole list.
+  const [contentMatchIds, setContentMatchIds] = React.useState<Set<string> | null>(null);
   const [groupMode, setGroupMode] = useUiPreference<GroupMode>(PREF.group, 'none');
   const [statusFilter, setStatusFilter] = useUiPreference<StatusFilter>(PREF.status, 'all');
   const [flowFilter, setFlowFilter] = useUiPreference<string>(PREF.flow, 'all');
@@ -135,6 +150,30 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   }, [groupMode, conversations]);
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
+
+  // Content search (issue #182): when the search dimension is 'content', message
+  // bodies must be matched server-side (they aren't all resident here). Debounce
+  // the request so a scan doesn't fire on every keystroke, and ignore stale
+  // responses. Non-content mode clears the id set so `filtered` falls back to
+  // the client-side title filter.
+  React.useEffect(() => {
+    const q = search.trim();
+    if (searchDimension !== 'content' || q.length === 0) {
+      setContentMatchIds(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetch(`/v1/chat/conversations?search=${encodeURIComponent(q)}&dimension=content`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data: ConversationListItem[]) => {
+          if (cancelled) return;
+          setContentMatchIds(new Set(Array.isArray(data) ? data.map((c) => c.id) : []));
+        })
+        .catch(() => { if (!cancelled) setContentMatchIds(new Set()); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [search, searchDimension]);
 
   // Format date for display
   const formatDate = (timestamp: number) => {
@@ -215,13 +254,20 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         if (flowFilter !== 'all' && flowMeta(c.flowId).key !== flowFilter) return false;
         if (dateCutoff && c.updatedAt < dateCutoff) return false;
         if (q) {
-          const haystack = `${c.title} ${flowMeta(c.flowId).label}`.toLowerCase();
-          if (!haystack.includes(q)) return false;
+          if (searchDimension === 'content') {
+            // Content search is resolved server-side (issue #182). While the
+            // debounced request is in flight (contentMatchIds === null) show no
+            // matches yet; otherwise keep only the ids the backend matched.
+            if (!contentMatchIds || !contentMatchIds.has(c.id)) return false;
+          } else {
+            const haystack = `${c.title} ${flowMeta(c.flowId).label}`.toLowerCase();
+            if (!haystack.includes(q)) return false;
+          }
         }
         return true;
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [conversations, search, statusFilter, flowFilter, dateFilter, flowMeta]);
+  }, [conversations, search, searchDimension, contentMatchIds, statusFilter, flowFilter, dateFilter, flowMeta]);
 
   // Build the (optionally grouped) sections to render.
   const groups: CardGroup<ConversationListItem>[] = useMemo(() => {
@@ -242,6 +288,21 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   };
+
+  // "By chain" grouping (issue #182): nest child conversations under the parent
+  // that spawned them, using the persisted parentConversationId links. The
+  // index is only built while that mode is active; a filter that hides a parent
+  // but keeps a child renders the child as a root (see buildChainIndex).
+  const chainIndex = useMemo(
+    () => (groupMode === 'chain' ? buildChainIndex(filtered) : { roots: [], childrenByParent: new Map() }),
+    [groupMode, filtered],
+  );
+  // Per-node expand state is session-only (not persisted): a node is expanded
+  // unless explicitly collapsed, so chains are visible by default.
+  const [expandedChains, setExpandedChains] = React.useState<Record<string, boolean>>({});
+  const toggleChain = React.useCallback((id: string) => {
+    setExpandedChains((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
+  }, []);
 
   const activeFilterCount =
     (statusFilter !== 'all' ? 1 : 0) +
@@ -410,10 +471,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
       {/* Search + filter + group controls (issue #147). */}
       <Box sx={{ px: 2, pt: 1.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1 }}>
         <TextField
           size="small"
-          fullWidth
-          placeholder="Search title or flow…"
+          sx={{ flex: 1 }}
+          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title or flow…'}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           InputProps={{
@@ -431,6 +493,17 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             ) : undefined,
           }}
         />
+        <FormControl size="small" sx={{ minWidth: 100 }}>
+          <Select
+            value={searchDimension}
+            onChange={(e) => setSearchDimension(e.target.value as 'title' | 'content')}
+            aria-label="Search dimension"
+          >
+            <MenuItem value="title">Title</MenuItem>
+            <MenuItem value="content">Content</MenuItem>
+          </Select>
+        </FormControl>
+        </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
             <Select
@@ -519,6 +592,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               secondaryTypographyProps={{ align: 'center' }}
             />
           </ListItem>
+        ) : groupMode === 'chain' ? (
+          <ConversationTree
+            nodes={chainIndex.roots}
+            childrenByParent={chainIndex.childrenByParent}
+            renderItem={(c) => renderConversation(c)}
+            expanded={expandedChains}
+            onToggle={toggleChain}
+          />
         ) : groupMode === 'none' ? (
           filtered.map(renderConversation)
         ) : (

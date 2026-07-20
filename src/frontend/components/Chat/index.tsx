@@ -149,6 +149,13 @@ export interface ConversationListItem {
    *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
    *  chat/API conversations. */
   plannedExecutionId?: string | null;
+  /** Conversation that spawned this one (subflow child conversations) -- issue
+   *  #182. Absent/null => this conversation is a chain root. Used by the
+   *  sidebar's "by chain" grouping to nest children under their parent. */
+  parentConversationId?: string | null;
+  /** Top-level conversation of this chain (computed at creation) -- issue #182.
+   *  Lets the sidebar bucket a whole chain by its root in O(1). */
+  rootConversationId?: string | null;
 }
 
 /** Field-wise list equality, so the periodic silent refresh can keep the
@@ -163,6 +170,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.flowId === y.flowId &&
       x.status === y.status &&
       x.plannedExecutionId === y.plannedExecutionId &&
+      x.parentConversationId === y.parentConversationId &&
+      x.rootConversationId === y.rootConversationId &&
       x.createdAt === y.createdAt &&
       x.updatedAt === y.updatedAt
     );
