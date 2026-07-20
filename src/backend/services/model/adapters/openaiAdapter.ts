@@ -18,6 +18,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
+    maxTokens,
     signal,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({
@@ -32,6 +33,11 @@ export class OpenAiAdapter implements CompletionAdapter {
       messages,
       temperature,
     };
+    // Only send a cap when one was resolved; omitting it preserves the previous
+    // "no max_tokens" default behavior.
+    if (typeof maxTokens === 'number') {
+      requestParams.max_tokens = maxTokens;
+    }
     if (tools && tools.length > 0) {
       requestParams.tools = tools;
     }

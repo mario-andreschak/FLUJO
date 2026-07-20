@@ -288,6 +288,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         temperature: formState.temperature,
         contextWindow: formState.contextWindow,
         maxTurns: formState.maxTurns,
+        maxTokens: formState.maxTokens,
       } as Model);
 
       if (result.success) {
@@ -561,6 +562,24 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   }}
                   inputProps={{ min: 1 }}
                   helperText="Max agentic turns before a run stops (default 50). Process nodes can override this per-node."
+                />
+
+                <TextField
+                  margin="dense"
+                  label="Max Output Tokens (optional)"
+                  fullWidth
+                  type="number"
+                  value={formState.maxTokens ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const parsed = raw === '' ? undefined : Number(raw);
+                    setFormState(prev => ({
+                      ...prev,
+                      maxTokens: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
+                    }));
+                  }}
+                  inputProps={{ min: 1 }}
+                  helperText="Optional. Default cap on generated tokens. A request's max_tokens overrides this. Anthropic uses 8192 when unset."
                 />
               </Box>
             </Grid>

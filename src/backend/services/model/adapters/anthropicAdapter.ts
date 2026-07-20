@@ -7,8 +7,10 @@ import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
-// The Anthropic Messages API requires max_tokens. Modern Claude models support
-// at least this many output tokens; it bounds a single completion, not a flow.
+// The Anthropic Messages API REQUIRES max_tokens, so this is a fallback-only
+// default used solely when no cap was resolved (no request max_tokens and no
+// per-model Model.maxTokens). It is no longer a silent ceiling: when a value is
+// resolved it is used verbatim, so larger caps are honored (issue #173).
 const DEFAULT_MAX_TOKENS = 8192;
 
 /**
@@ -196,6 +198,7 @@ export class AnthropicAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
+    maxTokens,
     signal,
   }: CompletionInput): Promise<CompletionResult> {
     const client = new Anthropic({
@@ -213,7 +216,7 @@ export class AnthropicAdapter implements CompletionAdapter {
 
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: model.name,
-      max_tokens: DEFAULT_MAX_TOKENS,
+      max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
       temperature,
       messages: anthropicMessages,
       ...(system ? { system } : {}),

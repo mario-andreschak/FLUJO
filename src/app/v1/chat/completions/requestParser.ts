@@ -56,7 +56,10 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
     const messageContent = url.searchParams.get('message') || '';
     const stream = url.searchParams.get('stream') === 'true';
     const temperature = parseFloat(url.searchParams.get('temperature') || '0');
-    const max_tokens = parseInt(url.searchParams.get('max_tokens') || '0', 10);
+    // parseInt(... || '0') yields 0 when the param is absent; a 0/negative cap
+    // must normalize to undefined so it doesn't shadow the per-model default.
+    const parsedMaxTokens = parseInt(url.searchParams.get('max_tokens') || '0', 10);
+    const max_tokens = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0 ? parsedMaxTokens : undefined;
     
     log.debug('Extracted parameters from query string', {
       requestId,
@@ -66,7 +69,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         `${messageContent.substring(0, 50)}...` : messageContent,
       stream,
       temperature: isNaN(temperature) ? undefined : temperature,
-      max_tokens: isNaN(max_tokens) ? undefined : max_tokens
+      max_tokens
     });
     
     const result = {
@@ -79,7 +82,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       ],
       stream,
       temperature: isNaN(temperature) ? undefined : temperature,
-      max_tokens: isNaN(max_tokens) ? undefined : max_tokens,
+      max_tokens,
       // Add flags for GET requests (always false as metadata isn't supported)
       flujo: false,
       requireApproval: false, // Always false for GET

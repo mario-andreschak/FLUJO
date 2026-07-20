@@ -44,6 +44,15 @@ export interface CompletionInput {
   /** Sampling temperature. */
   temperature: number;
   /**
+   * Upper bound on tokens the provider may generate for this single completion.
+   * Already resolved by the caller with precedence: explicit request
+   * `max_tokens` > per-model `Model.maxTokens` > adapter default. `undefined`
+   * means "no cap requested" — each request/response adapter then omits the
+   * cap (OpenAI/Gemini) or applies its own documented default (Anthropic).
+   * Self-orchestrating adapters (Claude subscription) ignore it, like `maxTurns`.
+   */
+  maxTokens?: number;
+  /**
    * Maps model-facing MCP tool names back to (server, tool). Needed by adapters
    * that execute tools themselves (e.g. the Claude subscription adapter runs the
    * agentic loop in-process and must dispatch tool calls to `mcpService`).

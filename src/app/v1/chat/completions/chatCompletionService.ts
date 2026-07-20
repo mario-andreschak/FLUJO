@@ -264,6 +264,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
     modelIdentifier: identifier,
     messages: data.messages,
     temperature: data.temperature,
+    maxTokens: data.max_tokens,
     tools: data.tools,
   });
 

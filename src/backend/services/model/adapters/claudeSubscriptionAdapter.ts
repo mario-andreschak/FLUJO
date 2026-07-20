@@ -329,6 +329,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     conversationId,
     nodeId,
     runResourceMarkers,
+    // Note: `maxTokens` is intentionally NOT destructured/applied here. Like
+    // `maxTurns`, sampling is managed by the Agent SDK's own agentic loop, so an
+    // output-token cap has no single request to attach to (issue #173).
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely

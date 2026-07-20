@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { Model } from '@/shared/types/model';
+import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
@@ -542,6 +542,11 @@ class ModelService {
     modelIdentifier: string;
     messages: OpenAI.ChatCompletionMessageParam[];
     temperature?: number;
+    /**
+     * Client-supplied upper bound on generated tokens (the wire `max_tokens`).
+     * Overrides the per-model default; `undefined`/`0`/negative means "not set".
+     */
+    maxTokens?: number;
     /** Client-supplied tool definitions — passed through per standard OpenAI semantics. */
     tools?: OpenAI.ChatCompletionTool[];
   }): Promise<DirectCompletionResult> {
@@ -632,11 +637,18 @@ class ModelService {
             : 0.0;
 
       // --- Single provider call through the completion-adapter seam ---
+      // Resolve the output-token cap once, here at the seam boundary, so the
+      // adapters stay dumb. Precedence: explicit request max_tokens > per-model
+      // Model.maxTokens > adapter default (undefined). Non-positive/non-finite
+      // values are treated as "not set" (mirrors the UI parsing).
+      const resolvedMaxTokens = normalizeMaxTokens(params.maxTokens) ?? normalizeMaxTokens(model.maxTokens);
+
       const adapter = getCompletionAdapter(model);
       log.debug('generateChatCompletion: calling completion adapter', {
         adapter: model.adapter || 'openai',
         model: model.name,
         temperature,
+        maxTokens: resolvedMaxTokens,
       });
 
       const { completion } = await adapter.createCompletion({
@@ -645,6 +657,7 @@ class ModelService {
         messages,
         tools: tools && tools.length > 0 ? tools : undefined,
         temperature,
+        maxTokens: resolvedMaxTokens,
         // Only relevant for self-orchestrating adapters: keep it single-turn.
         maxTurns: 1,
       });

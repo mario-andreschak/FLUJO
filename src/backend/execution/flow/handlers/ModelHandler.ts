@@ -14,6 +14,7 @@ import { toApiMessages } from '../buildNodeContext';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
+import { normalizeMaxTokens } from '@/shared/types/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
 import { mcpService } from '@/backend/services/mcp';
@@ -658,6 +659,9 @@ export class ModelHandler {
           messages: apiMessages,
           tools: sanitizedTools,
           temperature,
+          // Per-model default cap; the flow path has no wire request, so a
+          // future node-level override would slot in as the highest tier here.
+          maxTokens: normalizeMaxTokens(model.maxTokens),
           toolNameMap: opts?.toolNameMap,
           localToolExecutors: opts?.localToolExecutors,
           maxTurns: opts?.maxTurns,

@@ -307,6 +307,7 @@ export class GeminiAdapter implements CompletionAdapter {
     messages,
     tools,
     temperature,
+    maxTokens,
     signal,
   }: CompletionInput): Promise<CompletionResult> {
     // Raise the per-request timeout (SDK default is short relative to a long
@@ -327,6 +328,9 @@ export class GeminiAdapter implements CompletionAdapter {
       contents,
       config: {
         temperature,
+        // Only set an output cap when one was resolved; omitting it preserves
+        // the previous default behavior.
+        ...(typeof maxTokens === 'number' ? { maxOutputTokens: maxTokens } : {}),
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
         // The abort signal (Stop button) cancels the in-flight HTTP request.
