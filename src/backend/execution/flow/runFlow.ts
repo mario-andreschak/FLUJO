@@ -1195,7 +1195,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   if (
                     targetNode?.type === 'subflow' &&
                     targetProps?.inputMode === 'isolated' &&
-                    targetProps?.allowCallerPrompt === true &&
+                    targetProps?.allowCallerPrompt !== false &&
                     targetProps?.allowCallerFanout !== true &&
                     !(targetProps?.promptTemplate?.trim())
                   ) {

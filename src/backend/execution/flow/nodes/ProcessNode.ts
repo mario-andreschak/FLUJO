@@ -135,7 +135,7 @@ export class ProcessNode extends BaseNode {
       const acceptsCallerPrompt =
         target.type === 'subflow' &&
         targetProps?.inputMode === 'isolated' &&
-        targetProps?.allowCallerPrompt === true;
+        targetProps?.allowCallerPrompt !== false;
       // Issue #169: for a NON-spawn, isolated, allowCallerPrompt subflow that has
       // NO authored message on the node itself (empty promptTemplate), the caller
       // MUST supply a prompt — otherwise the subflow starts with an empty prompt

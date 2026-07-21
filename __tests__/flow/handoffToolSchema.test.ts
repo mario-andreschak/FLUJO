@@ -3,11 +3,14 @@
  * (issue #96).
  *
  * A handoff tool is normally parameter-less. When its target is a Subflow node
- * in 'isolated' inputMode that opted into `allowCallerPrompt`, the tool must
- * instead expose an OPTIONAL `prompt` string so a routing model can instruct the
- * child flow. Every other target — including an isolated subflow that did NOT
- * opt in, and a subflow whose inputMode is not 'isolated' — must keep the
- * byte-identical empty schema (preserving the #89 prefix-cache stability).
+ * in 'isolated' inputMode that did NOT explicitly opt OUT of `allowCallerPrompt`,
+ * the tool must instead expose a `prompt` string so a routing model can instruct
+ * the child flow. Per the canonical #138 default (issue #200), an ABSENT
+ * `allowCallerPrompt` counts as ON, matching SubflowNode.prep's runtime default;
+ * only an explicit `allowCallerPrompt: false` opts out. Every other target — an
+ * isolated subflow that explicitly opted out, and a subflow whose inputMode is
+ * not 'isolated' — must keep the byte-identical empty schema (preserving the #89
+ * prefix-cache stability).
  *
  * generateHandoffTools is private; it is exercised directly via a cast. Its only
  * external reads (the containing flow and each target's handoff description) are
@@ -66,7 +69,7 @@ describe('ProcessNode.generateHandoffTools — caller-prompt schema (#96)', () =
         // Has an authored promptTemplate, so `prompt` stays OPTIONAL (a caller
         // brief is a nice-to-have; the authored message is the fallback).
         { id: 'sub-allow', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: true, promptTemplate: 'do the default thing' } } },
-        { id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated' } } },
+        { id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } },
         { id: 'sub-fullhist', type: 'subflow', data: { properties: { inputMode: 'full-history', allowCallerPrompt: true } } },
       ],
     });
@@ -92,10 +95,10 @@ describe('ProcessNode.generateHandoffTools — caller-prompt schema (#96)', () =
     }
   });
 
-  it('keeps handoff tools parameter-less when no target opts in', async () => {
+  it('keeps handoff tools parameter-less when a target explicitly opts out (allowCallerPrompt:false)', async () => {
     const proc = makeProcessNode([{ edgeId: 'e-plain', nodeId: 'sub-plain' }]);
     getFlowMock.mockResolvedValue({
-      nodes: [{ id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated' } } }],
+      nodes: [{ id: 'sub-plain', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } }],
     });
 
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
@@ -220,5 +223,57 @@ describe('ProcessNode.generateHandoffTools — spawn-with-brief schema (#156)', 
     expect(props.task.type).toBe('string');
     expect(props.prompt).toBeUndefined();
     expect(tools[0].inputSchema.required).toEqual([]);
+  });
+});
+
+describe('ProcessNode.generateHandoffTools — absent allowCallerPrompt canonical default (#200)', () => {
+  it('exposes a REQUIRED `prompt` for an isolated subflow with ABSENT allowCallerPrompt and no promptTemplate', async () => {
+    // This is the exact failing config from issue #200: inputMode 'isolated',
+    // allowCallerPrompt undefined, no promptTemplate. Previously the `=== true`
+    // check hid the param, so the model called the handoff with `{}` and the
+    // subflow stalled. The canonical #138 default treats absent as ON.
+    const proc = makeProcessNode([{ edgeId: 'e-abs', nodeId: 'sub-abs' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'sub-abs', type: 'subflow', data: { properties: { inputMode: 'isolated', outputMode: 'final-only' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
+    expect(tools[0].inputSchema.required).toEqual(['prompt']);
+    expect(tools[0].description).toContain('MUST');
+  });
+
+  it('exposes an OPTIONAL `prompt` for an isolated subflow with ABSENT allowCallerPrompt WITH a promptTemplate', async () => {
+    const proc = makeProcessNode([{ edgeId: 'e-abs-t', nodeId: 'sub-abs-t' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'sub-abs-t', type: 'subflow', data: { properties: { inputMode: 'isolated', promptTemplate: 'do the default thing' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
+    expect(tools[0].inputSchema.required).toEqual([]);
+  });
+
+  it('keeps the empty schema when allowCallerPrompt is EXPLICITLY false (opt-out preserved)', async () => {
+    const proc = makeProcessNode([{ edgeId: 'e-optout', nodeId: 'sub-optout' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'sub-optout', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+
+    expect(tools).toHaveLength(1);
+    expect(hasPromptParam(tools[0])).toBe(false);
+    expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
   });
 });
