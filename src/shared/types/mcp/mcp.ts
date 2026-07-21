@@ -32,6 +32,26 @@ export type EnvVarValue = string | {
  */
 export type MCPHeaderValue = EnvVarValue;
 
+/**
+ * How an MCP server was installed (#193). A machine-readable, discriminated
+ * record of each server's install-origin, so downstream features (notably the
+ * by-reference package export, #192) can serialize *installation instructions*
+ * rather than files — and abort on `local` servers, which are not packageable.
+ *
+ *  - `github`      — cloned from a git repository (GitHub tab, Reference servers).
+ *  - `registry`    — installed from registry.modelcontextprotocol.io (Marketplace,
+ *                    Spotlight, headless registry install).
+ *  - `marketplace` — installed from a curated marketplace entry (reserved).
+ *  - `remote`      — a hosted sse/streamable endpoint (`serverUrl` is the reference).
+ *  - `local`       — a hand-configured local server; explicitly NOT packageable.
+ */
+export type MCPServerSource =
+  | { type: 'github'; repositoryUrl: string; ref?: string; subdirectory?: string }
+  | { type: 'registry'; registryName: string; version?: string }
+  | { type: 'marketplace'; id: string }
+  | { type: 'remote' }
+  | { type: 'local' };
+
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
@@ -40,6 +60,14 @@ export type MCPManagerConfig = {
   env: Record<string, EnvVarValue>
   _buildCommand: string;
   _installCommand: string;
+  /**
+   * Install-origin metadata (#193). Optional and additive: existing persisted
+   * configs load unchanged, and `loadServerConfigs` best-effort backfills it on
+   * read (git remote for clones under mcp-servers/, else `local`). Populated at
+   * install time on every non-local path so package export can decide
+   * packageable-vs-abort purely from `source.type`.
+   */
+  source?: MCPServerSource;
   /**
    * When true, FLUJO re-exposes this server's tools to external MCP clients at
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.

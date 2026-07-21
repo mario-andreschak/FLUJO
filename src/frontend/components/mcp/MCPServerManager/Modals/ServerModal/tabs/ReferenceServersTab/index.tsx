@@ -538,6 +538,13 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         transport: 'stdio',
         _buildCommand: buildCommand,
         _installCommand: installCommand,
+        // Install-origin (#193): reference servers are clones of the official
+        // modelcontextprotocol/servers monorepo — genuinely packageable by reference.
+        source: {
+          type: 'github',
+          repositoryUrl: 'https://github.com/modelcontextprotocol/servers.git',
+          subdirectory: `src/${server.name}`,
+        },
       };
       
       // Update the config in the parent component

@@ -79,7 +79,9 @@ const RemoteTab: React.FC<TabProps> = ({
         autoApprove: [],
         env: {},
         _buildCommand: '',
-        _installCommand: ''
+        _installCommand: '',
+        // Install-origin (#193): a hosted endpoint — serverUrl is the reference.
+        source: { type: 'remote' }
       };
 
       // Pass the config to the parent component before switching tabs

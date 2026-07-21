@@ -12,7 +12,7 @@
  * save) — the same handoff the GitHub/Remote/Reference tabs use.
  */
 
-import { MCPServerConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, EnvVarValue, MCPServerSource } from '@/shared/types/mcp/mcp';
 
 // ---------------------------------------------------------------------------
 // Registry API shapes (subset of server.schema.json that we consume)
@@ -412,9 +412,20 @@ export function buildConfigFromOption(
   server: RegistryServer,
   option: InstallOption
 ): Partial<MCPServerConfig> {
-  return option.kind === 'package'
+  const config = option.kind === 'package'
     ? buildPackageConfig(server, option.pkg)
     : buildRemoteConfig(server, option.remote);
+  // Install-origin (#193): every server built from a registry entry carries a
+  // `registry` source so package export can serialize it by reference. Both the
+  // Marketplace and Spotlight tabs (and the headless installRegistryServer) funnel
+  // through here, so setting it once covers all registry-backed install paths.
+  const version = option.kind === 'package' ? (option.pkg.version ?? server.version) : server.version;
+  const source: MCPServerSource = {
+    type: 'registry',
+    registryName: server.name,
+    ...(version ? { version } : {}),
+  };
+  return { ...config, source } as Partial<MCPServerConfig>;
 }
 
 // ---------------------------------------------------------------------------

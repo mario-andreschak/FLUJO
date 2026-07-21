@@ -88,6 +88,11 @@ export const handleSubmit = (
     } as MCPStdioConfig;
   }
   
+  // Install-origin (#193): every upstream tab (GitHub/Remote/Reference/Marketplace/
+  // Spotlight) hands its config off through here, so preserve any `source` it set and
+  // default to `local` only for a genuinely hand-configured server.
+  finalConfig = { ...finalConfig, source: finalConfig.source ?? { type: 'local' } } as MCPServerConfig;
+
   if (initialConfig && onUpdate) {
     onUpdate(finalConfig);
   } else {

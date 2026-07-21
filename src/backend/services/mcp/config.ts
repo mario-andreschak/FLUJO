@@ -1,7 +1,10 @@
+import path from 'path';
+import simpleGit from 'simple-git';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
+import { MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
+import { getDataDir } from '@/utils/paths';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -9,6 +12,66 @@ const log = createLogger('backend/services/mcp/config');
 // only used by FLUJO's own file/git features (folder pickers, ServerCard actions,
 // git-update route), so a filesystem-root value is never a sensible scope.
 const REMOTE_TRANSPORTS = new Set(['streamable', 'sse', 'websocket']);
+
+// Where GitHub/reference server clones live (mirrors /api/git's REPOS_BASE_DIR).
+// Used to decide whether an un-sourced server's rootPath is a git clone whose
+// origin can be read to reconstruct a `github` install-origin (#193 backfill).
+const REPOS_BASE_DIR = path.join(getDataDir(), 'mcp-servers');
+
+// Per-process memo of read-time git-remote lookups (keyed by absolute repo path),
+// so the backfill spawns `git remote get-url origin` at most once per clone even
+// though loadServerConfigs is called frequently (server-list polling). Null means
+// "looked, none found" and is cached too, so failures don't retry every load.
+const gitRemoteCache = new Map<string, string | null>();
+
+/** Resolve a (possibly relative) server rootPath to an absolute path under the data dir. */
+function resolveRootPath(rootPath: unknown): string | null {
+  if (typeof rootPath !== 'string' || rootPath.trim() === '') return null;
+  return path.isAbsolute(rootPath) ? rootPath : path.resolve(getDataDir(), rootPath);
+}
+
+/** Is this absolute path inside the mcp-servers clone directory? */
+function isInsideReposDir(absPath: string): boolean {
+  const rel = path.relative(REPOS_BASE_DIR, absPath);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
+ * Best-effort read of a clone's `origin` remote URL. Bounded (5s) and never
+ * throws: a slow/failing git call falls back to null so config load is never
+ * blocked or broken. Result is memoized per absolute path.
+ */
+async function readGitRemote(absPath: string): Promise<string | null> {
+  if (gitRemoteCache.has(absPath)) return gitRemoteCache.get(absPath)!;
+  let url: string | null = null;
+  try {
+    const git = simpleGit({ baseDir: absPath, timeout: { block: 5000 } });
+    const raw = (await git.remote(['get-url', 'origin'])) || '';
+    url = raw.trim() || null;
+  } catch {
+    url = null;
+  }
+  gitRemoteCache.set(absPath, url);
+  return url;
+}
+
+/**
+ * Infer an install-origin for a server that has none persisted (#193 backfill).
+ * Remote transports are `remote`; a stdio/websocket server whose rootPath is a
+ * git clone under mcp-servers/ becomes `github` (from its origin remote); every
+ * other local server is `local`. Best-effort and idempotent.
+ */
+async function inferServerSource(config: MCPServerConfig): Promise<MCPServerSource> {
+  if (REMOTE_TRANSPORTS.has(config.transport)) {
+    return { type: 'remote' };
+  }
+  const abs = resolveRootPath(config.rootPath);
+  if (abs && isInsideReposDir(abs)) {
+    const remoteUrl = await readGitRemote(abs);
+    if (remoteUrl) return { type: 'github', repositoryUrl: remoteUrl };
+  }
+  return { type: 'local' };
+}
 
 /**
  * Is this rootPath a bare filesystem root ('/', '\', or a drive root like 'C:\')?
@@ -29,7 +92,7 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
   try {
     const mcpServers = await loadItem<Record<string, any>>(StorageKey.MCP_SERVERS, {});
     
-    return Object.entries(mcpServers).map(([name, serverConfig]) => {
+    const configs = Object.entries(mcpServers).map(([name, serverConfig]) => {
       // Determine the transport type
       const transport = serverConfig.transport || 'stdio';
 
@@ -121,6 +184,21 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
         } as MCPStdioConfig;
       }
     });
+
+    // Install-origin backfill (#193): any config that predates the `source` field
+    // gets a best-effort origin inferred at read time. Computed-on-load (not
+    // force-persisted here) — it durably persists the next time the config is
+    // saved. Resilient: inferServerSource never throws and each git lookup is
+    // bounded + memoized, so this can't block or break config load.
+    await Promise.all(
+      configs.map(async (config) => {
+        if (!config.source) {
+          config.source = await inferServerSource(config);
+        }
+      })
+    );
+
+    return configs;
   } catch (error) {
     log.warn('Failed to load server configs', error);
     return {

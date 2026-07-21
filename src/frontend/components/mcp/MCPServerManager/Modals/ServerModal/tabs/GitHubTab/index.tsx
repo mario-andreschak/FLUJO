@@ -268,6 +268,14 @@ const GitHubTab: React.FC<TabProps> = ({
         }
       }
       
+      // Install-origin (#193): stamp the cloned repo's URL so package export can
+      // serialize this server by reference. Survives the LocalServerTab handoff
+      // (handleSubmit spreads localConfig, and defaults to `local` only when absent).
+      finalConfig = {
+        ...finalConfig,
+        source: { type: 'github', repositoryUrl: githubUrl },
+      };
+
       // Store the final config (either from detection or README fallback)
       setParsedConfig(finalConfig);
       setMessage(finalMessage); // Set the final message state
