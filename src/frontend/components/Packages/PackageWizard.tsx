@@ -1,0 +1,484 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  AlertTitle,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControlLabel,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Stack,
+  Step,
+  StepLabel,
+  Stepper,
+  TextField,
+  Typography,
+} from '@mui/material';
+import { flowService } from '@/frontend/services/flow';
+import { modelService } from '@/frontend/services/model';
+import { mcpService } from '@/frontend/services/mcp';
+import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
+import { getPackageService } from '@/frontend/services/packages';
+import type {
+  BuildManifestResult,
+  PackageSelection,
+  ResolveResult,
+} from '@/frontend/services/packages';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('frontend/components/Packages/PackageWizard');
+
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
+
+const STEPS = ['Select contents', 'Resolve & validate', 'Secret review', 'Metadata', 'Export'];
+
+interface EntityOption {
+  id: string; // flow/model/planned id, or MCP server name
+  label: string;
+}
+
+interface WizardEntities {
+  flows: EntityOption[];
+  models: EntityOption[];
+  mcpServers: EntityOption[];
+  plannedExecutions: EntityOption[];
+}
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+}
+
+/**
+ * Multi-step package-creation wizard (issue #194): select contents → resolve
+ * dependencies + validate MCP → review derived secrets → metadata → export.
+ * The dependency closure, MCP validation and secret derivation all run on the
+ * backend (`/api/packages/resolve`); the final manifest is assembled and
+ * downloaded via `/api/packages/build`. No secret values ever leave the host.
+ */
+export default function PackageWizard({ open, onClose }: Props) {
+  const [activeStep, setActiveStep] = useState(0);
+
+  // Step 0 — available entities + user selection.
+  const [entities, setEntities] = useState<WizardEntities>({
+    flows: [],
+    models: [],
+    mcpServers: [],
+    plannedExecutions: [],
+  });
+  const [loadingEntities, setLoadingEntities] = useState(true);
+  const [selectedFlows, setSelectedFlows] = useState<Set<string>>(new Set());
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
+  const [selectedPlanned, setSelectedPlanned] = useState<Set<string>>(new Set());
+
+  // Step 1 — resolution result.
+  const [resolving, setResolving] = useState(false);
+  const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+
+  // Step 3 — metadata.
+  const [name, setName] = useState('');
+  const [version, setVersion] = useState('1.0.0');
+  const [description, setDescription] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
+
+  // Step 4 — build result.
+  const [building, setBuilding] = useState(false);
+  const [buildResult, setBuildResult] = useState<BuildManifestResult | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
+
+  // Load selectable entities on open.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingEntities(true);
+      try {
+        const [flows, models, serverConfigs, planned] = await Promise.all([
+          flowService.loadFlows(),
+          modelService.loadModels(),
+          mcpService.loadServerConfigs(),
+          plannedExecutionsService.list(),
+        ]);
+        if (cancelled) return;
+        const serverList = Array.isArray(serverConfigs) ? serverConfigs : [];
+        setEntities({
+          flows: (flows ?? []).map((f) => ({ id: f.id, label: f.name || f.id })),
+          models: (models ?? []).map((m) => ({ id: m.id, label: m.displayName || m.name || m.id })),
+          mcpServers: serverList.map((s: { name: string }) => ({ id: s.name, label: s.name })),
+          plannedExecutions: (planned?.executions ?? []).map((e) => ({
+            id: e.execution.id,
+            label: e.execution.name || e.execution.id,
+          })),
+        });
+      } catch (err) {
+        log.warn('Failed to load packageable entities', err);
+      } finally {
+        if (!cancelled) setLoadingEntities(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const selection: PackageSelection = useMemo(
+    () => ({
+      flowIds: Array.from(selectedFlows),
+      modelIds: Array.from(selectedModels),
+      mcpServerNames: Array.from(selectedServers),
+      plannedExecutionIds: Array.from(selectedPlanned),
+    }),
+    [selectedFlows, selectedModels, selectedServers, selectedPlanned],
+  );
+
+  const nothingSelected =
+    selectedFlows.size === 0 &&
+    selectedModels.size === 0 &&
+    selectedServers.size === 0 &&
+    selectedPlanned.size === 0;
+
+  const toggle = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) => (id: string) => {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runResolve = useCallback(async () => {
+    setResolving(true);
+    setResolveError(null);
+    setResolveResult(null);
+    try {
+      const result = await getPackageService().resolve(selection);
+      setResolveResult(result);
+    } catch (err) {
+      setResolveError(err instanceof Error ? err.message : 'Failed to resolve dependencies');
+    } finally {
+      setResolving(false);
+    }
+  }, [selection]);
+
+  const runBuild = useCallback(async () => {
+    setBuilding(true);
+    setBuildError(null);
+    setBuildResult(null);
+    try {
+      const tags = tagsInput
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const result = await getPackageService().build(selection, {
+        id: `pkg-${Date.now()}`,
+        name: name.trim(),
+        version: version.trim(),
+        description: description.trim() || undefined,
+        tags: tags.length ? tags : undefined,
+      });
+      setBuildResult(result);
+      if (!result.ok) {
+        setBuildError((result.errors && result.errors[0]) || 'Package build failed');
+      }
+    } catch (err) {
+      setBuildError(err instanceof Error ? err.message : 'Failed to build package');
+    } finally {
+      setBuilding(false);
+    }
+  }, [selection, name, version, description, tagsInput]);
+
+  const downloadManifest = () => {
+    if (!buildResult?.json) return;
+    const blob = new Blob([buildResult.json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safe = name.trim().replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'package';
+    a.download = `${safe}-${version.trim()}.flujo-package.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleNext = async () => {
+    if (activeStep === 0) {
+      await runResolve();
+      setActiveStep(1);
+      return;
+    }
+    if (activeStep === 3) {
+      setActiveStep(4);
+      await runBuild();
+      return;
+    }
+    setActiveStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+
+  const handleBack = () => setActiveStep((s) => Math.max(s - 1, 0));
+
+  const versionValid = SEMVER.test(version.trim());
+  const metadataValid = name.trim().length > 0 && versionValid;
+  const mcpBlocked = Boolean(resolveResult && !resolveResult.mcp.ok);
+
+  const nextDisabled = (() => {
+    if (activeStep === 0) return nothingSelected || resolving;
+    if (activeStep === 1) return resolving || Boolean(resolveError) || mcpBlocked;
+    if (activeStep === 3) return !metadataValid;
+    if (activeStep === 4) return true;
+    return false;
+  })();
+
+  const renderList = (
+    title: string,
+    options: EntityOption[],
+    selected: Set<string>,
+    onToggle: (id: string) => void,
+  ) => (
+    <Box sx={{ flex: 1, minWidth: 220 }}>
+      <Typography variant="subtitle2" gutterBottom>
+        {title} {selected.size > 0 && <Chip label={selected.size} size="small" />}
+      </Typography>
+      {options.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          None available
+        </Typography>
+      ) : (
+        <List dense sx={{ maxHeight: 220, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
+          {options.map((opt) => (
+            <ListItem key={opt.id} disablePadding>
+              <ListItemButton onClick={() => onToggle(opt.id)} dense>
+                <ListItemIcon sx={{ minWidth: 36 }}>
+                  <Checkbox edge="start" checked={selected.has(opt.id)} tabIndex={-1} disableRipple />
+                </ListItemIcon>
+                <ListItemText primary={opt.label} />
+              </ListItemButton>
+            </ListItem>
+          ))}
+        </List>
+      )}
+    </Box>
+  );
+
+  const renderStepContent = () => {
+    switch (activeStep) {
+      case 0:
+        return loadingEntities ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : (
+          <Stack spacing={2}>
+            <Typography variant="body2" color="text.secondary">
+              Pick the entities to include. Dependencies (subflows, referenced models and
+              MCP servers, planned-execution flows) are pulled in automatically in the next step.
+            </Typography>
+            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+              {renderList('Flows', entities.flows, selectedFlows, toggle(setSelectedFlows))}
+              {renderList('Models', entities.models, selectedModels, toggle(setSelectedModels))}
+              {renderList('MCP servers', entities.mcpServers, selectedServers, toggle(setSelectedServers))}
+              {renderList('Planned executions', entities.plannedExecutions, selectedPlanned, toggle(setSelectedPlanned))}
+            </Stack>
+          </Stack>
+        );
+      case 1:
+        if (resolving) {
+          return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          );
+        }
+        if (resolveError) {
+          return <Alert severity="error">{resolveError}</Alert>;
+        }
+        if (!resolveResult) return null;
+        return (
+          <Stack spacing={2}>
+            {mcpBlocked && (
+              <Alert severity="error">
+                <AlertTitle>Local MCP server(s) cannot be packaged</AlertTitle>
+                {resolveResult.mcp.errors.map((e, i) => (
+                  <div key={i}>{e}</div>
+                ))}
+              </Alert>
+            )}
+            {resolveResult.resolved.autoAdded.length > 0 && (
+              <Alert severity="info">
+                <AlertTitle>Automatically included dependencies</AlertTitle>
+                {resolveResult.resolved.autoAdded.map((a, i) => (
+                  <div key={i}>
+                    {a.type}: <code>{a.id}</code> — {a.reason}
+                  </div>
+                ))}
+              </Alert>
+            )}
+            {resolveResult.resolved.warnings.length > 0 && (
+              <Alert severity="warning">
+                <AlertTitle>Warnings</AlertTitle>
+                {resolveResult.resolved.warnings.map((w, i) => (
+                  <div key={i}>{w}</div>
+                ))}
+              </Alert>
+            )}
+            <Divider />
+            <Typography variant="body2">
+              Resolved: {resolveResult.resolved.flowIds.length} flow(s),{' '}
+              {resolveResult.resolved.modelIds.length} model(s),{' '}
+              {resolveResult.resolved.mcpServerNames.length} MCP server(s),{' '}
+              {resolveResult.resolved.plannedExecutionIds.length} planned execution(s).
+            </Typography>
+            {resolveResult.mcp.servers.length > 0 && (
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {resolveResult.mcp.servers.map((s) => (
+                  <Chip key={s.name} label={`${s.name} · ${s.sourceType}`} size="small" color="success" variant="outlined" />
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        );
+      case 2:
+        return (
+          <Stack spacing={2}>
+            <Typography variant="body2" color="text.secondary">
+              These are the secrets the package will declare. Values are never included —
+              whoever installs the package must supply them.
+            </Typography>
+            {!resolveResult || resolveResult.secrets.length === 0 ? (
+              <Alert severity="success">This package declares no secrets.</Alert>
+            ) : (
+              <List dense>
+                {resolveResult.secrets.map((s) => (
+                  <ListItem key={s.name}>
+                    <ListItemText
+                      primary={
+                        <>
+                          <code>{s.name}</code>{' '}
+                          {s.required && <Chip label="required" size="small" color="warning" />}
+                        </>
+                      }
+                      secondary={s.description}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </Stack>
+        );
+      case 3:
+        return (
+          <Stack spacing={2}>
+            <TextField
+              label="Package name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              fullWidth
+              error={name.length > 0 && name.trim().length === 0}
+            />
+            <TextField
+              label="Version"
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              required
+              fullWidth
+              error={version.length > 0 && !versionValid}
+              helperText={version.length > 0 && !versionValid ? 'Must be a semantic version (e.g. 1.0.0)' : ' '}
+            />
+            <TextField
+              label="Description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              fullWidth
+              multiline
+              minRows={2}
+            />
+            <TextField
+              label="Tags (comma-separated)"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              fullWidth
+            />
+          </Stack>
+        );
+      case 4:
+        if (building) {
+          return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          );
+        }
+        if (buildError) {
+          return <Alert severity="error">{buildError}</Alert>;
+        }
+        if (buildResult?.ok) {
+          return (
+            <Stack spacing={2}>
+              <Alert severity="success">
+                <AlertTitle>Package built</AlertTitle>
+                <code>{name.trim()}</code> v{version.trim()} is ready to export.
+              </Alert>
+              {buildResult.warnings.length > 0 && (
+                <Alert severity="warning">
+                  <AlertTitle>Warnings</AlertTitle>
+                  {buildResult.warnings.map((w, i) => (
+                    <div key={i}>{w}</div>
+                  ))}
+                </Alert>
+              )}
+              <Button variant="contained" onClick={downloadManifest}>
+                Download package manifest (.json)
+              </Button>
+            </Stack>
+          );
+        }
+        return null;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Create package</DialogTitle>
+      <DialogContent dividers>
+        <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
+          {STEPS.map((label) => (
+            <Step key={label}>
+              <StepLabel>{label}</StepLabel>
+            </Step>
+          ))}
+        </Stepper>
+        {renderStepContent()}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>{buildResult?.ok ? 'Close' : 'Cancel'}</Button>
+        <Box sx={{ flex: 1 }} />
+        <Button onClick={handleBack} disabled={activeStep === 0 || building || resolving}>
+          Back
+        </Button>
+        {activeStep < 4 && (
+          <Button variant="contained" onClick={handleNext} disabled={nextDisabled}>
+            {activeStep === 3 ? 'Build' : 'Next'}
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
+  );
+}

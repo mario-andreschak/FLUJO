@@ -26,6 +26,7 @@ const navItems: NavItem[] = [
   { name: 'Flows', path: '/flows', tour: 'nav-flows' },
   { name: 'Executions', path: '/executions', tour: 'nav-executions' },
   { name: 'Waves', path: '/waves', tour: 'nav-waves', experimental: true },
+  { name: 'Packages', path: '/packages', tour: 'nav-packages', experimental: true },
   { name: 'Chat', path: '/chat', tour: 'nav-chat' },
   { name: 'Docs', path: '/docs', tour: 'nav-docs' },
   { name: 'Settings', path: '/settings', tour: 'nav-settings' },
