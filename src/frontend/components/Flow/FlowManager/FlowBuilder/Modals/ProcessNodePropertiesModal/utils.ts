@@ -11,6 +11,14 @@ export const getNodeProperties = (): PropertyDefinition[] => [
     helperText:
       'Optional. Overrides the bound model\'s Max Turns for this node. Leave empty to inherit the model setting (default 50).',
   },
+  {
+    key: 'maxTokens',
+    label: 'Max Output Tokens (override)',
+    type: 'number',
+    min: 1,
+    helperText:
+      'Optional. Overrides the bound model\'s Max Output Tokens for this node. Leave empty to inherit the model setting (adapter default). Not enforced for the Claude subscription adapter.',
+  },
 ];
 
 // Find MCP nodes connected to this Process node (unique ids — there may be

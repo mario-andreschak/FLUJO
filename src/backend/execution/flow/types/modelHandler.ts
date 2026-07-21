@@ -28,6 +28,12 @@ export interface ModelCallInput {
    * This is the authoritative cap that replaced the former hard-coded 30.
    */
   maxTurns?: number;
+  /**
+   * Optional per-node override of the per-completion output-token cap. When set
+   * (> 0) it wins; otherwise callModel resolves the bound model's `maxTokens`,
+   * then lets the adapter apply its own default (no numeric system default).
+   */
+  maxTokens?: number;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
   /**

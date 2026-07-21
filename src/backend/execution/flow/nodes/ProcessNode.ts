@@ -579,6 +579,10 @@ export class ProcessNode extends BaseNode {
         // the bound model's maxTurns setting and the system default (50), replacing
         // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
         maxTurns: node_params?.properties?.maxTurns,
+        // Per-node override of the per-completion output-token cap (#189).
+        // ModelHandler resolves this against the bound model's maxTokens, then
+        // lets the adapter apply its own default when both are unset.
+        maxTokens: node_params?.properties?.maxTokens,
           nodeName, // Pass the node name to be included in the response header
           nodeId: prepResult.nodeId, // Pass the node ID
           toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService

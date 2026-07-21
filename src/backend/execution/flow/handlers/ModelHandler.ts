@@ -14,6 +14,7 @@ import { toApiMessages } from '../buildNodeContext';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
+import { resolveEffectiveMaxTokens } from './maxTokens';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
@@ -238,12 +239,13 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, conversationId, requireToolApproval } = input; // Added nodeId
+    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, requireToolApproval } = input; // Added nodeId
 
-    // Fetch model information for display name (and the model's own maxTurns cap)
+    // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
+    let modelMaxTokens: number | undefined;
     const nodeDisplayName = nodeName;
     try {
       const model = await modelService.getModel(modelId);
@@ -251,6 +253,7 @@ export class ModelHandler {
         modelDisplayName = model.displayName || model.name;
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
+        modelMaxTokens = model.maxTokens;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
@@ -261,6 +264,11 @@ export class ModelHandler {
     // hard-coded 30 that ProcessNode passed straight through as maxTurns and
     // caused long agentic runs (Claude subscription) to abort mid-execution (#48).
     const effectiveMaxTurns = resolveEffectiveMaxTurns(maxTurns, modelMaxTurns);
+
+    // Resolve the effective per-completion output-token cap (#189). Precedence:
+    // per-node override → bound-model maxTokens → adapter default. `undefined`
+    // here means "let the adapter decide" (there is no numeric system default).
+    const effectiveMaxTokens = resolveEffectiveMaxTokens(maxTokens, modelMaxTokens);
 
     log.info(`callModel - Single execution`, {
       modelId,
@@ -373,6 +381,7 @@ export class ModelHandler {
     const response = await this.generateCompletion(modelId, prompt, wireMessages ?? messages, tools, {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
+      maxTokens: effectiveMaxTokens,
       requestToolApproval,
       onTranscriptMessage,
       shouldAbort,
@@ -503,6 +512,9 @@ export class ModelHandler {
     opts?: {
       toolNameMap?: Record<string, { server: string; tool: string }>;
       maxTurns?: number;
+      /** Effective per-completion output-token cap, already resolved by callModel
+       *  (node override → model setting). Undefined ⇒ adapter default (#189). */
+      maxTokens?: number;
       requestToolApproval?: (call: {
         id: string;
         name: string;
@@ -659,9 +671,10 @@ export class ModelHandler {
           messages: apiMessages,
           tools: sanitizedTools,
           temperature,
-          // Per-model default cap; the flow path has no wire request, so a
-          // future node-level override would slot in as the highest tier here.
-          maxTokens: normalizeMaxTokens(model.maxTokens),
+          // Effective output-token cap: node-level override → per-model default
+          // (resolved in callModel, #189), falling back to the per-model value
+          // for any caller that doesn't pass one. Undefined ⇒ adapter default.
+          maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
           toolNameMap: opts?.toolNameMap,
           localToolExecutors: opts?.localToolExecutors,
           maxTurns: opts?.maxTurns,

@@ -156,6 +156,15 @@ export interface ProcessNodeProperties {
      * the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
      */
     maxTurns?: number;
+    /**
+     * Per-node override of the bound model's Max Output Tokens cap (upper bound
+     * on tokens the provider may generate for a single completion). Highest
+     * precedence: node override → bound-model `maxTokens` → adapter default.
+     * Unset/0 = inherit the model setting, then let the adapter decide (no
+     * numeric system default). Not enforced by the Claude subscription adapter.
+     */
+    maxTokens?: number;
+
     /** Tier 2c (named variables): when set, this node writes its final output
      *  (the model's assistant text) into `SharedState.variables[captureVariable]`
      *  in post(). Any later step can inject it with `${var:NAME}` in its prompt /
