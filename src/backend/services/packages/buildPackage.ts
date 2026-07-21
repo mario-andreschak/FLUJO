@@ -34,6 +34,10 @@ import type {
   McpInstallOrigin,
 } from '@/shared/types/package/installOrigin';
 import type { PackageSecret } from '@/shared/types/package/secrets';
+import type { SecretSubstitution } from '@/shared/types/package/secretProposal';
+import { applySecretSubstitutions, backstopScan, deriveSecretProposals } from './deriveSecrets';
+import type { DeriveResult } from './deriveSecrets';
+import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
@@ -408,6 +412,13 @@ export function buildManifestFromEntities(
   resolved: ResolvedSelection,
   entities: PackageEntities,
   metadata: PackageMetadataInput,
+  /**
+   * User-accepted content-secret substitutions (issue #195). Each occurrence of
+   * `excerpt` is replaced by a `{{secret.NAME}}` placeholder in the packaged
+   * entities and declared in `secrets[]`; the result is re-scanned as a
+   * backstop. Empty by default so the base #194 build path is unchanged.
+   */
+  substitutions: SecretSubstitution[] = [],
 ): BuildManifestResult {
   const errors: string[] = [];
   const warnings = [...resolved.warnings];
@@ -430,9 +441,34 @@ export function buildManifestFromEntities(
     }
   };
 
-  const models = resolved.modelIds
+  const modelsRaw = resolved.modelIds
     .map((id) => modelById.get(id))
     .filter((m): m is Model => Boolean(m));
+  const flowsRaw = resolved.flowIds
+    .map((id) => flowById.get(id))
+    .filter((f): f is Flow => Boolean(f));
+  const plannedExecutionsRaw = resolved.plannedExecutionIds
+    .map((id) => peById.get(id))
+    .filter((p): p is PlannedExecution => Boolean(p));
+
+  // Apply user-accepted content-secret substitutions (issue #195), if any. This
+  // deep-clones the entities (inputs untouched) and adds one required
+  // `secrets[]` entry per distinct placeholder.
+  let models = modelsRaw;
+  let flows = flowsRaw;
+  let plannedExecutions = plannedExecutionsRaw;
+  if (substitutions.length > 0) {
+    const sub = applySecretSubstitutions(
+      { flows: flowsRaw, models: modelsRaw, plannedExecutions: plannedExecutionsRaw },
+      substitutions,
+    );
+    models = sub.entities.models;
+    flows = sub.entities.flows;
+    plannedExecutions = sub.entities.plannedExecutions;
+    warnings.push(...sub.warnings);
+    for (const s of sub.secrets) pushSecret(s);
+  }
+
   const modelInputs = models.map((model) => {
     const { ref, secret } = deriveModelApiKeyRef(model);
     pushSecret(secret);
@@ -440,13 +476,6 @@ export function buildManifestFromEntities(
   });
 
   for (const s of deriveMcpSecrets(mcp.packaged)) pushSecret(s);
-
-  const flows = resolved.flowIds
-    .map((id) => flowById.get(id))
-    .filter((f): f is Flow => Boolean(f));
-  const plannedExecutions = resolved.plannedExecutionIds
-    .map((id) => peById.get(id))
-    .filter((p): p is PlannedExecution => Boolean(p));
 
   if (errors.length > 0) {
     return { ok: false, resolved, errors, warnings };
@@ -470,6 +499,11 @@ export function buildManifestFromEntities(
     // Surface advisory warnings (e.g. an unused secret) without failing.
     const advisory = validatePackage(pkg);
     if (advisory.warnings?.length) warnings.push(...advisory.warnings);
+    // Heuristic backstop (issue #195): warn about any likely secret still
+    // present after substitution. Advisory only — never blocks export.
+    if (substitutions.length > 0) {
+      warnings.push(...backstopScan({ flows, models, plannedExecutions }));
+    }
     return { ok: true, json, package: pkg, resolved, errors, warnings };
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
@@ -515,8 +549,70 @@ export async function resolvePackageSelection(selection: PackageSelection): Prom
 export async function buildPackageManifest(
   selection: PackageSelection,
   metadata: PackageMetadataInput,
+  /** Accepted content-secret proposals from the "Secret review" step (#195). */
+  acceptedSecrets: SecretProposal[] = [],
 ): Promise<BuildManifestResult> {
   log.info(`Building package "${metadata.name}" v${metadata.version}`);
   const { resolved, entities } = await resolvePackageSelection(selection);
-  return buildManifestFromEntities(resolved, entities, metadata);
+  const substitutions = acceptedSecrets
+    .filter((p) => p.excerpt && p.suggestedSecretName)
+    .map((p) => ({
+      excerpt: p.excerpt,
+      secretName: p.suggestedSecretName,
+      description: p.suggestedDescription,
+    }));
+  return buildManifestFromEntities(resolved, entities, metadata, substitutions);
+}
+
+/**
+ * Restrict live entities to a resolved selection's subset — the content that
+ * will actually be packaged — so the secret scan only sees what ships.
+ */
+function restrictToResolved(resolved: ResolvedSelection, entities: PackageEntities) {
+  const flowIds = new Set(resolved.flowIds);
+  const modelIds = new Set(resolved.modelIds);
+  const peIds = new Set(resolved.plannedExecutionIds);
+  return {
+    flows: entities.flows.filter((f) => flowIds.has(f.id)),
+    models: entities.models.filter((m) => modelIds.has(m.id)),
+    plannedExecutions: entities.plannedExecutions.filter((p) => peIds.has(p.id)),
+  };
+}
+
+/**
+ * Derive content-secret PROPOSALS for a selection (issue #195): resolve the
+ * selection, restrict to what ships, run the heuristic pass, and — only when a
+ * model is chosen — the optional model-driven pass (via
+ * `modelService.generateChatCompletion`). Pure detection: no substitution, no
+ * manifest. I/O wrapper.
+ */
+export async function deriveSecretsForSelection(
+  selection: PackageSelection,
+  options: { modelIdentifier?: string; entropyThreshold?: number; enableEntropy?: boolean } = {},
+): Promise<DeriveResult> {
+  const { resolved, entities } = await resolvePackageSelection(selection);
+  const scanEntities = restrictToResolved(resolved, entities);
+
+  const deriveOptions: import('./deriveSecrets').DeriveOptions = {
+    entropyThreshold: options.entropyThreshold,
+    enableEntropy: options.enableEntropy,
+  };
+  if (options.modelIdentifier) {
+    const { modelService } = await import('@/backend/services/model');
+    deriveOptions.model = {
+      modelIdentifier: options.modelIdentifier,
+      completion: async (params) => {
+        const res = await modelService.generateChatCompletion({
+          modelIdentifier: params.modelIdentifier,
+          messages: params.messages as unknown as Parameters<
+            typeof modelService.generateChatCompletion
+          >[0]['messages'],
+          temperature: params.temperature,
+        });
+        return res as unknown as import('./secretModelPass').CompletionResultLike;
+      },
+    };
+  }
+
+  return deriveSecretProposals(scanEntities, deriveOptions);
 }

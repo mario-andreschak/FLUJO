@@ -8,6 +8,7 @@
  */
 export * from './constants';
 export * from './secrets';
+export * from './secretProposal';
 export * from './installOrigin';
 export * from './package';
 export * from './package.schema';

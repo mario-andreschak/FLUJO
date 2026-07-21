@@ -13,8 +13,14 @@ import type {
   ResolvedSelection,
 } from '@/backend/services/packages/buildPackage';
 import type { PackageSecret } from '@/shared/types/package/secrets';
+import type { SecretProposal } from '@/shared/types/package/secretProposal';
 
 const log = createLogger('frontend/services/packages');
+
+export interface DeriveSecretsResult {
+  proposals: SecretProposal[];
+  warnings: string[];
+}
 
 export interface ResolveResult {
   resolved: ResolvedSelection;
@@ -41,15 +47,37 @@ class PackageService {
     return body as ResolveResult;
   }
 
+  /**
+   * Derive content-secret proposals for the "Secret review" step (issue #195).
+   * The optional `modelIdentifier` enables the model-driven pass (which sends
+   * packaged content to that provider).
+   */
+  async deriveSecrets(
+    selection: PackageSelection,
+    options: { modelIdentifier?: string } = {},
+  ): Promise<DeriveSecretsResult> {
+    const response = await fetch('/api/packages/derive-secrets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selection, modelIdentifier: options.modelIdentifier }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body?.error || `HTTP ${response.status}`);
+    }
+    return body as DeriveSecretsResult;
+  }
+
   /** Build the package manifest; returns the structured build result. */
   async build(
     selection: PackageSelection,
     metadata: PackageMetadataInput,
+    acceptedSecrets: SecretProposal[] = [],
   ): Promise<BuildManifestResult> {
     const response = await fetch('/api/packages/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selection, metadata }),
+      body: JSON.stringify({ selection, metadata, acceptedSecrets }),
     });
     const body = await response.json();
     if (!response.ok && body?.ok === undefined) {

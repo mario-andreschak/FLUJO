@@ -20,6 +20,8 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  MenuItem,
+  Select,
   Stack,
   Step,
   StepLabel,
@@ -37,6 +39,7 @@ import type {
   PackageSelection,
   ResolveResult,
 } from '@/frontend/services/packages';
+import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages/PackageWizard');
@@ -89,6 +92,14 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [resolving, setResolving] = useState(false);
   const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
+
+  // Step 2 — content-secret derivation (issue #195).
+  const [contentProposals, setContentProposals] = useState<SecretProposal[]>([]);
+  const [deriving, setDeriving] = useState(false);
+  const [derivedOnce, setDerivedOnce] = useState(false);
+  const [deriveError, setDeriveError] = useState<string | null>(null);
+  const [deriveWarnings, setDeriveWarnings] = useState<string[]>([]);
+  const [scanModelId, setScanModelId] = useState<string>('');
 
   // Step 3 — metadata.
   const [name, setName] = useState('');
@@ -165,6 +176,11 @@ export default function PackageWizard({ open, onClose }: Props) {
     setResolving(true);
     setResolveError(null);
     setResolveResult(null);
+    // The selection changed — any previously derived proposals are now stale.
+    setContentProposals([]);
+    setDerivedOnce(false);
+    setDeriveError(null);
+    setDeriveWarnings([]);
     try {
       const result = await getPackageService().resolve(selection);
       setResolveResult(result);
@@ -175,6 +191,52 @@ export default function PackageWizard({ open, onClose }: Props) {
     }
   }, [selection]);
 
+  /**
+   * Run the content-secret derivation (issue #195). Heuristic-only unless a
+   * model is passed, in which case the optional model-driven pass also runs
+   * (sending packaged content to that provider). Preserves the user's per-row
+   * accept/rename choices across a re-scan.
+   */
+  const runDerive = useCallback(
+    async (modelIdentifier?: string) => {
+      setDeriving(true);
+      setDeriveError(null);
+      try {
+        const res = await getPackageService().deriveSecrets(selection, { modelIdentifier });
+        setContentProposals((prev) => {
+          const acceptedById = new Map(prev.map((p) => [p.id, p.accepted]));
+          const nameById = new Map(prev.map((p) => [p.id, p.suggestedSecretName]));
+          return res.proposals.map((p) => ({
+            ...p,
+            accepted: acceptedById.has(p.id) ? acceptedById.get(p.id) : true,
+            suggestedSecretName: nameById.get(p.id) ?? p.suggestedSecretName,
+          }));
+        });
+        setDeriveWarnings(res.warnings ?? []);
+      } catch (err) {
+        setDeriveError(err instanceof Error ? err.message : 'Failed to derive secrets');
+      } finally {
+        setDeriving(false);
+        setDerivedOnce(true);
+      }
+    },
+    [selection],
+  );
+
+  const toggleProposal = (id: string) =>
+    setContentProposals((prev) => prev.map((p) => (p.id === id ? { ...p, accepted: !p.accepted } : p)));
+  const setAllProposals = (accepted: boolean) =>
+    setContentProposals((prev) => prev.map((p) => ({ ...p, accepted })));
+  const renameProposal = (id: string, name: string) =>
+    setContentProposals((prev) => prev.map((p) => (p.id === id ? { ...p, suggestedSecretName: name } : p)));
+
+  // Auto-run the offline heuristic derivation when the user reaches the step.
+  useEffect(() => {
+    if (activeStep === 2 && resolveResult && !derivedOnce && !deriving) {
+      void runDerive();
+    }
+  }, [activeStep, resolveResult, derivedOnce, deriving, runDerive]);
+
   const runBuild = useCallback(async () => {
     setBuilding(true);
     setBuildError(null);
@@ -184,13 +246,17 @@ export default function PackageWizard({ open, onClose }: Props) {
         .split(',')
         .map((t) => t.trim())
         .filter(Boolean);
-      const result = await getPackageService().build(selection, {
-        id: `pkg-${Date.now()}`,
-        name: name.trim(),
-        version: version.trim(),
-        description: description.trim() || undefined,
-        tags: tags.length ? tags : undefined,
-      });
+      const result = await getPackageService().build(
+        selection,
+        {
+          id: `pkg-${Date.now()}`,
+          name: name.trim(),
+          version: version.trim(),
+          description: description.trim() || undefined,
+          tags: tags.length ? tags : undefined,
+        },
+        contentProposals.filter((p) => p.accepted),
+      );
       setBuildResult(result);
       if (!result.ok) {
         setBuildError((result.errors && result.errors[0]) || 'Package build failed');
@@ -200,7 +266,7 @@ export default function PackageWizard({ open, onClose }: Props) {
     } finally {
       setBuilding(false);
     }
-  }, [selection, name, version, description, tagsInput]);
+  }, [selection, name, version, description, tagsInput, contentProposals]);
 
   const downloadManifest = () => {
     if (!buildResult?.json) return;
@@ -355,12 +421,13 @@ export default function PackageWizard({ open, onClose }: Props) {
       case 2:
         return (
           <Stack spacing={2}>
+            <Typography variant="subtitle2">Declared secrets (entity keys)</Typography>
             <Typography variant="body2" color="text.secondary">
-              These are the secrets the package will declare. Values are never included —
-              whoever installs the package must supply them.
+              Secrets the package will declare from model API keys and MCP env/headers.
+              Values are never included — whoever installs must supply them.
             </Typography>
             {!resolveResult || resolveResult.secrets.length === 0 ? (
-              <Alert severity="success">This package declares no secrets.</Alert>
+              <Alert severity="success">No entity secrets to declare.</Alert>
             ) : (
               <List dense>
                 {resolveResult.secrets.map((s) => (
@@ -378,6 +445,134 @@ export default function PackageWizard({ open, onClose }: Props) {
                 ))}
               </List>
             )}
+
+            <Divider />
+
+            <Typography variant="subtitle2">Detected secrets in content</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Values that look secret or instance-specific (paths, repos, tokens, URLs,
+              emails) found in flow prompts, node properties, model config and planned-
+              execution prompts. Accepted rows are replaced with a{' '}
+              <code>{'{{secret.NAME}}'}</code> placeholder everywhere they occur.
+            </Typography>
+
+            {deriving && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                <CircularProgress size={28} />
+              </Box>
+            )}
+            {deriveError && <Alert severity="error">{deriveError}</Alert>}
+
+            {!deriving && derivedOnce && contentProposals.length === 0 && (
+              <Alert severity="success">No likely secrets detected in the packaged content.</Alert>
+            )}
+
+            {contentProposals.length > 0 && (
+              <>
+                <Stack direction="row" spacing={1}>
+                  <Button size="small" onClick={() => setAllProposals(true)}>
+                    Accept all
+                  </Button>
+                  <Button size="small" onClick={() => setAllProposals(false)}>
+                    Reject all
+                  </Button>
+                  <Box sx={{ flex: 1 }} />
+                  <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
+                    {contentProposals.filter((p) => p.accepted).length} of {contentProposals.length} accepted
+                  </Typography>
+                </Stack>
+                <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 280, overflow: 'auto' }}>
+                  {contentProposals.map((p) => (
+                    <ListItem key={p.id} alignItems="flex-start" divider>
+                      <ListItemIcon sx={{ minWidth: 36, mt: 1 }}>
+                        <Checkbox
+                          edge="start"
+                          checked={Boolean(p.accepted)}
+                          onChange={() => toggleProposal(p.id)}
+                          tabIndex={-1}
+                          disableRipple
+                        />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={
+                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                            <Chip label={p.kind} size="small" />
+                            <Chip
+                              label={p.source}
+                              size="small"
+                              variant="outlined"
+                              color={p.source === 'model' ? 'secondary' : 'default'}
+                            />
+                            <Box component="code" sx={{ wordBreak: 'break-all' }}>
+                              {p.excerpt.length > 80 ? `${p.excerpt.slice(0, 80)}…` : p.excerpt}
+                            </Box>
+                          </Stack>
+                        }
+                        secondary={
+                          <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                            <Typography variant="caption" color="text.secondary">
+                              {p.location}
+                              {p.rationale ? ` — ${p.rationale}` : ''}
+                            </Typography>
+                            <TextField
+                              size="small"
+                              label="Secret name"
+                              value={p.suggestedSecretName}
+                              onChange={(e) => renameProposal(p.id, e.target.value)}
+                              disabled={!p.accepted}
+                              sx={{ maxWidth: 320 }}
+                            />
+                          </Stack>
+                        }
+                        primaryTypographyProps={{ component: 'div' }}
+                        secondaryTypographyProps={{ component: 'div' }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </>
+            )}
+
+            {deriveWarnings.length > 0 && (
+              <Alert severity="warning">
+                <AlertTitle>Notes</AlertTitle>
+                {deriveWarnings.map((w, i) => (
+                  <div key={i}>{w}</div>
+                ))}
+              </Alert>
+            )}
+
+            <Divider />
+            <Typography variant="subtitle2">Optional: model-driven scan</Typography>
+            <Alert severity="info">
+              Running the model-driven pass sends the packaged content above to the selected
+              model provider. The offline heuristic scan never leaves your machine.
+            </Alert>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Select
+                size="small"
+                displayEmpty
+                value={scanModelId}
+                onChange={(e) => setScanModelId(e.target.value as string)}
+                sx={{ minWidth: 220 }}
+              >
+                <MenuItem value="">
+                  <em>Select a model…</em>
+                </MenuItem>
+                {entities.models.map((m) => (
+                  <MenuItem key={m.id} value={m.label}>
+                    {m.label}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Button
+                variant="outlined"
+                disabled={!scanModelId || deriving}
+                onClick={() => void runDerive(scanModelId)}
+              >
+                Scan with model
+              </Button>
+            </Stack>
           </Stack>
         );
       case 3:
