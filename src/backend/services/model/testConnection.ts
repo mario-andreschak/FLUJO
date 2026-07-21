@@ -2,7 +2,7 @@ import axios, { AxiosError } from 'axios';
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
-import { Model } from '@/shared/types/model';
+import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { ModelAdapter } from '@/shared/types/model/provider';
 import { createOpenAIClient, getProviderDefaultHeaders } from './openaiClient';
 import { getCompletionAdapter } from './adapters';
@@ -212,6 +212,7 @@ async function attemptViaAdapter(model: Model, apiKey: string): Promise<ModelTes
       apiKey,
       messages: [...TEST_MESSAGES],
       temperature: 0,
+      maxTokens: normalizeMaxTokens(model.maxTokens),
     });
     const durationMs = Date.now() - started;
 

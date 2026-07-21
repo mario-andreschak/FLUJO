@@ -122,6 +122,7 @@ async function askModel(modelId: string, task: string): Promise<string> {
   // Lazy imports keep the model stack out of scheduler module-load and tests.
   const { modelService } = await import('@/backend/services/model');
   const { getCompletionAdapter } = await import('@/backend/services/model/adapters');
+  const { normalizeMaxTokens } = await import('@/shared/types/model');
 
   const model = await modelService.getModel(modelId);
   if (!model) {
@@ -137,6 +138,7 @@ async function askModel(modelId: string, task: string): Promise<string> {
     model,
     apiKey,
     temperature: 0,
+    maxTokens: normalizeMaxTokens(model.maxTokens),
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: task },

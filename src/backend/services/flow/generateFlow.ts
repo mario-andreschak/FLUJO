@@ -32,7 +32,7 @@ import OpenAI from 'openai';
 import { Flow } from '@/shared/types/flow';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter, CompletionAdapter } from '@/backend/services/model/adapters';
-import { Model } from '@/shared/types/model';
+import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import {
   compileFlowSpec,
   applyGenerationDefaults,
@@ -326,6 +326,7 @@ async function runModelTurn(
       apiKey,
       messages,
       temperature: 0,
+      maxTokens: normalizeMaxTokens(model.maxTokens),
       ...(withTools ? { tools, localToolExecutors } : {}),
     });
     const message = completion.choices?.[0]?.message;

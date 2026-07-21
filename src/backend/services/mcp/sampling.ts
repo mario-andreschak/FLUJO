@@ -10,6 +10,7 @@ import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPSamplingPolicy } from '@/shared/types/mcp';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
+import { normalizeMaxTokens } from '@/shared/types/model';
 
 const log = createLogger('backend/services/mcp/sampling');
 
@@ -114,7 +115,7 @@ export function registerSamplingHandler(client: Client, config: MCPServerConfig)
 
     log.info(`Sampling for ${config.name} via model ${model.name} (${messages.length} messages)`);
     const adapter = getCompletionAdapter(model);
-    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature });
+    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, maxTokens: normalizeMaxTokens(model.maxTokens) });
 
     const raw = completion.choices?.[0]?.message?.content;
     const text = typeof raw === 'string' ? raw : '';
