@@ -329,9 +329,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     conversationId,
     nodeId,
     runResourceMarkers,
-    // Note: `maxTokens` is intentionally NOT destructured/applied here. Like
-    // `maxTurns`, sampling is managed by the Agent SDK's own agentic loop, so an
-    // output-token cap has no single request to attach to (issue #173).
+    // Note: `maxTokens` is intentionally NOT destructured/applied here — and
+    // neither is `temperature`. This is an agentic adapter: unlike the
+    // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
+    // API call and can pass max_tokens/temperature per request, the Claude
+    // Agent SDK's query() loop owns sampling and output length internally, so an
+    // output-token cap has no single request to attach to. Only `maxTurns` (the
+    // agentic iteration bound) is honoured here. A hard `maxTokens` cap would
+    // require SDK-managed sampling-control support that does not exist today; if
+    // that is ever desired, revisit this seam (issues #173 and #191).
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
