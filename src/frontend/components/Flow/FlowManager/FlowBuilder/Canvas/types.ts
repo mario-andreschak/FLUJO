@@ -20,6 +20,8 @@ export interface CanvasProps {
   onInit?: (reactFlowInstance: ReactFlowInstance<FlowNode, Edge>) => void;
   reactFlowWrapper?: React.RefObject<HTMLDivElement | null>;
   onEditNode?: (node: FlowNode) => void;
+  /** Open the edge-properties editor (Tier 2b condition) for a flow-control edge. */
+  onEditEdge?: (edge: Edge) => void;
 }
 
 export interface EditNodeEventDetail {

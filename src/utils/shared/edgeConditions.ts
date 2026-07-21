@@ -60,6 +60,30 @@ export function isRegexCompilable(pattern: string): boolean {
 }
 
 /**
+ * A short, human-legible label for a condition — used by the FlowBuilder canvas
+ * badge so a conditional (branching) edge is visually distinguishable from a
+ * plain one. Kept compact (value truncated) so it doesn't crowd the wire:
+ *   contains "FAIL"      → `contains:"FAIL"`
+ *   regex   /^PASS\b/    → `regex:/^PASS…/`
+ *   negate               → `!` prefix (e.g. `!contains:"x"`)
+ *   ignoreCase           → trailing ` i` marker (e.g. `contains:"x" i`)
+ *   always               → `always` (value-less)
+ * Returns '' for a missing/invalid condition so callers can treat it as
+ * "render no badge".
+ */
+export function formatConditionLabel(cond: EdgeCondition | undefined | null): string {
+  if (!cond || !isValidConditionKind(cond.kind)) return '';
+  const prefix = cond.negate ? '!' : '';
+  if (cond.kind === 'always') return `${prefix}always`;
+  const ci = cond.ignoreCase ? ' i' : '';
+  const raw = typeof cond.value === 'string' ? cond.value : '';
+  const MAX = 8;
+  const shown = raw.length > MAX ? `${raw.slice(0, MAX)}…` : raw;
+  const body = cond.kind === 'regex' ? `/${shown}/` : `"${shown}"`;
+  return `${prefix}${cond.kind}:${body}${ci}`;
+}
+
+/**
  * Coerce a chat message's `content` into a plain string. OpenAI content can be a
  * string or an array of parts; we join the text parts and drop non-text parts.
  * Anything else (null/undefined/object) becomes ''.

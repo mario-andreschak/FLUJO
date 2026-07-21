@@ -6,6 +6,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 
 interface ContextMenuProps {
   open: boolean;
@@ -13,6 +14,8 @@ interface ContextMenuProps {
   onClose: () => void;
   onDelete: () => void;
   onEditProperties?: () => void;
+  /** Flip a flow-control edge between one-way and bidirectional. */
+  onToggleBidirectional?: () => void;
   onCopy?: () => void;
   onPaste?: () => void;
   canPaste?: boolean;
@@ -30,6 +33,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onClose,
   onDelete,
   onEditProperties,
+  onToggleBidirectional,
   onCopy,
   onPaste,
   canPaste,
@@ -60,6 +64,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     onClose();
   };
 
+  const handleToggleBidirectional = () => {
+    if (onToggleBidirectional) {
+      onToggleBidirectional();
+    }
+    onClose();
+  };
+
   // Build menu items array
   const menuItems = [];
 
@@ -73,6 +84,31 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemText>Edit Properties</ListItemText>
       </MenuItem>
     );
+  }
+
+  // Edge-specific menu items (a single edge, not a node or multi-selection):
+  // edit its routing condition (Tier 2b) and toggle bidirectional handoff.
+  if (edgeId && !nodeId && !selection) {
+    if (onEditProperties) {
+      menuItems.push(
+        <MenuItem key="edge-edit" onClick={handleEditProperties}>
+          <ListItemIcon>
+            <EditIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Edit Properties</ListItemText>
+        </MenuItem>
+      );
+    }
+    if (onToggleBidirectional) {
+      menuItems.push(
+        <MenuItem key="edge-bidirectional" onClick={handleToggleBidirectional}>
+          <ListItemIcon>
+            <SwapHorizIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Toggle Bidirectional</ListItemText>
+        </MenuItem>
+      );
+    }
   }
 
   // Copy applies to a copyable node or the current selection

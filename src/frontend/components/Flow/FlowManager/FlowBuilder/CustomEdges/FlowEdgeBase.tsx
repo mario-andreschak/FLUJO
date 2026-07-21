@@ -17,6 +17,7 @@ import {
   nearestGap,
 } from './orthogonalPath';
 import { BASE_ANIMATION_MS, BASE_ANIMATION_BOTH_MS, edgeSpeedFactor } from './edgeSpeed';
+import { EdgeCondition, formatConditionLabel } from '@/utils/shared/edgeConditions';
 
 // Fired when the user finishes a re-route gesture (bend drag, waypoint move,
 // or waypoint removal). The Canvas listens and commits the change through
@@ -151,8 +152,12 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   const suppressClickRef = useRef(false);
 
   const edgeData = data as
-    | { waypoints?: Point[]; waypoint?: Point; bidirectional?: boolean; animated?: boolean }
+    | { waypoints?: Point[]; waypoint?: Point; bidirectional?: boolean; animated?: boolean; condition?: EdgeCondition }
     | undefined;
+  // A conditional (Tier 2b) flow-control edge shows a small badge so branching
+  // is legible on the canvas. Only standard edges carry routing conditions.
+  const conditionLabel =
+    variant === 'standard' && edgeData?.condition ? formatConditionLabel(edgeData.condition) : '';
   // (data.waypoint is the single-waypoint shape from the first iteration of
   // this feature — treat it as a one-entry array.)
   const storedWaypoints = edgeData?.waypoints ?? (edgeData?.waypoint ? [edgeData.waypoint] : []);
@@ -333,6 +338,31 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
         onPointerUp={onDragPointerUp}
       />
       <EdgeLabelRenderer>
+        {/* Condition badge on a conditional (branching) edge. Non-interactive
+            (pointer-events none) and offset above the path midpoint so it never
+            interferes with the waypoint dots or the delete button. */}
+        {conditionLabel && (
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${controlsPoint.x}px,${controlsPoint.y - 18}px)`,
+              pointerEvents: 'none',
+              background: theme.palette.info.main,
+              color: theme.palette.info.contrastText,
+              borderRadius: 4,
+              padding: '1px 6px',
+              fontSize: 10,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              boxShadow: theme.shadows[1],
+              zIndex: 1002,
+            }}
+            className="nodrag nopan"
+            title={`Routing condition: ${conditionLabel}`}
+          >
+            {conditionLabel}
+          </div>
+        )}
         {/* Waypoint dots — on the path, drag to move, double-click to remove */}
         {controlsVisible && waypoints.map((wp, i) => (
           <div

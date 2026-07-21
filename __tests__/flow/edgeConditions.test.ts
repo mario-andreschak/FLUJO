@@ -12,6 +12,7 @@ import {
   messageText,
   isRegexCompilable,
   isValidConditionKind,
+  formatConditionLabel,
   EdgeCondition,
 } from '@/utils/shared/edgeConditions';
 
@@ -156,5 +157,35 @@ describe('helpers', () => {
   it('EdgeCondition is structurally usable', () => {
     const c: EdgeCondition = { kind: 'contains', value: 'x', target: 'last-message', ignoreCase: true, negate: true };
     expect(c.kind).toBe('contains');
+  });
+});
+
+describe('formatConditionLabel', () => {
+  it('labels each kind with its value', () => {
+    expect(formatConditionLabel({ kind: 'contains', value: 'FAIL' })).toBe('contains:"FAIL"');
+    expect(formatConditionLabel({ kind: 'equals', value: 'PASS' })).toBe('equals:"PASS"');
+    expect(formatConditionLabel({ kind: 'regex', value: '^ok' })).toBe('regex:/^ok/');
+  });
+
+  it('is value-less for always', () => {
+    expect(formatConditionLabel({ kind: 'always' })).toBe('always');
+  });
+
+  it('prefixes negate with ! and marks ignoreCase with a trailing i', () => {
+    expect(formatConditionLabel({ kind: 'contains', value: 'x', negate: true })).toBe('!contains:"x"');
+    expect(formatConditionLabel({ kind: 'contains', value: 'x', ignoreCase: true })).toBe('contains:"x" i');
+    expect(formatConditionLabel({ kind: 'always', negate: true })).toBe('!always');
+  });
+
+  it('truncates long values so the badge stays compact', () => {
+    const label = formatConditionLabel({ kind: 'contains', value: 'abcdefghijklmnop' });
+    expect(label).toBe('contains:"abcdefgh…"');
+    expect(label.length).toBeLessThanOrEqual(22);
+  });
+
+  it('returns \'\' for a missing or invalid condition (no badge)', () => {
+    expect(formatConditionLabel(undefined)).toBe('');
+    expect(formatConditionLabel(null)).toBe('');
+    expect(formatConditionLabel({ kind: 'bogus' as any, value: 'x' })).toBe('');
   });
 });

@@ -55,6 +55,7 @@ import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
 import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
+import EdgePropertiesModal from './Modals/EdgePropertiesModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
@@ -67,6 +68,7 @@ import HealingIcon from '@mui/icons-material/Healing';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
+import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { Collapse } from '@mui/material';
 
 /** Pre-filled instruction for AI-supported repair (mirrors the backend repairFlowWithAI). */
@@ -159,6 +161,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [signalModalOpen, setSignalModalOpen] = useState(false);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
+  // The edge whose properties (Tier 2b routing condition) are being edited.
+  const [editingEdge, setEditingEdge] = useState<Edge | null>(null);
 
   // AI-Improve (issue #99): the dialog that revises the current flow, plus a transient
   // notice summarizing the last improvement (validation counts / installed servers).
@@ -644,6 +648,26 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setNodes((nds) => applyNodeChanges(changes, nds) as FlowNode[]);
   }, []);
 
+  // Persist a Tier 2b routing condition edited in the EdgePropertiesModal.
+  // When a condition is provided it is spread into the edge's data; when
+  // cleared, the `condition` key is DELETED (not set to undefined) so a plain
+  // edge stays byte-identical to the compiler's control-edge output. Runs
+  // through setEdges, so it lands in undo history and flags unsaved changes
+  // just like any other edit.
+  const handleSaveEdgeCondition = useCallback((edgeId: string, condition?: EdgeCondition) => {
+    setEdges((eds) => eds.map((edge) => {
+      if (edge.id !== edgeId) return edge;
+      const data = { ...(edge.data ?? {}) } as Record<string, unknown>;
+      if (condition) {
+        data.condition = condition;
+      } else {
+        delete data.condition;
+      }
+      return { ...edge, data };
+    }));
+    log.info(`handleSaveEdgeCondition: ${condition ? 'set' : 'cleared'} condition on edge ${edgeId}`);
+  }, []);
+
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     log.debug(`onEdgesChange: Processing ${changes.length} edge changes`);
     
@@ -989,6 +1013,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               onInit={onInit}
               reactFlowWrapper={reactFlowWrapper}
               onEditNode={openNodeProperties}
+              onEditEdge={(edge) => setEditingEdge(edge)}
             />
           </Box>
         </MainContent>
@@ -1052,6 +1077,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         node={nodeToEdit}
         onClose={() => setSignalModalOpen(false)}
         onSave={handleNodeUpdate}
+      />
+
+      <EdgePropertiesModal
+        open={!!editingEdge}
+        edge={editingEdge}
+        onClose={() => setEditingEdge(null)}
+        onSave={handleSaveEdgeCondition}
       />
 
       {/* AI-Improve dialog (issue #99): revises the CURRENT canvas state (incl. unsaved edits). */}

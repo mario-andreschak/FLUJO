@@ -243,6 +243,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onInit,
     reactFlowWrapper,
     onEditNode,
+    onEditEdge,
   } = props;
 
   const {
@@ -491,15 +492,63 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     };
   }, [reactFlowInstance, onNodesChange, buildAddNodeChanges, onEditNode]);
 
-  // Handle edit properties from context menu
+  // Handle edit properties from context menu. Branches on whether the menu
+  // targets a node or an edge — an edge opens the EdgePropertiesModal (Tier 2b
+  // condition editor) via the onEditEdge callback surfaced from FlowBuilder.
   const handleEditProperties = useCallback(() => {
     if (contextMenu.nodeId && onEditNode) {
       const node = findNodeById(contextMenu.nodeId, nodes);
       if (node) {
         onEditNode(node);
       }
+    } else if (contextMenu.edgeId && onEditEdge) {
+      const edge = edges.find(e => e.id === contextMenu.edgeId);
+      if (edge) {
+        onEditEdge(edge);
+      }
     }
-  }, [contextMenu.nodeId, nodes, onEditNode]);
+  }, [contextMenu.nodeId, contextMenu.edgeId, nodes, edges, onEditNode, onEditEdge]);
+
+  // Toggle a flow-control edge between one-way and bidirectional from the edge
+  // context menu. Reuses the exact marker logic of the bidirectional drag path
+  // (add/remove the start arrowhead) and only turns an edge ON when the reverse
+  // direction is itself a legal connection (canConvertToBidirectional).
+  const handleToggleBidirectional = useCallback(() => {
+    if (!contextMenu.edgeId) return;
+    const edge = edges.find(e => e.id === contextMenu.edgeId);
+    if (!edge) return;
+    // Only plain flow-control edges support bidirectional handoff; mcp/resource
+    // wiring edges are config, not control flow.
+    const isStandard = (edge.data as { edgeType?: string } | undefined)?.edgeType === 'standard';
+    if (!isStandard) {
+      log.debug(`Toggle bidirectional ignored for non-standard edge ${edge.id}`);
+      return;
+    }
+    const current = !!(edge.data as { bidirectional?: boolean } | undefined)?.bidirectional;
+    if (!current && !canConvertToBidirectional(edge, nodes, edges)) {
+      log.info(`Edge ${edge.id} cannot be made bidirectional (reverse direction is not a legal connection)`);
+      return;
+    }
+    const nextData = { ...(edge.data ?? {}), bidirectional: !current };
+    let item: Edge;
+    if (current) {
+      // Turning OFF: drop the start arrowhead so only the forward arrow remains.
+      const { markerStart: _drop, ...rest } = edge as Edge & { markerStart?: unknown };
+      item = { ...rest, data: nextData } as Edge;
+    } else {
+      item = {
+        ...edge,
+        data: nextData,
+        markerStart: {
+          type: MarkerType.ArrowClosed,
+          width: 20,
+          height: 20,
+          color: theme.palette.text.secondary,
+        },
+      } as Edge;
+    }
+    onEdgesChange([{ type: 'replace', id: edge.id, item }]);
+  }, [contextMenu.edgeId, edges, nodes, onEdgesChange, theme.palette.text.secondary]);
 
   // Handle double-click on nodes to open edit properties
   const onNodeDoubleClick = useCallback(
@@ -852,6 +901,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onClose={closeContextMenu}
         onDelete={handleDelete}
         onEditProperties={handleEditProperties}
+        onToggleBidirectional={handleToggleBidirectional}
         onCopy={handleContextCopy}
         onPaste={handlePaste}
         canPaste={canPaste}
