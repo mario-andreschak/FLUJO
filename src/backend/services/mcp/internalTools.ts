@@ -49,6 +49,7 @@ import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule
 import type { PlannedExecution, TriggerConfig } from '@/shared/types/plannedExecution';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
+import { truncate, MAX_FLOW_DESCRIPTION_CHARS } from '@/backend/services/flow/generationContext';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import {
   flushConversationLog,
@@ -131,6 +132,15 @@ export function internalToolDefinitions(): Tool[] {
     // external /mcp-flows endpoint (list_flow_building_blocks, validate_flow_spec,
     // create_flow, search_mcp_marketplace, install_mcp_server).
     ...authoringToolDefinitions(),
+    {
+      name: 'list_flows',
+      description:
+        'List all flows in this FLUJO instance with lightweight metadata only ' +
+        '(id, name, description, node count) and no flow content. Use this to ' +
+        'enumerate flows cheaply. Use list_flow_building_blocks only when you ' +
+        'need the full authoring catalog (models + servers + flows).',
+      inputSchema: { type: 'object', properties: {} },
+    },
     {
       name: 'execute_flow',
       description:
@@ -743,6 +753,26 @@ async function setMcpServerEnabled(
   return textResult({ server, enabled });
 }
 
+async function listFlows(): Promise<CallToolResult> {
+  // Lightweight enumeration: reuses flowService.loadFlows() and returns the same
+  // reduced per-flow metadata shape as list_flow_building_blocks' `flows` array
+  // (id, name, truncated description, nodeCount) — never node/edge content or
+  // any secrets. Cheap alternative to the full authoring catalog.
+  try {
+    const flows = await flowService.loadFlows();
+    const flowList = flows.map((f) => ({
+      id: f.id,
+      name: f.name,
+      ...(f.description ? { description: truncate(f.description, MAX_FLOW_DESCRIPTION_CHARS) } : {}),
+      nodeCount: f.nodes?.length ?? 0,
+    }));
+    return textResult(flowList);
+  } catch (error) {
+    log.error('list_flows failed', error);
+    return textResult({ error: 'Failed to load flows.' }, true);
+  }
+}
+
 async function listModels(): Promise<CallToolResult> {
   const models = await modelService.loadModels();
   // Strict whitelist: model configs carry the (encrypted) ApiKey, which must never
@@ -1202,6 +1232,8 @@ export async function internalCallTool(
       return await authoringCallTool(toolName, args);
     }
     switch (toolName) {
+      case 'list_flows':
+        return await listFlows();
       case 'execute_flow':
         return await executeFlow(args);
       case 'read_flow':

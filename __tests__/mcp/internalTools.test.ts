@@ -133,6 +133,7 @@ describe('internalToolDefinitions', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
+        'list_flows',
         'execute_flow',
         'read_flow',
         'update_flow',
@@ -155,6 +156,75 @@ describe('internalToolDefinitions', () => {
         'read_conversation',
       ])
     );
+  });
+});
+
+describe('list_flows', () => {
+  it('advertises an empty-object input schema', () => {
+    const def = internalToolDefinitions().find((t) => t.name === 'list_flows');
+    expect(def).toBeDefined();
+    expect(def!.inputSchema).toEqual({ type: 'object', properties: {} });
+  });
+
+  it('returns lightweight per-flow metadata only (id, name, description?, nodeCount)', async () => {
+    flows.loadFlows.mockResolvedValue([
+      { id: 'flow-1', name: 'Alpha', description: 'hello', nodes: [{}, {}], edges: [{}] },
+      { id: 'flow-2', name: 'Beta', nodes: undefined },
+    ]);
+
+    const r = await internalCallTool(makeService(), 'list_flows', {});
+
+    expect(r.isError).toBeUndefined();
+    expect(JSON.parse(text(r))).toEqual([
+      { id: 'flow-1', name: 'Alpha', description: 'hello', nodeCount: 2 },
+      { id: 'flow-2', name: 'Beta', nodeCount: 0 },
+    ]);
+  });
+
+  it('leaks no flow content or secrets (only the whitelisted keys are present)', async () => {
+    flows.loadFlows.mockResolvedValue([
+      {
+        id: 'flow-1',
+        name: 'Alpha',
+        description: 'hi',
+        nodes: [{ data: { boundModel: 'secret-model' } }],
+        edges: [{ id: 'e1' }],
+      },
+    ]);
+
+    const payload = JSON.parse(text(await internalCallTool(makeService(), 'list_flows', {})));
+    expect(Object.keys(payload[0]).sort()).toEqual(['description', 'id', 'name', 'nodeCount']);
+    expect(text(await internalCallTool(makeService(), 'list_flows', {}))).not.toContain('secret-model');
+  });
+
+  it('truncates long descriptions to the shared 300-char cap', async () => {
+    flows.loadFlows.mockResolvedValue([
+      { id: 'flow-1', name: 'Alpha', description: 'x'.repeat(500), nodes: [] },
+    ]);
+
+    const payload = JSON.parse(text(await internalCallTool(makeService(), 'list_flows', {})));
+    expect(payload[0].description.length).toBeLessThanOrEqual(301); // 300 chars + ellipsis
+    expect(payload[0].description.length).toBeGreaterThan(0);
+  });
+
+  it('omits the description key when a flow has none', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'flow-1', name: 'Alpha', nodes: [] }]);
+    const payload = JSON.parse(text(await internalCallTool(makeService(), 'list_flows', {})));
+    expect(payload[0]).not.toHaveProperty('description');
+  });
+
+  it('returns an empty array when there are no flows', async () => {
+    flows.loadFlows.mockResolvedValue([]);
+    const r = await internalCallTool(makeService(), 'list_flows', {});
+    expect(r.isError).toBeUndefined();
+    expect(JSON.parse(text(r))).toEqual([]);
+  });
+
+  it('returns a graceful error result (no throw) when loadFlows rejects', async () => {
+    flows.loadFlows.mockRejectedValue(new Error('disk gone'));
+    const r = await internalCallTool(makeService(), 'list_flows', {});
+    expect(r.isError).toBe(true);
+    expect(text(r)).not.toContain('disk gone'); // generic message, no internals leaked
   });
 });
 

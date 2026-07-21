@@ -28,7 +28,7 @@ const log = createLogger('backend/services/flow/generationContext');
 const MAX_TOOLS_PER_SERVER = 20;
 const MAX_TOOL_DESCRIPTION_CHARS = 100;
 const MAX_FLOWS_LISTED = 15;
-const MAX_FLOW_DESCRIPTION_CHARS = 300;
+export const MAX_FLOW_DESCRIPTION_CHARS = 300;
 
 export interface BuildingBlockModel {
   id: string;
@@ -68,7 +68,7 @@ export interface GenerationContext {
   validatorServers: Array<{ name: string; status?: string }>;
 }
 
-function truncate(text: string, max: number): string {
+export function truncate(text: string, max: number): string {
   const clean = String(text).replace(/\s+/g, ' ').trim();
   return clean.length <= max ? clean : `${clean.slice(0, max).trimEnd()}…`;
 }
