@@ -29,7 +29,15 @@ export enum StorageKey {
   PACKAGE_INSTALLS = 'package_installs',
   // Experimental features toggle (issue #184): a single boolean gating
   // in-progress/unstable UI (e.g. the Waves nav entry). UI-only flag.
-  EXPERIMENTAL_SETTINGS = 'experimental_settings'
+  EXPERIMENTAL_SETTINGS = 'experimental_settings',
+  // Package-registry account (issue #197): encrypted JWT/refresh tokens plus
+  // masked account metadata (publisher handle, email, confirmation state) for
+  // publishing to the hosted package registry. Tokens are stored with the same
+  // at-rest posture as model API keys and are NEVER rendered to the browser.
+  REGISTRY_ACCOUNT = 'registry_account',
+  // Package-registry settings (issue #197): user-configured registry base URL
+  // (blank => use the built-in production default). No secrets.
+  REGISTRY_SETTINGS = 'registry_settings'
 }
 
 export const StorageKeys = {
@@ -54,6 +62,8 @@ export const StorageKeys = {
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
+  REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,
+  REGISTRY_SETTINGS: StorageKey.REGISTRY_SETTINGS,
 } as const;
 
 /**

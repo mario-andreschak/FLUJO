@@ -17,6 +17,7 @@ import SpeechRecognitionSettings from './SpeechRecognitionSettings';
 import UpdateSettings from './UpdateSettings';
 import OnboardingSettings from './OnboardingSettings';
 import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
+import RegistryAccountSettings from './RegistryAccountSettings';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -141,6 +142,22 @@ export default function Settings() {
           </AccordionSummary>
           <AccordionDetails>
             <OnboardingSettings />
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          expanded={expanded === 'registry'}
+          onChange={handleChange('registry')}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="registry-content"
+            id="registry-header"
+          >
+            <Typography variant="h6">Package Registry Account</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <RegistryAccountSettings />
           </AccordionDetails>
         </Accordion>
 

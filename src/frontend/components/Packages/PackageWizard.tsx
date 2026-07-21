@@ -34,6 +34,8 @@ import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
 import { getPackageService } from '@/frontend/services/packages';
+import { getRegistryService } from '@/frontend/services/registry';
+import type { RegistryPublishResult } from '@/shared/types/registry';
 import type {
   BuildManifestResult,
   PackageSelection,
@@ -111,6 +113,10 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [building, setBuilding] = useState(false);
   const [buildResult, setBuildResult] = useState<BuildManifestResult | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
+
+  // Step 4 — optional publish to the hosted registry (issue #197).
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<RegistryPublishResult | null>(null);
 
   // Load selectable entities on open.
   useEffect(() => {
@@ -267,6 +273,30 @@ export default function PackageWizard({ open, onClose }: Props) {
       setBuilding(false);
     }
   }, [selection, name, version, description, tagsInput, contentProposals]);
+
+  /**
+   * Publish the built manifest to the hosted package registry (issue #197).
+   * Requires a confirmed, signed-in registry account (managed in Settings →
+   * Package Registry Account); friendly errors are surfaced from the service.
+   */
+  const publishToRegistry = useCallback(async () => {
+    if (!buildResult?.json) return;
+    setPublishing(true);
+    setPublishResult(null);
+    try {
+      const manifest = JSON.parse(buildResult.json);
+      const result = await getRegistryService().publish(manifest);
+      setPublishResult(result);
+    } catch (err) {
+      setPublishResult({
+        ok: false,
+        code: 'error',
+        error: err instanceof Error ? err.message : 'Failed to publish package',
+      });
+    } finally {
+      setPublishing(false);
+    }
+  }, [buildResult]);
 
   const downloadManifest = () => {
     if (!buildResult?.json) return;
@@ -640,6 +670,38 @@ export default function PackageWizard({ open, onClose }: Props) {
               <Button variant="contained" onClick={downloadManifest}>
                 Download package manifest (.json)
               </Button>
+
+              <Divider />
+              <Typography variant="subtitle2">Publish to the FLUJO package registry</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Publishing requires a confirmed registry account (set one up under
+                Settings → Package Registry Account). Only the secret-safe manifest above
+                is uploaded — no secret values ever leave your machine.
+              </Typography>
+              {publishResult?.ok ? (
+                <Alert severity="success">
+                  <AlertTitle>Published</AlertTitle>
+                  {publishResult.name || name.trim()} v{publishResult.version || version.trim()} is live.
+                  {publishResult.url && (
+                    <div>
+                      <a href={publishResult.url} target="_blank" rel="noreferrer">
+                        {publishResult.url}
+                      </a>
+                    </div>
+                  )}
+                </Alert>
+              ) : (
+                <>
+                  {publishResult && !publishResult.ok && (
+                    <Alert severity={publishResult.code === 'unconfirmed' || publishResult.code === 'not_authenticated' ? 'warning' : 'error'}>
+                      {publishResult.error || 'Failed to publish package.'}
+                    </Alert>
+                  )}
+                  <Button variant="outlined" onClick={() => void publishToRegistry()} disabled={publishing}>
+                    {publishing ? 'Publishing…' : 'Publish to registry'}
+                  </Button>
+                </>
+              )}
             </Stack>
           );
         }
