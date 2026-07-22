@@ -2057,6 +2057,18 @@ const Chat: React.FC = () => {
     });
   };
 
+  // #97: stable MCP App -> conversation return channel. handleSendMessage closes
+  // over conversation state and is recreated each render, so we route through a
+  // ref to keep the callback IDENTITY stable across the memoized MessageBubble
+  // boundary (passing handleSendMessage directly would defeat that memo and
+  // regress chat render perf). An app's ui/message (e.g. a file selection)
+  // becomes a follow-up user message, resuming a waiting model.
+  const handleSendMessageRef = useRef(handleSendMessage);
+  handleSendMessageRef.current = handleSendMessage;
+  const handleAppMessage = useCallback((text: string) => {
+    void handleSendMessageRef.current(text);
+  }, []);
+
   // Edit a message and re-send the conversation (operates on detailedConversation)
   const handleEditMessage = async (messageId: string, newContent: string, processNodeId?: string | null) => {
     if (!detailedConversation) return;
@@ -2732,6 +2744,7 @@ const Chat: React.FC = () => {
                 onEditMessage={handleEditMessage}
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
+                onAppMessage={handleAppMessage}
               />
 
               {/* Completion banner: shown once the run has reached a Finish node

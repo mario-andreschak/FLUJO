@@ -80,7 +80,13 @@ export async function listServerTools(client: Client | undefined, serverName: st
     const tools = (response.tools || []).map(tool => ({
       name: tool.name,
       description: tool.description || '',
-      inputSchema: tool.inputSchema || {}
+      inputSchema: tool.inputSchema || {},
+      // Preserve server-declared annotations and `_meta`. MCP Apps (#97) link a
+      // tool to its `ui://` UI resource via `_meta.ui.resourceUri` on the tool
+      // DEFINITION (per SEP-1865 / ext-apps), so this must survive listing or
+      // the app link is lost before detection can ever see it.
+      ...(tool.annotations ? { annotations: tool.annotations } : {}),
+      ...(tool._meta ? { _meta: tool._meta } : {}),
     }));
 
     log.verbose('Processed tools:', tools);

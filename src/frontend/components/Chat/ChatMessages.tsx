@@ -67,6 +67,12 @@ interface ChatMessagesProps {
   onEditMessage?: (messageId: string, content: string, processNodeId?: string | null) => void;
   onApproveToolCall?: (toolCallId: string) => void; // Add approve handler prop
   onRejectToolCall?: (toolCallId: string) => void; // Add reject handler prop
+  /**
+   * #97: an MCP App handed a message/selection back to the model (ui/message /
+   * ui/update-model-context). Wired to submit a follow-up user message. MUST be
+   * a stable callback — it crosses the memoized MessageBubble boundary.
+   */
+  onAppMessage?: (text: string) => void;
 }
 
 // Type guard to check if a message has tool_calls
@@ -313,7 +319,7 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
  * local state; the component is keyed by the stable message id so the state
  * survives the parent list's re-renders.
  */
-const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId: string }> = ({ pairs, messageId }) => {
+const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId: string; onAppMessage?: (text: string) => void }> = ({ pairs, messageId, onAppMessage }) => {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
@@ -420,7 +426,14 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
                   rendered read-only in a sandboxed iframe. Present only when the
                   server has the MCP Apps opt-in enabled (gated server-side). */}
               {pair.result?.ui?.uri && pair.result.ui.serverName && (
-                <McpAppFrame serverName={pair.result.ui.serverName} uri={pair.result.ui.uri} />
+                <McpAppFrame
+                  serverName={pair.result.ui.serverName}
+                  uri={pair.result.ui.uri}
+                  toolName={pair.toolCall.function.name}
+                  toolArgs={pair.toolCall.function.arguments}
+                  toolResultContent={typeof pair.result.content === 'string' ? pair.result.content : undefined}
+                  onAppMessage={onAppMessage}
+                />
               )}
             </Box>
           </Collapse>
@@ -450,6 +463,8 @@ interface MessageBubbleProps {
    * assistant turn with no non-handoff tool calls.
    */
   toolCallPairs?: ToolCallPair<ChatMessage>[];
+  /** #97: stable MCP App -> conversation return channel (see ChatMessagesProps). */
+  onAppMessage?: (text: string) => void;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -480,6 +495,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   availableNodes,
   showRaw,
   toolCallPairs,
+  onAppMessage,
   hoistedHandoffs,
   edit,
   onMenuOpen,
@@ -737,7 +753,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             bubble; clicking a node reveals that call's parameters AND its result
             together. Pairs are handoff-filtered and computed by the container. */}
         {toolCallPairs && toolCallPairs.length > 0 && (
-          <ToolCallTimeline pairs={toolCallPairs} messageId={message.id} />
+          <ToolCallTimeline pairs={toolCallPairs} messageId={message.id} onAppMessage={onAppMessage} />
         )}
 
         {/* Display tool call result for tool messages. Handoff results are the
@@ -835,7 +851,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onSplitConversation,
   onEditMessage,
   onApproveToolCall, // Destructure new prop
-  onRejectToolCall // Destructure new prop
+  onRejectToolCall, // Destructure new prop
+  onAppMessage, // #97: MCP App -> conversation return channel (stable)
 }) => {
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
@@ -1049,6 +1066,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             availableNodes={availableNodes}
             showRaw={!!showRawToolResult[message.id]}
             toolCallPairs={renderPairsById.get(message.id)}
+            onAppMessage={onAppMessage}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             edit={isThisEditing ? { content: editContent, nodeId: editNodeId } : null}
             onMenuOpen={handleMenuOpen}

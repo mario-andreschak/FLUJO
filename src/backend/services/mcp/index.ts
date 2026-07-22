@@ -1277,6 +1277,11 @@ export class MCPService {
       const { internalListResources } = await import('./internalResources');
       return internalListResources();
     }
+    // The built-in `filesystem` server publishes its MCP App UI (#97).
+    if (serverName === FILESYSTEM_SERVER_NAME) {
+      const { filesystemListResources } = await import('./internal/filesystemResources');
+      return filesystemListResources();
+    }
     return this.listWithReconnect(serverName, listResources, { resources: [] });
   }
 
@@ -1302,6 +1307,11 @@ export class MCPService {
     if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
       const { internalReadResource } = await import('./internalResources');
       return internalReadResource(uri);
+    }
+    // The built-in `filesystem` server serves its MCP App UI HTML in-process (#97).
+    if (serverName === FILESYSTEM_SERVER_NAME) {
+      const { filesystemReadResource, isFilesystemAppUri } = await import('./internal/filesystemResources');
+      if (isFilesystemAppUri(uri)) return filesystemReadResource(uri);
     }
     const client = this.getClient(serverName);
     if (!client) {
