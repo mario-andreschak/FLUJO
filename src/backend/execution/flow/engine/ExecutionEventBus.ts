@@ -8,6 +8,11 @@ const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
 // How many recent events to retain per conversation for replay on (re)connect.
 const RING_BUFFER_SIZE = 1000;
 
+// How many recent events to retain on the GLOBAL firehose for replay on
+// (re)connect. Larger than the per-conversation buffer because it spans every
+// conversation at once — sized for a few seconds of heavy subflow fan-out.
+const GLOBAL_RING_BUFFER_SIZE = 5000;
+
 // How long a channel (and its buffered events) survives after a run:done with
 // no listeners. Long enough for the frontend's terminal refetch and any late
 // replays; without this the channels Map grew for the process lifetime — one
@@ -18,6 +23,17 @@ interface ConversationChannel {
   emitter: EventEmitter;
   seq: number;
   buffer: ExecutionEvent[];
+}
+
+/**
+ * A firehose entry: an already-stamped event plus its own global sequence
+ * number (independent of any per-conversation seq) so a single
+ * all-conversations subscriber can resume via ?fromSeq without tracking N
+ * per-conversation seqs.
+ */
+export interface GlobalEvent {
+  globalSeq: number;
+  event: ExecutionEvent;
 }
 
 /**
@@ -33,6 +49,21 @@ interface ConversationChannel {
 class ExecutionEventBus {
   private channels = new Map<string, ConversationChannel>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // --- Global firehose (additive) ------------------------------------------
+  // A single process-wide channel mirroring EVERY per-conversation event, so a
+  // client (e.g. the brain viz) can watch all activity over ONE connection
+  // instead of one EventSource per conversation — which hits the browser's
+  // ~6-per-origin connection cap under heavy subflow fan-out. Purely additive:
+  // the per-conversation channels are untouched, so chat streaming is
+  // unaffected. Never garbage-collected: it spans the process lifetime.
+  private globalEmitter = (() => {
+    const e = new EventEmitter();
+    e.setMaxListeners(0); // arbitrarily many firehose subscribers
+    return e;
+  })();
+  private globalSeq = 0;
+  private globalBuffer: GlobalEvent[] = [];
 
   private getChannel(conversationId: string): ConversationChannel {
     let channel = this.channels.get(conversationId);
@@ -96,6 +127,11 @@ class ExecutionEventBus {
     // fire-and-forget so persistence can never break live consumers.
     appendFromBus(event);
 
+    // Fan the same event onto the global firehose. The per-conversation channel
+    // above already delivered it (chat is unaffected); this is an extra tap for
+    // all-conversations subscribers.
+    this.publishGlobal(event);
+
     // Terminal event → the channel becomes garbage once nobody replays it.
     // Any other event (e.g. run:start of a resumed conversation) revives it.
     if (event.type === 'run:done') {
@@ -136,6 +172,36 @@ class ExecutionEventBus {
     return () => {
       channel.emitter.off('event', listener);
     };
+  }
+
+  // --- Global firehose API -------------------------------------------------
+
+  /** Publish an event onto the global channel, assigning a monotonic globalSeq
+   *  and retaining it in the global ring buffer for replay. */
+  private publishGlobal(event: ExecutionEvent): void {
+    const wrapped: GlobalEvent = { globalSeq: this.globalSeq++, event };
+    this.globalBuffer.push(wrapped);
+    if (this.globalBuffer.length > GLOBAL_RING_BUFFER_SIZE) this.globalBuffer.shift();
+    this.globalEmitter.emit('event', wrapped);
+  }
+
+  /** Subscribe to the firehose (all conversations). Returns an unsubscribe fn. */
+  subscribeGlobal(listener: (e: GlobalEvent) => void): () => void {
+    this.globalEmitter.on('event', listener);
+    return () => {
+      this.globalEmitter.off('event', listener);
+    };
+  }
+
+  /** Buffered firehose entries with globalSeq >= fromSeq, for replay on
+   *  (re)connect. */
+  getGlobalBufferedSince(fromSeq: number): GlobalEvent[] {
+    return this.globalBuffer.filter((e) => e.globalSeq >= fromSeq);
+  }
+
+  /** The next globalSeq the firehose will assign (current high-water mark). */
+  currentGlobalSeq(): number {
+    return this.globalSeq;
   }
 }
 
