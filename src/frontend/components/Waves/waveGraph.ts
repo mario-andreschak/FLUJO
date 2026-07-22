@@ -18,6 +18,7 @@
  */
 
 import type { Wave, WaveChainEdge, WaveChainNode } from '@/shared/types/waves/waves';
+import { buildWaveAdjacency } from '@/utils/shared/waveHierarchy';
 import { enumerateOccurrences, timelineFraction } from './waveTimeline';
 
 /* --------------------------------------------------------------------- */
@@ -105,49 +106,9 @@ export function occOf(key: string): number {
 export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
   const { wave, now, windowMs, hoveredKey, timezone } = input;
 
-  const nodeById = new Map<string, WaveChainNode>();
-  for (const n of wave.nodes) nodeById.set(n.executionId, n);
-
-  // Adjacency + canonical spanning-tree parent (deterministic: smallest pred id).
-  const succ = new Map<string, string[]>();
-  const preds = new Map<string, string[]>();
-  for (const n of wave.nodes) {
-    succ.set(n.executionId, []);
-    preds.set(n.executionId, []);
-  }
-  const edgeByPair = new Map<string, WaveChainEdge>();
-  for (const e of wave.edges) {
-    if (!nodeById.has(e.fromExecutionId) || !nodeById.has(e.toExecutionId)) continue;
-    succ.get(e.fromExecutionId)!.push(e.toExecutionId);
-    preds.get(e.toExecutionId)!.push(e.fromExecutionId);
-    edgeByPair.set(`${e.fromExecutionId}->${e.toExecutionId}`, e);
-  }
-  for (const [, arr] of succ) arr.sort();
-
-  // Roots: declared roots present in the wave, else nodes without preds.
-  let rootIds = wave.rootExecutionIds.filter((id) => nodeById.has(id));
-  if (rootIds.length === 0) {
-    rootIds = wave.nodes.filter((n) => (preds.get(n.executionId)?.length ?? 0) === 0).map((n) => n.executionId);
-  }
-  rootIds = [...rootIds].sort();
-
-  // BFS spanning-tree parent pointing TOWARD a root, so walking `parentOf`
-  // always terminates at a root even through recursion cycles.
-  const parentOf = new Map<string, string>();
-  {
-    const seen = new Set<string>(rootIds);
-    const queue = [...rootIds];
-    while (queue.length > 0) {
-      const u = queue.shift()!;
-      for (const v of succ.get(u) ?? []) {
-        if (!seen.has(v)) {
-          seen.add(v);
-          parentOf.set(v, u);
-          queue.push(v);
-        }
-      }
-    }
-  }
+  // Adjacency + canonical spanning-tree parent are shared with the Chat sidebar
+  // wave hierarchy (#214) so the canvas and sidebar can never drift.
+  const { nodeById, succ, edgeByPair, rootIds, parentOf } = buildWaveAdjacency(wave);
 
   /* -- Root instances (timeline occurrences) ------------------------- */
   interface RootInstance { baseId: string; occ: number; runAt: number | null; }

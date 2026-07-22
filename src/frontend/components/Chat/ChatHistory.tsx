@@ -33,10 +33,21 @@ import { ConversationListItem } from './index'; // Import ConversationListItem i
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
 import { groupItems, CardGroup } from '@/utils/shared/cardGrouping';
-import { buildWaveLookup, waveBucket, orderWaveGroups } from '@/utils/shared/waveGrouping';
+import {
+  buildWaveLookup,
+  waveBucket,
+  orderWaveGroups,
+  WAVE_ADHOC_KEY,
+  WAVE_ARCHIVED_KEY,
+} from '@/utils/shared/waveGrouping';
+import {
+  buildWaveExecutionTrees,
+  attachConversationsToWaveTree,
+} from '@/utils/shared/waveHierarchy';
 import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import ConversationTree from './ConversationTree';
+import WaveTree from './WaveTree';
 import { buildChainIndex } from '@/utils/shared/conversationChains';
 
 interface ChatHistoryProps {
@@ -150,6 +161,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   }, [groupMode, conversations]);
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
+  // Execution hierarchy per wave (issue #214): turns each wave into a
+  // parent→child tree of executions so the sidebar can nest conversations under
+  // the execution they ran from — the same hierarchy the Waves page shows.
+  const waveTrees = useMemo(() => buildWaveExecutionTrees(waves), [waves]);
 
   // Content search (issue #182): when the search dimension is 'content', message
   // bodies must be matched server-side (they aren't all resident here). Debounce
@@ -302,6 +317,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const [expandedChains, setExpandedChains] = React.useState<Record<string, boolean>>({});
   const toggleChain = React.useCallback((id: string) => {
     setExpandedChains((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
+  }, []);
+
+  // Per-execution expand state for the wave hierarchy (issue #214), same
+  // session-only, expanded-by-default pattern as the chain tree, keyed by
+  // execution id.
+  const [expandedWaveNodes, setExpandedWaveNodes] = React.useState<Record<string, boolean>>({});
+  const toggleWaveNode = React.useCallback((id: string) => {
+    setExpandedWaveNodes((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
   }, []);
 
   const activeFilterCount =
@@ -605,6 +628,18 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         ) : (
           groups.map((group) => {
             const collapsed = !!collapsedGroups[group.key];
+            // In wave mode, real wave buckets (not the Ad-hoc / Archived
+            // fallbacks) render their execution hierarchy inside the group body
+            // (issue #214). The group key is `wave:${waveId}`.
+            const waveTree =
+              groupMode === 'wave' &&
+              group.key !== WAVE_ADHOC_KEY &&
+              group.key !== WAVE_ARCHIVED_KEY
+                ? waveTrees.get(group.key.replace(/^wave:/, ''))
+                : undefined;
+            const attachment = waveTree
+              ? attachConversationsToWaveTree(waveTree, group.items)
+              : null;
             return (
               <Box key={group.key}>
                 <ListItemButton
@@ -622,7 +657,20 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                   <Chip label={group.items.length} size="small" sx={{ height: 18, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }} />
                 </ListItemButton>
                 <Collapse in={!collapsed} timeout="auto" unmountOnExit>
-                  {group.items.map(renderConversation)}
+                  {waveTree && attachment ? (
+                    <WaveTree
+                      executionIds={waveTree.rootExecutionIds}
+                      childrenByExecution={waveTree.childrenByExecution}
+                      nodeById={waveTree.nodeById}
+                      conversationsByExecution={attachment.conversationsByExecution}
+                      renderable={attachment.renderableExecutionIds}
+                      renderItem={renderConversation}
+                      expanded={expandedWaveNodes}
+                      onToggle={toggleWaveNode}
+                    />
+                  ) : (
+                    group.items.map(renderConversation)
+                  )}
                 </Collapse>
               </Box>
             );
