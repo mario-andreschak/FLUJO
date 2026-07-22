@@ -308,11 +308,19 @@ export class SchedulerService {
         this.armed.set(
           execution.id,
           armFlowEvent(trigger, {
-            onFire: ({ summary, context, chainDepth }) => {
+            onFire: ({ summary, context, chainDepth, sourceConversationId }) => {
               this.lastTriggerErrors.delete(execution.id);
               // Fire-and-forget: the bus listener is synchronous. Any run
-              // outcome is recorded by fire() as a RunRecord.
-              void this.fire(execution, { kind: 'flow-event', summary, context, chainDepth }).catch(
+              // outcome is recorded by fire() as a RunRecord. Thread the
+              // upstream run's conversation as the parent (#214) so the produced
+              // run records its lineage for the sidebar's per-run wave tree.
+              void this.fire(execution, {
+                kind: 'flow-event',
+                summary,
+                context,
+                chainDepth,
+                parentConversationId: sourceConversationId,
+              }).catch(
                 error => log.error(`Flow-event fire failed for ${execution.id}:`, error)
               );
             },
@@ -1319,6 +1327,12 @@ export class SchedulerService {
         // (issue #113).
         source: 'schedule',
         plannedExecutionId: execution.id,
+        // Runtime lineage (#214): a flow-event/signal-fired run records the
+        // upstream run's conversation as its parent (runFlow sets
+        // parentConversationId + rootConversationId from this), so the chat
+        // sidebar can nest the real per-run tree — ap-01 run → ap-02 run → ap-03
+        // run. Undefined for organic fires, which stay chain roots.
+        parentRunId: payload.parentConversationId,
         // Event-chain depth (issue #116/#117): a flow-event/signal-fired run is
         // one hop deeper than the run that triggered it. Threaded onto
         // SharedState so a `signal` node inside this run emits at the right depth

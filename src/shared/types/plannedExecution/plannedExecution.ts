@@ -310,6 +310,15 @@ export interface TriggerFirePayload {
    * break runaway A→B→A loops. Distinct from runFlow's subflow `runDepth`.
    */
   chainDepth?: number;
+  /**
+   * Conversation id of the UPSTREAM run that triggered this fire (issue #214).
+   * Set only for `flow-event`/signal chained fires; threaded into runFlow as
+   * `parentRunId` so the produced conversation records its `parentConversationId`
+   * and the chat sidebar can nest the real per-run tree (ap-01 run → ap-02 run →
+   * ap-03 run) instead of collapsing every run onto its planned-execution.
+   * Undefined for organic fires (schedule/webhook/file/poll/manual/chat).
+   */
+  parentConversationId?: string;
 }
 
 /** Live (non-persisted) status of an execution's armed trigger, for the UI. */

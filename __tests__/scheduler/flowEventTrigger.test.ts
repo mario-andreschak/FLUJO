@@ -45,7 +45,7 @@ describe('armFlowEvent', () => {
     const deps = makeDeps();
     const trigger = armFlowEvent(config, deps);
 
-    publish({ chainDepth: 2, outputText: 'hello world' });
+    publish({ chainDepth: 2, outputText: 'hello world', conversationId: 'conv-up' });
 
     expect(deps.onFire).toHaveBeenCalledTimes(1);
     const payload = deps.onFire.mock.calls[0][0];
@@ -53,6 +53,9 @@ describe('armFlowEvent', () => {
     expect(payload.context.flowId).toBe('flow-A');
     expect(payload.context.outputText).toBe('hello world');
     expect(payload.summary).toMatch(/Flow "Flow A" completed/);
+    // Runtime lineage (#214): the upstream run's conversation is threaded out so
+    // the scheduler can record it as the produced run's parent.
+    expect(payload.sourceConversationId).toBe('conv-up');
 
     trigger.dispose();
   });
@@ -238,7 +241,7 @@ describe('armFlowEvent topic source (issue #117)', () => {
     const deps = makeDeps();
     const trigger = armFlowEvent({ type: 'flow-event', source: { topic: 'review-blocked' } }, deps);
 
-    publishSignal({ chainDepth: 1, payload: 'boom' });
+    publishSignal({ chainDepth: 1, payload: 'boom', conversationId: 'conv-sig' });
 
     expect(deps.onFire).toHaveBeenCalledTimes(1);
     const payload = deps.onFire.mock.calls[0][0];
@@ -247,6 +250,8 @@ describe('armFlowEvent topic source (issue #117)', () => {
     expect(payload.context.payload).toBe('boom');
     expect(payload.context.emitterFlowId).toBe('flow-A');
     expect(payload.summary).toMatch(/Signal "review-blocked"/);
+    // Runtime lineage (#214): the emitting run's conversation is threaded out.
+    expect(payload.sourceConversationId).toBe('conv-sig');
 
     trigger.dispose();
   });

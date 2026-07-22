@@ -37,17 +37,10 @@ import {
   buildWaveLookup,
   waveBucket,
   orderWaveGroups,
-  WAVE_ADHOC_KEY,
-  WAVE_ARCHIVED_KEY,
 } from '@/utils/shared/waveGrouping';
-import {
-  buildWaveExecutionTrees,
-  attachConversationsToWaveTree,
-} from '@/utils/shared/waveHierarchy';
 import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import ConversationTree from './ConversationTree';
-import WaveTree from './WaveTree';
 import { buildChainIndex } from '@/utils/shared/conversationChains';
 
 interface ChatHistoryProps {
@@ -161,10 +154,6 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   }, [groupMode, conversations]);
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
-  // Execution hierarchy per wave (issue #214): turns each wave into a
-  // parent→child tree of executions so the sidebar can nest conversations under
-  // the execution they ran from — the same hierarchy the Waves page shows.
-  const waveTrees = useMemo(() => buildWaveExecutionTrees(waves), [waves]);
 
   // Content search (issue #182): when the search dimension is 'content', message
   // bodies must be matched server-side (they aren't all resident here). Debounce
@@ -319,13 +308,19 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     setExpandedChains((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
   }, []);
 
-  // Per-execution expand state for the wave hierarchy (issue #214), same
-  // session-only, expanded-by-default pattern as the chain tree, keyed by
-  // execution id.
-  const [expandedWaveNodes, setExpandedWaveNodes] = React.useState<Record<string, boolean>>({});
-  const toggleWaveNode = React.useCallback((id: string) => {
-    setExpandedWaveNodes((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
-  }, []);
+  // Wave grouping hierarchy (issue #214): within each wave bucket, nest
+  // conversations by their RUNTIME parent chain (the same `parentConversationId`
+  // links "Group by chain" uses) so every execution *run* is its own node —
+  // ap-01 run → ap-02 run → ap-03 run — instead of collapsing all runs onto the
+  // single planned-execution node. The lineage is recorded by the scheduler
+  // when a flow-event/signal fire threads the upstream run as parentRunId.
+  // Reuses the chain tree's session-only, expanded-by-default toggle state.
+  const waveChainByGroup = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof buildChainIndex>>();
+    if (groupMode !== 'wave') return map;
+    for (const g of groups) map.set(g.key, buildChainIndex(g.items));
+    return map;
+  }, [groupMode, groups]);
 
   const activeFilterCount =
     (statusFilter !== 'all' ? 1 : 0) +
@@ -628,18 +623,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         ) : (
           groups.map((group) => {
             const collapsed = !!collapsedGroups[group.key];
-            // In wave mode, real wave buckets (not the Ad-hoc / Archived
-            // fallbacks) render their execution hierarchy inside the group body
-            // (issue #214). The group key is `wave:${waveId}`.
-            const waveTree =
-              groupMode === 'wave' &&
-              group.key !== WAVE_ADHOC_KEY &&
-              group.key !== WAVE_ARCHIVED_KEY
-                ? waveTrees.get(group.key.replace(/^wave:/, ''))
-                : undefined;
-            const attachment = waveTree
-              ? attachConversationsToWaveTree(waveTree, group.items)
-              : null;
+            // In wave mode, each bucket nests its conversations by their runtime
+            // parent chain so every execution run is its own tree node (#214).
+            const waveChain = groupMode === 'wave' ? waveChainByGroup.get(group.key) : undefined;
             return (
               <Box key={group.key}>
                 <ListItemButton
@@ -657,16 +643,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                   <Chip label={group.items.length} size="small" sx={{ height: 18, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }} />
                 </ListItemButton>
                 <Collapse in={!collapsed} timeout="auto" unmountOnExit>
-                  {waveTree && attachment ? (
-                    <WaveTree
-                      executionIds={waveTree.rootExecutionIds}
-                      childrenByExecution={waveTree.childrenByExecution}
-                      nodeById={waveTree.nodeById}
-                      conversationsByExecution={attachment.conversationsByExecution}
-                      renderable={attachment.renderableExecutionIds}
-                      renderItem={renderConversation}
-                      expanded={expandedWaveNodes}
-                      onToggle={toggleWaveNode}
+                  {waveChain ? (
+                    <ConversationTree
+                      nodes={waveChain.roots}
+                      childrenByParent={waveChain.childrenByParent}
+                      renderItem={(c) => renderConversation(c)}
+                      expanded={expandedChains}
+                      onToggle={toggleChain}
                     />
                   ) : (
                     group.items.map(renderConversation)

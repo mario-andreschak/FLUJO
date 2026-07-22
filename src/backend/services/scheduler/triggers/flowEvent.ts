@@ -18,7 +18,15 @@ export interface FlowEventDeps {
    * the scheduler stamps it onto the next FlowRunEvent so a runaway chain trips
    * `maxChainDepth`. Fire-and-forget — the bus listener stays synchronous.
    */
-  onFire: (payload: { summary: string; context: unknown; chainDepth: number }) => void;
+  onFire: (payload: {
+    summary: string;
+    context: unknown;
+    chainDepth: number;
+    /** Conversation id of the upstream run that triggered this fire (#214), so
+     *  the produced run records it as `parentConversationId` and the sidebar can
+     *  nest the real per-run tree. */
+    sourceConversationId?: string;
+  }) => void;
   /**
    * Record a `skipped` run instead of firing (loop safety: the event-chain
    * depth reached `maxChainDepth`). Preserves the audit trail.
@@ -108,7 +116,12 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
 
   // Shared loop-safety gate: refuse to extend a chain at the cap, clamp the
   // cooldown, then fire at chainDepth + 1 (the new run is one hop deeper).
-  const attemptFire = (sourceDepth: number, summary: string, context: unknown): void => {
+  const attemptFire = (
+    sourceDepth: number,
+    summary: string,
+    context: unknown,
+    sourceConversationId?: string,
+  ): void => {
     if (sourceDepth >= maxChainDepth) {
       const reason = `Flow-event chain reached the depth limit (${maxChainDepth}); not firing again`;
       log.info(reason);
@@ -121,7 +134,7 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
       return;
     }
     lastFireMs = now;
-    deps.onFire({ summary, context, chainDepth: sourceDepth + 1 });
+    deps.onFire({ summary, context, chainDepth: sourceDepth + 1, sourceConversationId });
   };
 
   const unsubscribe = getFlowRunEventBus().subscribe((event) => {
@@ -138,15 +151,20 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
         if (!matchesOutput(event.payload)) {
           return;
         }
-        attemptFire(event.chainDepth, `Signal "${event.topic}"`, {
-          topic: event.topic,
-          payload: clampContext(event.payload),
-          emitterFlowId: event.emitterFlowId,
-          flowName: event.flowName,
-          runId: event.runId,
-          conversationId: event.conversationId,
-          firedBy: event.firedBy,
-        });
+        attemptFire(
+          event.chainDepth,
+          `Signal "${event.topic}"`,
+          {
+            topic: event.topic,
+            payload: clampContext(event.payload),
+            emitterFlowId: event.emitterFlowId,
+            flowName: event.flowName,
+            runId: event.runId,
+            conversationId: event.conversationId,
+            firedBy: event.firedBy,
+          },
+          event.conversationId,
+        );
         return;
       }
 
@@ -165,17 +183,22 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
         return;
       }
       const label = event.flowName ?? event.flowId;
-      attemptFire(event.chainDepth, `Flow "${label}" ${event.status}`, {
-        flowId: event.flowId,
-        flowName: event.flowName,
-        executionId: event.executionId,
-        runId: event.runId,
-        conversationId: event.conversationId,
-        status: event.status,
-        firedBy: event.firedBy,
-        outputText: clampContext(event.outputText),
-        error: event.error,
-      });
+      attemptFire(
+        event.chainDepth,
+        `Flow "${label}" ${event.status}`,
+        {
+          flowId: event.flowId,
+          flowName: event.flowName,
+          executionId: event.executionId,
+          runId: event.runId,
+          conversationId: event.conversationId,
+          status: event.status,
+          firedBy: event.firedBy,
+          outputText: clampContext(event.outputText),
+          error: event.error,
+        },
+        event.conversationId,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn(`Flow-event handling failed: ${message}`);
