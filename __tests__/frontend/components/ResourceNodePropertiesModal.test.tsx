@@ -82,3 +82,83 @@ describe('ResourceNodePropertiesModal', () => {
     expect(options).toContain('summary');
   });
 });
+
+// --- #205 coverage top-up: MCP-scope reveal + save persistence / label fallback ---
+
+const makeNode = (label: string, properties: Record<string, any> = {}): any => ({
+  id: 'r1',
+  type: 'resource',
+  position: { x: 0, y: 0 },
+  data: { label, type: 'resource', properties },
+});
+
+const renderNode = (node: any, onSave = jest.fn()) => {
+  render(
+    <ResourceNodePropertiesModal
+      open
+      node={node}
+      onClose={() => {}}
+      onSave={onSave}
+      flowNodes={[node]}
+    />
+  );
+  return onSave;
+};
+
+describe('ResourceNodePropertiesModal — scope reveal', () => {
+  it('switching to MCP scope reveals the server/URI fields and hides the run-scope field', () => {
+    renderNode(makeNode('Resource Node'));
+    // Run-scope field is present initially, mcp-only field is not.
+    expect(screen.getByLabelText('Temporary Data name')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Resource URI')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'MCP resource' }));
+
+    // MCP fields appear; the run-scope name field is gone.
+    expect(screen.getByLabelText('Resource URI')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Temporary Data name')).not.toBeInTheDocument();
+  });
+});
+
+describe('ResourceNodePropertiesModal — save persistence', () => {
+  it('persists only the run scope, dropping stale MCP bindings', () => {
+    const onSave = renderNode(makeNode('Resource Node', { scope: 'run', runName: 'summary', boundServer: 'srv', uri: 'file:///x' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const [, data] = onSave.mock.calls[0];
+    expect(data.properties.scope).toBe('run');
+    expect(data.properties.runName).toBe('summary');
+    expect(data.properties.boundServer).toBeUndefined();
+    expect(data.properties.uri).toBeUndefined();
+  });
+
+  it('persists only the MCP scope, dropping the stale run name', () => {
+    const onSave = renderNode(makeNode('Resource Node', { scope: 'mcp', runName: 'stale', boundServer: 'srv', uri: 'file:///x' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const [, data] = onSave.mock.calls[0];
+    expect(data.properties.scope).toBe('mcp');
+    expect(data.properties.runName).toBeUndefined();
+    expect(data.properties.boundServer).toBe('srv');
+    expect(data.properties.uri).toBe('file:///x');
+  });
+
+  it('falls back the label to the run name when no custom label is set', () => {
+    // Empty label so the fallback path runs (the default "Resource Node" would be kept verbatim).
+    const onSave = renderNode(makeNode('', { scope: 'run', runName: 'draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onSave.mock.calls[0][1].label).toBe('draft');
+  });
+
+  it('falls back the label to "Temporary Data" when neither label nor run name is set', () => {
+    const onSave = renderNode(makeNode('', { scope: 'run' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onSave.mock.calls[0][1].label).toBe('Temporary Data');
+  });
+
+  it('falls back the label to "MCP resource" in MCP scope with no custom label', () => {
+    const onSave = renderNode(makeNode('', { scope: 'mcp', boundServer: 'srv' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onSave.mock.calls[0][1].label).toBe('MCP resource');
+  });
+});
