@@ -101,10 +101,13 @@ describe('SubflowNode', () => {
       expect.objectContaining({ role: 'user', content: 'hello world' }),
     ]);
 
-    // Subflow output folded back into the parent transcript as this node's message.
+    // Subflow output folded back into the parent transcript as this node's
+    // message, framed as a returned sub-agent result (#218) while the RAW text
+    // is preserved verbatim (and stays clean on lastResponse for captures).
     const last = state.messages[state.messages.length - 1];
     expect(last.role).toBe('assistant');
-    expect(last.content).toBe('echo:history');
+    expect(last.content).toContain('echo:history');
+    expect(last.content).toContain('Returned result from sub-agent');
     expect(last.processNodeId).toBe('sub-node');
     expect(state.lastResponse).toBe('echo:history');
 
@@ -434,8 +437,11 @@ describe('subflow event folding into the parent conversation (Phase 3)', () => {
 
     expect(runFlowMock.mock.calls[0][0].emit).toBeUndefined();
     expect(parentEvents).toEqual([]);
-    // The folded final output still lands in the parent transcript.
-    expect(state.messages[state.messages.length - 1]).toMatchObject({ role: 'assistant', content: 'echo:history' });
+    // The folded final output still lands in the parent transcript (framed as a
+    // returned sub-agent result, #218 — the raw text is retained verbatim).
+    const folded = state.messages[state.messages.length - 1];
+    expect(folded.role).toBe('assistant');
+    expect(folded.content).toContain('echo:history');
   });
 
   it('runs the child without an emit when the parent has none (headless runs unchanged)', async () => {

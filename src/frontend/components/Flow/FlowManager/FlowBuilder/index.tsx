@@ -14,6 +14,8 @@ import {
   Divider,
   IconButton,
   Tooltip,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
@@ -145,7 +147,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
   const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
-  
+  // Unattended execution (#218): when ON, a Process node that stops on plain
+  // text is driven forward to its single next step instead of silently ending
+  // the run. `undefined` = follow the source default (scheduled ON, chat OFF).
+  const [flowUnattended, setFlowUnattended] = useState<boolean>(initialFlow?.unattended ?? false);
+
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
   const [dialogType, setDialogType] = useState<DialogType>('none');
@@ -219,7 +225,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges(validEdges);
       setFlowName(initialFlow.name);
       setFlowDescription(initialFlow.description || '');
-      
+      setFlowUnattended(initialFlow.unattended ?? false);
+
       // Initialize history with initial state
       const initialState: HistoryEntry = {
         nodes: initialFlow.nodes || [],
@@ -235,7 +242,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges([]);
       setFlowName('NewFlow');
       setFlowDescription('');
-      
+      setFlowUnattended(false);
+
       // Initialize history with the Start node
       const emptyState: HistoryEntry = {
         nodes: [startNode],
@@ -355,6 +363,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setHasUnsavedChanges(true);
   };
 
+  // Handle unattended toggle (#218). Like the description, it isn't tracked by
+  // the nodes/edges history effect, so flag unsaved changes explicitly.
+  const handleFlowUnattendedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFlowUnattended(e.target.checked);
+    setHasUnsavedChanges(true);
+  };
+
   // Handle save flow
   const handleSave = useCallback((): SaveResult => {
     log.debug(`handleSave: Attempting to save flow "${flowName}"`);
@@ -391,6 +406,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       id: initialFlow?.id || uuidv4(),
       name: flowName,
       description: flowDescription,
+      unattended: flowUnattended,
       nodes: flowNodes,
       edges,
     };
@@ -399,7 +415,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     onSave(flow);
     setHasUnsavedChanges(false);
     return 'saved';
-  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave, allFlows]);
+  }, [flowName, flowDescription, flowUnattended, nodes, edges, initialFlow, onSave, allFlows]);
 
   // Navigation guard: the parent must route "leave the builder" actions
   // (back to dashboard, switching flows) through here so unsaved changes get
@@ -478,6 +494,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       id: initialFlow?.id || '',
       name: flowName,
       description: flowDescription,
+      unattended: flowUnattended,
       nodes,
       edges,
     };
@@ -519,6 +536,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       id: uuidv4(), // Generate a new ID
       name: newName,
       description: flowToCopy.description,
+      unattended: flowToCopy.unattended,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
     };
@@ -565,6 +583,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         id: initialFlow?.id || uuidv4(),
         name: newFlowName,
         description: flowDescription,
+        unattended: flowUnattended,
         nodes,
         edges,
       };
@@ -884,10 +903,27 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               sx={{ minWidth: 300, flex: 1 }}
               placeholder="Optional — shown on the flow card"
             />
-            
-            <Button 
-              variant="contained" 
-              color="primary" 
+
+            <Tooltip
+              arrow
+              title="Unattended: if a step's model stops without handing off, the engine drives the conversation forward to the next step instead of silently ending the run. Recommended for scheduled/headless flows; leave off for interactive chat."
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={flowUnattended}
+                    onChange={handleFlowUnattendedChange}
+                  />
+                }
+                label="Unattended"
+                sx={{ whiteSpace: 'nowrap', ml: 0.5 }}
+              />
+            </Tooltip>
+
+            <Button
+              variant="contained"
+              color="primary"
               onClick={handleSave}
               startIcon={<SaveIcon />}
               disabled={!!flowNameError}
@@ -1094,6 +1130,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           id: initialFlow?.id || '',
           name: flowName,
           description: flowDescription,
+          unattended: flowUnattended,
           nodes,
           edges,
         }}

@@ -34,6 +34,17 @@ export interface Flow {
    */
   favorite?: boolean;
   /**
+   * Unattended execution (issue #218). When true, a Process node that ends its
+   * turn on plain text (no tool call / handoff) does NOT silently terminate the
+   * run as `completed`: if the node has exactly one forward (non-returning)
+   * successor the engine auto-advances to it, so a model that "narrates and
+   * stops" instead of handing off can't dead-end the flow halfway. Absent means
+   * "use the source default" (headless/scheduled runs default ON, interactive
+   * chat OFF) — see runFlow's resolveUnattended. Set explicitly to force either
+   * mode regardless of source.
+   */
+  unattended?: boolean;
+  /**
    * Server-managed creation time in epoch milliseconds (#108). Set once when a
    * flow is first saved and preserved across subsequent saves. Optional so it
    * stays out of the public FlowSpec authoring contract; legacy flows that

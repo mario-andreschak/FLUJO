@@ -48,6 +48,138 @@ const persistState = persistConversationState;
 /** Cap the output carried on a runFlow-originated FlowRunEvent (issue #116). */
 const MAX_EVENT_OUTPUT_CHARS = 4096;
 
+/** Unattended mode (issue #218): how many times to re-prompt a Process node
+ *  that ended on plain text but has MORE THAN ONE forward successor (so the
+ *  engine can't pick deterministically) before giving up and completing the
+ *  run. The single-forward-successor case never nudges — it auto-advances. */
+const UNATTENDED_MAX_NUDGES = 1;
+
+/**
+ * Resolve whether this run is UNATTENDED (issue #218), memoized on the state.
+ * Precedence: the flow's explicit `unattended` flag, else a source default —
+ * scheduled/headless runs default ON (no human to nudge them past a stall),
+ * interactive chat defaults OFF (a plain-text answer legitimately waits for the
+ * user). A flow load failure falls back to the source default. Never throws.
+ */
+async function resolveUnattended(state: SharedState): Promise<boolean> {
+  if (typeof state.unattended === 'boolean') return state.unattended;
+  let flag: boolean | undefined;
+  try {
+    const flow = state.flowSnapshot
+      ?? (state.flowId ? (await flowService.getFlow(state.flowId)) ?? undefined : undefined);
+    flag = flow?.unattended;
+  } catch (err) {
+    log.debug('resolveUnattended: flow load failed; using source default', { err });
+  }
+  const resolved = typeof flag === 'boolean' ? flag : state.source === 'schedule';
+  state.unattended = resolved;
+  return resolved;
+}
+
+type UnattendedOutcome = 'advanced' | 'nudged' | 'complete';
+
+/**
+ * Unattended drive-forward (issue #218). Called when a step returned
+ * FINAL_RESPONSE_ACTION (a Process node ended its turn on plain text with no
+ * tool call / handoff). In a normal run that silently completes the flow — a
+ * problem for headless runs where the model "narrates and stops" instead of
+ * handing off, leaving the flow dead halfway (labels not moved, no commit,
+ * status reported as success). In UNATTENDED mode:
+ *   - exactly ONE forward (non-returning) control successor  -> auto-advance to
+ *     it (the author's unambiguous continuation);
+ *   - MORE THAN ONE                                          -> re-prompt the
+ *     model to hand off, bounded by UNATTENDED_MAX_NUDGES, then complete;
+ *   - ZERO (a genuine leaf, e.g. a simple answer flow)       -> complete as
+ *     today.
+ * "Forward" excludes bidirectional back-edges (they return to a caller rather
+ * than progress toward a finish) and MCP edges. Only Process nodes are driven;
+ * a Finish node reaching FINAL_RESPONSE_ACTION completes normally.
+ */
+async function unattendedDriveForward(
+  state: SharedState,
+  emit: EmitFn,
+  nudges: Map<string, number>,
+): Promise<UnattendedOutcome> {
+  if (!(await resolveUnattended(state))) return 'complete';
+
+  const nodeId = state.currentNodeId;
+  if (!nodeId) return 'complete';
+
+  let flow: Flow | undefined;
+  try {
+    flow = state.flowSnapshot
+      ?? (state.flowId ? (await flowService.getFlow(state.flowId)) ?? undefined : undefined);
+  } catch (err) {
+    log.debug('[Unattended] flow load failed; completing normally', { err });
+    return 'complete';
+  }
+  if (!flow) return 'complete';
+
+  const node = flow.nodes?.find(n => n.id === nodeId);
+  // Only Process nodes stall on plain text. A finish node (or anything else)
+  // reaching here means the flow genuinely ended — complete normally.
+  if (!node || node.type !== 'process') return 'complete';
+
+  const mcpNodeIds = new Set((flow.nodes ?? []).filter(n => n.type === 'mcp').map(n => n.id));
+  const forwardTargets = Array.from(
+    new Set(
+      (flow.edges ?? [])
+        .filter(e =>
+          e.source === nodeId &&
+          e.type !== 'mcpEdge' &&
+          (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.edgeType !== 'mcp' &&
+          (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.bidirectional !== true &&
+          !mcpNodeIds.has(e.target),
+        )
+        .map(e => e.target),
+    ),
+  ).filter(t => (flow!.nodes ?? []).some(n => n.id === t));
+
+  if (forwardTargets.length === 1) {
+    const nextNodeId = forwardTargets[0];
+    log.info(
+      `[Unattended] Process node ${nodeId} ended on plain text; auto-advancing to sole forward successor ${nextNodeId} for conv ${state.conversationId}.`,
+    );
+    const fromNodeId = state.currentNodeId;
+    state.currentNodeId = nextNodeId;
+    state.handoffRequested = undefined;
+    nudges.delete(nodeId);
+    emit({
+      type: 'handoff',
+      from: fromNodeId ? { nodeId: fromNodeId } : undefined,
+      toNodeId: nextNodeId,
+      edgeId: `unattended-auto:${nodeId}->${nextNodeId}`,
+    });
+    return 'advanced';
+  }
+
+  if (forwardTargets.length > 1) {
+    const count = nudges.get(nodeId) ?? 0;
+    if (count < UNATTENDED_MAX_NUDGES) {
+      nudges.set(nodeId, count + 1);
+      log.info(
+        `[Unattended] Process node ${nodeId} ended on plain text with ${forwardTargets.length} forward successors; nudging to hand off (attempt ${count + 1}/${UNATTENDED_MAX_NUDGES}).`,
+      );
+      state.messages.push({
+        id: crypto.randomUUID(),
+        role: 'user',
+        content:
+          'You ended your turn without calling a tool or handing off, but this is an unattended run that cannot stop at this step. To continue you MUST call one of your handoff tools to route to the next step. If your work at this step is complete, hand off to the finishing/next step now.',
+        timestamp: Date.now(),
+        processNodeId: nodeId,
+      });
+      return 'nudged';
+    }
+    log.warn(
+      `[Unattended] Process node ${nodeId} still did not hand off after ${UNATTENDED_MAX_NUDGES} nudge(s); completing the run to avoid a loop.`,
+    );
+    return 'complete';
+  }
+
+  // Zero forward successors: a genuine leaf. Nothing to drive to — complete.
+  return 'complete';
+}
+
 /**
  * Announce a terminal run on the process-global FlowRunEvent bus (issue #116)
  * so `flow-event` triggers can react to chat/API/manual runs. ONLY called for
@@ -617,6 +749,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   let preflightError = false;
   const MAX_INTERNAL_ITERATIONS = 150;
   let internalIterations = 0;
+  // Unattended drive-forward (issue #218): per-node nudge counter, run-scoped
+  // (a resume starts fresh). Keyed by the Process node id that stalled.
+  const unattendedNudges = new Map<string, number>();
 
   // --- Execution event emission (live progress + debugger) ---
   const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
@@ -874,6 +1009,26 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         if (currentAction === FINAL_RESPONSE_ACTION) {
           log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
           log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
+
+          // Unattended safety net (issue #218): a Process node that ended its
+          // turn on plain text (no tool call / handoff) would silently complete
+          // the run here. In unattended mode, drive it forward along its single
+          // non-returning successor instead (or nudge on ambiguity), so a model
+          // that "narrates and stops" can't dead-end the flow halfway. Returns
+          // 'complete' for interactive runs, finish nodes, and genuine leaves —
+          // preserving today's behavior for everything except the stall case.
+          const driven = await unattendedDriveForward(sharedState, emit, unattendedNudges);
+          if (driven === 'advanced') {
+            emitNewMessages();
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            continue;
+          }
+          if (driven === 'nudged') {
+            emitNewMessages();
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            continue;
+          }
+
           sharedState.status = 'completed';
           log.info(`Setting conversation status to 'completed' for conv ${effectiveConvId}`);
           break;

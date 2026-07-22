@@ -882,9 +882,28 @@ export class SubflowNode extends BaseNode {
     // Fold the subflow's output into the parent transcript as an assistant
     // message attributed to this node, and expose it as the latest response.
     const outputText = execResult.outputText ?? '';
+
+    // Issue #218: FRAME the folded output as an explicit returned result. On the
+    // model wire, stripHandoffPlumbing removes the caller's `handoff_to_*` call
+    // and its tool result but KEEPS the caller's departing prose — so an unframed
+    // fold reads as a SECOND assistant turn the caller itself wrote. That is the
+    // reported dead-end: after a bidirectional sub-agent returns, the caller sees
+    // what looks like its own message, concludes the work is still pending, says
+    // "awaiting the sub-agent's report", and ends its turn on plain text (which
+    // terminates the run). A short attribution header makes the boundary explicit
+    // and tells the model the sub-task is FINISHED, not in-flight. The RAW
+    // `outputText` is kept for lastResponse and every capture path below so the
+    // frame never leaks into programmatic outputs (captureVariable/Resource/kv)
+    // or the run's returned outputText.
+    const subAgentName =
+      node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
+    const framedContent =
+      outputText.trim().length > 0
+        ? `[↩ Returned result from sub-agent "${subAgentName}" — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${outputText}`
+        : `[↩ Sub-agent "${subAgentName}" finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
     const assistantMessage: FlujoChatMessage = {
       role: 'assistant',
-      content: outputText,
+      content: framedContent,
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       processNodeId: node_params?.id,

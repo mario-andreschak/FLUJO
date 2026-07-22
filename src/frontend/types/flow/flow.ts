@@ -27,6 +27,14 @@ export interface Flow {
    * (mirrors `folder?` #71).
    */
   favorite?: boolean;
+  /**
+   * Unattended execution (#218). When true, a Process node that ends its turn
+   * on plain text (no tool call / handoff) is driven forward to its single next
+   * step instead of silently ending the run. Absent means "use the source
+   * default" (scheduled/headless ON, interactive chat OFF). See the backend
+   * Flow type and runFlow's resolveUnattended.
+   */
+  unattended?: boolean;
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

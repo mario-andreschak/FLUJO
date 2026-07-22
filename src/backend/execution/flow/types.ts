@@ -602,6 +602,13 @@ export interface SharedState {
      *  Read by the chat loop (OpenAI path) and by self-orchestrating adapters
      *  (Claude subscription) to gate tool calls. */
     requireApproval?: boolean;
+    /** Unattended execution (issue #218), resolved once per run from the flow's
+     *  `unattended` flag (falling back to a source default: headless/scheduled
+     *  ON, interactive chat OFF). When true, a Process node that ends its turn
+     *  on plain text is driven forward along its single non-returning successor
+     *  instead of silently completing the run — see runFlow's FINAL_RESPONSE
+     *  handling. Memoized here so resolution (a flow load) happens at most once. */
+    unattended?: boolean;
     /** Node IDs with an active breakpoint (used by the visual debugger). */
     breakpoints?: string[];
     /** The node we most recently paused at for a breakpoint, so a resume from it does not immediately re-break. */
