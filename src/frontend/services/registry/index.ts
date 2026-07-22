@@ -68,6 +68,16 @@ class RegistryService {
     return parse<{ success: boolean; message?: string }>(response);
   }
 
+  /** Request a password-reset email for the given account (issue #206). */
+  async requestPasswordReset(email: string): Promise<{ success: boolean; message?: string }> {
+    const response = await fetch('/api/registry/auth/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    return parse<{ success: boolean; message?: string }>(response);
+  }
+
   async getSettings(): Promise<RegistrySettingsView> {
     const response = await fetch('/api/registry/settings', { method: 'GET' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

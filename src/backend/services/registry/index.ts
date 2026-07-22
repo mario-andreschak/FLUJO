@@ -160,6 +160,26 @@ export async function resendConfirmation(email?: string): Promise<{ success: boo
 }
 
 /**
+ * Request a password-reset email for the given address (issue #206). Proxies
+ * the hosted registry's Supabase reset flow: FLUJO only forwards the request;
+ * the registry sends the link and the password change happens on its own hosted
+ * page. No token is issued or returned. The plaintext email is NEVER logged.
+ */
+export async function requestPasswordReset(email: string): Promise<{ success: boolean; message?: string }> {
+  const address = (email || '').trim();
+  if (!address) {
+    return { success: false, message: 'Enter the email address for your registry account.' };
+  }
+  const { status, body } = await client.requestPasswordReset(address);
+  if (status >= 200 && status < 300) {
+    log.info('Requested password reset for registry account.');
+    return { success: true };
+  }
+  log.info(`Password reset request returned status ${status}.`);
+  return { success: false, message: body?.error || body?.message || `Registry responded with status ${status}.` };
+}
+
+/**
  * Run an authenticated registry call, decrypting the stored access token. On a
  * 401 it attempts one silent refresh (re-storing the rotated tokens) and
  * retries; if refresh fails it clears the tokens so the UI forces re-auth.

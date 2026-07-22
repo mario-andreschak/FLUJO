@@ -115,6 +115,28 @@ export default function RegistryAccountSettings() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    const address = email.trim();
+    if (!address) {
+      setMessage({ type: 'info', text: 'Enter your account email above, then tap “Forgot password?”.' });
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      // Enumeration-safe: show the same message whether or not the account exists.
+      await registryService.requestPasswordReset(address);
+      setMessage({
+        type: 'info',
+        text: 'If an account exists for that email, a password-reset link is on its way. Follow the link to set a new password.',
+      });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to request a password reset.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleSaveSettings = async () => {
     setBusy(true);
     setMessage(null);
@@ -218,6 +240,19 @@ export default function RegistryAccountSettings() {
               {tab === 'signup' ? 'Sign up' : 'Log in'}
             </Button>
           </Box>
+          {tab === 'login' && (
+            <Box>
+              <Button
+                variant="text"
+                size="small"
+                onClick={handleForgotPassword}
+                disabled={busy}
+                sx={{ textTransform: 'none', px: 0 }}
+              >
+                Forgot password?
+              </Button>
+            </Box>
+          )}
         </Stack>
       )}
 

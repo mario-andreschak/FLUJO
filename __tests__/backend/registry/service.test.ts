@@ -27,12 +27,14 @@ const loginMock = jest.fn();
 const refreshMock = jest.fn();
 const resendMock = jest.fn();
 const publishPackageMock = jest.fn();
+const requestPasswordResetMock = jest.fn();
 jest.mock('@/backend/utils/packageRegistryClient', () => ({
   signup: (...a: unknown[]) => signupMock(...a),
   login: (...a: unknown[]) => loginMock(...a),
   refresh: (...a: unknown[]) => refreshMock(...a),
   resendConfirmation: (...a: unknown[]) => resendMock(...a),
   publishPackage: (...a: unknown[]) => publishPackageMock(...a),
+  requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
 }));
 
 import {
@@ -40,6 +42,7 @@ import {
   getAccountStatus,
   logout,
   publish,
+  requestPasswordReset,
 } from '@/backend/services/registry';
 
 beforeEach(() => {
@@ -169,5 +172,40 @@ describe('publish (#197)', () => {
     const result = await publish({ id: 'pkg1' });
     expect(result.ok).toBe(false);
     expect(result.code).toBe(code);
+  });
+});
+
+describe('requestPasswordReset (#206)', () => {
+  it('returns success on a 2xx and forwards the trimmed email to the client', async () => {
+    requestPasswordResetMock.mockResolvedValue({ status: 200, body: {} });
+    const result = await requestPasswordReset('  me@example.com  ');
+    expect(result).toEqual({ success: true });
+    expect(requestPasswordResetMock).toHaveBeenCalledWith('me@example.com');
+  });
+
+  it('rejects an empty email without calling the client', async () => {
+    const result = await requestPasswordReset('   ');
+    expect(result.success).toBe(false);
+    expect(requestPasswordResetMock).not.toHaveBeenCalled();
+  });
+
+  it('maps a transport failure (status 0) to a failure result', async () => {
+    requestPasswordResetMock.mockResolvedValue({ status: 0, body: { message: 'unreachable' } });
+    const result = await requestPasswordReset('me@example.com');
+    expect(result.success).toBe(false);
+    expect(result.message).toBeDefined();
+  });
+
+  it("surfaces the registry's friendly error message on a non-2xx", async () => {
+    requestPasswordResetMock.mockResolvedValue({ status: 429, body: { error: 'Too many requests' } });
+    const result = await requestPasswordReset('me@example.com');
+    expect(result.success).toBe(false);
+    expect(result.message).toBe('Too many requests');
+  });
+
+  it('never returns/leaks the plaintext email in the result', async () => {
+    requestPasswordResetMock.mockResolvedValue({ status: 200, body: {} });
+    const result = await requestPasswordReset('secret@example.com');
+    expect(JSON.stringify(result)).not.toContain('secret@example.com');
   });
 });

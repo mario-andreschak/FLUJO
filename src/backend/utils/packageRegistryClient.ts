@@ -9,6 +9,7 @@
  *   POST /v1/auth/login               { email, password }
  *   POST /v1/auth/refresh             { refresh_token }
  *   POST /v1/auth/resend-confirmation { email }
+ *   POST /v1/auth/forgot-password     { email }         (TBD per #196 contract)
  *   POST /v1/packages                 <manifest JSON>   (Authorization: Bearer)
  *
  * Node-only: never import from client code. Never logs passwords, tokens, or
@@ -131,6 +132,20 @@ export function refresh(refreshToken: string) {
 
 export function resendConfirmation(email: string) {
   return postJson<RegistryAuthPayload>('/v1/auth/resend-confirmation', { email });
+}
+
+/**
+ * Request a password-reset email (pre-auth; issue #206). Proxies the hosted
+ * registry's Supabase-backed reset flow — the actual password change happens on
+ * the registry's own hosted page reached via the emailed link, so no reset token
+ * or new-password form is ever handled inside FLUJO. No auth header is sent.
+ *
+ * NOTE: the exact pathname is owned by the hosted registry (#196) and is
+ * currently "TBD per #196 contract"; it is isolated here so only this one line
+ * needs updating once the contract is finalized.
+ */
+export function requestPasswordReset(email: string) {
+  return postJson<RegistryAuthPayload>('/v1/auth/forgot-password', { email });
 }
 
 /** Publish a package manifest. `manifest` is the canonical JSON object (#192). */

@@ -10,11 +10,13 @@ const authenticateMock = jest.fn();
 const getAccountStatusMock = jest.fn();
 const logoutMock = jest.fn();
 const publishMock = jest.fn();
+const requestPasswordResetMock = jest.fn();
 jest.mock('@/backend/services/registry', () => ({
   authenticate: (...a: unknown[]) => authenticateMock(...a),
   getAccountStatus: (...a: unknown[]) => getAccountStatusMock(...a),
   logout: (...a: unknown[]) => logoutMock(...a),
   publish: (...a: unknown[]) => publishMock(...a),
+  requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
 }));
 
 // Store unlocked (default encryption mode).
@@ -24,6 +26,7 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 
 import { POST as authPost } from '@/app/api/registry/auth/route';
 import { POST as publishPost } from '@/app/api/registry/publish/route';
+import { POST as resetPost } from '@/app/api/registry/auth/reset/route';
 
 function req(url: string, body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) {
   return new Request(url, {
@@ -94,5 +97,34 @@ describe('POST /api/registry/publish (#197)', () => {
     const res = await publishPost(req('http://localhost:4200/api/registry/publish', { manifest: { id: 'p' } }, { host: 'evil.example.com' }));
     expect(res.status).toBe(403);
     expect(publishMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/registry/auth/reset (#206)', () => {
+  it('requests a password reset for a local email and returns 200', async () => {
+    requestPasswordResetMock.mockResolvedValue({ success: true });
+    const res = await resetPost(req('http://localhost:4200/api/registry/auth/reset', { email: 'a@b.c' }));
+    expect(res.status).toBe(200);
+    expect(requestPasswordResetMock).toHaveBeenCalledWith('a@b.c');
+  });
+
+  it('rejects a cross-origin (DNS-rebinding) request with 403 and never calls the service', async () => {
+    const res = await resetPost(
+      req('http://localhost:4200/api/registry/auth/reset', { email: 'a@b.c' }, { host: 'localhost:4200', origin: 'https://evil.example.com' }),
+    );
+    expect(res.status).toBe(403);
+    expect(requestPasswordResetMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the email is missing/empty', async () => {
+    const res = await resetPost(req('http://localhost:4200/api/registry/auth/reset', { email: '   ' }));
+    expect(res.status).toBe(400);
+    expect(requestPasswordResetMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a service failure as 400', async () => {
+    requestPasswordResetMock.mockResolvedValue({ success: false, message: 'nope' });
+    const res = await resetPost(req('http://localhost:4200/api/registry/auth/reset', { email: 'a@b.c' }));
+    expect(res.status).toBe(400);
   });
 });
