@@ -11,6 +11,7 @@ import type {
   RegistryAuthAction,
   RegistryAuthResult,
   RegistryPublishResult,
+  RegistryOAuthProvider,
 } from '@/shared/types/registry';
 
 const log = createLogger('frontend/services/registry');
@@ -57,6 +58,23 @@ class RegistryService {
   async logout(): Promise<void> {
     const response = await fetch('/api/registry/auth', { method: 'DELETE' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  }
+
+  /**
+   * Begin OAuth provider sign-in (#207): asks the local backend for the registry
+   * authorize URL. The caller navigates the browser there. Never handles tokens.
+   */
+  async beginOAuth(provider: RegistryOAuthProvider): Promise<{ authorizationUrl: string }> {
+    const response = await fetch('/api/registry/oauth/initiate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider }),
+    });
+    const body = await parse<{ authorizationUrl?: string; error?: string }>(response);
+    if (!response.ok || !body?.authorizationUrl) {
+      throw new Error(body?.error || `HTTP ${response.status}`);
+    }
+    return { authorizationUrl: body.authorizationUrl };
   }
 
   async resendConfirmation(email?: string): Promise<{ success: boolean; message?: string }> {

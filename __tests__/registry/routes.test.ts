@@ -11,22 +11,39 @@ const getAccountStatusMock = jest.fn();
 const logoutMock = jest.fn();
 const publishMock = jest.fn();
 const requestPasswordResetMock = jest.fn();
+const beginOAuthMock = jest.fn();
+const completeOAuthMock = jest.fn();
 jest.mock('@/backend/services/registry', () => ({
   authenticate: (...a: unknown[]) => authenticateMock(...a),
   getAccountStatus: (...a: unknown[]) => getAccountStatusMock(...a),
   logout: (...a: unknown[]) => logoutMock(...a),
   publish: (...a: unknown[]) => publishMock(...a),
   requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
+  beginOAuth: (...a: unknown[]) => beginOAuthMock(...a),
+  completeOAuth: (...a: unknown[]) => completeOAuthMock(...a),
 }));
 
-// Store unlocked (default encryption mode).
+// Store unlocked (default encryption mode). Individual tests can override with
+// `mockResolvedValueOnce(...)` to simulate the locked (423) state.
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: jest.fn(async () => null),
 }));
 
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { POST as authPost } from '@/app/api/registry/auth/route';
 import { POST as publishPost } from '@/app/api/registry/publish/route';
 import { POST as resetPost } from '@/app/api/registry/auth/reset/route';
+import { POST as oauthInitiatePost } from '@/app/api/registry/oauth/initiate/route';
+import { GET as oauthCallbackGet } from '@/app/api/registry/oauth/callback/route';
+
+function getReq(url: string, headers: Record<string, string> = { host: 'localhost:4200' }) {
+  return new Request(url, { method: 'GET', headers }) as unknown as NextRequest;
+}
+
+const locked = () =>
+  (assertUnlocked as jest.Mock).mockResolvedValueOnce(
+    new Response(JSON.stringify({ error: 'encryption_locked' }), { status: 423 }),
+  );
 
 function req(url: string, body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) {
   return new Request(url, {
@@ -97,6 +114,83 @@ describe('POST /api/registry/publish (#197)', () => {
     const res = await publishPost(req('http://localhost:4200/api/registry/publish', { manifest: { id: 'p' } }, { host: 'evil.example.com' }));
     expect(res.status).toBe(403);
     expect(publishMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/registry/oauth/initiate (#207)', () => {
+  it('begins OAuth locally and returns the authorization URL', async () => {
+    beginOAuthMock.mockResolvedValue({ authorizationUrl: 'https://registry.example/authz', state: 's' });
+    const res = await oauthInitiatePost(
+      req('http://localhost:4200/api/registry/oauth/initiate', { provider: 'github' }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ authorizationUrl: 'https://registry.example/authz' });
+    expect(beginOAuthMock).toHaveBeenCalledWith('github', 'http://localhost:4200/api/registry/oauth/callback');
+  });
+
+  it('rejects a cross-origin (DNS-rebinding) request with 403 and never begins OAuth', async () => {
+    const res = await oauthInitiatePost(
+      req('http://localhost:4200/api/registry/oauth/initiate', { provider: 'github' }, { host: 'localhost:4200', origin: 'https://evil.example.com' }),
+    );
+    expect(res.status).toBe(403);
+    expect(beginOAuthMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for an unsupported provider', async () => {
+    const res = await oauthInitiatePost(
+      req('http://localhost:4200/api/registry/oauth/initiate', { provider: 'facebook' }),
+    );
+    expect(res.status).toBe(400);
+    expect(beginOAuthMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 423 when the store is locked and never begins OAuth', async () => {
+    locked();
+    const res = await oauthInitiatePost(
+      req('http://localhost:4200/api/registry/oauth/initiate', { provider: 'github' }),
+    );
+    expect(res.status).toBe(423);
+    expect(beginOAuthMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/registry/oauth/callback (#207)', () => {
+  it('is reachable cross-origin (allow-listed) and redirects to success on completion', async () => {
+    completeOAuthMock.mockResolvedValue({ status: 'authenticated', account: { signedIn: true } });
+    // No Origin/local guard here — the provider redirect arrives cross-origin.
+    const res = await oauthCallbackGet(
+      getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=xyz', { host: 'localhost:4200', referer: 'https://registry.example/' }),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/settings?registry_oauth=success');
+    expect(completeOAuthMock).toHaveBeenCalledWith('abc', 'xyz');
+  });
+
+  it('redirects to error (and never stores tokens) on invalid/expired state', async () => {
+    completeOAuthMock.mockResolvedValue({ status: 'error', message: 'expired' });
+    const res = await oauthCallbackGet(
+      getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=stale'),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/settings?registry_oauth=error');
+  });
+
+  it('redirects to error when the provider returned an error, without exchanging', async () => {
+    const res = await oauthCallbackGet(
+      getReq('http://localhost:4200/api/registry/oauth/callback?error=access_denied'),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/settings?registry_oauth=error');
+    expect(completeOAuthMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 423 when the store is locked and never completes OAuth', async () => {
+    locked();
+    const res = await oauthCallbackGet(
+      getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=xyz'),
+    );
+    expect(res.status).toBe(423);
+    expect(completeOAuthMock).not.toHaveBeenCalled();
   });
 });
 

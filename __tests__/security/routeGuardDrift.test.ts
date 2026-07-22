@@ -75,6 +75,7 @@ describe('route guard drift', () => {
     '/api/oauth/callback',
     '/api/oauth/initiate',
     '/api/oauth/reset',
+    '/api/registry/oauth/callback',
     '/api/webhooks/[id]',
   ].sort();
 

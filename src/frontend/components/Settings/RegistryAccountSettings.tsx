@@ -15,7 +15,7 @@ import {
   Typography,
 } from '@mui/material';
 import { registryService } from '@/frontend/services/registry';
-import type { RegistryAccountStatus } from '@/shared/types/registry';
+import type { RegistryAccountStatus, RegistryOAuthProvider } from '@/shared/types/registry';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Settings/RegistryAccountSettings');
@@ -61,6 +61,25 @@ export default function RegistryAccountSettings() {
     void refresh();
   }, [refresh]);
 
+  // Surface the OAuth callback outcome (#207). The callback route redirects back
+  // to `/settings?registry_oauth=success|error`; show a banner, refresh masked
+  // status, then strip the param so a reload doesn't re-show it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('registry_oauth');
+    if (!outcome) return;
+    setMessage(
+      outcome === 'success'
+        ? { type: 'success', text: 'Signed in to the package registry.' }
+        : { type: 'error', text: 'OAuth sign-in did not complete. Please try again.' },
+    );
+    void refresh();
+    params.delete('registry_oauth');
+    const qs = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+  }, [refresh]);
+
   const handleAuth = async () => {
     setBusy(true);
     setMessage(null);
@@ -96,6 +115,19 @@ export default function RegistryAccountSettings() {
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to log out.' });
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleOAuth = async (provider: RegistryOAuthProvider) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { authorizationUrl } = await registryService.beginOAuth(provider);
+      // Hand off to the registry's authorize page; we return here via the callback.
+      window.location.assign(authorizationUrl);
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to start OAuth sign-in.' });
       setBusy(false);
     }
   };
@@ -253,6 +285,15 @@ export default function RegistryAccountSettings() {
               </Button>
             </Box>
           )}
+          <Divider>or</Divider>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Button variant="outlined" onClick={() => handleOAuth('github')} disabled={busy}>
+              Continue with GitHub
+            </Button>
+            <Button variant="outlined" onClick={() => handleOAuth('google')} disabled={busy}>
+              Continue with Google
+            </Button>
+          </Stack>
         </Stack>
       )}
 

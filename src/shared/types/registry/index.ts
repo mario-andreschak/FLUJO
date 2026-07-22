@@ -16,6 +16,22 @@
 export const DEFAULT_REGISTRY_URL = 'https://registry.flujo.app';
 
 /**
+ * OAuth providers the hosted registry can broker sign-in through (issue #207).
+ * The registry (#196) is the OAuth client that holds the provider secrets; FLUJO
+ * only initiates against the registry and stores the registry token it returns,
+ * so this list is display/scoping metadata rather than a provider integration.
+ */
+export type RegistryOAuthProvider = 'github' | 'google';
+
+/** The OAuth providers FLUJO currently offers a sign-in button for (#207). */
+export const REGISTRY_OAUTH_PROVIDERS: readonly RegistryOAuthProvider[] = ['github', 'google'];
+
+/** Whether an arbitrary value is a supported registry OAuth provider (#207). */
+export function isRegistryOAuthProvider(value: unknown): value is RegistryOAuthProvider {
+  return typeof value === 'string' && (REGISTRY_OAUTH_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
  * The at-rest account record persisted under `StorageKey.REGISTRY_ACCOUNT`.
  * `accessToken`/`refreshToken` are ENCRYPTED strings (the `encrypted:` envelope
  * produced by the model-API-key encryption path); they are decrypted only
@@ -31,6 +47,10 @@ export interface StoredRegistryAccount {
   accessToken: string;
   /** Encrypted refresh token (`encrypted:...`) or empty. */
   refreshToken: string;
+  /** How the session was established (#207). Absent on legacy password records. */
+  authMethod?: 'password' | 'oauth';
+  /** OAuth providers linked to this account, for display/telemetry only (#207). */
+  linkedProviders?: RegistryOAuthProvider[];
 }
 
 /** Non-secret registry settings persisted under `StorageKey.REGISTRY_SETTINGS`. */
@@ -49,6 +69,8 @@ export interface RegistryAccountStatus {
   hasToken: boolean;
   /** Always the mask (`********`) when a token exists, otherwise empty. */
   token: string;
+  /** Providers linked to this account (display only; never a token) (#207). */
+  linkedProviders?: RegistryOAuthProvider[];
 }
 
 export type RegistryAuthAction = 'signup' | 'login';

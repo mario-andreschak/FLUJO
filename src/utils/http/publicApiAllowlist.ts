@@ -34,6 +34,11 @@ export const PUBLIC_API_EXACT_PATHS: readonly string[] = [
   // OAuth flow start / reset — reached as part of the provider round-trip.
   '/api/oauth/initiate',
   '/api/oauth/reset',
+  // Registry-account OAuth sign-in callback (#207): the hosted registry redirects
+  // the browser here cross-origin. Exact-path only, so `...callback-evil` and the
+  // local-only `.../oauth/initiate` are NOT opened. State/PKCE are validated
+  // server-side and no token is ever returned in the response body.
+  '/api/registry/oauth/callback',
 ];
 
 /**

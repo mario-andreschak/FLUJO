@@ -23,9 +23,12 @@ import {
   type RegistryAuthAction,
   type RegistryAuthResult,
   type RegistryPublishResult,
+  type RegistryOAuthProvider,
 } from '@/shared/types/registry';
 import * as client from '@/backend/utils/packageRegistryClient';
 import type { RegistryAuthPayload } from '@/backend/utils/packageRegistryClient';
+import { buildAuthorizeUrl, exchangeAuthorizationCode } from '@/backend/services/registry/oauth-adapter';
+import { randomBytes, createHash } from 'crypto';
 
 const log = createLogger('backend/services/registry');
 
@@ -58,11 +61,22 @@ function computeExpiry(payload: RegistryAuthPayload): number | null {
   return null;
 }
 
-/** Encrypt + store the tokens/metadata returned by an auth call. */
+/**
+ * Encrypt + store the tokens/metadata returned by an auth call.
+ *
+ * `options.authMethod` records how the session was established (defaults to the
+ * previously-stored method, so a silent token refresh never clobbers it).
+ * `options.linkedProvider` merges an OAuth provider into the account's linked set
+ * (display/telemetry only — never a token). (#207)
+ */
 async function storeTokens(
   email: string,
   payload: RegistryAuthPayload,
+  options?: { authMethod?: 'password' | 'oauth'; linkedProvider?: RegistryOAuthProvider },
 ): Promise<StoredRegistryAccount> {
+  const existing = await loadStored();
+  const linkedProviders = new Set<RegistryOAuthProvider>(existing.linkedProviders ?? []);
+  if (options?.linkedProvider) linkedProviders.add(options.linkedProvider);
   const account: StoredRegistryAccount = {
     email: payload.email || email,
     publisherHandle: payload.publisher_handle ?? null,
@@ -70,6 +84,8 @@ async function storeTokens(
     expiresAt: computeExpiry(payload),
     accessToken: payload.access_token ? await encryptApiKey(payload.access_token) : '',
     refreshToken: payload.refresh_token ? await encryptApiKey(payload.refresh_token) : '',
+    authMethod: options?.authMethod ?? existing.authMethod ?? 'password',
+    ...(linkedProviders.size ? { linkedProviders: Array.from(linkedProviders) } : {}),
   };
   await persist(account);
   return account;
@@ -85,6 +101,9 @@ function toStatus(account: StoredRegistryAccount): RegistryAccountStatus {
     isConfirmed: account.isConfirmed,
     hasToken,
     token: hasToken ? MASKED_API_KEY : '',
+    ...(account.linkedProviders && account.linkedProviders.length
+      ? { linkedProviders: account.linkedProviders }
+      : {}),
   };
 }
 
@@ -118,7 +137,7 @@ export async function authenticate(
     (mode === 'signup' && !body?.access_token && status >= 200 && status < 300);
 
   if (status >= 200 && status < 300 && body?.access_token) {
-    const account = await storeTokens(email, body);
+    const account = await storeTokens(email, body, { authMethod: 'password' });
     return { status: 'authenticated', account: toStatus(account) };
   }
 
@@ -146,6 +165,99 @@ export async function authenticate(
 /** Clear the stored account/tokens (log out). */
 export async function logout(): Promise<void> {
   await persist({ ...EMPTY_ACCOUNT });
+}
+
+// ---------------------------------------------------------------------------
+// OAuth provider sign-in (issue #207)
+//
+// The hosted registry (#196) brokers the GitHub/Google flow; FLUJO is a public
+// initiator that never holds a provider secret and only stores the registry
+// token it receives (same shape/encryption as the email/password flow).
+//
+// State + PKCE verifier are kept SERVER-SIDE in a short-TTL, single-use in-memory
+// map keyed by an opaque `state`. The callback validates and consumes them; a
+// client-supplied `state` alone is never trusted. Nothing here is ever logged.
+// ---------------------------------------------------------------------------
+
+interface OAuthPendingSession {
+  provider: RegistryOAuthProvider;
+  codeVerifier: string;
+  redirectUri: string;
+  createdAt: number;
+}
+
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes.
+const oauthSessions = new Map<string, OAuthPendingSession>();
+
+function pruneExpiredOAuthSessions(): void {
+  const now = Date.now();
+  for (const [state, session] of oauthSessions) {
+    if (now - session.createdAt > OAUTH_STATE_TTL_MS) oauthSessions.delete(state);
+  }
+}
+
+/** Generate a single-use PKCE verifier + S256 challenge (RFC 7636). */
+function generatePkce(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  return { verifier, challenge };
+}
+
+/**
+ * Begin an OAuth sign-in: mint state + PKCE, stash them server-side, and return
+ * the registry authorize URL for the browser to navigate to. `redirectUri` is
+ * our own callback route (computed by the route from the request origin).
+ */
+export async function beginOAuth(
+  provider: RegistryOAuthProvider,
+  redirectUri: string,
+): Promise<{ authorizationUrl: string; state: string }> {
+  pruneExpiredOAuthSessions();
+  const state = randomBytes(24).toString('base64url');
+  const { verifier, challenge } = generatePkce();
+  oauthSessions.set(state, { provider, codeVerifier: verifier, redirectUri, createdAt: Date.now() });
+  const authorizationUrl = await buildAuthorizeUrl({ provider, redirectUri, state, codeChallenge: challenge });
+  return { authorizationUrl, state };
+}
+
+/**
+ * Complete an OAuth sign-in from the callback: validate + CONSUME the state
+ * (single-use, even on failure), exchange the code via the adapter, and store
+ * the encrypted tokens with `authMethod: 'oauth'`. Returns a browser-safe result
+ * (never a token).
+ */
+export async function completeOAuth(code: string, state: string): Promise<RegistryAuthResult> {
+  pruneExpiredOAuthSessions();
+  const session = state ? oauthSessions.get(state) : undefined;
+  // Single-use: consume the state regardless of the exchange outcome.
+  if (state) oauthSessions.delete(state);
+
+  if (!code || !session) {
+    return { status: 'error', message: 'Your sign-in session expired or was invalid. Please try again.' };
+  }
+
+  const { status, body } = await exchangeAuthorizationCode({
+    code,
+    codeVerifier: session.codeVerifier,
+    redirectUri: session.redirectUri,
+    provider: session.provider,
+  });
+
+  if (status === 0) {
+    return { status: 'error', message: 'Could not reach the package registry.' };
+  }
+  if (status >= 200 && status < 300 && body?.access_token) {
+    const account = await storeTokens(body.email || '', body, {
+      authMethod: 'oauth',
+      linkedProvider: session.provider,
+    });
+    log.info('Completed registry OAuth sign-in.');
+    return { status: 'authenticated', account: toStatus(account) };
+  }
+  return {
+    status: 'error',
+    message: body?.error || body?.message || `Registry responded with status ${status}.`,
+  };
 }
 
 /** Resend the confirmation email for the stored (or provided) address. */

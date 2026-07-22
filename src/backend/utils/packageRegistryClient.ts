@@ -10,6 +10,8 @@
  *   POST /v1/auth/refresh             { refresh_token }
  *   POST /v1/auth/resend-confirmation { email }
  *   POST /v1/auth/forgot-password     { email }         (TBD per #196 contract)
+ *   GET  /v1/auth/oauth/:provider/authorize                (browser redirect; TBD #196/#207)
+ *   POST /v1/auth/oauth/token         { code, code_verifier, redirect_uri, provider } (TBD #196/#207)
  *   POST /v1/packages                 <manifest JSON>   (Authorization: Bearer)
  *
  * Node-only: never import from client code. Never logs passwords, tokens, or
@@ -151,4 +153,27 @@ export function requestPasswordReset(email: string) {
 /** Publish a package manifest. `manifest` is the canonical JSON object (#192). */
 export function publishPackage(manifest: unknown, accessToken: string) {
   return postJson<RegistryPublishPayload>('/v1/packages', manifest, accessToken);
+}
+
+/**
+ * Exchange an OAuth authorization code for registry tokens (issue #207). The
+ * hosted registry (#196) is the OAuth client that brokers the GitHub/Google
+ * flow, so FLUJO never sees a provider secret — it swaps the registry-issued
+ * `code` (plus the single-use PKCE `code_verifier`) for the SAME token shape as
+ * the email/password flow. The exact pathname/params are owned by the #196
+ * contract and are "TBD" — isolated here so only this one function needs
+ * updating once the contract is finalized. Never logs the code or tokens.
+ */
+export function oauthExchange(params: {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+  provider: string;
+}) {
+  return postJson<RegistryAuthPayload>('/v1/auth/oauth/token', {
+    code: params.code,
+    code_verifier: params.codeVerifier,
+    redirect_uri: params.redirectUri,
+    provider: params.provider,
+  });
 }
