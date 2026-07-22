@@ -18,6 +18,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import LoginIcon from '@mui/icons-material/Login';
 import { isPackageRunnerCommand } from '@/utils/mcp/resolveServerCwd';
 import { RUNNER_TEST_CONNECTION_TIMEOUT_MS } from '@/utils/mcp/testConnectionTimeout';
 
@@ -45,6 +46,11 @@ interface RunToolsProps {
   consoleOutput: string;
   message: MessageState | null;
   setMessage: (message: MessageState | null) => void;
+  /** Test Run detected a reachable OAuth (RFC 9728) streamable server. */
+  oauthCapable?: boolean;
+  /** Persist the server and start its OAuth flow (shown when oauthCapable). */
+  onSaveAndAuthenticate?: () => Promise<void> | void;
+  isAuthenticating?: boolean;
 }
 
 const RunTools: React.FC<RunToolsProps> = ({
@@ -70,7 +76,10 @@ const RunTools: React.FC<RunToolsProps> = ({
   serverName,
   consoleOutput,
   message,
-  setMessage
+  setMessage,
+  oauthCapable = false,
+  onSaveAndAuthenticate,
+  isAuthenticating = false
 }) => {
   // Check for MODULE_NOT_FOUND in console output
   useEffect(() => {
@@ -269,7 +278,31 @@ const RunTools: React.FC<RunToolsProps> = ({
           {isRunning ? 'Running...' : '3) Test Run'}
         </Button>
       </Box>
-      
+
+      {/* OAuth affordance: shown after a Test Run finds a reachable streamable server that
+          advertises OAuth. "Save & Authenticate" persists the server (OAuth binds tokens by
+          server name) and opens the provider's sign-in, so the user need not save, hunt for
+          the card banner, and click Authenticate separately. */}
+      {oauthCapable && (transport === 'sse' || transport === 'streamable') && onSaveAndAuthenticate && (
+        <Alert
+          severity="info"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              variant="outlined"
+              startIcon={isAuthenticating ? <CircularProgress size={16} color="inherit" /> : <LoginIcon />}
+              onClick={() => { void onSaveAndAuthenticate(); }}
+              disabled={isAuthenticating || !isServerUrlValid}
+            >
+              {isAuthenticating ? 'Authenticating…' : 'Save & Authenticate'}
+            </Button>
+          }
+        >
+          This server uses OAuth. Saving it and signing in will complete the connection.
+        </Alert>
+      )}
+
       <Box>
         <EnvEditor
           serverName={serverName}

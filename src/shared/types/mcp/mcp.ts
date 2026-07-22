@@ -181,6 +181,9 @@ export interface MCPServiceResponse<T = unknown> {
   toolName?: string;
   timeout?: number;
   requiresAuthentication?: boolean;
+  /** Set on a test/connect result: the server advertises OAuth (RFC 9728), so the UI can
+   * offer to authenticate rather than only hinting at a static Authorization header. */
+  oauthCapable?: boolean;
 }
 
 // Using the official type from MCP SDK (the SDK exports the inferred TS type directly,

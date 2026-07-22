@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { TabProps, MessageState } from '../../types';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { mcpService } from '@/frontend/services/mcp';
 import {
   Alert,
   Box,
@@ -22,6 +23,10 @@ const RemoteTab: React.FC<TabProps> = ({
   const [url, setUrl] = useState<string>('');
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
+  // When the probe detects OAuth, we pause before switching tabs to show a one-time note,
+  // so the user understands they'll sign in (rather than hand-enter a header) on the next
+  // screen. A second click ("Continue to setup") then proceeds.
+  const [oauthDetected, setOauthDetected] = useState<boolean>(false);
 
   // URL validation
   const isValidHttpUrl = (url: string): boolean => {
@@ -47,6 +52,39 @@ const RemoteTab: React.FC<TabProps> = ({
     }
   };
 
+  const proceedToLocalTab = () => {
+    // Extract server name from URL
+    const serverName = extractServerName(url);
+
+    // Create a streamable config with the URL. The server root dir defaults to a
+    // dedicated per-server folder (like stdio servers), NOT '/': rootPath feeds the
+    // folder pickers, ServerCard actions and the git-update route, so a filesystem
+    // root would be an overly wide default scope (issue 52).
+    const remoteConfig: Partial<MCPServerConfig> = {
+      name: serverName,
+      transport: 'streamable',
+      serverUrl: url,
+      rootPath: `mcp-servers/${serverName}`,
+      disabled: false,
+      autoApprove: [],
+      env: {},
+      _buildCommand: '',
+      _installCommand: '',
+      // Install-origin (#193): a hosted endpoint — serverUrl is the reference.
+      source: { type: 'remote' }
+    };
+
+    // Pass the config to the parent component before switching tabs
+    if (onUpdate) {
+      onUpdate(remoteConfig as MCPServerConfig);
+    }
+
+    // Switch to the local tab with pre-filled data
+    if (setActiveTab) {
+      setActiveTab('local');
+    }
+  };
+
   const handleConnect = async () => {
     if (!isUrlValid) {
       setMessage({
@@ -56,44 +94,34 @@ const RemoteTab: React.FC<TabProps> = ({
       return;
     }
 
+    // Second click after an OAuth note — the user has read it; proceed.
+    if (oauthDetected) {
+      proceedToLocalTab();
+      return;
+    }
+
     setIsValidating(true);
     setMessage({
       type: 'success',
-      text: 'Validating URL...'
+      text: 'Checking the server…'
     });
 
     try {
-      // Extract server name from URL
-      const serverName = extractServerName(url);
-      
-      // Create a streamable config with the URL. The server root dir defaults to a
-      // dedicated per-server folder (like stdio servers), NOT '/': rootPath feeds the
-      // folder pickers, ServerCard actions and the git-update route, so a filesystem
-      // root would be an overly wide default scope (issue 52).
-      const remoteConfig: Partial<MCPServerConfig> = {
-        name: serverName,
-        transport: 'streamable',
-        serverUrl: url,
-        rootPath: `mcp-servers/${serverName}`,
-        disabled: false,
-        autoApprove: [],
-        env: {},
-        _buildCommand: '',
-        _installCommand: '',
-        // Install-origin (#193): a hosted endpoint — serverUrl is the reference.
-        source: { type: 'remote' }
-      };
-
-      // Pass the config to the parent component before switching tabs
-      if (onUpdate) {
-        onUpdate(remoteConfig as MCPServerConfig);
+      // Probe for OAuth before handing off, so the user knows up front that this server
+      // signs in via OAuth (rather than a static header). Best-effort — a failed probe
+      // just proceeds to the normal setup flow.
+      const probe = await mcpService.probeOAuthCapability(url);
+      if (probe.oauthCapable) {
+        setOauthDetected(true);
+        setMessage({
+          type: 'success',
+          text: 'This server uses OAuth. Continue to setup, then run Test Run and click "Save & Authenticate" to sign in.'
+        });
+        setIsValidating(false);
+        return;
       }
 
-      // Switch to the local tab with pre-filled data
-      if (setActiveTab) {
-        setActiveTab('local');
-      }
-
+      proceedToLocalTab();
       setMessage({
         type: 'success',
         text: 'Switching to Local Server tab with pre-filled configuration...'
@@ -112,6 +140,8 @@ const RemoteTab: React.FC<TabProps> = ({
 
   const handleUrlChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setUrl(event.target.value);
+    // A changed URL invalidates the prior OAuth probe result.
+    setOauthDetected(false);
     // Clear any previous messages when user starts typing
     if (message) {
       setMessage(null);
@@ -174,7 +204,7 @@ const RemoteTab: React.FC<TabProps> = ({
             onClick={handleConnect}
             disabled={!isUrlValid || isValidating}
           >
-            {isValidating ? 'Connecting...' : 'Connect'}
+            {isValidating ? 'Checking…' : oauthDetected ? 'Continue to setup' : 'Connect'}
           </Button>
         </Box>
       </Stack>

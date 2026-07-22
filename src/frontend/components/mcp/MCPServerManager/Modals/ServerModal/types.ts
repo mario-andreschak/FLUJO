@@ -1,5 +1,11 @@
 import { MCPServerConfig } from '@/utils/mcp';
 
+/** Outcome of persisting a server and kicking off its OAuth flow from the modal. */
+export type SaveAndAuthenticateResult =
+  | { status: 'authorized' }
+  | { status: 'needs_client_credentials'; error?: string }
+  | { status: 'error'; error?: string };
+
 export interface ServerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -7,6 +13,9 @@ export interface ServerModalProps {
   initialConfig?: MCPServerConfig | null;
   onUpdate?: (config: MCPServerConfig) => void;
   onRestartAfterUpdate?: (serverName: string) => void;
+  /** Persist the (streamable) server and start its OAuth flow without closing the modal
+   * until it completes. Bound to the manager, which owns the store + modal state. */
+  onSaveAndAuthenticate?: (config: MCPServerConfig) => Promise<SaveAndAuthenticateResult>;
 }
 
 export interface MessageState {
@@ -29,6 +38,8 @@ export interface TabProps {
   onUpdate?: (config: MCPServerConfig, options?: { autoTestRun?: boolean }) => void;
   onClose: () => void;
   onRestartAfterUpdate?: (serverName: string) => void;
+  /** Persist the (streamable) server and start its OAuth flow. See ServerModalProps. */
+  onSaveAndAuthenticate?: (config: MCPServerConfig) => Promise<SaveAndAuthenticateResult>;
   setActiveTab?: (tab: 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => void;
   /** When true (marketplace handoff), collapse define/build as done and auto-start a test run */
   autoTestRun?: boolean;

@@ -21,7 +21,8 @@ import {
   handleParseReadme,
   handleInstall,
   handleBuild,
-  handleRun
+  handleRun,
+  buildFinalConfig
 } from './utils/formHandlers';
 import {
   Alert,
@@ -42,7 +43,8 @@ const LocalServerTab: React.FC<TabProps> = ({
   onAdd,
   onUpdate,
   onClose,
-  autoTestRun
+  autoTestRun,
+  onSaveAndAuthenticate
 }) => {
   // Use custom hooks for state management first
   const {
@@ -214,6 +216,11 @@ const LocalServerTab: React.FC<TabProps> = ({
     );
   };
 
+  // Whether the last Test Run found a reachable OAuth (RFC 9728) streamable server, and
+  // whether a Save & Authenticate round-trip is currently in flight.
+  const [oauthCapable, setOauthCapable] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
   const onRun = async () => {
     await handleRun(
       localConfig,
@@ -227,8 +234,39 @@ const LocalServerTab: React.FC<TabProps> = ({
       setRunCompleted,
       // Pass the pre-edit server name so masked secret headers hydrate from the saved
       // config on Test Connection, even after a rename (#137).
-      initialConfig?.name
+      initialConfig?.name,
+      setOauthCapable
     );
+  };
+
+  // "Save & Authenticate": persist the server (OAuth binds tokens by server name, so it
+  // must exist on disk) and start its OAuth flow via the manager, which keeps the modal
+  // open until the popup resolves. Collapses save → find-the-card → click-Authenticate.
+  const onSaveAndAuthenticateClick = async () => {
+    if (!onSaveAndAuthenticate) return;
+    if (!localConfig.name || !serverUrl) {
+      setMessage({ type: 'error', text: 'Please provide a server name and URL before authenticating.' });
+      return;
+    }
+    const finalConfig = buildFinalConfig(localConfig, websocketUrl, serverUrl, buildCommand, installCommand);
+    setIsAuthenticating(true);
+    setMessage({ type: 'success', text: `Saving ${finalConfig.name} and starting OAuth…` });
+    try {
+      const result = await onSaveAndAuthenticate(finalConfig);
+      if (result.status === 'needs_client_credentials') {
+        setMessage({
+          type: 'warning',
+          text: result.error || 'This server needs an OAuth Client ID and Secret. Enter them above, then authenticate again.'
+        });
+      } else if (result.status === 'error') {
+        setMessage({ type: 'error', text: result.error || 'OAuth authentication failed.' });
+      }
+      // 'authorized' → the manager closes the modal; nothing more to do here.
+    } catch (error) {
+      setMessage({ type: 'error', text: `OAuth authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    } finally {
+      setIsAuthenticating(false);
+    }
   };
 
   // Use custom hook for console output
@@ -547,6 +585,9 @@ const LocalServerTab: React.FC<TabProps> = ({
                     consoleOutput={consoleOutput}
                     message={message}
                     setMessage={setMessage}
+                    oauthCapable={oauthCapable}
+                    onSaveAndAuthenticate={onSaveAndAuthenticate ? onSaveAndAuthenticateClick : undefined}
+                    isAuthenticating={isAuthenticating}
                   />
                   
                   <Box>

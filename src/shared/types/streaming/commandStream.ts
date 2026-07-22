@@ -47,6 +47,9 @@ export interface CommandStreamResultEvent {
   success: boolean;
   error?: string;
   requiresAuthentication?: boolean;
+  /** Test Run only: the server advertises OAuth (RFC 9728). Lets the modal offer a
+   * "Save & Authenticate" action instead of only hinting at a static header. */
+  oauthCapable?: boolean;
   data?: { toolCount?: number };
   commandOutput?: string;
 }

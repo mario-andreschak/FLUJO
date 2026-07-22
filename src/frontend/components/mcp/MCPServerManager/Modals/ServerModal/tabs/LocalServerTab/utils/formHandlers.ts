@@ -9,48 +9,20 @@ import { mcpService } from '@/frontend/services/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 
-export const handleSubmit = (
-  e: React.FormEvent,
+/**
+ * Assemble the final, saveable server config from the current form state, applying the
+ * transport-specific fields exactly the way the Add/Update submit does. Shared by
+ * handleSubmit and the "Save & Authenticate" flow so both persist an identical shape.
+ */
+export const buildFinalConfig = (
   localConfig: MCPServerConfig,
   websocketUrl: string,
   serverUrl: string,
   buildCommand: string,
-  installCommand: string,
-  setMessage: (message: MessageState | null) => void,
-  onAdd: (config: MCPServerConfig) => void,
-  onUpdate?: (config: MCPServerConfig) => void,
-  initialConfig?: MCPServerConfig | null,
-  onClose?: () => void
-) => {
-  e.preventDefault();
-  if (!localConfig.name || (isStdioConfig(localConfig) && !localConfig.command)) {
-    setMessage({
-      type: 'error',
-      text: 'Please fill in all required fields'
-    });
-    return;
-  }
-  
-  // Validate URLs based on transport type
-  if (localConfig.transport === 'websocket' && !websocketUrl) {
-    setMessage({
-      type: 'error',
-      text: 'Please enter a valid WebSocket URL'
-    });
-    return;
-  }
-  
-  if ((localConfig.transport === 'sse' || localConfig.transport === 'streamable') && !serverUrl) {
-    setMessage({
-      type: 'error',
-      text: 'Please enter a valid Server URL'
-    });
-    return;
-  }
-  
-  // Create the final config based on transport type
+  installCommand: string
+): MCPServerConfig => {
   let finalConfig: MCPServerConfig;
-  
+
   if (localConfig.transport === 'websocket') {
     // For websocket transport
     finalConfig = {
@@ -87,11 +59,54 @@ export const handleSubmit = (
       _installCommand: installCommand
     } as MCPStdioConfig;
   }
-  
+
   // Install-origin (#193): every upstream tab (GitHub/Remote/Reference/Marketplace/
   // Spotlight) hands its config off through here, so preserve any `source` it set and
   // default to `local` only for a genuinely hand-configured server.
-  finalConfig = { ...finalConfig, source: finalConfig.source ?? { type: 'local' } } as MCPServerConfig;
+  return { ...finalConfig, source: finalConfig.source ?? { type: 'local' } } as MCPServerConfig;
+};
+
+export const handleSubmit = (
+  e: React.FormEvent,
+  localConfig: MCPServerConfig,
+  websocketUrl: string,
+  serverUrl: string,
+  buildCommand: string,
+  installCommand: string,
+  setMessage: (message: MessageState | null) => void,
+  onAdd: (config: MCPServerConfig) => void,
+  onUpdate?: (config: MCPServerConfig) => void,
+  initialConfig?: MCPServerConfig | null,
+  onClose?: () => void
+) => {
+  e.preventDefault();
+  if (!localConfig.name || (isStdioConfig(localConfig) && !localConfig.command)) {
+    setMessage({
+      type: 'error',
+      text: 'Please fill in all required fields'
+    });
+    return;
+  }
+
+  // Validate URLs based on transport type
+  if (localConfig.transport === 'websocket' && !websocketUrl) {
+    setMessage({
+      type: 'error',
+      text: 'Please enter a valid WebSocket URL'
+    });
+    return;
+  }
+
+  if ((localConfig.transport === 'sse' || localConfig.transport === 'streamable') && !serverUrl) {
+    setMessage({
+      type: 'error',
+      text: 'Please enter a valid Server URL'
+    });
+    return;
+  }
+
+  // Create the final config based on transport type
+  const finalConfig = buildFinalConfig(localConfig, websocketUrl, serverUrl, buildCommand, installCommand);
 
   if (initialConfig && onUpdate) {
     onUpdate(finalConfig);
@@ -542,8 +557,13 @@ export const handleRun = async (
   // The pre-edit server name (initialConfig?.name). Sent with the test request so the
   // backend can hydrate masked secret headers from the saved config, even after a rename
   // (#137). Undefined for a brand-new server (nothing stored to hydrate from).
-  storedName?: string
+  storedName?: string,
+  // Reports whether a reachable-but-unauthenticated remote server advertises OAuth (RFC
+  // 9728), so the modal can offer "Save & Authenticate" instead of only a header hint.
+  setOauthCapable?: (capable: boolean) => void
 ) => {
+  // A fresh run supersedes any earlier auth verdict.
+  setOauthCapable?.(false);
   if (!localConfig.name) {
     setMessage({
       type: 'error',
@@ -627,15 +647,27 @@ export const handleRun = async (
         setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
       } else if (testResult.requiresAuthentication) {
         // Reachable, but needs auth — surface as actionable info rather than a hard failure.
-        setMessage({
-          type: 'warning',
-          text: 'Server reachable but requires authentication.'
-        });
         setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
         if (testResult.error) {
           setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
         }
-        setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required headers (e.g. Authorization) and test again.\n');
+
+        // OAuth-capable (RFC 9728) streamable servers get an in-modal "Save & Authenticate"
+        // path — no manual header needed. Others (static bearer) keep the header hint.
+        if (testResult.oauthCapable && localConfig.transport === 'streamable') {
+          setOauthCapable?.(true);
+          setMessage({
+            type: 'warning',
+            text: 'Server reachable — it uses OAuth. Click "Save & Authenticate" to sign in.'
+          });
+          setConsoleOutput((prev: string) => prev + '\n🔑 Server uses OAuth. Click "Save & Authenticate" to complete sign-in.\n');
+        } else {
+          setMessage({
+            type: 'warning',
+            text: 'Server reachable but requires authentication.'
+          });
+          setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required headers (e.g. Authorization) and test again.\n');
+        }
       } else {
         setMessage({
           type: 'error',

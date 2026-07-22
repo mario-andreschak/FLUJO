@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
+import { SaveAndAuthenticateResult } from './Modals/ServerModal/types';
 import ServerDetailsModal from './ServerDetailsModal';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
@@ -225,6 +226,66 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setShowAddModal(false);
     setEditingServer(null);
     onServerModalToggle?.(false);
+  };
+
+  // "Save & Authenticate" from the Add/Edit modal (remote OAuth servers). Persist the
+  // server first — OAuth binds tokens/DCR client info by server name on disk, and the
+  // popup's callback resumes by reloading that saved config — then run the same
+  // initiate → popup flow the card banner uses. The modal stays open (this component owns
+  // it and stays mounted) until the popup resolves, so a cancelled sign-in returns the
+  // user to the form instead of a half-configured card.
+  const handleSaveAndAuthenticate = async (config: MCPServerConfig): Promise<SaveAndAuthenticateResult> => {
+    log.debug(`Save & Authenticate for server: ${config.name}`);
+    const closeModal = () => {
+      setShowAddModal(false);
+      setEditingServer(null);
+      onServerModalToggle?.(false);
+    };
+
+    try {
+      // editingServer is the server as opened, so its name is the current storage key.
+      if (editingServer) {
+        await updateServer(config, editingServer.name);
+      } else {
+        await addServer(config);
+      }
+
+      const response = await fetch('/api/oauth/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverName: config.name }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        // No DCR: the provider needs a manually pre-registered client (id/secret).
+        if (data.needsClientCredentials) {
+          return { status: 'needs_client_credentials', error: data.error };
+        }
+        return { status: 'error', error: data.error || 'Failed to start OAuth authentication.' };
+      }
+
+      if (data.alreadyAuthorized || !data.authorizationUrl) {
+        // A stored (or refreshed) token was still valid — no popup needed.
+        closeModal();
+        await retryServer(config.name);
+        return { status: 'authorized' };
+      }
+
+      const { openOAuthPopup } = await import('@/frontend/utils/oauth');
+      await openOAuthPopup({
+        url: data.authorizationUrl,
+        windowName: `oauth_${config.name}`,
+      });
+      // Resolved only when the callback returned oauth_success. Reconnect so the server
+      // picks up the freshly stored tokens (mirrors the card banner's post-auth restart).
+      closeModal();
+      await retryServer(config.name);
+      return { status: 'authorized' };
+    } catch (error) {
+      log.warn(`Save & Authenticate failed for ${config.name}:`, error);
+      return { status: 'error', error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   };
 
   const handleExportConfig = (formatId: McpFormatId) => {
@@ -884,6 +945,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         initialConfig={editingServer}
         onUpdate={handleUpdateServer}
         onRestartAfterUpdate={handleServerRetry}
+        onSaveAndAuthenticate={handleSaveAndAuthenticate}
       />
 
       <ServerDetailsModal

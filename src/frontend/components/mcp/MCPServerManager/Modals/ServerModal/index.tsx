@@ -30,7 +30,8 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onAdd,
   initialConfig,
   onUpdate,
-  onRestartAfterUpdate
+  onRestartAfterUpdate,
+  onSaveAndAuthenticate
 }) => {
   const [activeTab, setActiveTab] = useState<'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('spotlight');
   
@@ -157,6 +158,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onUpdate={onUpdate}
               onClose={onClose}
               onRestartAfterUpdate={onRestartAfterUpdate}
+              onSaveAndAuthenticate={onSaveAndAuthenticate}
             />
           ) : activeTab === 'spotlight' ? (
             <SpotlightTab
@@ -199,6 +201,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onAdd={onAdd}
               onClose={onClose}
               autoTestRun={autoTestRun}
+              onSaveAndAuthenticate={onSaveAndAuthenticate}
             />
           ) : activeTab === 'remote' ? (
             <RemoteTab

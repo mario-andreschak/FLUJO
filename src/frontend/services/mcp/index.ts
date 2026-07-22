@@ -295,6 +295,7 @@ class MCPService {
     success: boolean;
     error?: string;
     requiresAuthentication?: boolean;
+    oauthCapable?: boolean;
     data?: { toolCount?: number };
   }> {
     try {
@@ -338,6 +339,7 @@ class MCPService {
     success: boolean;
     error?: string;
     requiresAuthentication?: boolean;
+    oauthCapable?: boolean;
     data?: { toolCount?: number };
   }> {
     try {
@@ -360,6 +362,7 @@ class MCPService {
         success: boolean;
         error?: string;
         requiresAuthentication?: boolean;
+        oauthCapable?: boolean;
         data?: { toolCount?: number };
       } | null = null;
 
@@ -370,6 +373,7 @@ class MCPService {
             success: event.success,
             error: event.error,
             requiresAuthentication: event.requiresAuthentication,
+            oauthCapable: event.oauthCapable,
             data: event.data,
           };
         }
@@ -389,6 +393,28 @@ class MCPService {
     } catch (error) {
       log.warn(`Streaming test connection failed for ${config.name}; falling back to non-streaming:`, error);
       return this.testConnection(config, storedName);
+    }
+  }
+
+  /**
+   * Best-effort probe of whether a remote MCP endpoint advertises OAuth (RFC 9728), used
+   * by the Remote tab to hint at OAuth before the user reaches the full form. Never
+   * rejects loudly: a failed probe resolves to `{ oauthCapable: false }`.
+   */
+  async probeOAuthCapability(serverUrl: string): Promise<{ oauthCapable: boolean; resourceMetadataUrl?: string }> {
+    try {
+      const response = await fetch('/api/mcp/oauth-capability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverUrl }),
+      });
+      if (!response.ok) {
+        return { oauthCapable: false };
+      }
+      return await response.json();
+    } catch (error) {
+      log.warn(`Failed to probe OAuth capability for ${serverUrl}:`, error);
+      return { oauthCapable: false };
     }
   }
 

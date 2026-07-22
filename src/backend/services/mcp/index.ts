@@ -92,6 +92,7 @@ import { MASKED_API_KEY } from '@/shared/types/constants';
 import { normalizeHeaderValue, isMaskedHeaderValue, isGlobalBinding, hydrateMaskedHeaders } from '@/utils/mcp/headers';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
+import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
 import {
   createNewClient,
   createTransport,
@@ -947,9 +948,20 @@ export class MCPService {
 
       const requiresAuthentication = isAuthRequiredError(error);
 
+      // When a remote server rejects the probe for auth, find out WHETHER it speaks OAuth
+      // (RFC 9728) so the UI can offer to authenticate instead of only hinting at a static
+      // Authorization header. Best-effort: probeOAuthSupport never throws.
+      let oauthCapable: boolean | undefined;
+      if (requiresAuthentication && (config.transport === 'streamable' || config.transport === 'sse')) {
+        const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig).serverUrl;
+        if (serverUrl) {
+          oauthCapable = (await probeOAuthSupport(serverUrl)).oauthCapable;
+        }
+      }
+
       const enhancedErrorMessage = enhanceConnectionErrorMessage(error, config, stderrLogs);
-      emit({ type: 'result', success: false, error: enhancedErrorMessage, requiresAuthentication });
-      return { success: false, error: enhancedErrorMessage, requiresAuthentication };
+      emit({ type: 'result', success: false, error: enhancedErrorMessage, requiresAuthentication, oauthCapable });
+      return { success: false, error: enhancedErrorMessage, requiresAuthentication, oauthCapable };
     } finally {
       if (client) {
         try {
