@@ -193,3 +193,51 @@ describe('validTargetTypesFor', () => {
     expect(validTargetTypesFor('finish', 'finish-top')).toEqual([]);
   });
 });
+
+// --- #205 coverage top-up: resource (Tier 3, data-wiring) edges ---
+
+const resourceNodes = [node('p1', 'process'), node('p2', 'process'), node('r1', 'resource')];
+
+describe('createEdgeFromConnection — resource edges', () => {
+  it('types a process → resource (produce) connection as a resourceEdge', () => {
+    const produce = createEdgeFromConnection(
+      connect('p1', 'process-right-resource', 'r1', 'resource-in'),
+      resourceNodes
+    );
+    expect(produce.type).toBe('resourceEdge');
+    expect((produce.data as any).edgeType).toBe('resource');
+    // Resource edges are static config wiring, never animated flow control.
+    expect(produce.animated).toBe(false);
+  });
+
+  it('types a resource → process (consume) connection as a resourceEdge', () => {
+    const consume = createEdgeFromConnection(
+      connect('r1', 'resource-out', 'p1', 'process-left-resource'),
+      resourceNodes
+    );
+    expect(consume.type).toBe('resourceEdge');
+    expect((consume.data as any).edgeType).toBe('resource');
+    expect(consume.animated).toBe(false);
+  });
+});
+
+describe('getReplacedEdgeIds — resource edges', () => {
+  it('collapses two same-direction resource edges between the same pair', () => {
+    const existing = createEdgeFromConnection(connect('p1', 'process-right-resource', 'r1', 'resource-in'), resourceNodes);
+    const duplicate = createEdgeFromConnection(connect('p1', 'process-right-resource', 'r1', 'resource-in'), resourceNodes);
+    expect(getReplacedEdgeIds(duplicate, [existing])).toEqual([existing.id]);
+  });
+
+  it('keeps produce (process → resource) and consume (resource → process) as distinct edges', () => {
+    const produce = createEdgeFromConnection(connect('p1', 'process-right-resource', 'r1', 'resource-in'), resourceNodes);
+    const consume = createEdgeFromConnection(connect('r1', 'resource-out', 'p1', 'process-left-resource'), resourceNodes);
+    // A step may both write and read the same artifact — the two directions coexist.
+    expect(getReplacedEdgeIds(consume, [produce])).toEqual([]);
+  });
+
+  it('does not let a resource edge replace a flow-control edge between the same pair', () => {
+    const control = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), resourceNodes);
+    const resource = createEdgeFromConnection(connect('p1', 'process-right-resource', 'r1', 'resource-in'), resourceNodes);
+    expect(getReplacedEdgeIds(resource, [control])).toEqual([]);
+  });
+});
