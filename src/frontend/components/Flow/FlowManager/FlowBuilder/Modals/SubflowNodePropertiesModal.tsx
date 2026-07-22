@@ -33,6 +33,8 @@ import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import CaptureFields from './shared/CaptureFields';
+import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
@@ -61,6 +63,12 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   // line) and only parsed back into the string[] property at save time, so
   // typing/removing blank lines never fights the user mid-edit.
   const [briefsText, setBriefsText] = useState('');
+  // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
+  // into scope + key for editing and recombined via buildKvRef on save.
+  const [captureVariable, setCaptureVariable] = useState('');
+  const [captureResource, setCaptureResource] = useState('');
+  const [captureKvScope, setCaptureKvScope] = useState<KvRefScope>('folder');
+  const [captureKvKey, setCaptureKvKey] = useState('');
 
   useEffect(() => {
     if (node) {
@@ -83,6 +91,13 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           ? existing.spawnBriefs.filter((b: unknown) => typeof b === 'string').join('\n')
           : ''
       );
+
+      // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
+      setCaptureVariable(existing.captureVariable || '');
+      setCaptureResource(existing.captureResource || '');
+      const kvParsed = parseKvRef(existing.captureKv || '');
+      setCaptureKvScope(kvParsed.scope);
+      setCaptureKvKey(kvParsed.key || '');
     }
   }, [node, open]);
 
@@ -127,6 +142,17 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
       } else {
         delete properties.spawnBriefs;
       }
+
+      // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
+      // when empty, so flowToSpec never emits an empty captureX and existing
+      // flows without these fields stay byte-identical.
+      const cv = captureVariable.trim();
+      if (cv) properties.captureVariable = cv; else delete properties.captureVariable;
+      const cr = captureResource.trim();
+      if (cr) properties.captureResource = cr; else delete properties.captureResource;
+      const ckv = buildKvRef(captureKvScope, captureKvKey);
+      if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
+
       onSave(node.id, { ...nodeData, properties });
       onClose();
     }
@@ -509,6 +535,17 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           &quot;Save full conversations&quot;. Parallel copies each get their own
           conversation, titled by their brief.
         </Typography>
+
+        <Divider sx={{ my: 3 }} />
+        <CaptureFields
+          value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}
+          onChange={(patch) => {
+            if (patch.captureVariable !== undefined) setCaptureVariable(patch.captureVariable);
+            if (patch.captureResource !== undefined) setCaptureResource(patch.captureResource);
+            if (patch.captureKvScope !== undefined) setCaptureKvScope(patch.captureKvScope);
+            if (patch.captureKvKey !== undefined) setCaptureKvKey(patch.captureKvKey);
+          }}
+        />
       </DialogContent>
 
       <DialogActions>
