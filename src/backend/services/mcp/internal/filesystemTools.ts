@@ -210,6 +210,21 @@ export function filesystemToolDefinitions(): Tool[] {
       },
     },
     {
+      name: 'file_browser_ui',
+      description:
+        'Open an interactive file browser in the chat so the USER can pick a file. This returns IMMEDIATELY without a selection — the browser is shown to the user and the file they choose arrives afterwards as a follow-up user message (e.g. "Selected file: <path>"). After calling this tool you MUST stop and wait for that message; do not guess a path or continue until the user has selected.',
+      // MCP Apps (#97): this tool exists solely to surface the file-browser app
+      // (ui://filesystem/browser). See internal/filesystemResources.ts.
+      _meta: { ui: { resourceUri: 'ui://filesystem/browser' } },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { ...pathProp, description: 'Optional starting directory for the browser (defaults to the FLUJO data directory).' },
+        },
+        required: [],
+      },
+    },
+    {
       name: 'dir_tree',
       description: 'Return a recursive, depth-limited directory tree as nested JSON. Returns { path, depth, tree }.',
       inputSchema: {
@@ -766,6 +781,14 @@ async function deleteTool(args: Record<string, unknown>, roots: string[] | null)
 
 export async function filesystemCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
+    // MCP App launcher (#97): pure UI trigger — returns immediately without
+    // touching the filesystem. The app renders in chat; the user's pick returns
+    // as a follow-up message. Handled before roots are resolved (it needs none).
+    if (toolName === 'file_browser_ui') {
+      return textResult(
+        'File browser shown to the user. Waiting for them to select a file — their choice will arrive as a follow-up message. Do not proceed until then.',
+      );
+    }
     const roots = await loadEffectiveRoots(FILESYSTEM_SERVER_NAME, 'FLUJO_FS_ROOTS');
     switch (toolName) {
       case 'read_file':

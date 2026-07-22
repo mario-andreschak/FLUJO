@@ -53,12 +53,30 @@ export class ModelHandler {
    */
   private static async resolveToolUiLink(
     serverName: string,
+    toolName: string,
     resultData: unknown
   ): Promise<{ uri: string; serverName: string } | undefined> {
-    const meta = (resultData as { _meta?: unknown } | null | undefined)?._meta;
-    const uri = extractUiResourceUri(meta);
+    // The link may ride on the tool RESULT's `_meta` (FLUJO's original Phase-1
+    // assumption) OR — as the ext-apps SDK and the github-mcp-server actually do
+    // it — on the tool DEFINITION's `_meta.ui.resourceUri`. Check the result
+    // first (cheap, already in hand); only fall back to a tools/list lookup when
+    // the result carries no link, so ordinary tools add no per-call cost.
+    let uri = extractUiResourceUri((resultData as { _meta?: unknown } | null | undefined)?._meta);
+    if (!uri) {
+      try {
+        const { tools } = await mcpService.listServerTools(serverName);
+        const def = Array.isArray(tools) ? tools.find((t) => t.name === toolName) : undefined;
+        uri = extractUiResourceUri((def as { _meta?: unknown } | undefined)?._meta);
+      } catch (error) {
+        log.warn(`resolveToolUiLink: failed to list tools for ${serverName}`, error);
+      }
+    }
     if (!uri) return undefined;
     try {
+      // Built-in servers (filesystem/bash/flujo) are first-party FLUJO code — their
+      // apps are trusted and always allowed, no per-server opt-in required.
+      const { isBuiltInServerName } = await import('@/backend/services/mcp/internal/registry');
+      if (isBuiltInServerName(serverName)) return { uri, serverName };
       const configs = await mcpService.loadServerConfigs();
       if (!Array.isArray(configs)) return undefined;
       const config = configs.find((c) => c.name === serverName);
@@ -1146,7 +1164,7 @@ export class ModelHandler {
           // resource (SEP-1865 `_meta.ui.resourceUri`) AND has the per-server
           // opt-in enabled, attach the link so chat can render it sandboxed.
           const uiLink = result.success
-            ? await ModelHandler.resolveToolUiLink(serverName, result.data)
+            ? await ModelHandler.resolveToolUiLink(serverName, toolName, result.data)
             : undefined;
 
             // Add tool result message with timestamp and ID

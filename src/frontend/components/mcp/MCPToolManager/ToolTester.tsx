@@ -23,6 +23,8 @@ import { createLogger } from '@/utils/logger';
 import Spinner from '@/frontend/components/shared/Spinner';
 import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 import { useThemeUtils } from '@/frontend/utils/theme';
+import { extractUiResourceUri } from '@/shared/utils/mcpApps';
+import McpAppFrame from '@/frontend/components/Chat/McpAppFrame'; // #97: render a tool's MCP App here too
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
 
@@ -39,6 +41,7 @@ interface ToolTesterProps {
     name: string;
     description: string;
     inputSchema: Record<string, any>;
+    _meta?: Record<string, any>; // #97: carries ui.resourceUri for MCP Apps
   }>;
   onTestTool: (toolName: string, params: Record<string, any>, timeout?: number) => Promise<ToolTestResult>;
   onClose?: () => void; // Optional handler to dismiss the tester panel
@@ -523,6 +526,29 @@ const ToolTester: React.FC<ToolTesterProps> = ({
           )}
         </Paper>
       )}
+
+      {/* #97: if the just-tested tool links a ui:// MCP App, render it live here
+          — so apps can be tried straight from the tool tester, no flow needed. */}
+      {result?.success && (() => {
+        const uiUri = extractUiResourceUri(selectedToolData?._meta);
+        if (!uiUri) return null;
+        let resultContent: string | undefined;
+        try {
+          const parsed = JSON.parse(result.output);
+          resultContent = JSON.stringify(parsed?.data ?? parsed);
+        } catch {
+          resultContent = undefined;
+        }
+        return (
+          <McpAppFrame
+            serverName={serverName}
+            uri={uiUri}
+            toolName={selectedTool}
+            toolArgs={JSON.stringify(params)}
+            toolResultContent={resultContent}
+          />
+        );
+      })()}
     </Paper>
   );
 };
