@@ -61,6 +61,7 @@ import EdgePropertiesModal from './Modals/EdgePropertiesModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
+import FlowVersionHistoryDialog from './Modals/FlowVersionHistoryDialog';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
@@ -68,6 +69,7 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import HealingIcon from '@mui/icons-material/Healing';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import HistoryIcon from '@mui/icons-material/History';
 import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
@@ -180,6 +182,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // pre-seeded with when the user chooses "Repair with AI".
   const [repairMenuAnchor, setRepairMenuAnchor] = useState<null | HTMLElement>(null);
   const [improveInitialDescription, setImproveInitialDescription] = useState('');
+
+  // Version history: browse/preview/restore archived versions of a saved flow.
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   
   // History for undo/redo functionality
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -409,6 +414,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       unattended: flowUnattended,
       nodes: flowNodes,
       edges,
+      folder: initialFlow?.folder,    // Preserve folder assignment
+      favorite: initialFlow?.favorite, // Preserve favorite status
     };
 
     log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
@@ -484,6 +491,33 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
   }, [filterInvalidEdges]);
 
+  // Restore an archived version (issue: version history): apply the chosen
+  // version's definition to the canvas as an UNSAVED, undoable change — exactly
+  // like AI-Improve. The user reviews it and hits Save to persist (which archives
+  // the definition being replaced, so restoring is itself reversible); Undo
+  // reverts the restore. The node id set is preserved from the archived version,
+  // so name/description are flagged dirty explicitly (the history effect only
+  // watches nodes/edges).
+  const handleRestoreVersion = useCallback((restored: Flow) => {
+    log.info('Restoring an archived flow version to the canvas', {
+      flowId: restored.id,
+      nodes: restored.nodes?.length ?? 0,
+      edges: restored.edges?.length ?? 0,
+    });
+    setVersionHistoryOpen(false);
+    setNodes(restored.nodes || []);
+    setEdges(filterInvalidEdges(restored.edges || []));
+    setFlowName(restored.name);
+    setFlowDescription(restored.description || '');
+    setFlowUnattended(restored.unattended ?? false);
+    setFlowNameError(validateFlowName(restored.name));
+    setHasUnsavedChanges(true);
+    setImproveNotice({
+      severity: 'info',
+      message: 'Restored an earlier version to the canvas — review it (Undo reverts), then Save to keep it.',
+    });
+  }, [filterInvalidEdges]);
+
   // Static auto-repair: deterministically add a missing Start/Finish and connect
   // disconnected nodes, reading the current canvas layout as intent (vertical = sequential,
   // same row = parallel). Runs entirely client-side (no model), applied as an unsaved,
@@ -539,6 +573,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       unattended: flowToCopy.unattended,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
+      folder: flowToCopy.folder,    // Preserve folder assignment
+      favorite: flowToCopy.favorite, // Preserve favorite status
     };
     
     log.info(`handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`);
@@ -984,6 +1020,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 >
                   AI-Improve
                 </Button>
+                <Tooltip title="Browse, preview, and restore earlier saved versions of this flow">
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    onClick={() => setVersionHistoryOpen(true)}
+                    startIcon={<HistoryIcon />}
+                  >
+                    History
+                  </Button>
+                </Tooltip>
                 <Button
                   variant="outlined"
                   color="primary"
@@ -1120,6 +1166,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edge={editingEdge}
         onClose={() => setEditingEdge(null)}
         onSave={handleSaveEdgeCondition}
+      />
+
+      {/* Version history: browse/preview/restore archived versions of this flow. */}
+      <FlowVersionHistoryDialog
+        open={versionHistoryOpen}
+        flowId={initialFlow?.id}
+        onClose={() => setVersionHistoryOpen(false)}
+        onRestore={handleRestoreVersion}
       />
 
       {/* AI-Improve dialog (issue #99): revises the CURRENT canvas state (incl. unsaved edits). */}

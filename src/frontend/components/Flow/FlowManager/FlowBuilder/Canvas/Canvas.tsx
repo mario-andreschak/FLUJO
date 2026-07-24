@@ -58,8 +58,9 @@ function writeFlowClipboard(payload: FlowClipboard) {
   }
 }
 
-// Node types for the ReactFlow component
-const nodeTypes = {
+// Node types for the ReactFlow component. Exported so the read-only version
+// preview (FlowPreview) renders with the exact same node components.
+export const nodeTypes = {
   start: StartNode,
   process: ProcessNode,
   finish: FinishNode,
@@ -69,7 +70,7 @@ const nodeTypes = {
   signal: SignalNode,
 };
 
-const edgeTypes = {
+export const edgeTypes = {
   custom: CustomEdge,
   mcpEdge: MCPEdge,
   resourceEdge: ResourceEdge,

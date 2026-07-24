@@ -9,6 +9,23 @@ import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
 const log = createLogger('frontend/services/flow/index');
 
+/** Summary of one archived flow version (list view). Mirrors the backend DTO. */
+export interface FlowVersionSummary {
+  versionId: string;
+  savedAt: number;
+  name: string;
+  nodeCount: number;
+  edgeCount: number;
+}
+
+/** One archived flow version with its full definition. */
+export interface FlowVersionRecord {
+  versionId: string;
+  flowId: string;
+  savedAt: number;
+  flow: Flow;
+}
+
 /**
  * FlowService class provides a client-side API for UI components
  * This service makes API calls to the server-side API layer
@@ -363,6 +380,48 @@ class FlowService {
         success: false, 
         error: error instanceof Error ? error.message : 'Failed to delete flow' 
       };
+    }
+  }
+
+  /**
+   * List a flow's archived versions (newest first). Versions are archived
+   * automatically each time an existing flow is overwritten on save.
+   */
+  async listFlowVersions(flowId: string): Promise<FlowVersionSummary[]> {
+    log.debug('listFlowVersions: Entering method', { flowId });
+    try {
+      const response = await fetch(`/api/flow/${encodeURIComponent(flowId)}/versions`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Failed to list flow versions');
+      }
+      const data = (await response.json()) as { versions: FlowVersionSummary[] };
+      return Array.isArray(data.versions) ? data.versions : [];
+    } catch (error) {
+      log.warn(`listFlowVersions: Failed for flow ${flowId}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch one archived version with its full flow definition, or null if it no
+   * longer exists (history is capped, so old versions are eventually pruned).
+   */
+  async getFlowVersion(flowId: string, versionId: string): Promise<FlowVersionRecord | null> {
+    log.debug('getFlowVersion: Entering method', { flowId, versionId });
+    try {
+      const response = await fetch(
+        `/api/flow/${encodeURIComponent(flowId)}/versions/${encodeURIComponent(versionId)}`
+      );
+      if (!response.ok) {
+        if (response.status === 404) return null;
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Failed to get flow version');
+      }
+      return (await response.json()) as FlowVersionRecord;
+    } catch (error) {
+      log.warn(`getFlowVersion: Failed for ${flowId}/${versionId}:`, error);
+      return null;
     }
   }
 
