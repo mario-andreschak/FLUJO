@@ -2360,6 +2360,23 @@ const Chat: React.FC = () => {
     }
   }, [breakpoints, currentConversationId]);
 
+  // Attach the debugger to an already-running conversation. Arms a one-shot
+  // wildcard breakpoint ('*') on the live run: the backend loop pauses before
+  // its next node and returns paused_debug, which resolves the still-pending
+  // send POST with debugState and opens the debugger panel through the normal
+  // paused_debug path. Only offered for the foreground (tracked) run — a
+  // background/re-attached run has no pending POST to carry debugState back.
+  const handleAttachDebugger = useCallback(async () => {
+    if (!currentConversationId) return;
+    log.info('Attaching debugger to running conversation', { conversationId: currentConversationId });
+    try {
+      await chatService.setBreakpoints(currentConversationId, ['*']);
+    } catch (err) {
+      log.error('Failed to attach debugger', { conversationId: currentConversationId, err });
+      setError(err instanceof Error ? err.message : 'Failed to attach debugger.');
+    }
+  }, [currentConversationId]);
+
   // Step Over: advance one node at a time until the active node changes (i.e.
   // skip a process node's internal tool-call iterations), or execution pauses
   // elsewhere / finishes. Implemented client-side as a bounded loop of steps.
@@ -2837,6 +2854,14 @@ const Chat: React.FC = () => {
                   onOpenLane={setCurrentConversationId}
                   onStop={handleCancelRequest}
                   stopDisabled={!currentConversationId}
+                  // Only a foreground (tracked) run holds a pending send POST
+                  // that can carry debugState back and open the panel; and never
+                  // while a debug session already owns the run.
+                  onAttachDebugger={
+                    isLoading && loadingConversationId === currentConversationId && !debugSessionActive
+                      ? handleAttachDebugger
+                      : undefined
+                  }
                 />
               )}
 

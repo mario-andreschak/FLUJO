@@ -424,8 +424,11 @@ const FlowsPage = () => {
       id: newId, // Generate a new ID
       name: newFlowName,
       description: flowToCopy.description,
+      unattended: flowToCopy.unattended,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
+      folder: flowToCopy.folder,
+      favorite: flowToCopy.favorite,
     };
     
     // Save the new flow

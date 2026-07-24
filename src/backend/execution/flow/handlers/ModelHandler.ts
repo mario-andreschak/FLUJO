@@ -11,6 +11,7 @@ import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName } from './toolNamespace';
 import { toApiMessages } from '../buildNodeContext';
+import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
@@ -23,7 +24,7 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
-import { isRunResourceToolName, executeRunResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
+import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -614,15 +615,62 @@ export class ModelHandler {
       // its result, the synthetic "Continue") from the WIRE view only — the threaded
       // history kept in SharedState is untouched. So a node handed off to sees a
       // clean conversation. See ~/.claude/plans/execution-core-v2.md.
-      const apiMessages: OpenAI.ChatCompletionMessageParam[] = toApiMessages(messages);
+      let apiMessages: OpenAI.ChatCompletionMessageParam[] = toApiMessages(messages);
+      let effectiveTools: OpenAI.ChatCompletionTool[] | undefined = tools;
+
+      // Wire-only history compaction for request/response adapters. Agentic loops
+      // re-send the whole growing history every turn; a single fat tool result
+      // then rides along on every subsequent request and dominates fresh (non-
+      // cached) prompt tokens. compactForWire shrinks oversized OLD tool results
+      // and old assistant prose while keeping the recent tail verbatim and never
+      // dropping a message (tool-pair integrity + prefix-cache stability). The
+      // self-orchestrating Claude path ('claude-cli') is skipped: it flattens the
+      // wire itself and has its own resource-aware truncation markers (issue #168).
+      if (model.adapter !== 'claude-cli' && couldCompact(apiMessages)) {
+        apiMessages = compactForWire(apiMessages, {
+          resourceMarkers: opts?.runResourceMarkers,
+        });
+        // Truncation embeds a `flujo://run/...` URI when the full result was
+        // captured (issue #168). ProcessNode.prep arms `read_resource` by
+        // scanning the PRE-compaction wire, so a URI first surfaced HERE would be
+        // undereferenceable. Arm it now if compaction introduced a run-resource
+        // reference the offered tools don't yet cover — dispatch is by-name
+        // (processToolCalls), so a late-added tool still executes. Re-sorted by
+        // name to keep the tool block byte-stable turn to turn (#89).
+        if (
+          wireHasRunResourceUri(apiMessages) &&
+          !(effectiveTools ?? []).some(
+            (t) => t.type === 'function' && t.function.name === READ_RESOURCE_TOOL_NAME
+          )
+        ) {
+          const def = buildReadResourceTool();
+          const readTool: OpenAI.ChatCompletionTool = {
+            type: 'function',
+            function: {
+              name: def.name,
+              description: def.description || `Tool: ${def.name}`,
+              parameters: def.inputSchema as Record<string, unknown>,
+            },
+          };
+          effectiveTools = [...(effectiveTools ?? []), readTool].sort((a, b) =>
+            a.type === 'function' && b.type === 'function'
+              ? a.function.name < b.function.name
+                ? -1
+                : a.function.name > b.function.name
+                  ? 1
+                  : 0
+              : 0
+          );
+        }
+      }
 
       // Sanitize tool schemas for broad provider compatibility (handles string
       // properties with unsupported `format` values, etc.). Done once here so
       // every adapter receives clean tool definitions.
       let sanitizedTools: OpenAI.ChatCompletionTool[] | undefined;
-      if (tools && tools.length > 0) {
+      if (effectiveTools && effectiveTools.length > 0) {
         const { ToolHandler } = require('../handlers/ToolHandler');
-        sanitizedTools = tools.map(tool => {
+        sanitizedTools = effectiveTools.map(tool => {
           if (tool.type === 'function' && tool.function.parameters) {
             return {
               ...tool,

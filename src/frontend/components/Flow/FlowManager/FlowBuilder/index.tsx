@@ -531,6 +531,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       unattended: flowUnattended,
       nodes,
       edges,
+      folder: initialFlow?.folder,
+      favorite: initialFlow?.favorite,
     };
     const { flow: repaired, changes } = autoRepairFlow(currentFlow);
     if (changes.length === 0) {
@@ -622,6 +624,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         unattended: flowUnattended,
         nodes,
         edges,
+        folder: initialFlow?.folder,
+        favorite: initialFlow?.favorite,
       };
       onSave(flow);
       setHasUnsavedChanges(false);

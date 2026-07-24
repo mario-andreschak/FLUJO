@@ -1578,8 +1578,6 @@ declare global {
 }
 
 export function getSchedulerService(): SchedulerService {
-  if (!global.__flujo_scheduler) {
-    global.__flujo_scheduler = new SchedulerService();
-  }
-  return global.__flujo_scheduler;
+  const service = global.__flujo_scheduler ?? (global.__flujo_scheduler = new SchedulerService());
+  return service;
 }

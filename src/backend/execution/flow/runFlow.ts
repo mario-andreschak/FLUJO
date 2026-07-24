@@ -946,8 +946,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         // Breakpoint check.
         if (!singleStep && sharedState.breakpoints && sharedState.breakpoints.length > 0) {
           const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
-          if (nextNodeId && sharedState.breakpoints.includes(nextNodeId) && sharedState.lastBreakNodeId !== nextNodeId) {
-            log.info(`Breakpoint hit at node ${nextNodeId} for conv ${effectiveConvId}. Pausing.`);
+          // '*' is a one-shot "attach" breakpoint set by the live-view Attach-
+          // debugger button (setBreakpoints(convId, ['*'])): pause before
+          // whatever node comes next, then consume the sentinel so a subsequent
+          // Continue resumes normally instead of re-pausing at every node.
+          const wildcard = sharedState.breakpoints.includes('*');
+          const hit = !!nextNodeId && (wildcard || sharedState.breakpoints.includes(nextNodeId));
+          if (hit && sharedState.lastBreakNodeId !== nextNodeId) {
+            if (wildcard) {
+              sharedState.breakpoints = sharedState.breakpoints.filter(b => b !== '*');
+            }
+            log.info(`Breakpoint hit at node ${nextNodeId}${wildcard ? ' (attach)' : ''} for conv ${effectiveConvId}. Pausing.`);
             sharedState.status = 'paused_debug';
             sharedState.debugMode = true;
             sharedState.lastBreakNodeId = nextNodeId;
