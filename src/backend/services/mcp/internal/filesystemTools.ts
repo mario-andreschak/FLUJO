@@ -144,7 +144,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'edit_file',
       description:
-        'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the first (unambiguous) occurrence, optionally scoped to a line range; or (2) "diff": a unified diff string (standard "@@ -a,b +c,d @@" hunks) applied atomically. Fails with no partial write on any mismatch. Returns { path, editsApplied|applied, diff:{added,removed} }.',
+        'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the unique occurrence of oldText. startLine/endLine are an optional disambiguation HINT (if exactly one match starts in that range it wins); a wrong/missing range still works as long as oldText is unique in the file. Include enough surrounding context to make oldText unique. Or (2) "diff": a unified diff string ("@@ -a,b +c,d @@" hunks) applied atomically — hunks are relocated to where their context actually matches, so slightly-off @@ line numbers still apply, and CRLF files are handled. Fails with no partial write only when text is missing/ambiguous or a hunk context is not found. Returns { path, editsApplied|applied, diff:{added,removed} }.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -466,13 +466,20 @@ async function editFileTool(args: Record<string, unknown>, roots: string[] | nul
 
   // (2) Unified-diff apply — atomic.
   if (hasDiff) {
+    // Match in LF space so a CRLF file's trailing \r doesn't make every context
+    // line mismatch the (\r-stripped) diff body; restore the original EOL on
+    // write. The literal-edits path already did this (#187); the diff path did
+    // not, which meant diff apply could never succeed on a CRLF file.
+    const diffEol = detectEol(original);
+    const normalized = original.replace(/\r\n?/g, '\n');
     let out: { result: string; added: number; removed: number };
     try {
-      out = applyUnifiedDiff(original, args.diff as string);
+      out = applyUnifiedDiff(normalized, args.diff as string);
     } catch (err) {
       return errorResult(`Diff apply failed: ${err instanceof Error ? err.message : String(err)}. No changes written.`);
     }
-    await fs.writeFile(filePath, out.result, 'utf8');
+    const finalContent = diffEol === '\r\n' ? out.result.replace(/\n/g, '\r\n') : out.result;
+    await fs.writeFile(filePath, finalContent, 'utf8');
     return dualResult({ path: filePath, applied: true, mode: 'diff', diff: { added: out.added, removed: out.removed } });
   }
 
@@ -500,19 +507,35 @@ async function editFileTool(args: Record<string, unknown>, roots: string[] | nul
     const start = typeof edit.startLine === 'number' ? edit.startLine : gStart;
     const end = typeof edit.endLine === 'number' ? edit.endLine : gEnd;
     const scoped = start !== undefined || end !== undefined;
-    const { lo, hi } = regionOffsets(working, start, end);
 
-    const idx = working.indexOf(oldText, lo);
-    if (idx === -1 || idx >= hi || idx + oldText.length > hi) {
-      return errorResult(
-        `Edit #${applied + 1}: "oldText" not found${scoped ? ' in the specified line range' : ''} in ${filePath}. No changes written.`
-      );
+    // Collect every occurrence in LF space, then resolve which one to edit.
+    const occurrences: number[] = [];
+    for (let p = working.indexOf(oldText); p !== -1; p = working.indexOf(oldText, p + 1)) {
+      occurrences.push(p);
     }
-    const next = working.indexOf(oldText, idx + 1);
-    if (next !== -1 && next < hi && next + oldText.length <= hi) {
-      return errorResult(
-        `Edit #${applied + 1}: "oldText" is ambiguous (appears more than once${scoped ? ' in the specified line range' : ''}). No changes written.`
-      );
+    if (occurrences.length === 0) {
+      return errorResult(`Edit #${applied + 1}: "oldText" not found in ${filePath}. No changes written.`);
+    }
+
+    // startLine/endLine are a disambiguation HINT, not a hard gate: if exactly
+    // one occurrence STARTS within the hinted range, use it (this also tolerates
+    // a multi-line match that extends past endLine). Otherwise fall back to a
+    // whole-file unambiguous match so a slightly-off line estimate never blocks
+    // an edit that is otherwise unique (#170 follow-up).
+    let idx = -1;
+    if (scoped) {
+      const { lo, hi } = regionOffsets(working, start, end);
+      const inRange = occurrences.filter((p) => p >= lo && p < hi);
+      if (inRange.length === 1) idx = inRange[0];
+    }
+    if (idx === -1) {
+      if (occurrences.length === 1) {
+        idx = occurrences[0];
+      } else {
+        return errorResult(
+          `Edit #${applied + 1}: "oldText" is ambiguous (appears ${occurrences.length} times); add more surrounding context or a tighter startLine/endLine so exactly one occurrence is in range. No changes written.`
+        );
+      }
     }
     working = working.slice(0, idx) + newText + working.slice(idx + oldText.length);
     applied += 1;
@@ -525,79 +548,113 @@ async function editFileTool(args: Record<string, unknown>, roots: string[] | nul
   return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff });
 }
 
+interface DiffOp { tag: ' ' | '-' | '+'; body: string }
+interface DiffHunk { oldStart: number; ops: DiffOp[] }
+
+/**
+ * Locate where a hunk's "old side" (its context + removed lines, in order)
+ * occurs in `origLines`. The unified-diff header's line number is treated as a
+ * HINT, not gospel: we prefer a match at the declared position but search
+ * outward from it so a stale/estimated line number still applies cleanly (the
+ * "fuzz" that GNU patch / `git apply` provide). `minPos` forbids matching before
+ * already-consumed lines. A pure-insertion hunk (empty old side) anchors at the
+ * hint. Throws when the context genuinely doesn't exist anywhere in the file.
+ */
+function locateHunk(origLines: string[], oldBlock: string[], hint: number, minPos: number): number {
+  if (oldBlock.length === 0) {
+    return Math.min(Math.max(hint, minPos), origLines.length);
+  }
+  const maxStart = origLines.length - oldBlock.length;
+  const matchesAt = (start: number): boolean => {
+    if (start < minPos || start > maxStart) return false;
+    for (let k = 0; k < oldBlock.length; k++) {
+      if (origLines[start + k] !== oldBlock[k]) return false;
+    }
+    return true;
+  };
+  const clampedHint = Math.max(minPos, hint);
+  if (matchesAt(clampedHint)) return clampedHint;
+  const radius = Math.max(clampedHint - minPos, maxStart - clampedHint);
+  for (let r = 1; r <= radius; r++) {
+    if (matchesAt(clampedHint - r)) return clampedHint - r;
+    if (matchesAt(clampedHint + r)) return clampedHint + r;
+  }
+  throw new Error(
+    `could not locate hunk near line ${hint + 1}; its context/removed lines do not match the file. First expected line: ${JSON.stringify(oldBlock[0])}`
+  );
+}
+
 /**
  * Minimal, dependency-free unified-diff applier (issue #170 D1). Parses standard
  * `@@ -oldStart,oldLen +newStart,newLen @@` hunks and applies them atomically:
- * context (' ') and removed ('-') lines must match the original exactly or the
- * whole apply throws (no partial write). Added ('+') lines are inserted;
- * "\ No newline at end of file" markers are ignored. Throws on any mismatch.
+ * each hunk is RELOCATED to where its context (' ') + removed ('-') lines
+ * actually match the original (see locateHunk) rather than trusting the header's
+ * line number, so a slightly-off line number no longer hard-fails. Added ('+')
+ * lines are inserted; "\ No newline at end of file" markers are ignored. Throws
+ * with no partial write when a hunk's context can't be found at all.
+ * PRECONDITION: `original` is LF-normalized by the caller.
  */
 function applyUnifiedDiff(original: string, diffText: string): { result: string; added: number; removed: number } {
   const origLines = original.split('\n');
   const diffLines = diffText.split(/\r?\n/);
   const hunkHeader = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
+  // Parse the diff into hunks first so relocation can reason about a whole hunk.
+  const hunks: DiffHunk[] = [];
+  let cur: DiffHunk | null = null;
+  for (let i = 0; i < diffLines.length; i++) {
+    const line = diffLines[i];
+    if (line === undefined) break;
+    const m = hunkHeader.exec(line);
+    if (m) {
+      cur = { oldStart: parseInt(m[1], 10), ops: [] };
+      hunks.push(cur);
+      continue;
+    }
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      cur = null; // file header — leave the current hunk (if any)
+      continue;
+    }
+    if (!cur) continue; // preamble before the first hunk
+    const tag = line.length ? line[0] : ' ';
+    const body = line.length ? line.slice(1) : '';
+    if (tag === ' ' || tag === '-' || tag === '+') {
+      cur.ops.push({ tag, body });
+    } else if (tag === '\\') {
+      // "\ No newline at end of file" — nothing to apply.
+    } else {
+      throw new Error(`unexpected diff line: ${JSON.stringify(line)}`);
+    }
+  }
+
+  if (hunks.length === 0) throw new Error('no unified-diff hunks (@@ ... @@) found');
+
   const out: string[] = [];
   let cursor = 0; // 0-based index into origLines already consumed/emitted
   let added = 0;
   let removed = 0;
-  let sawHunk = false;
-  let i = 0;
 
-  while (i < diffLines.length) {
-    const line = diffLines[i];
-    if (line === undefined) break;
-    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
-      i++;
-      continue;
-    }
-    const m = hunkHeader.exec(line);
-    if (!m) {
-      i++;
-      continue;
-    }
-    sawHunk = true;
-    const oldStart = parseInt(m[1], 10);
-    const hunkStartIdx = Math.max(0, oldStart - 1);
-    if (hunkStartIdx < cursor) throw new Error('overlapping or out-of-order hunks');
-    while (cursor < hunkStartIdx && cursor < origLines.length) {
+  for (const hunk of hunks) {
+    const oldBlock = hunk.ops.filter((o) => o.tag === ' ' || o.tag === '-').map((o) => o.body);
+    const pos = locateHunk(origLines, oldBlock, Math.max(0, hunk.oldStart - 1), cursor);
+    if (pos < cursor) throw new Error('overlapping or out-of-order hunks');
+    while (cursor < pos) {
       out.push(origLines[cursor]);
       cursor++;
     }
-    i++;
-
-    // Consume the hunk body until the next hunk header or file header.
-    while (i < diffLines.length && !hunkHeader.test(diffLines[i]) && !diffLines[i].startsWith('--- ')) {
-      const hl = diffLines[i];
-      const tag = hl.length ? hl[0] : ' ';
-      const body = hl.length ? hl.slice(1) : '';
-      if (tag === ' ') {
-        const expected = origLines[cursor];
-        if (expected !== body) {
-          throw new Error(`context mismatch at line ${cursor + 1}: expected ${JSON.stringify(expected)}, diff has ${JSON.stringify(body)}`);
-        }
+    for (const op of hunk.ops) {
+      if (op.tag === ' ') {
         out.push(origLines[cursor]);
         cursor++;
-      } else if (tag === '-') {
-        const expected = origLines[cursor];
-        if (expected !== body) {
-          throw new Error(`removed-line mismatch at line ${cursor + 1}: expected ${JSON.stringify(expected)}, diff has ${JSON.stringify(body)}`);
-        }
+      } else if (op.tag === '-') {
         cursor++;
         removed++;
-      } else if (tag === '+') {
-        out.push(body);
-        added++;
-      } else if (tag === '\\') {
-        // "\ No newline at end of file" — nothing to apply.
       } else {
-        throw new Error(`unexpected diff line: ${JSON.stringify(hl)}`);
+        out.push(op.body);
+        added++;
       }
-      i++;
     }
   }
-
-  if (!sawHunk) throw new Error('no unified-diff hunks (@@ ... @@) found');
 
   while (cursor < origLines.length) {
     out.push(origLines[cursor]);
