@@ -243,7 +243,7 @@ const FILESYSTEM_APP_HTML = `<!doctype html>
     // The picker action: hand the chosen path back to the assistant as a user
     // message (ui/message). The host injects it into the conversation, which
     // resumes the waiting model.
-    rpc("ui/message", { role: "user", content: { type: "text", text: "Selected file: " + path } })
+    rpc("ui/message", { role: "user", content: [{ type: "text", text: "Selected file: " + path }] })
       .then(function () { setMsg(previewEl, "Selected " + path + " — sent to the assistant."); })
       .catch(function (e) { setMsg(previewEl, "Select failed: " + (e && e.message ? e.message : e), true); });
   }
