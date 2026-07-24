@@ -183,6 +183,67 @@ describe('compactForWire', () => {
     }
   });
 
+  describe('compactRecentToolResults (context-overflow emergency fit)', () => {
+    it('shrinks an oversized RECENT tool result to a size-naming URI marker', () => {
+      const uri = 'flujo://run/conv-2/res-recent';
+      // A short history whose ONLY message is a fat recent tool result — the
+      // exact shape that overflows the window without compactForWire helping,
+      // because it is inside the recent tail AND below keepRecentMessages.
+      const msgs: Msg[] = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'search everything' },
+        ...toolTurn('c1', 400_000),
+      ];
+      // Normal compaction is a no-op here (nothing is old enough).
+      expect(compactForWire(msgs, { keepRecentMessages: 12 })).toBe(msgs);
+
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 12,
+        toolResultHeadChars: 2000,
+        compactRecentToolResults: true,
+        resourceMarkers: markersFor('c1', uri),
+      });
+      const tool = out[3] as OpenAI.ChatCompletionToolMessageParam;
+      expect((tool.content as string).length).toBeLessThan(2300);
+      expect(tool.content).toContain(uri);
+      expect(tool.content).toContain('read_resource');
+      expect(tool.content).toContain('400000'); // full size announced
+      expect(wireHasRunResourceUri(out)).toBe(true);
+    });
+
+    it('lossily truncates a recent oversized result when emergency + lossy and no marker', () => {
+      const msgs: Msg[] = [
+        { role: 'user', content: 'go' },
+        ...toolTurn('c1', 400_000),
+      ];
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 12,
+        toolResultHeadChars: 2000,
+        compactRecentToolResults: true,
+        allowLossyTruncation: true,
+      });
+      const tool = out[2] as OpenAI.ChatCompletionToolMessageParam;
+      expect((tool.content as string).length).toBeLessThan(2300);
+      expect(tool.content).toContain('truncated 398000 chars');
+      expect(wireHasRunResourceUri(out)).toBe(false);
+    });
+
+    it('does NOT touch recent tool results without the flag (normal turns)', () => {
+      const msgs: Msg[] = [
+        { role: 'user', content: 'go' },
+        ...toolTurn('c1', 400_000),
+      ];
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 12,
+        allowLossyTruncation: true,
+        resourceMarkers: markersFor('c1', 'flujo://run/x/y'),
+      });
+      // keepRecentMessages(12) > length(3): identity, verbatim.
+      expect(out).toBe(msgs);
+      expect(((msgs[2] as OpenAI.ChatCompletionToolMessageParam).content as string).length).toBe(400_000);
+    });
+  });
+
   it('mirrors the reported conversation: fat downloads stop riding along', () => {
     // Reproduces cc894ecd…: two large "downloaded file" tool results early in a
     // long tool-calling run, then many more turns. On the wire they should shrink.

@@ -71,6 +71,17 @@ export interface CompactForWireOptions {
    * marker the result is left inline rather than silently losing data.
    */
   allowLossyTruncation?: boolean;
+  /**
+   * Emergency context-overflow fit: ALSO shrink oversized tool results in the
+   * RECENT tail, not just old ones (and bypass the "nothing old enough" fast
+   * path). Normally the recent tail is kept verbatim for prefix-cache
+   * stability, but when a request has already overflowed the model's context
+   * window the cache is moot — fitting the request is all that matters. Used
+   * by ModelHandler only on the retry after a context-length error. Default
+   * false. See ModelHandler.generateCompletion. Tier 1 (old assistant prose)
+   * is unaffected — it never touches the recent tail either way.
+   */
+  compactRecentToolResults?: boolean;
 }
 
 const DEFAULTS: Required<Omit<CompactForWireOptions, 'resourceMarkers'>> = {
@@ -78,6 +89,7 @@ const DEFAULTS: Required<Omit<CompactForWireOptions, 'resourceMarkers'>> = {
   toolResultHeadChars: 2000,
   dropOldAssistantProse: true,
   allowLossyTruncation: false,
+  compactRecentToolResults: false,
 };
 
 /** True when compaction could ever shrink this history; lets callers skip the copy. */
@@ -98,39 +110,44 @@ export function compactForWire(
   messages: OpenAI.ChatCompletionMessageParam[],
   opts?: CompactForWireOptions
 ): OpenAI.ChatCompletionMessageParam[] {
-  const { keepRecentMessages, toolResultHeadChars, dropOldAssistantProse, allowLossyTruncation } = {
+  const { keepRecentMessages, toolResultHeadChars, dropOldAssistantProse, allowLossyTruncation, compactRecentToolResults } = {
     ...DEFAULTS,
     ...opts,
   };
   const resourceMarkers = opts?.resourceMarkers;
 
   // Nothing old enough to compact: return the input untouched (identity — keeps
-  // the fast path allocation-free and the cache prefix byte-identical).
-  if (messages.length <= keepRecentMessages) return messages;
+  // the fast path allocation-free and the cache prefix byte-identical). Skipped
+  // in emergency mode, where even a short history can carry one fat NEW result.
+  if (!compactRecentToolResults && messages.length <= keepRecentMessages) return messages;
 
   const oldCount = messages.length - keepRecentMessages;
   let savedChars = 0;
 
   const out = messages.map((msg, i) => {
-    if (i >= oldCount) return msg; // recent tail — verbatim
+    const isRecent = i >= oldCount;
 
-    // Tier 0: oversized old tool results. Tool result content is a string in the
-    // OpenAI shape; only touch strings over the head threshold.
+    // Tier 0: oversized tool results. Tool result content is a string in the
+    // OpenAI shape; only touch strings over the head threshold. OLD results are
+    // always eligible; RECENT results only in emergency mode (context overflow).
     if (msg.role === 'tool' && typeof msg.content === 'string') {
       if (msg.content.length <= toolResultHeadChars) return msg;
+      if (isRecent && !compactRecentToolResults) return msg; // recent tail — verbatim
 
       const uri = resourceMarkers?.get(msg.tool_call_id)?.result?.uri;
       const head = msg.content.slice(0, toolResultHeadChars);
-      const dropped = msg.content.length - toolResultHeadChars;
+      const total = msg.content.length;
+      const dropped = total - toolResultHeadChars;
 
       if (uri) {
-        // Recoverable: point the model at the captured full content.
+        // Recoverable: point the model at the captured full content, naming the
+        // size so it can judge whether reading the rest back is worth it.
         savedChars += dropped;
         return {
           ...msg,
           content:
-            `${head}\n…\n[full content stored as run resource ${uri} — ` +
-            `call read_resource with this uri to read it]`,
+            `${head}\n…\n[tool result truncated for context — the full ${total}-character result ` +
+            `is stored as run resource ${uri}; call read_resource with this uri to read all of it]`,
         };
       }
       if (allowLossyTruncation) {
@@ -140,6 +157,8 @@ export function compactForWire(
       // No captured resource and lossy not allowed: keep it inline.
       return msg;
     }
+
+    if (isRecent) return msg; // recent tail — verbatim (Tier 1 never touches it)
 
     // Tier 1: old assistant turn that made tool call(s) — drop its prose, keep
     // the calls. An assistant message with no tool_calls is a real answer/

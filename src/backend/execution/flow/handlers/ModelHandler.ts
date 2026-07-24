@@ -253,6 +253,241 @@ export class ModelHandler {
   }
 
   /**
+   * Head chars kept when an oversized tool result is shrunk on the emergency
+   * context-overflow retry (see generateCompletion). Also the threshold above
+   * which a result is considered "oversized" for on-the-fly capture, so the two
+   * stay consistent: anything the refit will truncate is first made recoverable.
+   */
+  private static readonly OVERFLOW_TOOL_RESULT_HEAD_CHARS = 2000;
+
+  /**
+   * True when a provider error is a context-window overflow (the request had
+   * more prompt tokens than the model accepts), as opposed to any other API
+   * failure. Matches the several wordings providers use ("maximum context
+   * length", OpenAI's `context_length_exceeded`, OpenRouter's "reduce the
+   * length", etc.) across the message, the error code/type, and the raw
+   * provider body. Deliberately conservative: only these overflow-specific
+   * phrases, so a generic 400 never triggers the (lossy) refit retry.
+   */
+  private static isContextOverflowError(error?: ExecutionError): boolean {
+    if (!error || error.type !== 'model') return false;
+    const details = (error.details ?? {}) as Record<string, unknown>;
+    let providerText = '';
+    try {
+      providerText = JSON.stringify(details.providerError ?? '');
+    } catch {
+      /* circular/huge body — the message + code below are enough to decide */
+    }
+    const haystack =
+      `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`.toLowerCase();
+    return (
+      haystack.includes('context_length_exceeded') ||
+      haystack.includes('maximum context length') ||
+      haystack.includes('context length is') ||
+      haystack.includes('maximum context') ||
+      haystack.includes('reduce the length') ||
+      haystack.includes('too many tokens') ||
+      haystack.includes('exceeds the context')
+    );
+  }
+
+  /**
+   * Arm the synthetic `read_resource` tool when the wire references a run
+   * resource URI but the offered tools don't yet expose read_resource — so a
+   * `flujo://run/...` marker introduced by compaction is actually
+   * dereferenceable. Dispatch is by-name (processToolCalls), so a late-added
+   * tool still executes. The tool block is re-sorted by name to stay byte-stable
+   * turn to turn (prefix cache, #89). Returns the tools unchanged when no arming
+   * is needed.
+   */
+  private static ensureReadResourceArmed(
+    apiMessages: OpenAI.ChatCompletionMessageParam[],
+    tools: OpenAI.ChatCompletionTool[] | undefined
+  ): OpenAI.ChatCompletionTool[] | undefined {
+    if (
+      !wireHasRunResourceUri(apiMessages) ||
+      (tools ?? []).some((t) => t.type === 'function' && t.function.name === READ_RESOURCE_TOOL_NAME)
+    ) {
+      return tools;
+    }
+    const def = buildReadResourceTool();
+    const readTool: OpenAI.ChatCompletionTool = {
+      type: 'function',
+      function: {
+        name: def.name,
+        description: def.description || `Tool: ${def.name}`,
+        parameters: def.inputSchema as Record<string, unknown>,
+      },
+    };
+    return [...(tools ?? []), readTool].sort((a, b) =>
+      a.type === 'function' && b.type === 'function'
+        ? a.function.name < b.function.name
+          ? -1
+          : a.function.name > b.function.name
+            ? 1
+            : 0
+        : 0
+    );
+  }
+
+  /**
+   * Emergency context-overflow recovery: make every oversized tool result on
+   * the wire recoverable so it can be shrunk to a dereferenceable
+   * `flujo://run/...` URI on the retry. Any oversized result whose tool_call_id
+   * is NOT already backed by a captured resource is written to the run-resource
+   * store on the fly and added to a fresh (augmented) markers map — so it can be
+   * read back with `read_resource` instead of being lossily discarded. This
+   * covers results that auto-capture missed (disabled, or produced before the
+   * setting was on). Best-effort: any store failure just leaves that result
+   * unmarked (it will be lossily truncated). Returns the markers map to use for
+   * the refit.
+   */
+  private static async captureOversizedToolResultsForRefit(
+    conversationId: string,
+    apiMessages: OpenAI.ChatCompletionMessageParam[],
+    existing: Map<string, ToolResourceMarker> | undefined,
+    nodeId?: string
+  ): Promise<Map<string, ToolResourceMarker> | undefined> {
+    let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;
+    for (const msg of apiMessages) {
+      if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+      if (msg.content.length <= ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS) continue;
+      const callId = msg.tool_call_id;
+      if (markers?.get(callId)?.result?.uri) continue; // already recoverable
+      try {
+        const written = await writeRunResource({
+          conversationId,
+          mimeType: 'text/plain',
+          kind: 'text',
+          data: { text: msg.content },
+          producedBy: { source: 'tool-result', nodeId, toolCallId: callId },
+        });
+        if ('skipped' in written) {
+          log.warn(`Emergency capture of oversized tool result skipped (${written.skipped}); it will be lossily truncated`);
+          continue;
+        }
+        if (!markers) markers = new Map();
+        const slot = markers.get(callId) ?? {};
+        slot.result = written;
+        markers.set(callId, slot);
+      } catch (error) {
+        log.warn('Emergency capture of oversized tool result failed; it will be lossily truncated', error);
+      }
+    }
+    return markers;
+  }
+
+  /**
+   * Shape a thrown provider/SDK error into a standardized error Result. Shared
+   * by every attempt of a completion call and the setup path, so cancellation,
+   * OpenAI.APIError bodies, and unknown errors are all reported identically no
+   * matter which attempt threw. `aborted` = the shared AbortController fired
+   * (user Stop), reported as a clean cancellation rather than a provider failure.
+   */
+  private static shapeCompletionError(
+    error: unknown,
+    modelId: string,
+    aborted: boolean
+  ): Result<ModelCallResult> {
+    // A user cancellation aborted the in-flight call: whatever error shape the
+    // SDK threw (OpenAI APIUserAbortError, DOMException AbortError, the Agent
+    // SDK's teardown error, ...), report it as a clean cancellation — not a
+    // provider failure.
+    if (aborted) {
+      log.info('Provider call aborted by user cancellation.', { modelId });
+      return {
+        success: false,
+        error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
+      };
+    }
+
+    // --- Log the raw error object caught ---
+    log.error('[ModelHandler.generateCompletion] Caught error during OpenAI API call', { rawError: error });
+
+    // --- Enhanced Error Logging ---
+    log.error('--- Error during openai.chat.completions.create ---');
+    if (error instanceof Error) {
+      log.error(`Error Name: ${error.name}`);
+      log.error(`Error Message: ${error.message}`);
+      log.error(`Error Stack: ${error.stack}`);
+    } else {
+      log.error('Caught non-Error object:', error); // Log the raw object if it's not an Error instance
+    }
+    if (error instanceof OpenAI.APIError) {
+      log.error(`API Error Status: ${error.status}`);
+      log.error(`API Error Type: ${error.type}`);
+      log.error(`API Error Code: ${error.code}`);
+      log.error(`API Error Param: ${error.param}`);
+      log.error(`API Error Headers: ${JSON.stringify(error.headers)}`);
+    }
+    log.error('--- End Error Details ---');
+    // --- End Enhanced Error Logging ---
+
+    // Handle API errors
+    if (error instanceof OpenAI.APIError) {
+      // The SDK's APIError.message is often terse (e.g. "429 Provider returned
+      // error"). The real reason lives in the parsed response body
+      // (error.error); extractProviderErrorDetails digs it out so the user
+      // sees something actionable instead of a generic line.
+      const body = (error as any).error as any; // parsed response body, if any
+      const extracted = ModelHandler.extractProviderErrorDetails(body, error.message);
+
+      // Prefer the response header retry-after; fall back to the body's
+      // metadata.retry_after_seconds (already surfaced by the helper).
+      const headers = (error.headers || {}) as Record<string, unknown>;
+      const headerRetryAfter = headers['retry-after'] ?? headers['Retry-After'];
+      const retryAfter =
+        headerRetryAfter !== undefined ? String(headerRetryAfter) : extracted.retryAfter;
+      const rateLimitReset =
+        headers['x-ratelimit-reset'] ?? headers['x-ratelimit-reset-requests'];
+
+      const errorResult: Result<ModelCallResult> = {
+        success: false,
+        error: createModelError(
+          'api_error',
+          extracted.message,
+          modelId,
+          undefined,
+          {
+            status: error.status,
+            // Prefer the body's values; fall back to the SDK's.
+            type: extracted.type ?? error.type,
+            code: extracted.code ?? error.code,
+            param: extracted.param ?? error.param,
+            retryAfter,
+            rateLimitReset: rateLimitReset !== undefined ? String(rateLimitReset) : undefined,
+            // The full parsed provider body is the richest source of truth.
+            providerError: extracted.providerError,
+            // Include stack trace if available
+            stack: error.stack
+          }
+        )
+      };
+
+      log.verbose('generateCompletion API error', errorResult);
+      return errorResult;
+    }
+
+    // Handle other errors
+    const errorResult: Result<ModelCallResult> = {
+      success: false,
+      error: createModelError(
+        'unknown_error',
+        error instanceof Error ? error.message : String(error),
+        modelId,
+        undefined,
+        {
+          // Include stack trace if available
+          stack: error instanceof Error ? error.stack : undefined
+        }
+      )
+    };
+
+    log.verbose('generateCompletion unknown error', errorResult);
+    return errorResult;
+  }
+
+  /**
    * Call model with tool support - performs a SINGLE API call.
    * Does NOT handle tool execution loops internally.
    */
@@ -634,34 +869,8 @@ export class ModelHandler {
         // captured (issue #168). ProcessNode.prep arms `read_resource` by
         // scanning the PRE-compaction wire, so a URI first surfaced HERE would be
         // undereferenceable. Arm it now if compaction introduced a run-resource
-        // reference the offered tools don't yet cover — dispatch is by-name
-        // (processToolCalls), so a late-added tool still executes. Re-sorted by
-        // name to keep the tool block byte-stable turn to turn (#89).
-        if (
-          wireHasRunResourceUri(apiMessages) &&
-          !(effectiveTools ?? []).some(
-            (t) => t.type === 'function' && t.function.name === READ_RESOURCE_TOOL_NAME
-          )
-        ) {
-          const def = buildReadResourceTool();
-          const readTool: OpenAI.ChatCompletionTool = {
-            type: 'function',
-            function: {
-              name: def.name,
-              description: def.description || `Tool: ${def.name}`,
-              parameters: def.inputSchema as Record<string, unknown>,
-            },
-          };
-          effectiveTools = [...(effectiveTools ?? []), readTool].sort((a, b) =>
-            a.type === 'function' && b.type === 'function'
-              ? a.function.name < b.function.name
-                ? -1
-                : a.function.name > b.function.name
-                  ? 1
-                  : 0
-              : 0
-          );
-        }
+        // reference the offered tools don't yet cover.
+        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Sanitize tool schemas for broad provider compatibility (handles string
@@ -701,234 +910,203 @@ export class ModelHandler {
       // --- Log the exact request being sent ---
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
-      // Start the cancellation watch just before the (possibly long) provider
-      // call. A Stop pressed at any point during the call aborts it within
-      // CANCEL_POLL_MS instead of waiting for the turn to finish.
-      if (opts?.shouldAbort) {
-        if (opts.shouldAbort()) {
-          abortController.abort();
-        } else {
-          const watch = () => {
-            if (opts.shouldAbort!()) {
-              log.info('Cancellation detected mid-completion; aborting the provider call.', { modelId });
-              abortController.abort();
-              stopCancelWatch();
-            }
-          };
-          cancelWatch = setInterval(watch, CANCEL_POLL_MS);
-          // Never keep the process alive just for the watch.
-          cancelWatch.unref?.();
+      // One retryable attempt at the provider call. Extracted into a closure so
+      // a context-length overflow (below) can be retried once with oversized
+      // tool results shrunk to run-resource URIs, WITHOUT duplicating the
+      // cancellation watch, body-error check, and response shaping. Each attempt
+      // starts its own cancellation watch (the shared abortController persists,
+      // so a Stop during attempt 1 stays aborted and blocks a retry). Never
+      // throws — a thrown SDK error is shaped into an error Result in-place.
+      const attempt = async (
+        attemptMessages: OpenAI.ChatCompletionMessageParam[],
+        attemptTools: OpenAI.ChatCompletionTool[] | undefined
+      ): Promise<Result<ModelCallResult>> => {
+        // Start the cancellation watch just before the (possibly long) provider
+        // call. A Stop pressed at any point during the call aborts it within
+        // CANCEL_POLL_MS instead of waiting for the turn to finish.
+        if (opts?.shouldAbort) {
+          if (opts.shouldAbort()) {
+            abortController.abort();
+          } else if (!cancelWatch) {
+            const watch = () => {
+              if (opts.shouldAbort!()) {
+                log.info('Cancellation detected mid-completion; aborting the provider call.', { modelId });
+                abortController.abort();
+                stopCancelWatch();
+              }
+            };
+            cancelWatch = setInterval(watch, CANCEL_POLL_MS);
+            // Never keep the process alive just for the watch.
+            cancelWatch.unref?.();
+          }
         }
-      }
-      if (abortController.signal.aborted) {
-        return {
-          success: false,
-          error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
-        };
-      }
-
-      // Make the API request through the selected adapter.
-      let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
-      let transcript: FlujoChatMessage[] | undefined;
-      try {
-        ({ completion: chatCompletion, transcript } = await adapter.createCompletion({
-          model,
-          apiKey: decryptedApiKey,
-          messages: apiMessages,
-          tools: sanitizedTools,
-          temperature,
-          // Effective output-token cap: node-level override → per-model default
-          // (resolved in callModel, #189), falling back to the per-model value
-          // for any caller that doesn't pass one. Undefined ⇒ adapter default.
-          maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
-          toolNameMap: opts?.toolNameMap,
-          localToolExecutors: opts?.localToolExecutors,
-          maxTurns: opts?.maxTurns,
-          requestToolApproval: opts?.requestToolApproval,
-          onTranscriptMessage: opts?.onTranscriptMessage,
-          signal: abortController.signal,
-          conversationId: opts?.conversationId,
-          nodeId: opts?.nodeId,
-          runResourceMarkers: opts?.runResourceMarkers,
-        }));
-      } finally {
-        stopCancelWatch();
-      }
-
-      // --- Log the raw response received ---
-      log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: chatCompletion }); // Use debug level
-
-      log.verbose(`chatcompletion returned`) // Keep verbose for backward compatibility if needed
-      log.verbose('chatcompletion returned', chatCompletion) // Keep verbose
-
-      // --- Check for top-level error in the response ---
-      // Some providers (like OpenRouter for certain errors) might return a 200 OK
-      // with an error object in the body instead of throwing an HTTP error.
-      if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion && chatCompletion.error) {
-        log.warn('API call returned successfully but contained an error object:', JSON.stringify(chatCompletion.error));
-        const errorObj = chatCompletion.error as any; // Type assertion for easier access
-
-        // Shape the message + details consistently with the thrown-error path.
-        const extracted = ModelHandler.extractProviderErrorDetails(errorObj);
-
-        const errorResult: Result<ModelCallResult> = {
+        if (abortController.signal.aborted) {
+          return {
             success: false,
-            error: createModelError(
-                'api_error', // Treat as API error
-                extracted.message,
+            error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
+          };
+        }
+
+        try {
+          // Make the API request through the selected adapter.
+          let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
+          let transcript: FlujoChatMessage[] | undefined;
+          try {
+            ({ completion: chatCompletion, transcript } = await adapter.createCompletion({
+              model,
+              apiKey: decryptedApiKey,
+              messages: attemptMessages,
+              tools: attemptTools,
+              temperature,
+              // Effective output-token cap: node-level override → per-model default
+              // (resolved in callModel, #189), falling back to the per-model value
+              // for any caller that doesn't pass one. Undefined ⇒ adapter default.
+              maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
+              toolNameMap: opts?.toolNameMap,
+              localToolExecutors: opts?.localToolExecutors,
+              maxTurns: opts?.maxTurns,
+              requestToolApproval: opts?.requestToolApproval,
+              onTranscriptMessage: opts?.onTranscriptMessage,
+              signal: abortController.signal,
+              conversationId: opts?.conversationId,
+              nodeId: opts?.nodeId,
+              runResourceMarkers: opts?.runResourceMarkers,
+            }));
+          } finally {
+            stopCancelWatch();
+          }
+
+          // --- Log the raw response received ---
+          log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: chatCompletion }); // Use debug level
+
+          log.verbose(`chatcompletion returned`) // Keep verbose for backward compatibility if needed
+          log.verbose('chatcompletion returned', chatCompletion) // Keep verbose
+
+          // --- Check for top-level error in the response ---
+          // Some providers (like OpenRouter for certain errors) might return a 200 OK
+          // with an error object in the body instead of throwing an HTTP error.
+          if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion && chatCompletion.error) {
+            log.warn('API call returned successfully but contained an error object:', JSON.stringify(chatCompletion.error));
+            const errorObj = chatCompletion.error as any; // Type assertion for easier access
+
+            // Shape the message + details consistently with the thrown-error path.
+            const extracted = ModelHandler.extractProviderErrorDetails(errorObj);
+
+            const errorResult: Result<ModelCallResult> = {
+                success: false,
+                error: createModelError(
+                    'api_error', // Treat as API error
+                    extracted.message,
+                    modelId,
+                    undefined,
+                    {
+                        code: extracted.code,
+                        type: extracted.type,
+                        param: extracted.param,
+                        retryAfter: extracted.retryAfter,
+                        // The full parsed provider body is the richest source of truth.
+                        providerError: extracted.providerError,
+                    }
+                )
+            };
+            log.verbose('generateCompletion returning error from response body', errorResult);
+            return errorResult;
+          }
+          // --- End error check ---
+
+
+          // Create a standardized response with OpenAI-compatible structure
+          // Ensure choices exist before accessing them
+          const choice = chatCompletion?.choices?.[0];
+          if (!choice) {
+            log.error('API response missing choices array or first choice.', { response: chatCompletion });
+            return {
+              success: false,
+              error: createModelError(
+                'api_error',
+                'Invalid response structure from API: Missing choices.',
                 modelId,
                 undefined,
-                {
-                    code: extracted.code,
-                    type: extracted.type,
-                    param: extracted.param,
-                    retryAfter: extracted.retryAfter,
-                    // The full parsed provider body is the richest source of truth.
-                    providerError: extracted.providerError,
-                }
-            )
-        };
-        log.verbose('generateCompletion returning error from response body', errorResult);
-        return errorResult;
-      }
-      // --- End error check ---
+                { rawResponse: chatCompletion }
+              )
+            };
+          }
 
+          const result: Result<ModelCallResult> = {
+            success: true,
+            // Use the validated choice object
+            value: {
+              content: choice.message?.content || '',
+              messages: [...messages], // Return original messages with timestamps
+              fullResponse: chatCompletion, // Return the full original response
+              transcript // Present only for self-orchestrating adapters (Claude subscription)
+            }
+          };
 
-      // Create a standardized response with OpenAI-compatible structure
-      // Ensure choices exist before accessing them
-      const choice = chatCompletion?.choices?.[0];
-      if (!choice) {
-        log.error('API response missing choices array or first choice.', { response: chatCompletion });
-        return {
-          success: false,
-          error: createModelError(
-            'api_error',
-            'Invalid response structure from API: Missing choices.',
-            modelId,
-            undefined,
-            { rawResponse: chatCompletion }
-          )
-        };
-      }
+          // Add verbose logging of the successful result
+          log.verbose('generateCompletion success result', result);
 
-      const result: Result<ModelCallResult> = {
-        success: true,
-        // Use the validated choice object
-        value: {
-          content: choice.message?.content || '',
-          messages: [...messages], // Return original messages with timestamps
-          fullResponse: chatCompletion, // Return the full original response
-          transcript // Present only for self-orchestrating adapters (Claude subscription)
+          return result;
+        } catch (error) {
+          return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         }
       };
 
-      // Add verbose logging of the successful result
-      log.verbose('generateCompletion success result', result);
+      let result = await attempt(apiMessages, sanitizedTools);
+
+      // Context-length overflow recovery. A single unexpectedly-large tool
+      // result in the RECENT tail (a big search dump, a file read) can blow the
+      // model's context window even though compactForWire already shrinks OLD
+      // ones. compactForWire keeps the recent tail verbatim for cache stability,
+      // so it can't have prevented this. When the provider rejected the request
+      // for length, re-fit ONCE: shrink every oversized tool result on the wire
+      // (recent included) to a head excerpt + a dereferenceable flujo://run/...
+      // URI naming the full size, capturing any not-yet-captured result on the
+      // fly so the model can still read the whole thing back via read_resource.
+      // The cache is already moot (the request was rejected), so touching the
+      // recent tail costs nothing here. Skipped for the self-orchestrating
+      // claude-cli path (it manages its own wire + truncation markers).
+      if (
+        !result.success &&
+        model.adapter !== 'claude-cli' &&
+        ModelHandler.isContextOverflowError(result.error)
+      ) {
+        const beforeChars = JSON.stringify(apiMessages).length;
+        let refitMarkers = opts?.runResourceMarkers;
+        if (opts?.conversationId) {
+          refitMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
+            opts.conversationId,
+            apiMessages,
+            refitMarkers,
+            opts?.nodeId
+          );
+        }
+        const refitMessages = compactForWire(apiMessages, {
+          resourceMarkers: refitMarkers,
+          compactRecentToolResults: true,
+          allowLossyTruncation: true,
+          toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+        });
+        const afterChars = JSON.stringify(refitMessages).length;
+        if (afterChars < beforeChars) {
+          const refitTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
+          log.warn('Context-length overflow; retrying once with oversized tool results shrunk to run-resource URIs', {
+            modelId,
+            beforeChars,
+            afterChars,
+          });
+          result = await attempt(refitMessages, refitTools);
+        } else {
+          log.warn('Context-length overflow but nothing on the wire left to compact; returning the original error', { modelId });
+        }
+      }
 
       return result;
     } catch (error) {
+      // Setup (model fetch / key decrypt / compaction) threw — attempts shape
+      // their own errors and never throw out. stopCancelWatch is idempotent.
       stopCancelWatch();
-
-      // A user cancellation aborted the in-flight call: whatever error shape the
-      // SDK threw (OpenAI APIUserAbortError, DOMException AbortError, the Agent
-      // SDK's teardown error, ...), report it as a clean cancellation — not a
-      // provider failure.
-      if (abortController.signal.aborted) {
-        log.info('Provider call aborted by user cancellation.', { modelId });
-        return {
-          success: false,
-          error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
-        };
-      }
-
-      // --- Log the raw error object caught ---
-      log.error('[ModelHandler.generateCompletion] Caught error during OpenAI API call', { rawError: error });
-
-      // --- Enhanced Error Logging ---
-      log.error('--- Error during openai.chat.completions.create ---');
-      if (error instanceof Error) {
-        log.error(`Error Name: ${error.name}`);
-        log.error(`Error Message: ${error.message}`);
-        log.error(`Error Stack: ${error.stack}`);
-      } else {
-        log.error('Caught non-Error object:', error); // Log the raw object if it's not an Error instance
-      }
-      if (error instanceof OpenAI.APIError) {
-        log.error(`API Error Status: ${error.status}`);
-        log.error(`API Error Type: ${error.type}`);
-        log.error(`API Error Code: ${error.code}`);
-        log.error(`API Error Param: ${error.param}`);
-        log.error(`API Error Headers: ${JSON.stringify(error.headers)}`);
-      }
-      log.error('--- End Error Details ---');
-      // --- End Enhanced Error Logging ---
-
-      // Handle API errors
-      if (error instanceof OpenAI.APIError) {
-        // The SDK's APIError.message is often terse (e.g. "429 Provider returned
-        // error"). The real reason lives in the parsed response body
-        // (error.error); extractProviderErrorDetails digs it out so the user
-        // sees something actionable instead of a generic line.
-        const body = (error as any).error as any; // parsed response body, if any
-        const extracted = ModelHandler.extractProviderErrorDetails(body, error.message);
-
-        // Prefer the response header retry-after; fall back to the body's
-        // metadata.retry_after_seconds (already surfaced by the helper).
-        const headers = (error.headers || {}) as Record<string, unknown>;
-        const headerRetryAfter = headers['retry-after'] ?? headers['Retry-After'];
-        const retryAfter =
-          headerRetryAfter !== undefined ? String(headerRetryAfter) : extracted.retryAfter;
-        const rateLimitReset =
-          headers['x-ratelimit-reset'] ?? headers['x-ratelimit-reset-requests'];
-
-        const errorResult: Result<ModelCallResult> = {
-          success: false,
-          error: createModelError(
-            'api_error',
-            extracted.message,
-            modelId,
-            undefined,
-            {
-              status: error.status,
-              // Prefer the body's values; fall back to the SDK's.
-              type: extracted.type ?? error.type,
-              code: extracted.code ?? error.code,
-              param: extracted.param ?? error.param,
-              retryAfter,
-              rateLimitReset: rateLimitReset !== undefined ? String(rateLimitReset) : undefined,
-              // The full parsed provider body is the richest source of truth.
-              providerError: extracted.providerError,
-              // Include stack trace if available
-              stack: error.stack
-            }
-          )
-        };
-
-        // Add verbose logging of the API error
-        log.verbose('generateCompletion API error', errorResult);
-
-        return errorResult;
-      }
-
-      // Handle other errors
-      const errorResult: Result<ModelCallResult> = {
-        success: false,
-        error: createModelError(
-          'unknown_error',
-          error instanceof Error ? error.message : String(error),
-          modelId,
-          undefined,
-          {
-            // Include stack trace if available
-            stack: error instanceof Error ? error.stack : undefined
-          }
-        )
-      };
-
-      // Add verbose logging of the unknown error
-      log.verbose('generateCompletion unknown error', errorResult);
-
-      return errorResult;
+      return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
     }
   }
 
