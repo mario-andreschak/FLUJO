@@ -166,10 +166,31 @@ describe('scopeMessagesForInput (process node inputMode — WIRE view only)', ()
     expect(scopeMessagesForInput(messages, undefined)).toBe(messages);
   });
 
-  it("'latest-message' keeps the system message plus everything from the last user message on", () => {
+  it("'latest-message' keeps the system message plus the last user message (nothing after it)", () => {
     const messages = [sys('NODE', 'node-sys'), user('old', 'u1'), assistant('done', 'a1'), user('current', 'u2')];
     const out = scopeMessagesForInput(messages, 'latest-message');
     expect(out.map((m) => m.id)).toEqual(['node-sys', 'u2']);
+  });
+
+  it("'latest-message' keeps the last user message AND the last assistant response", () => {
+    const messages = [sys('NODE', 'node-sys'), user('old', 'u1'), assistant('done', 'a1'), user('current', 'u2'), assistant('reply', 'a2')];
+    const out = scopeMessagesForInput(messages, 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u2', 'a2']);
+  });
+
+  it("'latest-message' compresses several settled turns since the last user message to just the LAST assistant", () => {
+    // A single user turn followed by several nodes each appending their output
+    // (orchestrator → worker chain). Only the latest assistant survives; the
+    // intermediate ones are dropped.
+    const messages = [
+      sys('NODE', 'node-sys'),
+      user('task', 'u1'),
+      assistant('A output', 'a1'),
+      assistant('B output', 'a2'),
+      assistant('C output', 'a3'),
+    ];
+    const out = scopeMessagesForInput(messages, 'latest-message');
+    expect(out.map((m) => m.id)).toEqual(['node-sys', 'u1', 'a3']);
   });
 
   it("'latest-message' includes the in-flight tool exchange that follows the last user message", () => {

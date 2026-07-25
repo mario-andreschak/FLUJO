@@ -21,12 +21,7 @@ import {
   Typography,
   FormControlLabel, // Added for checkbox
   Checkbox, // Added for checkbox
-  Chip,
-  Menu,
-  MenuItem,
-  ListItemIcon,
-  ListItemText,
-  Divider
+  Chip
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
@@ -34,7 +29,8 @@ import MicIcon from '@mui/icons-material/Mic';
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CheckIcon from '@mui/icons-material/Check';
-import AutoModeIcon from '@mui/icons-material/AutoMode';
+import EditIcon from '@mui/icons-material/Edit';
+import FlowNodePicker from './FlowNodePicker';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
@@ -52,9 +48,19 @@ interface ChatInputProps {
   // will resume on, whether that node is a manual pick, and the pick callback
   // (null = back to automatic).
   availableNodes?: { id: string; label: string }[];
+  /** Full flow definition, pre-rendered by the visual node picker. */
+  flow?: import('@/shared/types/flow').Flow | null;
   currentNodeId?: string | null;
   nodeOverrideActive?: boolean;
   onSelectNode?: (nodeId: string | null) => void;
+  // Edit mode: when set, the input edits an existing message (content + its
+  // process node) instead of composing a new one. Editing happens here rather
+  // than inline in the bubble.
+  editing?: { messageId: string; content: string; nodeId: string | null } | null;
+  onEditingContentChange?: (content: string) => void;
+  onEditingNodeChange?: (nodeId: string | null) => void;
+  onSaveEdit?: () => void;
+  onCancelEdit?: () => void;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -65,9 +71,15 @@ const ChatInput: React.FC<ChatInputProps> = ({
   executeInDebugger = false, // Default to false
   onExecuteInDebuggerChange,
   availableNodes = [],
+  flow = null,
   currentNodeId = null,
   nodeOverrideActive = false,
-  onSelectNode
+  onSelectNode,
+  editing = null,
+  onEditingContentChange,
+  onEditingNodeChange,
+  onSaveEdit,
+  onCancelEdit
 }) => {
   const { settings } = useStorage();
   const [message, setMessage] = useState('');
@@ -81,10 +93,21 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   
-  // Node picker menu state
-  const [nodeMenuAnchor, setNodeMenuAnchor] = useState<HTMLElement | null>(null);
-  const currentNodeLabel = availableNodes.find(n => n.id === currentNodeId)?.label
-    || (currentNodeId ? `${currentNodeId.substring(0, 6)}...` : 'Start');
+  // Visual node picker (modal) open state.
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Editing an existing message vs. composing a new one. In edit mode the text
+  // and picked node come from the parent; otherwise from local state.
+  const isEditing = !!editing;
+  const pickerSelectedId = isEditing ? (editing?.nodeId ?? null) : currentNodeId;
+  const nodeLabelFor = (id: string | null) =>
+    availableNodes.find(n => n.id === id)?.label
+    || (id ? `${id.substring(0, 6)}...` : 'Start');
+  const currentNodeLabel = nodeLabelFor(pickerSelectedId);
+  const handlePickNode = (nodeId: string | null) => {
+    if (isEditing) onEditingNodeChange?.(nodeId);
+    else onSelectNode?.(nodeId);
+  };
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -97,11 +120,17 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [transcriptionProgress, setTranscriptionProgress] = useState(0);
   const [transcriptionStatus, setTranscriptionStatus] = useState('');
   
-  // Handle text input change
+  // Handle text input change (routes to the parent while editing).
   const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setMessage(e.target.value);
+    if (isEditing) onEditingContentChange?.(e.target.value);
+    else setMessage(e.target.value);
   };
-  
+
+  // Save the in-progress edit (only when there's content).
+  const handleSaveEdit = () => {
+    if (editing && editing.content.trim()) onSaveEdit?.();
+  };
+
   // Handle sending a message
   const handleSend = () => {
     if (message.trim() || attachments.length > 0) {
@@ -111,13 +140,20 @@ const ChatInput: React.FC<ChatInputProps> = ({
       setAttachments([]);
     }
   };
-  
-  // Handle key press (Enter to send)
+
+  // Handle key press (Enter to send / save edit)
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      log.debug('Enter key pressed, sending message');
       e.preventDefault();
-      handleSend();
+      if (isEditing) {
+        handleSaveEdit();
+      } else {
+        log.debug('Enter key pressed, sending message');
+        handleSend();
+      }
+    } else if (e.key === 'Escape' && isEditing) {
+      e.preventDefault();
+      onCancelEdit?.();
     }
   };
 
@@ -413,37 +449,51 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </Box>
         )}
         
+        {/* Edit banner: shown while editing an existing message in the input. */}
+        {isEditing && (
+          <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip icon={<EditIcon />} label="Editing message" size="small" color="warning" variant="outlined" />
+            <Typography variant="caption" color="text.secondary">
+              Enter to save · Esc to cancel
+            </Typography>
+          </Box>
+        )}
+
         {/* Input area */}
         <Box sx={{ display: 'flex', alignItems: 'flex-end' }}>
           <TextField
             fullWidth
             multiline
-            maxRows={4}
+            maxRows={isEditing ? 12 : 4}
             data-tour="chat-input"
-            placeholder="Type a message..."
-            value={message}
+            placeholder={isEditing ? 'Edit message...' : 'Type a message...'}
+            value={isEditing ? (editing?.content ?? '') : message}
             onChange={handleMessageChange}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
-            disabled={disabled}
+            disabled={isEditing ? false : disabled}
             variant="outlined"
+            autoFocus={isEditing}
             sx={{ mr: 1 }}
             InputProps={{
               sx: { borderRadius: 2 }
             }}
           />
-          
+
+          {/* Compose-only controls (attachments, audio) are hidden while editing. */}
+          {!isEditing && (
+            <>
           {/* File attachment button */}
           <Tooltip title="Attach document">
-            <IconButton 
-              color="primary" 
+            <IconButton
+              color="primary"
               onClick={handleFileSelect}
               disabled={disabled || isRecording}
             >
               <AttachFileIcon />
             </IconButton>
           </Tooltip>
-          
+
           {/* Hidden file input */}
           <input
             type="file"
@@ -452,21 +502,21 @@ const ChatInput: React.FC<ChatInputProps> = ({
             style={{ display: 'none' }}
             accept=".txt,.md,.json,.csv,.html,.xml,.js,.ts,.jsx,.tsx,.css,.scss"
           />
-          
+
           {/* Audio recording button */}
           <Tooltip title={isRecording ? "Stop recording" : "Record audio"}>
-            <IconButton 
-              color={isRecording ? "error" : "primary"} 
+            <IconButton
+              color={isRecording ? "error" : "primary"}
               onClick={isRecording ? stopRecording : startRecording}
               disabled={disabled}
             >
               <MicIcon />
               {isRecording && (
-                <Typography 
-                  variant="caption" 
-                  sx={{ 
-                    position: 'absolute', 
-                    bottom: -15, 
+                <Typography
+                  variant="caption"
+                  sx={{
+                    position: 'absolute',
+                    bottom: -15,
                     fontSize: '0.7rem',
                     color: 'error.main'
                   }}
@@ -476,69 +526,75 @@ const ChatInput: React.FC<ChatInputProps> = ({
               )}
             </IconButton>
           </Tooltip>
-          
-          {/* Send button */}
-          <Tooltip title="Send message">
-            <IconButton 
-              color="primary" 
-              onClick={handleSend}
-              disabled={disabled || (!message.trim() && attachments.length === 0)}
-            >
-              <SendIcon />
-            </IconButton>
-          </Tooltip>
+            </>
+          )}
+
+          {isEditing ? (
+            <>
+              {/* Save / cancel the edit */}
+              <Tooltip title="Save edit">
+                <span>
+                  <IconButton
+                    color="primary"
+                    onClick={handleSaveEdit}
+                    disabled={!editing?.content.trim()}
+                  >
+                    <CheckIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Cancel edit">
+                <IconButton color="default" onClick={() => onCancelEdit?.()}>
+                  <CloseIcon />
+                </IconButton>
+              </Tooltip>
+            </>
+          ) : (
+            /* Send button */
+            <Tooltip title="Send message">
+              <span>
+                <IconButton
+                  color="primary"
+                  onClick={handleSend}
+                  disabled={disabled || (!message.trim() && attachments.length === 0)}
+                >
+                  <SendIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
         </Box> {/* End of Input area Box */}
 
         {/* Run options: current-node pill + tool approval + execute-in-debugger */}
-        {(onRequireApprovalChange || (onSelectNode && availableNodes.length > 0)) && (
+        {(onRequireApprovalChange || ((onSelectNode || isEditing) && availableNodes.length > 0)) && (
           <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-            {/* Node picker: shows the node the next message resumes on; click
-                to manually pick a different node (or go back to automatic). */}
-            {onSelectNode && availableNodes.length > 0 && (
+            {/* Node picker: shows the node this turn runs on; click to open the
+                visual picker and choose a node from the pre-rendered flow. */}
+            {(onSelectNode || isEditing) && availableNodes.length > 0 && (
               <>
-                <Tooltip title={nodeOverrideActive
-                  ? 'Next message will run on this manually picked node — click to change'
-                  : 'Node the next message will run on — click to pick a different one'}>
+                <Tooltip title={isEditing
+                  ? 'Node this message runs on — click to pick from the flow'
+                  : (nodeOverrideActive
+                    ? 'Next message will run on this manually picked node — click to change'
+                    : 'Node the next message will run on — click to pick from the flow')}>
                   <Chip
                     icon={<AccountTreeIcon />}
                     label={currentNodeLabel}
                     size="small"
-                    color={nodeOverrideActive ? 'primary' : 'default'}
-                    variant={nodeOverrideActive ? 'filled' : 'outlined'}
-                    onClick={(e) => setNodeMenuAnchor(e.currentTarget)}
-                    disabled={disabled}
+                    color={(isEditing || nodeOverrideActive) ? 'primary' : 'default'}
+                    variant={(isEditing || nodeOverrideActive) ? 'filled' : 'outlined'}
+                    onClick={() => setPickerOpen(true)}
+                    disabled={isEditing ? false : disabled}
                   />
                 </Tooltip>
-                <Menu
-                  anchorEl={nodeMenuAnchor}
-                  open={!!nodeMenuAnchor}
-                  onClose={() => setNodeMenuAnchor(null)}
-                >
-                  <MenuItem
-                    selected={!nodeOverrideActive}
-                    onClick={() => { onSelectNode(null); setNodeMenuAnchor(null); }}
-                  >
-                    <ListItemIcon><AutoModeIcon fontSize="small" /></ListItemIcon>
-                    <ListItemText
-                      primary="Automatic"
-                      secondary="Follow the conversation"
-                      secondaryTypographyProps={{ variant: 'caption' }}
-                    />
-                  </MenuItem>
-                  <Divider />
-                  {availableNodes.map((node) => (
-                    <MenuItem
-                      key={node.id}
-                      selected={nodeOverrideActive && node.id === currentNodeId}
-                      onClick={() => { onSelectNode(node.id); setNodeMenuAnchor(null); }}
-                    >
-                      <ListItemIcon>
-                        {node.id === currentNodeId ? <CheckIcon fontSize="small" /> : null}
-                      </ListItemIcon>
-                      <ListItemText primary={node.label} />
-                    </MenuItem>
-                  ))}
-                </Menu>
+                <FlowNodePicker
+                  open={pickerOpen}
+                  flow={flow}
+                  selectedNodeId={pickerSelectedId}
+                  allowAutomatic={!isEditing}
+                  onSelect={handlePickNode}
+                  onClose={() => setPickerOpen(false)}
+                />
               </>
             )}
             {onRequireApprovalChange && (

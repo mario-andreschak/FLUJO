@@ -262,6 +262,10 @@ const Chat: React.FC = () => {
   // null = automatic (follow the conversation). Cleared once a message is sent
   // with it, and on conversation switch.
   const [nodeOverride, setNodeOverride] = useState<string | null>(null);
+  // Editing an existing message happens in the ChatInput (not inline in the
+  // bubble). null = not editing. Carries the message id, the in-progress text,
+  // and the picked process node.
+  const [editingMessage, setEditingMessage] = useState<{ messageId: string; content: string; nodeId: string | null } | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
   const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
   // Whether a debug session is active (panel should stay open). Decoupled from
@@ -808,15 +812,22 @@ const Chat: React.FC = () => {
   // Nodes of the conversation's flow, for message attribution + the edit
   // dropdown. Memoized: a fresh array per render would defeat the memoized
   // message bubbles (prop identity would change on every SSE event).
+  // The conversation's full flow definition — pre-rendered by the visual node
+  // picker (FlowNodePicker) so the user picks a node from the graph, not a flat
+  // list. Referentially stable while the flow doesn't change (safe to hand to
+  // memoized children).
+  const currentFlow = useMemo(
+    () => flows.find(f => f.id === detailedConversation?.flowId) || null,
+    [flows, detailedConversation?.flowId]
+  );
+
   const availableNodes = useMemo(
     () =>
-      flows
-        .find(f => f.id === detailedConversation?.flowId)
-        ?.nodes?.map(node => ({
-          id: node.id,
-          label: node.data.label || node.id,
-        })) || [],
-    [flows, detailedConversation?.flowId]
+      currentFlow?.nodes?.map(node => ({
+        id: node.id,
+        label: node.data.label || node.id,
+      })) || [],
+    [currentFlow]
   );
 
   // Node ids actually executed in this conversation, for the Executed-Steps
@@ -2261,6 +2272,36 @@ const Chat: React.FC = () => {
     }
   };
 
+  // Begin editing a message in the ChatInput (issue: editing moved out of the
+  // bubble). Only user messages with string content are editable.
+  const beginEditMessage = useCallback((messageId: string) => {
+    const msg = detailedConversation?.messages.find(m => m.id === messageId);
+    if (!msg || msg.role !== 'user' || typeof msg.content !== 'string') return;
+    setEditingMessage({
+      messageId,
+      content: msg.content,
+      nodeId: msg.processNodeId ?? (availableNodes[0]?.id ?? null),
+    });
+  }, [detailedConversation, availableNodes]);
+
+  const handleEditingContentChange = useCallback((content: string) => {
+    setEditingMessage(prev => (prev ? { ...prev, content } : prev));
+  }, []);
+
+  const handleEditingNodeChange = useCallback((nodeId: string | null) => {
+    setEditingMessage(prev => (prev ? { ...prev, nodeId } : prev));
+  }, []);
+
+  // Plain function (not memoized): references handleEditMessage, which is
+  // recreated each render — a useCallback would capture a stale copy.
+  const handleSaveEditingMessage = () => {
+    if (!editingMessage || !editingMessage.content.trim()) return;
+    void handleEditMessage(editingMessage.messageId, editingMessage.content, editingMessage.nodeId || "");
+    setEditingMessage(null);
+  };
+
+  const handleCancelEditingMessage = useCallback(() => setEditingMessage(null), []);
+
   // Split conversation at a message (creates new local conversation)
   const splitConversationAtMessage = (messageId: string) => {
     if (!detailedConversation) return;
@@ -2832,11 +2873,12 @@ const Chat: React.FC = () => {
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
-                availableNodes={availableNodes} // Memoized nodes for the selected flow
+                availableNodes={availableNodes} // Memoized nodes for the attribution pill
                 conversationId={detailedConversation.id} // Resets the render window on switch
+                editingMessageId={editingMessage?.messageId ?? null} // Bubble being edited (in the input)
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
-                onEditMessage={handleEditMessage}
+                onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
                 onAppMessage={handleAppMessage}
@@ -3044,9 +3086,16 @@ const Chat: React.FC = () => {
             // Node picker: shows where the next message resumes; a manual pick
             // overrides it for one send (null = back to automatic).
             availableNodes={availableNodes}
+            flow={currentFlow}
             currentNodeId={currentNodeId}
             nodeOverrideActive={!!nodeOverride}
             onSelectNode={setNodeOverride}
+            // Message editing happens here in the input, not inline in the bubble.
+            editing={editingMessage}
+            onEditingContentChange={handleEditingContentChange}
+            onEditingNodeChange={handleEditingNodeChange}
+            onSaveEdit={handleSaveEditingMessage}
+            onCancelEdit={handleCancelEditingMessage}
           />
         </Box>
         </Box> {/* End Chat Area */}

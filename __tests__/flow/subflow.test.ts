@@ -205,6 +205,29 @@ describe('SubflowNode', () => {
     expect(call.prompt).toBeUndefined();
   });
 
+  it("inputMode 'latest-message' compresses several trailing assistant turns to just the LAST one", async () => {
+    // Only the latest exchange (last user + last assistant) survives — earlier
+    // nodes' outputs since the last user message are dropped.
+    const node = makeNode({ subflowId: 'inner-flow', inputMode: 'latest-message' }, 'edge-next');
+    const state = makeState({
+      messages: [
+        { role: 'user', content: 'Plan issue #70', id: 'u1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'A output', id: 'a1', timestamp: 2 } as any,
+        { role: 'assistant', content: 'B output', id: 'a2', timestamp: 3 } as any,
+        { role: 'assistant', content: 'C output', id: 'a3', timestamp: 4 } as any,
+      ],
+    });
+
+    await node.run(state);
+
+    const call = runFlowMock.mock.calls[0][0];
+    expect(call.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Plan issue #70' }),
+      expect.objectContaining({ role: 'assistant', content: 'C output' }),
+    ]);
+    expect(call.prompt).toBeUndefined();
+  });
+
   it('back-compat: a promptTemplate with no inputMode is treated as isolated (sent as a prompt)', async () => {
     const node = makeNode({ subflowId: 'inner-flow', promptTemplate: 'use me instead' }, 'edge-next');
     await node.run(makeState());

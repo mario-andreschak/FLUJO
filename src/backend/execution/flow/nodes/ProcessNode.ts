@@ -113,14 +113,18 @@ export class ProcessNode extends BaseNode {
         ? await buildHandoffDescription(flowNode)
         : `Hand off execution to ${target.label} (${target.type})`;
 
-      // A subflow node in 'isolated' inputMode that opted into `allowCallerPrompt`
-      // (issue #96) lets the routing model pass an instruction to the child flow.
-      // Only those targets get a `prompt` parameter; every other handoff tool
-      // stays byte-identically parameter-less (preserving the provider
-      // prefix-cache stability from #89). The param is OPTIONAL: the model may
-      // still route with no prompt, in which case the authored promptTemplate is
-      // used as the default (see SubflowNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string } | undefined;
+      // A subflow OR process node in 'isolated' inputMode that opted into
+      // `allowCallerPrompt` (issue #96) lets the routing model pass an
+      // instruction message THROUGH the handoff to the target — so an isolated
+      // process step can receive a message from the previous node, exactly like
+      // an isolated subflow. Only those targets get a `prompt` parameter; every
+      // other handoff tool stays byte-identically parameter-less (preserving the
+      // provider prefix-cache stability from #89). The param is OPTIONAL: the
+      // model may still route with no prompt, in which case the target's authored
+      // isolated message (promptTemplate for a subflow, isolatedPrompt for a
+      // process node) is used as the default (see SubflowNode.prep /
+      // ProcessNode.prep).
+      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
       // Spawn-with-brief (issue #156, supersedes the #130 `parallelFlows` param):
       // a subflow target that opted into `allowCallerFanout` is a SPAWNABLE
       // sub-agent. Its handoff tool gains an optional `task` string, and the
@@ -133,20 +137,24 @@ export class ProcessNode extends BaseNode {
       const acceptsCallerSpawn =
         target.type === 'subflow' && targetProps?.allowCallerFanout === true;
       const acceptsCallerPrompt =
-        target.type === 'subflow' &&
+        (target.type === 'subflow' || target.type === 'process') &&
         targetProps?.inputMode === 'isolated' &&
         targetProps?.allowCallerPrompt !== false;
-      // Issue #169: for a NON-spawn, isolated, allowCallerPrompt subflow that has
-      // NO authored message on the node itself (empty promptTemplate), the caller
-      // MUST supply a prompt — otherwise the subflow starts with an empty prompt
-      // and the chain dies silently (StartNode asks the user for input). In that
-      // exact configuration we mark `prompt` as JSON-Schema `required`, turning a
-      // silent runtime dead-end into a schema-enforced guarantee. Every other
-      // configuration keeps `prompt` optional exactly as before.
+      // The target's OWN authored isolated message, used to decide whether a
+      // caller prompt is mandatory: a subflow authors it as `promptTemplate`, a
+      // process node as `isolatedPrompt`.
+      const authoredIsolatedMessage =
+        target.type === 'subflow' ? targetProps?.promptTemplate : targetProps?.isolatedPrompt;
+      // Issue #169: for a NON-spawn, isolated, allowCallerPrompt target that has
+      // NO authored message on the node itself, the caller MUST supply a prompt —
+      // otherwise the target starts with an empty prompt and the chain dies
+      // silently. In that exact configuration we mark `prompt` as JSON-Schema
+      // `required`, turning a silent runtime dead-end into a schema-enforced
+      // guarantee. Every other configuration keeps `prompt` optional as before.
       const promptIsMandatory =
         acceptsCallerPrompt &&
         targetProps?.allowCallerFanout !== true &&
-        !(targetProps?.promptTemplate?.trim());
+        !(authoredIsolatedMessage?.trim());
 
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
@@ -165,14 +173,14 @@ export class ProcessNode extends BaseNode {
         paramProps.prompt = {
           type: "string",
           description: promptIsMandatory
-            ? "REQUIRED initial brief/instruction for the target subflow (isolated mode). The subflow has no authored message of its own, so you MUST supply what it should work on — omitting it makes the subflow start with an empty prompt and stall."
-            : "Instruction/prompt to run the target subflow with (isolated mode). Optional; omitted falls back to the subflow's default prompt."
+            ? "REQUIRED initial brief/instruction for the target node (isolated mode). It has no authored message of its own, so you MUST supply what it should work on — omitting it makes the target start with an empty prompt and stall."
+            : "Instruction/prompt to run the target node with (isolated mode). Optional; omitted falls back to the target's default prompt."
         };
         if (promptIsMandatory) {
           requiredParams.push('prompt');
-          descExtras.push('You MUST pass a "prompt" argument instructing the target subflow — it has no authored message of its own.');
+          descExtras.push('You MUST pass a "prompt" argument instructing the target node — it has no authored message of its own.');
         } else {
-          descExtras.push('Optionally pass a "prompt" argument to instruct the target subflow; omit it to use its default prompt.');
+          descExtras.push('Optionally pass a "prompt" argument to instruct the target node; omit it to use its default prompt.');
         }
       }
       const hasParams = Object.keys(paramProps).length > 0;
@@ -400,6 +408,19 @@ export class ProcessNode extends BaseNode {
     // When neither applies, wireMessages stays unset and the model sees
     // prepResult.messages verbatim.
     const inputMode = node_params?.properties?.inputMode ?? 'full-history';
+    // Caller handoff input (issue #96): the single-shot, node-id-scoped `prompt`
+    // an upstream routing model passed via the handoff tool — the same value
+    // SubflowNode.prep reads. It lets an ISOLATED process node receive a message
+    // handed to it by the previous node, exactly like an isolated subflow. Read
+    // WITHOUT clearing: a Process node's tool loop re-runs prep() on every
+    // iteration (runFlow re-enters the node), so clearing here would lose the
+    // caller prompt mid-loop. runFlow resets handoffInput at each handoff
+    // transition, so it stays scoped to this node's visit and never leaks to a
+    // later node or a subsequent turn.
+    const handoffForThisNode =
+      sharedState.handoffInput && sharedState.handoffInput.targetNodeId === node_params?.id
+        ? sharedState.handoffInput
+        : undefined;
     let wireBase = prepResult.messages;
     try {
       const flow = await flowService.getFlow(flowId);
@@ -417,7 +438,16 @@ export class ProcessNode extends BaseNode {
       // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
       // like the system prompt) so an isolated step can pull captured state.
       // Tier 3: `${res:NAME}` likewise.
-      const isolatedPrompt = node_params?.properties?.isolatedPrompt;
+      // Isolated mode: when this node opted into `allowCallerPrompt` (issue #96,
+      // default ON) and the routing model passed a `prompt` via the handoff tool,
+      // that caller-supplied message OVERRIDES the authored `isolatedPrompt`
+      // (which stays the default/fallback) — mirroring the isolated subflow path.
+      const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
+      const callerPrompt = allowCallerPrompt ? handoffForThisNode?.prompt?.trim() : undefined;
+      if (callerPrompt) {
+        log.info('Using caller-supplied prompt for isolated process node', { nodeId });
+      }
+      const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
       let resolvedIsolatedPrompt = isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),

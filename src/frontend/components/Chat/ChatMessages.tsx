@@ -16,9 +16,6 @@ import {
   AccordionSummary,
   AccordionDetails,
   Button,
-  FormControl,
-  InputLabel,
-  Select,
   Switch,
   FormControlLabel,
   Collapse,
@@ -62,9 +59,12 @@ interface ChatMessagesProps {
   availableNodes?: { id: string; label: string }[]; // Add available nodes for dropdown
   /** Resets the render window when the user switches conversations. */
   conversationId?: string;
+  /** Id of the message currently being edited in the ChatInput (or null). */
+  editingMessageId?: string | null;
   onToggleDisabled: (messageId: string) => void;
   onSplitConversation: (messageId: string) => void;
-  onEditMessage?: (messageId: string, content: string, processNodeId?: string | null) => void;
+  /** Start editing a message — opens the editor in the ChatInput, not inline. */
+  onBeginEditMessage?: (messageId: string) => void;
   onApproveToolCall?: (toolCallId: string) => void; // Add approve handler prop
   onRejectToolCall?: (toolCallId: string) => void; // Add reject handler prop
   /**
@@ -443,17 +443,11 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
   );
 };
 
-/** Edit state, present only on the single bubble currently being edited. */
-interface BubbleEditState {
-  content: string;
-  nodeId: string | null;
-}
-
 interface MessageBubbleProps {
   message: ChatMessage;
   /** Resolved node label for the attribution pill (id shown in the tooltip). */
   nodeLabel?: string;
-  /** Stable reference (memoized by the parent) — used by the edit-mode Select. */
+  /** Stable reference (memoized by the parent) — resolves the attribution pill. */
   availableNodes: { id: string; label: string }[];
   /** Raw/rendered toggle for the LEGACY standalone (orphan) tool-result bubble. */
   showRaw: boolean;
@@ -471,15 +465,10 @@ interface MessageBubbleProps {
    * bubble (in addition to any handoffs the message owns itself).
    */
   hoistedHandoffs?: OpenAI.ChatCompletionMessageToolCall[];
-  /** Non-null only while THIS bubble is in edit mode. */
-  edit: BubbleEditState | null;
+  /** True while THIS message is being edited in the ChatInput (dims the bubble). */
+  isBeingEdited?: boolean;
   onMenuOpen: (event: React.MouseEvent<HTMLElement>, messageId: string) => void;
   onToggleRaw: (messageId: string, checked: boolean) => void;
-  onEditContentChange: (content: string) => void;
-  onEditNodeChange: (nodeId: string) => void;
-  /** Passed only to the bubble being edited (undefined elsewhere, keeps memo stable). */
-  onSaveEdit?: () => void;
-  onCancelEdit?: () => void;
 }
 
 /**
@@ -497,13 +486,9 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   toolCallPairs,
   onAppMessage,
   hoistedHandoffs,
-  edit,
+  isBeingEdited,
   onMenuOpen,
   onToggleRaw,
-  onEditContentChange,
-  onEditNodeChange,
-  onSaveEdit,
-  onCancelEdit,
 }) {
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
@@ -608,6 +593,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           position: 'relative',
           borderLeft: message.role === 'tool' ? '4px solid' : 'none',
           borderColor: message.role === 'tool' ? 'grey.400' : 'transparent',
+          // Dim + outline the bubble whose content is being edited in the input.
+          opacity: isBeingEdited ? 0.55 : 1,
+          outline: isBeingEdited ? '2px dashed' : 'none',
+          outlineColor: 'warning.main',
           overflowWrap: 'break-word', // Ensure long words break
           wordBreak: 'break-word', // Ensure words break correctly
           // NOTE: do NOT set white-space: pre-wrap here. react-markdown emits
@@ -619,57 +608,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           overflow: 'hidden', // Prevent content from visually overflowing the paper
         }}
       >
-        {edit ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <textarea
-              value={edit.content}
-              onChange={(e) => onEditContentChange(e.target.value)}
-              style={{
-                width: '100%',
-                minHeight: '100px',
-                padding: '8px',
-                borderRadius: '4px',
-                border: '1px solid var(--border)',
-                fontFamily: 'inherit',
-                fontSize: 'inherit',
-                backgroundColor: 'var(--surface-raised)',
-                color: 'var(--foreground)',
-              }}
-            />
-            <FormControl fullWidth size="small" sx={{ mt: 1 }}>
-              <InputLabel id="node-id-select-label">Process Node</InputLabel>
-              <Select
-                labelId="node-id-select-label"
-                id="node-id-select"
-                value={edit.nodeId || (availableNodes.length > 0 ? availableNodes[0].id : "")}
-                label="Process Node"
-                onChange={(e) => onEditNodeChange(e.target.value)}
-              >
-                {availableNodes.map((node) => (
-                  <MenuItem key={node.id} value={node.id}>
-                    {node.label || node.id.substring(0, 8)}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1 }}>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={onCancelEdit}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="contained"
-                size="small"
-                onClick={onSaveEdit}
-              >
-                Save
-              </Button>
-            </Box>
-          </Box>
-        ) : (
+        {(
           <>
             {/* Render message content only if it's a string and not a tool message */}
             {message.role !== 'tool' && typeof message.content === 'string' && (
@@ -847,9 +786,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   pendingToolCalls, // Destructure new prop
   availableNodes = [], // Destructure with default empty array
   conversationId,
+  editingMessageId,
   onToggleDisabled,
   onSplitConversation,
-  onEditMessage,
+  onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
   onAppMessage, // #97: MCP App -> conversation return channel (stable)
@@ -921,10 +861,6 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   // Message menu state
   const [menuAnchorEl, setMenuAnchorEl] = React.useState<null | HTMLElement>(null);
   const [activeMessageId, setActiveMessageId] = React.useState<string | null>(null);
-  const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
-  const [isEditing, setIsEditing] = React.useState<boolean>(false);
-  const [editContent, setEditContent] = React.useState<string>('');
-  const [editNodeId, setEditNodeId] = React.useState<string | null>(null);
   // State to manage raw view toggle for each tool message
   const [showRawToolResult, setShowRawToolResult] = React.useState<Record<string, boolean>>({});
 
@@ -937,15 +873,6 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
 
   const handleToggleRaw = useCallback((messageId: string, checked: boolean) => {
     setShowRawToolResult(prev => ({ ...prev, [messageId]: checked }));
-  }, []);
-
-  const handleEditContentChange = useCallback((content: string) => {
-    setEditContent(content);
-  }, []);
-
-  const handleEditNodeChange = useCallback((nodeId: string) => {
-    // Always use the string value, never null
-    setEditNodeId(nodeId);
   }, []);
 
   const handleMenuClose = () => {
@@ -967,35 +894,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     }
   };
 
+  // Editing happens in the ChatInput now — this just hands the message id up.
   const handleStartEditing = () => {
     if (activeMessageId) {
-      const message = messages.find(m => m.id === activeMessageId);
-      // Ensure content is a string before setting it for editing
-      if (message && message.role === 'user' && typeof message.content === 'string') {
-        setEditContent(message.content);
-        // Use existing processNodeId or first available node if any, never null
-        setEditNodeId(message.processNodeId || (availableNodes.length > 0 ? availableNodes[0].id : ""));
-        setEditingMessageId(activeMessageId);
-        setIsEditing(true);
-      }
+      onBeginEditMessage?.(activeMessageId);
       handleMenuClose();
     }
-  };
-
-  const handleSaveEdit = () => {
-    if (editingMessageId && onEditMessage) {
-      // Always pass the string value of editNodeId, never null
-      onEditMessage(editingMessageId, editContent, editNodeId || "");
-      setIsEditing(false);
-      setEditingMessageId(null);
-      setEditNodeId(null);
-    }
-  };
-
-  const handleCancelEdit = () => {
-    setIsEditing(false);
-    setEditingMessageId(null);
-    setEditNodeId(null);
   };
 
   // Resolve node ids to display labels once per availableNodes change.
@@ -1057,7 +961,6 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         // #95 (follow-up): this assistant message's tool calls were hoisted onto
         // a still-visible anchor; suppress its now-empty standalone bubble.
         if (suppressedIds.has(message.id)) return null;
-        const isThisEditing = isEditing && message.id === editingMessageId;
         return (
           <MessageBubble
             key={message.id || `msg-${hiddenCount + index}`} // Use message.id as key, fallback to global index
@@ -1068,13 +971,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             toolCallPairs={renderPairsById.get(message.id)}
             onAppMessage={onAppMessage}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
-            edit={isThisEditing ? { content: editContent, nodeId: editNodeId } : null}
+            isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}
             onToggleRaw={handleToggleRaw}
-            onEditContentChange={handleEditContentChange}
-            onEditNodeChange={handleEditNodeChange}
-            onSaveEdit={isThisEditing ? handleSaveEdit : undefined}
-            onCancelEdit={isThisEditing ? handleCancelEdit : undefined}
           />
         );
       })}
@@ -1091,16 +990,11 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           log.debug('Active message object for menu:', activeMsgForMenu);
           log.debug('Active message role for menu:', activeMsgForMenu?.role);
           try {
-            const hasOnEditMessageProp = !!onEditMessage;
-            const shouldShowEdit = activeMsgForMenu.role === 'user' && hasOnEditMessageProp;
-
-            log.debug('Rendering Edit Message menu item check', {
-              activeMessageId: activeMsgForMenu.id, // Use ID from the message object
-              messageRole: activeMsgForMenu.role,
-              onEditMessagePropType: typeof onEditMessage,
-              hasOnEditMessageProp,
-              shouldShowEdit
-            });
+            // Only user messages with string content can be edited in the input.
+            const shouldShowEdit =
+              activeMsgForMenu.role === 'user' &&
+              typeof activeMsgForMenu.content === 'string' &&
+              !!onBeginEditMessage;
 
             if (shouldShowEdit) {
               return (

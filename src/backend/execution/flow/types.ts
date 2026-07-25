@@ -132,6 +132,14 @@ export interface ProcessNodeProperties {
      *  it shapes the model's input but is not persisted into the conversation
      *  transcript (analogous to the subflow node's isolated prompt). */
     isolatedPrompt?: string;
+    /** Opt-out (issue #96): only meaningful in 'isolated' inputMode. When unset
+     *  or true, an upstream routing model MAY pass a `prompt` through the handoff
+     *  tool that overrides this node's authored `isolatedPrompt` (so the previous
+     *  node can hand a message to this isolated step, like an isolated subflow).
+     *  Set false to forbid it — the handoff tool then exposes no `prompt` param
+     *  and only the authored `isolatedPrompt` is used. Mirrors the subflow node's
+     *  `allowCallerPrompt`. */
+    allowCallerPrompt?: boolean;
     /** How much of THIS node's work later model calls see (the output-side
      *  counterpart of inputMode, for context-token control):
      *    - 'full-conversation' (default): everything the node produced — tool

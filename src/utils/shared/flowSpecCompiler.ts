@@ -184,9 +184,11 @@ export interface FlowSpecNode {
    *  'latest-message' — the latter hides its tool calls/results from later
    *  model calls, keeping only its final response). */
   outputMode?: 'steps' | 'final-only' | 'full-conversation' | 'latest-message';
-  /** subflow only, inputMode 'isolated' (issue #96): when true, a step that hands
-   *  off to this subflow may pass a `prompt` argument that overrides `prompt`
-   *  (the authored default). Defaults to false. */
+  /** subflow OR process, inputMode 'isolated' (issue #96): controls whether a
+   *  step that hands off to this node may pass a `prompt` argument that overrides
+   *  the node's authored isolated message (`prompt`/`promptTemplate` for a
+   *  subflow, `isolatedPrompt` for a process node). Defaults to true; set false
+   *  to forbid it. */
   allowCallerPrompt?: boolean;
   /** subflow only (issue #156 spawn-with-brief; supersedes the #130 Phase 4
    *  `parallelFlows` handoff argument): when true, this node is a SPAWNABLE
@@ -600,6 +602,13 @@ export function compileFlowSpec(
           } else {
             warn('invalid-input-mode', `Node "${key}": inputMode "${String(specNode.inputMode)}" is not valid (full-history | latest-message | isolated); omitted.`, key);
           }
+        }
+
+        // Opt-out caller prompt (issue #96): only meaningful in isolated mode. When
+        // absent (default ON) an upstream routing model may hand this isolated step
+        // a `prompt` through the handoff tool that overrides its isolatedPrompt.
+        if (typeof specNode.allowCallerPrompt === 'boolean') {
+          properties.allowCallerPrompt = specNode.allowCallerPrompt;
         }
 
         if (specNode.outputMode !== undefined) {
@@ -1256,6 +1265,9 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.boundModel === 'string' && props.boundModel) specNode.model = props.boundModel;
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) specNode.isolatedPrompt = props.isolatedPrompt;
+      // Opt-out caller prompt (issue #96): round-trip only the explicit false
+      // (true is the default and stays implicit, like the subflow side).
+      if (props.allowCallerPrompt === false) specNode.allowCallerPrompt = false;
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.maxTurns === 'number' && props.maxTurns > 0) specNode.maxTurns = props.maxTurns;
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;

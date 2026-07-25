@@ -65,28 +65,35 @@ function sanitizeForSubflow(messages: FlujoChatMessage[]): FlujoChatMessage[] {
 }
 
 /**
- * Scope a sanitized transcript to the current turn: everything from the most
- * recent user message ONWARD ('latest-message' inputMode, issue #74). An
- * orchestrator that hands off to a worker subflow on every loop iteration would
- * otherwise re-send the entire accumulated history — including already-finished
- * tasks — causing the worker to re-anchor on the earliest/loudest task. Slicing
- * from the last user message pins each invocation to the current task while
- * PRESERVING any trailing assistant/Process-node output for that turn (issue
- * #119): a Process node's produced instruction sits after the last user message,
- * so returning only `[sanitized[i]]` silently dropped it. This mirrors
+ * Scope a sanitized transcript to the current turn's most recent EXCHANGE: the
+ * last user message and the last assistant message that follows it
+ * ('latest-message' inputMode, issue #74). An orchestrator that hands off to a
+ * worker subflow on every loop iteration would otherwise re-send the entire
+ * accumulated history — including already-finished tasks — causing the worker to
+ * re-anchor on the earliest/loudest task. Pinning to the last user message keeps
+ * each invocation on the current task while PRESERVING any trailing
+ * assistant/Process-node output for that turn (issue #119): a Process node's
+ * produced instruction sits after the last user message, so returning only the
+ * user message silently dropped it — the LAST assistant message after it is kept
+ * instead. Intermediate turns (earlier nodes' outputs since the last user
+ * message) are dropped, so only the latest exchange survives. This mirrors
  * `scopeMessagesForInput` in buildNodeContext.ts (the Process-node path) so the
- * two 'latest-message' implementations cannot diverge again. Finished earlier
- * tasks still precede the last user message, so #74's intent is intact. Falls
- * back to the full sanitized list when there is no user message (unusual, but
- * keeps the subflow fed).
+ * two 'latest-message' implementations cannot diverge again. The input is
+ * already sanitized (no tool / tool-call turns), so any assistant here is prose.
+ * Falls back to the full sanitized list when there is no user message (unusual,
+ * but keeps the subflow fed).
  */
 function latestUserMessage(sanitized: FlujoChatMessage[]): FlujoChatMessage[] {
+  let lastUserIdx = -1;
   for (let i = sanitized.length - 1; i >= 0; i--) {
-    if (sanitized[i].role === 'user') {
-      return sanitized.slice(i);
-    }
+    if (sanitized[i].role === 'user') { lastUserIdx = i; break; }
   }
-  return sanitized;
+  if (lastUserIdx === -1) return sanitized;
+  let lastAssistant: FlujoChatMessage | undefined;
+  for (let i = sanitized.length - 1; i > lastUserIdx; i--) {
+    if (sanitized[i].role === 'assistant') { lastAssistant = sanitized[i]; break; }
+  }
+  return lastAssistant ? [sanitized[lastUserIdx], lastAssistant] : [sanitized[lastUserIdx]];
 }
 
 /** Flatten a message's content down to plain text (map-over-list source). A

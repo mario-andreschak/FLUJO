@@ -1,5 +1,5 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState, useEffect } from 'react';
-import { Box, Typography, FormControlLabel, Switch, CircularProgress, Alert, Paper, Button, TextField } from '@mui/material';
+import { Box, Typography, FormControlLabel, Switch, Checkbox, CircularProgress, Alert, Paper, Button, TextField } from '@mui/material';
 import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
@@ -27,6 +27,8 @@ interface PromptTemplateEditorProps {
   setInputMode: (value: InputMode) => void;
   isolatedPrompt: string;
   setIsolatedPrompt: (value: string) => void;
+  allowCallerPrompt: boolean;
+  setAllowCallerPrompt: (value: boolean) => void;
   outputMode: OutputMode;
   setOutputMode: (value: OutputMode) => void;
   isModelBound: boolean;
@@ -49,6 +51,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     setInputMode,
     isolatedPrompt,
     setIsolatedPrompt,
+    allowCallerPrompt,
+    setAllowCallerPrompt,
     outputMode,
     setOutputMode,
     isModelBound,
@@ -306,7 +310,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
               {inputMode === 'isolated'
                 ? '(the prompt below, as the user message)'
                 : inputMode === 'latest-message'
-                  ? '(from the most recent user message onward)'
+                  ? '(the last user message + the last assistant response)'
                   : '(coming from ChatCompletion endpoint)'}
             </Typography>
           </Box>
@@ -331,7 +335,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
             onClick={() => setInputMode('latest-message')}
             icon={<ShortTextIcon fontSize="small" />}
             title="Latest message only"
-            description="The model sees this node's prompt plus everything from the most recent user message onward — including this turn's own tool calls and results."
+            description="The model sees this node's prompt plus the most recent exchange — the last user message and the last assistant response — plus this turn's own in-flight tool calls and results."
           />
           <OptionCard
             selected={inputMode === 'isolated'}
@@ -343,16 +347,37 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
         </Box>
 
         {inputMode === 'isolated' && (
-          <TextField
-            fullWidth
-            label="Isolated prompt"
-            value={isolatedPrompt}
-            onChange={(e) => setIsolatedPrompt(e.target.value)}
-            margin="normal"
-            multiline
-            rows={2}
-            helperText="Sent to the model as the user message. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes)."
-          />
+          <>
+            <FormControlLabel
+              sx={{ mt: 1, display: 'block' }}
+              control={
+                <Checkbox
+                  checked={allowCallerPrompt}
+                  onChange={(e) => setAllowCallerPrompt(e.target.checked)}
+                />
+              }
+              label="Let the caller pass a prompt"
+            />
+            <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
+              When on, a step that hands off to this node can attach an instruction through
+              its handoff tool, overriding the prompt below. The prompt below is then used
+              only as a default when the caller sends none.
+            </Typography>
+            <TextField
+              fullWidth
+              label={allowCallerPrompt ? 'Default prompt (used if the caller sends none)' : 'Isolated prompt'}
+              value={isolatedPrompt}
+              onChange={(e) => setIsolatedPrompt(e.target.value)}
+              margin="normal"
+              multiline
+              rows={2}
+              helperText={
+                allowCallerPrompt
+                  ? 'The default user message. A routing model may override it via the handoff tool. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes).'
+                  : 'Sent to the model as the user message. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes).'
+              }
+            />
+          </>
         )}
       </Box>
 

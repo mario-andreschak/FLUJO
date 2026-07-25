@@ -39,10 +39,12 @@ function currentToolTail(messages: FlujoChatMessage[]): FlujoChatMessage[] {
  * full history for persistence — so it must be safe to recompute every tool-loop
  * iteration:
  *   - 'full-history' (default): unchanged.
- *   - 'latest-message': the leading system message(s), then everything from the
- *     most recent user message onward (which includes any in-flight tool
- *     exchange for the current turn). Falls back to the full list when there is
- *     no user message.
+ *   - 'latest-message': the leading system message(s), then the most recent
+ *     EXCHANGE — the last user message and the last settled assistant response
+ *     — plus any in-flight tool exchange for the current turn (so a tool-using
+ *     node can continue its loop across re-entries). Turns in between (earlier
+ *     nodes' outputs, settled tool exchanges) since the last user message are
+ *     dropped. Falls back to the full list when there is no user message.
  *   - 'isolated': the leading system message(s), then `isolatedPrompt` as a
  *     single synthetic user message, then the current in-flight tool tail (so a
  *     tool-using isolated node can continue its loop across re-entries). The
@@ -81,13 +83,35 @@ export function scopeMessagesForInput(
     return [...system, userMsg, ...currentToolTail(messages)];
   }
 
-  // 'latest-message'
+  // 'latest-message': the most recent EXCHANGE — the last user message and the
+  // last settled assistant response — plus any in-flight tool tail for the
+  // current turn. This is narrower than "everything from the last user message
+  // onward": when several nodes have appended output since the last user turn
+  // (e.g. an orchestrator → worker chain), only the LATEST assistant message
+  // survives, not every one. The in-flight tool tail is peeled off first (it is
+  // re-attached verbatim so a tool-using node can re-enter its loop), and the
+  // last-assistant search skips mid-loop tool-call turns so no dangling
+  // tool_calls survive without their results — a settled region always ends on a
+  // plain/handoff turn, and a trailing handoff turn's prose still reaches the
+  // model via the tail + stripHandoffPlumbing.
+  const tail = currentToolTail(messages);
+  const settledEnd = messages.length - tail.length;
   let lastUserIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  for (let i = settledEnd - 1; i >= 0; i--) {
     if (messages[i].role === 'user') { lastUserIdx = i; break; }
   }
   if (lastUserIdx === -1) return messages; // no user turn — keep everything
-  return [...system, ...messages.slice(lastUserIdx)];
+  let lastAssistant: FlujoChatMessage | undefined;
+  for (let i = settledEnd - 1; i > lastUserIdx; i--) {
+    const m = messages[i];
+    if (m.role === 'assistant' && !isToolCallTurn(m)) { lastAssistant = m; break; }
+  }
+  return [
+    ...system,
+    messages[lastUserIdx],
+    ...(lastAssistant ? [lastAssistant] : []),
+    ...tail,
+  ];
 }
 
 /** True when this tool-call turn contains a FLUJO handoff call — i.e. it is a

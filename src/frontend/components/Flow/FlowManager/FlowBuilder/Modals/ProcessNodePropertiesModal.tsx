@@ -46,6 +46,9 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [excludeSystemPrompt, setExcludeSystemPrompt] = useState(false);
   const [inputMode, setInputMode] = useState<'full-history' | 'latest-message' | 'isolated'>('full-history');
   const [isolatedPrompt, setIsolatedPrompt] = useState('');
+  // Issue #96: only meaningful in isolated mode; default ON (a caller may pass a
+  // prompt through the handoff tool that overrides the isolated prompt below).
+  const [allowCallerPrompt, setAllowCallerPrompt] = useState(true);
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
   const [activeTab, setActiveTab] = useState<string>('server');
 
@@ -139,6 +142,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       setExcludeSystemPrompt(node.data.properties?.excludeSystemPrompt || false);
       setInputMode(node.data.properties?.inputMode || 'full-history');
       setIsolatedPrompt(node.data.properties?.isolatedPrompt || '');
+      setAllowCallerPrompt(node.data.properties?.allowCallerPrompt !== false);
       setOutputMode(node.data.properties?.outputMode || 'full-conversation');
     }
   }, [node, open]);
@@ -213,6 +217,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           excludeSystemPrompt: excludeSystemPrompt,
           inputMode: inputMode,
           isolatedPrompt: isolatedPrompt,
+          allowCallerPrompt: allowCallerPrompt,
           outputMode: outputMode,
         }
       };
@@ -364,6 +369,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               setInputMode={setInputMode}
               isolatedPrompt={isolatedPrompt}
               setIsolatedPrompt={setIsolatedPrompt}
+              allowCallerPrompt={allowCallerPrompt}
+              setAllowCallerPrompt={setAllowCallerPrompt}
               outputMode={outputMode}
               setOutputMode={setOutputMode}
               isModelBound={isModelBound}

@@ -1232,6 +1232,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           const nextNodeId = handoff.targetNodeId;
           if (typeof nextNodeId === 'string' && nextNodeId.length > 0) {
 
+            // Reset any caller handoff input at the transition: it is single-shot
+            // and scoped to exactly ONE target node. The block below re-sets it
+            // for `nextNodeId` when this handoff carries caller args. Clearing it
+            // here (rather than relying on the target's prep to consume it) keeps
+            // it from leaking to a later node or a REVISIT of the same node — a
+            // process node reads it WITHOUT clearing (its tool loop re-runs prep
+            // each iteration), so its lifecycle is managed here instead.
+            sharedState.handoffInput = undefined;
+
             const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
 
             if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
@@ -1355,16 +1364,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 try {
                   const handoffFlow = await flowService.getFlow(sharedState.flowId);
                   const targetNode = handoffFlow?.nodes?.find(n => n.id === nextNodeId);
-                  const targetProps = targetNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string } | undefined;
+                  const targetProps = targetNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
+                  // The target's authored isolated message: promptTemplate for a
+                  // subflow, isolatedPrompt for a process node (issue #96).
+                  const authoredIsolated =
+                    targetNode?.type === 'subflow' ? targetProps?.promptTemplate : targetProps?.isolatedPrompt;
                   if (
-                    targetNode?.type === 'subflow' &&
+                    (targetNode?.type === 'subflow' || targetNode?.type === 'process') &&
                     targetProps?.inputMode === 'isolated' &&
                     targetProps?.allowCallerPrompt !== false &&
                     targetProps?.allowCallerFanout !== true &&
-                    !(targetProps?.promptTemplate?.trim())
+                    !(authoredIsolated?.trim())
                   ) {
                     log.warn(
-                      `Handoff to isolated subflow node ${nextNodeId} has neither a caller-supplied prompt nor an authored promptTemplate; the subflow will start with an empty prompt and may stall. The routing model should have supplied the required "prompt" argument (issue #169).`,
+                      `Handoff to isolated ${targetNode?.type} node ${nextNodeId} has neither a caller-supplied prompt nor an authored message; the target will start with an empty prompt and may stall. The routing model should have supplied the required "prompt" argument (issue #169).`,
                       { targetNodeId: nextNodeId },
                     );
                   }

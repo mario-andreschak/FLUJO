@@ -48,6 +48,21 @@ function makeProcessNode(targets: { edgeId: string; nodeId: string }[]): Process
   return proc;
 }
 
+/** A PROCESS node used as a handoff target (issue #96 extended to process→process). */
+function processTarget(id: string): ProcessNode {
+  const node = new ProcessNode();
+  node.setParams({}, { id, label: id, type: 'process', properties: {} });
+  return node;
+}
+
+/** Build the source ProcessNode wiring in arbitrary-typed target nodes. */
+function makeProcessNodeWith(targets: { edgeId: string; node: ProcessNode | SubflowNode }[]): ProcessNode {
+  const proc = new ProcessNode();
+  proc.setParams({}, { id: 'proc', label: 'P', type: 'process', properties: {} });
+  for (const t of targets) proc.addSuccessor(t.node, t.edgeId);
+  return proc;
+}
+
 function hasPromptParam(tool: any): boolean {
   return !!tool?.inputSchema?.properties?.prompt;
 }
@@ -273,6 +288,64 @@ describe('ProcessNode.generateHandoffTools — absent allowCallerPrompt canonica
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
 
     expect(tools).toHaveLength(1);
+    expect(hasPromptParam(tools[0])).toBe(false);
+    expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+  });
+});
+
+describe('ProcessNode.generateHandoffTools — caller-prompt for an ISOLATED PROCESS target (#96 process→process)', () => {
+  it('exposes an OPTIONAL `prompt` for an isolated process target with an authored isolatedPrompt', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-iso') }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        // A process node authors its isolated message as `isolatedPrompt` (not
+        // promptTemplate); present ⇒ the caller prompt is optional.
+        { id: 'proc-iso', type: 'process', data: { properties: { inputMode: 'isolated', isolatedPrompt: 'do the default thing' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
+    expect(tools[0].inputSchema.required).toEqual([]);
+  });
+
+  it('marks `prompt` REQUIRED for an isolated process target with NO authored isolatedPrompt (#169)', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-empty') }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'proc-empty', type: 'process', data: { properties: { inputMode: 'isolated' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(tools[0].inputSchema.properties.prompt.type).toBe('string');
+    expect(tools[0].inputSchema.required).toEqual(['prompt']);
+    expect(tools[0].description).toContain('MUST');
+  });
+
+  it('keeps the empty schema for a full-history process target', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-full') }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'proc-full', type: 'process', data: { properties: { inputMode: 'full-history' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(hasPromptParam(tools[0])).toBe(false);
+    expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+  });
+
+  it('keeps the empty schema when an isolated process target opts out (allowCallerPrompt:false)', async () => {
+    const proc = makeProcessNodeWith([{ edgeId: 'e', node: processTarget('proc-optout') }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [
+        { id: 'proc-optout', type: 'process', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false, isolatedPrompt: 'x' } } },
+      ],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
     expect(hasPromptParam(tools[0])).toBe(false);
     expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
   });
