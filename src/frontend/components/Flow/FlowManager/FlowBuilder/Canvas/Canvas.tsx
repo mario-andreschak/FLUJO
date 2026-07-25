@@ -5,6 +5,7 @@ import { Modal, Box, Typography } from '@mui/material';
 import {
   ReactFlow,
   ConnectionLineType,
+  ConnectionMode,
   ReactFlowInstance,
   Connection,
   Edge,
@@ -27,7 +28,7 @@ import { CustomEdge, MCPEdge, ResourceEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
 import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './types';
 import { useCanvasEvents } from './hooks/useCanvasEvents';
-import { validateConnection, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
+import { validateConnection, isConnectionAllowed, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
 import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
 import { shouldOpenNodePicker } from './utils/nodePickerGate';
 import { findNodeById } from './utils/nodeUtils';
@@ -411,6 +412,20 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       ]);
     },
     [nodes, edges, onEdgesChange, storeApi, theme.palette.text.secondary]
+  );
+
+  // Live-drag gate. The canvas runs in ConnectionMode.Loose so ReactFlow's
+  // built-in source→target handle-type check is off — that is what lets a
+  // producer edge be drawn from a Process node's left resource handle to a
+  // Resource node (issue #210). With that gate off, THIS callback is the only
+  // thing keeping illegal draws invalid, so it defers to the shared
+  // connection rules (via the silent isConnectionAllowed) exactly as the
+  // commit-time validateConnection does. ReactFlow calls this with a
+  // Connection on every pointer move, so the check must stay side-effect free.
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) =>
+      isConnectionAllowed(connection as Connection, nodes, edges),
+    [nodes, edges]
   );
 
   // Commit edge re-route gestures (bend drag end, waypoint move/removal)
@@ -864,6 +879,13 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
           },
         }), [theme.palette.text.secondary])}
         connectionLineType={ConnectionLineType.SmoothStep}
+        // Loose mode drops ReactFlow's built-in source→target handle-type gate
+        // so a producer edge (Process → Resource) can be drawn from the
+        // Process node's left resource handle (issue #210). Legality is
+        // re-imposed by isValidConnection, which defers to the shared
+        // connection rules.
+        connectionMode={ConnectionMode.Loose}
+        isValidConnection={isValidConnection}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}

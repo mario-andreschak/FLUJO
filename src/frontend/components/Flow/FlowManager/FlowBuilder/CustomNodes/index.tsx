@@ -262,12 +262,16 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
             style={{ ...getMCPConnectionHandleStyle(theme), top: '30%' }}
           />
 
-          {/* Resource connection connectors (left/right, lower). Left is the
-              consume INPUT (resource-out → here); right is the produce OUTPUT
-              (here → resource-in). */}
+          {/* Resource connection connectors (left/right, lower). Both are
+              `source` so a producer edge (Process → Resource) can be drawn from
+              EITHER side — issue #210. Direction (produce vs consume) follows
+              which end the drag starts from, and the canvas runs in
+              ConnectionMode.Loose so a source handle may still be the drop
+              target of a consume drag (resource-out → here). Handle IDs are
+              unchanged, so existing saved flows keep rendering as-is. */}
           <Handle
             id="process-left-resource"
-            type="target"
+            type="source"
             position={Position.Left}
             style={{ ...getResourceHandleStyle(theme), top: '70%' }}
           />

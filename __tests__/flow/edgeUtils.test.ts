@@ -9,6 +9,8 @@
 import { Connection, Edge } from '@xyflow/react';
 import {
   validateConnection,
+  isConnectionAllowed,
+  connectionErrorReason,
   createEdgeFromConnection,
   getReplacedEdgeIds,
   canConvertToBidirectional,
@@ -239,5 +241,56 @@ describe('getReplacedEdgeIds — resource edges', () => {
     const control = createEdgeFromConnection(connect('p1', 'process-bottom', 'p2', 'process-top'), resourceNodes);
     const resource = createEdgeFromConnection(connect('p1', 'process-right-resource', 'r1', 'resource-in'), resourceNodes);
     expect(getReplacedEdgeIds(resource, [control])).toEqual([]);
+  });
+});
+
+describe('isConnectionAllowed / connectionErrorReason — the Loose-mode live gate (issue #210)', () => {
+  // ReactFlow runs in ConnectionMode.Loose, so its built-in source→target
+  // handle-type check no longer blocks draws. isConnectionAllowed is the sole
+  // legality gate during a drag; it must mirror the shared connection rules.
+  const gateNodes = [...resourceNodes, node('start', 'start'), node('f1', 'finish')];
+
+  it('allows a producer edge from a Process node LEFT resource handle to a Resource node (the #210 case)', () => {
+    // process-left-resource is now a `source` handle, so a drag starting there
+    // and ending on the resource yields Process → Resource = produce.
+    const params = connect('p1', 'process-left-resource', 'r1', 'resource-out');
+    expect(isConnectionAllowed(params, resourceNodes, [])).toBe(true);
+    expect(connectionErrorReason(params, resourceNodes, [])).toBeNull();
+  });
+
+  it('still allows producing from the Process RIGHT resource handle', () => {
+    const params = connect('p1', 'process-right-resource', 'r1', 'resource-in');
+    expect(isConnectionAllowed(params, resourceNodes, [])).toBe(true);
+  });
+
+  it('still allows consuming (resource → process) from either side', () => {
+    expect(isConnectionAllowed(connect('r1', 'resource-out', 'p1', 'process-left-resource'), resourceNodes, [])).toBe(true);
+    expect(isConnectionAllowed(connect('r1', 'resource-out', 'p1', 'process-right-resource'), resourceNodes, [])).toBe(true);
+  });
+
+  it('rejects a resource handle wired to a non-Process, non-Resource node', () => {
+    const params = connect('p1', 'process-left-resource', 'f1', 'finish-top');
+    expect(isConnectionAllowed(params, gateNodes, [])).toBe(false);
+    expect(connectionErrorReason(params, gateNodes, [])).not.toBeNull();
+  });
+
+  it('still rejects connections into a Start node and out of a Finish node', () => {
+    expect(isConnectionAllowed(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, [])).toBe(false);
+    expect(isConnectionAllowed(connect('f1', 'finish-top', 'p1', 'process-top'), gateNodes, [])).toBe(false);
+  });
+
+  it('is silent: connectionErrorReason and isConnectionAllowed never log', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    isConnectionAllowed(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, []);
+    connectionErrorReason(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, []);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('validateConnection stays the logging commit-path wrapper', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect(validateConnection(connect('p1', 'process-bottom', 'start', 'start-bottom'), gateNodes, [])).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

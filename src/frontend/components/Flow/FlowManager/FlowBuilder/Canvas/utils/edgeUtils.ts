@@ -25,7 +25,73 @@ function subflowOutgoingEdges(
 }
 
 /**
- * Validates if a connection between nodes is valid
+ * Why a connection between nodes is not allowed, or null when it is. Pure and
+ * SILENT — cheap and side-effect free, so it is safe to call on every pointer
+ * move from ReactFlow's `isValidConnection` during a live drag.
+ * `validateConnection` wraps this with logging for the commit path
+ * (`onConnect`); `isConnectionAllowed` wraps it as a boolean for the live gate.
+ * @param params Connection parameters
+ * @param nodes Array of flow nodes
+ * @param edges Current edges, for rules that depend on existing connections
+ * @returns The reason the connection is invalid, or null when it is valid
+ */
+export function connectionErrorReason(
+  params: Connection,
+  nodes: FlowNode[],
+  edges: Edge[] = []
+): string | null {
+  // Reject connections without source, target, or handles
+  if (!params.source || !params.target || !params.sourceHandle || !params.targetHandle) {
+    return 'Missing source, target, or handles';
+  }
+
+  // Get the source and target nodes
+  const sourceNode = nodes.find(node => node.id === params.source) as FlowNode | undefined;
+  const targetNode = nodes.find(node => node.id === params.target) as FlowNode | undefined;
+
+  if (!sourceNode || !targetNode) {
+    return 'Source or target node not found';
+  }
+
+  const error = getConnectionError(sourceNode.type, params.sourceHandle, targetNode.type, params.targetHandle);
+  if (error) {
+    return error;
+  }
+
+  // A subflow hands off blindly to its single successor — it has no model to
+  // choose between multiple outgoing edges. Allowed shapes: one outgoing
+  // edge (A > S > C) or one bidirectional edge back to the caller (A <> S).
+  // Connections to the node it is already linked with are exempt: those
+  // re-draw or merge rather than add a second path.
+  if (sourceNode.type === 'subflow' &&
+      subflowOutgoingEdges(sourceNode.id, edges, params.target).length > 0) {
+    return 'Subflow nodes can only have one outgoing connection';
+  }
+
+  return null;
+}
+
+/**
+ * SILENT boolean gate for ReactFlow's `isValidConnection`. Because the canvas
+ * runs in `ConnectionMode.Loose` (ReactFlow's built-in source→target handle
+ * gate is off, so a producer edge can be drawn from a Process node's left
+ * resource handle to a Resource node — issue #210), THIS is what keeps illegal
+ * draws invalid: into a Start, out of a Finish, cross-type MCP/resource wiring,
+ * a second subflow exit. It defers entirely to the shared connectionRules
+ * single source of truth via connectionErrorReason.
+ */
+export function isConnectionAllowed(
+  params: Connection,
+  nodes: FlowNode[],
+  edges: Edge[] = []
+): boolean {
+  return connectionErrorReason(params, nodes, edges) === null;
+}
+
+/**
+ * Validates if a connection between nodes is valid, logging the specific
+ * reason on failure. Used by the commit path (onConnect); the live-drag gate
+ * uses the silent isConnectionAllowed instead.
  * @param params Connection parameters
  * @param nodes Array of flow nodes
  * @param edges Current edges, for rules that depend on existing connections
@@ -36,38 +102,11 @@ export function validateConnection(
   nodes: FlowNode[],
   edges: Edge[] = []
 ): boolean {
-  // Reject connections without source, target, or handles
-  if (!params.source || !params.target || !params.sourceHandle || !params.targetHandle) {
-    console.error('Invalid connection: Missing source, target, or handles', params);
+  const reason = connectionErrorReason(params, nodes, edges);
+  if (reason) {
+    console.error(`Invalid connection: ${reason}`, params);
     return false;
   }
-
-  // Get the source and target nodes
-  const sourceNode = nodes.find(node => node.id === params.source) as FlowNode | undefined;
-  const targetNode = nodes.find(node => node.id === params.target) as FlowNode | undefined;
-
-  if (!sourceNode || !targetNode) {
-    console.error('Invalid connection: Source or target node not found', params);
-    return false;
-  }
-
-  const error = getConnectionError(sourceNode.type, params.sourceHandle, targetNode.type, params.targetHandle);
-  if (error) {
-    console.error(`Invalid connection: ${error}`);
-    return false;
-  }
-
-  // A subflow hands off blindly to its single successor — it has no model to
-  // choose between multiple outgoing edges. Allowed shapes: one outgoing
-  // edge (A > S > C) or one bidirectional edge back to the caller (A <> S).
-  // Connections to the node it is already linked with are exempt: those
-  // re-draw or merge rather than add a second path.
-  if (sourceNode.type === 'subflow' &&
-      subflowOutgoingEdges(sourceNode.id, edges, params.target).length > 0) {
-    console.error('Invalid connection: Subflow nodes can only have one outgoing connection');
-    return false;
-  }
-
   return true;
 }
 
