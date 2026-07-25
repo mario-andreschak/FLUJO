@@ -33,6 +33,8 @@ import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import CaptureFields from './shared/CaptureFields';
+import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
@@ -61,6 +63,12 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   // line) and only parsed back into the string[] property at save time, so
   // typing/removing blank lines never fights the user mid-edit.
   const [briefsText, setBriefsText] = useState('');
+  // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
+  // into scope + key for editing and recombined via buildKvRef on save.
+  const [captureVariable, setCaptureVariable] = useState('');
+  const [captureResource, setCaptureResource] = useState('');
+  const [captureKvScope, setCaptureKvScope] = useState<KvRefScope>('folder');
+  const [captureKvKey, setCaptureKvKey] = useState('');
 
   useEffect(() => {
     if (node) {
@@ -83,6 +91,13 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           ? existing.spawnBriefs.filter((b: unknown) => typeof b === 'string').join('\n')
           : ''
       );
+
+      // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
+      setCaptureVariable(existing.captureVariable || '');
+      setCaptureResource(existing.captureResource || '');
+      const kvParsed = parseKvRef(existing.captureKv || '');
+      setCaptureKvScope(kvParsed.scope);
+      setCaptureKvKey(kvParsed.key || '');
     }
   }, [node, open]);
 
@@ -112,6 +127,18 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
     });
   };
 
+  // Issue #138 / #204: removing a key (rather than storing false/''/a default)
+  // keeps stored data minimal and byte-compatible with the FlowSpec compiler,
+  // which only emits these fan-out keys when they are explicitly set.
+  const removeProperty = (key: string) => {
+    setNodeData((prev) => {
+      if (!prev) return null;
+      const p = { ...prev.properties };
+      delete p[key];
+      return { ...prev, properties: p };
+    });
+  };
+
   const handleSave = () => {
     if (node && nodeData) {
       // Parse the brief editor back into the stored list. An empty editor
@@ -127,6 +154,17 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
       } else {
         delete properties.spawnBriefs;
       }
+
+      // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
+      // when empty, so flowToSpec never emits an empty captureX and existing
+      // flows without these fields stay byte-identical.
+      const cv = captureVariable.trim();
+      if (cv) properties.captureVariable = cv; else delete properties.captureVariable;
+      const cr = captureResource.trim();
+      if (cr) properties.captureResource = cr; else delete properties.captureResource;
+      const ckv = buildKvRef(captureKvScope, captureKvKey);
+      if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
+
       onSave(node.id, { ...nodeData, properties });
       onClose();
     }
@@ -167,6 +205,15 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
   // The pool/join/error tuning applies to every lane mode; show it as soon as
   // any lane source is in play so it never seeds values on unrelated saves.
   const showTuning = spawnEnabled || hasBriefs || parallelIds.length > 0 || !!parallelVar || mapOverList;
+
+  // Dynamic fan-out mode gating (issue #204). Mirror the compiler's mutual
+  // exclusions so the UI can never author a combination the compiler rejects:
+  //  - mapOverList conflicts with static parallel, parallel-var, and spawning.
+  //  - parallelFlowsVariable conflicts with mapOverList and a static list.
+  const staticParallelPresent = parallelIds.length > 0;
+  const spawnMode = spawnEnabled || hasBriefs;
+  const mapAllowed = !staticParallelPresent && !parallelVar && !spawnMode;
+  const varAllowed = !mapOverList && !staticParallelPresent;
 
   // Back-compat: a flow saved before the explicit 'isolated' mode existed just
   // has a promptTemplate and no inputMode — surface it as Isolated so the same
@@ -247,20 +294,13 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           </Alert>
         )}
 
-        {/* Issue #156 defect 3: surface API-authored lane config instead of
-            looking unbound. There is no full editor for these here (they are
-            authored via the flow-compile API), but the node must not look broken. */}
-        {(parallelIds.length > 0 || (parallelVar && !selectedSubflowId)) && (
+        {/* Issue #156 defect 3: the STATIC parallel list is still authored via
+            the flow-compile API — keep it read-only here (issue #204 Open Q1)
+            but VISIBLE so the node doesn't look unbound. The dynamic fan-out
+            modes (parallelFlowsVariable / mapOverList) are now editable below. */}
+        {parallelIds.length > 0 && (
           <Alert severity="info" sx={{ mt: 1 }}>
-            {parallelIds.length > 0
-              ? `This node runs ${parallelIds.length} flows in parallel and merges their results: ${parallelNames.join(', ')}. (Configured via the flow API.)`
-              : `This node picks its parallel target flows at runtime from the run variable "${parallelVar}". (Configured via the flow API.)`}
-          </Alert>
-        )}
-        {mapOverList && (
-          <Alert severity="info" sx={{ mt: 1 }}>
-            This node runs the selected flow once per item parsed from its input
-            (map-over-list, configured via the flow API).
+            {`This node runs ${parallelIds.length} flows in parallel and merges their results: ${parallelNames.join(', ')}. (Configured via the flow API.)`}
           </Alert>
         )}
 
@@ -372,6 +412,97 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
               }
             />
           </>
+        )}
+
+        {/* Dynamic subflow fan-out (issue #204, Phase 4 of #186): author
+            parallelFlowsVariable + mapOverList (+ itemSplit, sequential) that
+            were previously read-only alerts. "Never seed defaults" (#138): every
+            off/default/empty state REMOVES its key so UI output stays
+            byte-compatible with the FlowSpec compiler, which only emits these
+            keys when explicitly set. Mode gating mirrors the compiler's mutual
+            exclusions so an invalid combination can't be authored here. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          Dynamic fan-out
+        </Typography>
+        <TextField
+          fullWidth
+          label="Parallel flows from run variable"
+          value={parallelVar}
+          disabled={!varAllowed}
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            if (v) handlePropertyChange('parallelSubflowIdsVar', v);
+            else removeProperty('parallelSubflowIdsVar');
+          }}
+          margin="normal"
+          helperText={
+            !varAllowed
+              ? (mapOverList
+                  ? 'Disabled while “map over list” is on — a node can’t do both.'
+                  : 'Disabled while a static parallel list is configured via the flow API.')
+              : 'Enter a run-variable NAME only (no ${…}); it resolves at runtime to the list of flow ids to run in parallel.'
+          }
+        />
+        <FormControlLabel
+          sx={{ display: 'block', mt: 1 }}
+          control={
+            <Checkbox
+              checked={mapOverList}
+              disabled={!mapAllowed && !mapOverList}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  handlePropertyChange('mapOverList', true);
+                } else {
+                  // Uncheck cascade-removes the map-only modifiers rather than
+                  // writing false (#138: never store defaults/off states).
+                  setNodeData((prev) => {
+                    if (!prev) return null;
+                    const { mapOverList: _m, itemSplit: _i, sequential: _s, ...rest } = prev.properties;
+                    return { ...prev, properties: rest };
+                  });
+                }
+              }}
+            />
+          }
+          label="Run the selected flow once per input item (map over list)"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
+          {mapAllowed || mapOverList
+            ? 'When on, the node parses its input into a list and runs the single selected flow once per item, merging the results.'
+            : 'Disabled: map-over-list needs a single selected flow and can’t combine with parallel or spawning modes.'}
+        </Typography>
+        {mapOverList && (
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', ml: 4, mt: 1 }}>
+            <TextField
+              label="Split input as"
+              select
+              size="small"
+              sx={{ width: 240 }}
+              value={nodeData.properties?.itemSplit === 'lines' ? 'lines' : 'json-array'}
+              onChange={(e) => {
+                // json-array is the runtime default → store NOTHING for it so the
+                // common case round-trips byte-identically (#138).
+                if (e.target.value === 'lines') handlePropertyChange('itemSplit', 'lines');
+                else removeProperty('itemSplit');
+              }}
+              helperText="How the input is parsed into items"
+            >
+              <MenuItem value="json-array">JSON array (default)</MenuItem>
+              <MenuItem value="lines">Lines</MenuItem>
+            </TextField>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={nodeData.properties?.sequential === true}
+                  onChange={(e) => {
+                    if (e.target.checked) handlePropertyChange('sequential', true);
+                    else removeProperty('sequential');
+                  }}
+                />
+              }
+              label="Run items one at a time (ignores max copies)"
+            />
+          </Box>
         )}
 
         {/* Spawn-with-brief (issue #156): this node as a spawnable sub-agent —
@@ -509,6 +640,17 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           &quot;Save full conversations&quot;. Parallel copies each get their own
           conversation, titled by their brief.
         </Typography>
+
+        <Divider sx={{ my: 3 }} />
+        <CaptureFields
+          value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}
+          onChange={(patch) => {
+            if (patch.captureVariable !== undefined) setCaptureVariable(patch.captureVariable);
+            if (patch.captureResource !== undefined) setCaptureResource(patch.captureResource);
+            if (patch.captureKvScope !== undefined) setCaptureKvScope(patch.captureKvScope);
+            if (patch.captureKvKey !== undefined) setCaptureKvKey(patch.captureKvKey);
+          }}
+        />
       </DialogContent>
 
       <DialogActions>

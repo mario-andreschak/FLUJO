@@ -23,6 +23,7 @@ import {
   WAVE_WINDOWS,
   WAVE_WINDOW_KEYS,
   timelineTicks,
+  autoWindowForWave,
   type WaveWindowKey,
 } from './waveTimeline';
 
@@ -67,11 +68,11 @@ interface WaveCanvasProps {
  * "now"; timeline roots are placed by time-to-next-run (right = further out) and a
  * recurring schedule expands into one card per upcoming run in the window. The
  * chain is revealed lazily: hover a card to drop its next level below it and keep
- * following to arbitrary depth. The canvas never hijacks page scroll.
+ * following to arbitrary depth.
  */
 function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
   const [now, setNow] = useState(() => Date.now());
-  const [windowKey, setWindowKey] = useState<WaveWindowKey>(DEFAULT_WAVE_WINDOW);
+  const [windowKey, setWindowKey] = useState<WaveWindowKey>(() => autoWindowForWave(wave, Date.now()));
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   // Click-to-pin (#209): a pinned chain holds open (ignoring hover-out) until the
   // canvas background is clicked. The pin always wins over transient hover.
@@ -179,12 +180,11 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}
-        // Never swallow the page's wheel scroll (#144).
-        zoomOnScroll={false}
-        zoomOnPinch={false}
-        zoomOnDoubleClick={false}
+        zoomOnScroll={true}
+        zoomOnPinch={true}
+        zoomOnDoubleClick={true}
         panOnScroll={false}
-        preventScrolling={false}
+        preventScrolling={true}
         panOnDrag
         onNodeMouseEnter={(_e, node) => {
           if (clearTimer.current) clearTimeout(clearTimer.current);
@@ -197,7 +197,7 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         onNodeMouseLeave={() => {
           if (clearTimer.current) clearTimeout(clearTimer.current);
           // Grace period so the mouse can travel to a freshly-revealed child.
-          clearTimer.current = setTimeout(() => setHoveredKey(null), 260);
+          clearTimer.current = setTimeout(() => setHoveredKey(null), 800);
         }}
         onNodeClick={(_e, node) => {
           if (node.type === 'clock' || node.type === 'tick') return;
