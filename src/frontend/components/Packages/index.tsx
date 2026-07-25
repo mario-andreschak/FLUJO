@@ -12,6 +12,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import PackageWizard from './PackageWizard';
+import InstalledPackagesList from './InstalledPackagesList';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages');
@@ -79,6 +80,8 @@ export default function PackagesManager() {
             Create package
           </Button>
         </Paper>
+
+        <InstalledPackagesList />
       </Box>
 
       {wizardOpen && <PackageWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />}

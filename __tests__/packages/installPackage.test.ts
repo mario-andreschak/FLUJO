@@ -39,8 +39,12 @@ jest.mock('@/backend/services/flow', () => ({
 }));
 
 const updateServerConfigMock = jest.fn();
+const loadServerConfigsMock = jest.fn();
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { updateServerConfig: (...a: unknown[]) => updateServerConfigMock(...a) },
+  mcpService: {
+    updateServerConfig: (...a: unknown[]) => updateServerConfigMock(...a),
+    loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...a),
+  },
 }));
 
 const schedulerCreateMock = jest.fn();
@@ -97,6 +101,7 @@ beforeEach(() => {
   loadFlowsMock.mockResolvedValue([]);
   saveFlowMock.mockResolvedValue({ success: true });
   updateServerConfigMock.mockResolvedValue({ name: 'x' });
+  loadServerConfigsMock.mockResolvedValue([]);
   schedulerCreateMock.mockResolvedValue({ execution: { id: 'x' } });
   schedulerUpdateMock.mockResolvedValue({ execution: { id: 'x' } });
 });
@@ -215,6 +220,33 @@ describe('installPackage — idempotent re-install', () => {
     // Planned execution: create conflict -> update in place.
     expect(schedulerUpdateMock).toHaveBeenCalledWith('pkg-my-pkg-nightly', expect.objectContaining({ enabled: false }));
     expect(summary.updated.some((u) => u.type === 'plannedExecution')).toBe(true);
+  });
+});
+
+describe('installPackage — created provenance (issue #211)', () => {
+  it('records only newly-created ids in the ledger.created lists', async () => {
+    await installPackage({ source: 'registry', packageId: 'my-pkg', secrets: { API_KEY: 'sk-1' }, consentGranted: true });
+    const file = store.get('package_installs') as Record<string, { created?: { flows: string[]; models: string[]; servers: string[]; plannedExecutions: string[] } }>;
+    const created = file['my-pkg'].created!;
+    expect(created.flows.sort()).toEqual(['pkg-my-pkg-local-child', 'pkg-my-pkg-local-root']);
+    expect(created.models).toHaveLength(1);
+    expect(created.servers).toEqual(['web-search']);
+    expect(created.plannedExecutions).toEqual(['pkg-my-pkg-nightly']);
+  });
+
+  it('does NOT record adopted/updated entities as created', async () => {
+    loadFlowsMock.mockResolvedValue([{ id: 'pkg-my-pkg-local-root' }, { id: 'pkg-my-pkg-local-child' }]);
+    loadModelsMock.mockResolvedValue([{ id: 'existing-model', displayName: 'My GPT' }]);
+    installRegistryServerMock.mockResolvedValue({ installed: true, serverName: 'web-search', alreadyExisted: true });
+    schedulerCreateMock.mockResolvedValue({ conflict: true, error: 'exists' });
+
+    await installPackage({ source: 'registry', packageId: 'my-pkg', secrets: { API_KEY: 'sk-1' }, consentGranted: true });
+    const file = store.get('package_installs') as Record<string, { created?: { flows: string[]; models: string[]; servers: string[]; plannedExecutions: string[] } }>;
+    const created = file['my-pkg'].created!;
+    expect(created.flows).toEqual([]);
+    expect(created.models).toEqual([]);
+    expect(created.servers).toEqual([]);
+    expect(created.plannedExecutions).toEqual([]);
   });
 });
 

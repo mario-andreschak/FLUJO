@@ -116,8 +116,52 @@ interface PackageInstallRecord {
     servers: string[];
     plannedExecutions: string[];
   };
+  /**
+   * Per-entity provenance (issue #211): the ids the install NEWLY CREATED, as
+   * opposed to entities it merely adopted/updated in place (e.g. a pre-existing
+   * model matched by displayName). Uninstall only deletes created entities.
+   * Optional so ledgers written before this field (3.27.0) still parse.
+   */
+  created?: {
+    flows: string[];               // installed flow ids newly created
+    models: string[];              // model ids newly created (addModel)
+    servers: string[];             // server names newly installed
+    plannedExecutions: string[];   // execution ids newly created (no conflict)
+  };
 }
 type PackageInstallsFile = Record<string, PackageInstallRecord>;
+type LedgerCreated = NonNullable<PackageInstallRecord['created']>;
+
+// ---------------------------------------------------------------------------
+// Uninstall (issue #211)
+// ---------------------------------------------------------------------------
+
+export interface PackageEntityRef {
+  kind: 'flow' | 'model' | 'server' | 'plannedExecution';
+  /** Entity id (server name for MCP servers). */
+  id: string;
+  /** Human-friendly label (displayName / flow name), when known. */
+  label?: string;
+  /** Why it was skipped / errored (e.g. 'not found', 'adopted-not-created'). */
+  reason?: string;
+}
+
+export interface UninstallSummary {
+  packageName: string;
+  /** false when at least one delete primitive returned a hard error. */
+  ok: boolean;
+  hasErrors: boolean;
+  removed: PackageEntityRef[];   // entities actually deleted
+  skipped: PackageEntityRef[];   // already gone, or intentionally preserved
+  errors: PackageEntityRef[];    // delete primitive returned success:false (real error)
+}
+
+export interface InstalledPackageInfo {
+  packageName: string;
+  version: string;
+  installedAt: string;
+  entityCounts: { flows: number; models: number; servers: number; plannedExecutions: number };
+}
 
 // ---------------------------------------------------------------------------
 // Deterministic ids (idempotent re-installs)
@@ -230,23 +274,41 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     servers: [],
     plannedExecutions: [],
   };
+  const ledgerCreated: LedgerCreated = {
+    flows: [],
+    models: [],
+    servers: [],
+    plannedExecutions: [],
+  };
+
+  // Snapshot MCP server names that pre-exist BEFORE we install any, so remote
+  // (upsert) servers can be classified created-vs-adopted for uninstall.
+  const existingServerNames = new Set<string>();
+  try {
+    const configs = await mcpService.loadServerConfigs();
+    if (Array.isArray(configs)) {
+      for (const c of configs) existingServerNames.add(c.name);
+    }
+  } catch (err) {
+    log.warn('installPackage: failed to snapshot existing server names', err);
+  }
 
   // 4. MCP servers (before flows so name-based boundServer references resolve).
   for (const server of manifest.mcpServers ?? []) {
-    await installServer(server, { secrets, secretProvided, secretRequired, summary, ledgerEntities });
+    await installServer(server, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames });
   }
 
   // 5. Models (before flows so name-based boundModel references resolve).
   for (const model of manifest.models ?? []) {
-    await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities });
+    await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames });
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
-  const flowIdMap = await installFlows(manifest, summary, ledgerEntities);
+  const flowIdMap = await installFlows(manifest, summary, ledgerEntities, ledgerCreated);
 
   // 7. Planned executions — remapped flowId, created DISABLED.
   for (const pe of manifest.plannedExecutions ?? []) {
-    await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities);
+    await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities, ledgerCreated);
   }
 
   // 8. Persist the ledger (idempotency + last-summary for the status endpoint).
@@ -258,6 +320,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       installedAt: new Date().toISOString(),
       summary,
       entities: ledgerEntities,
+      created: ledgerCreated,
     };
     await saveItem(StorageKey.PACKAGE_INSTALLS, file);
   } catch (err) {
@@ -271,6 +334,159 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 export async function getLastInstallSummary(packageName: string): Promise<InstallSummary | null> {
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
   return file[packageName]?.summary ?? null;
+}
+
+/** List every installed package recorded in the ledger (for the UI list). */
+export async function listInstalledPackages(): Promise<InstalledPackageInfo[]> {
+  const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+  return Object.values(file).map((record) => ({
+    packageName: record.packageName,
+    version: record.version,
+    installedAt: record.installedAt,
+    entityCounts: {
+      flows: Object.keys(record.entities?.flows ?? {}).length,
+      models: Object.keys(record.entities?.models ?? {}).length,
+      servers: (record.entities?.servers ?? []).length,
+      plannedExecutions: (record.entities?.plannedExecutions ?? []).length,
+    },
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Uninstall orchestrator (issue #211)
+// ---------------------------------------------------------------------------
+
+/** A delete primitive's error text that means "the entity is already gone". */
+function isNotFoundError(error: string | undefined): boolean {
+  if (!error) return false;
+  return /not found|no planned execution with id|does not exist/i.test(error);
+}
+
+/**
+ * Reverse a package install (issue #211).
+ *
+ * Reads the install ledger and deletes ONLY the entities the install actually
+ * CREATED — never entities it adopted/updated in place (e.g. a pre-existing
+ * model matched by displayName). Fail-soft: an already-deleted entity is a
+ * `skipped`, not an `error`; a single thrown exception can't abort the batch.
+ * Idempotent: once the ledger entry is removed a second call is a clean no-op.
+ *
+ * Order: planned executions -> flows -> servers -> models (delete dependents
+ * before dependencies; models last since flows may reference them).
+ */
+export async function uninstallPackage(packageName: string): Promise<UninstallSummary> {
+  const summary: UninstallSummary = {
+    packageName,
+    ok: true,
+    hasErrors: false,
+    removed: [],
+    skipped: [],
+    errors: [],
+  };
+
+  const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+  const record = file[packageName];
+  if (!record) {
+    // Unknown package / already uninstalled: clean no-op.
+    return summary;
+  }
+
+  const created = record.created;
+  const hasProvenance = created !== undefined;
+
+  // Classify a delete primitive's result into the symmetric summary.
+  const classify = (
+    res: { success: boolean; error?: string },
+    ref: PackageEntityRef,
+  ): void => {
+    if (res.success) {
+      summary.removed.push(ref);
+    } else if (isNotFoundError(res.error)) {
+      summary.skipped.push({ ...ref, reason: 'not found' });
+    } else {
+      summary.errors.push({ ...ref, reason: res.error ?? 'delete failed' });
+    }
+  };
+
+  // Wrap a delete so a thrown exception becomes an errors[] entry, never aborts.
+  const runDelete = async (
+    ref: PackageEntityRef,
+    fn: () => Promise<{ success: boolean; error?: string }>,
+  ): Promise<void> => {
+    try {
+      classify(await fn(), ref);
+    } catch (err) {
+      summary.errors.push({ ...ref, reason: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const scheduler = getSchedulerService();
+
+  // 1. Planned executions. Package-owned deterministic ids: safe to remove even
+  //    for legacy ledgers without provenance.
+  for (const id of record.entities?.plannedExecutions ?? []) {
+    const ref: PackageEntityRef = { kind: 'plannedExecution', id };
+    if (hasProvenance && !created!.plannedExecutions.includes(id)) {
+      summary.skipped.push({ ...ref, reason: 'adopted-not-created' });
+      continue;
+    }
+    await runDelete(ref, () => scheduler.delete(id));
+  }
+
+  // 2. Flows. Package-owned deterministic ids: safe to remove even for legacy
+  //    ledgers without provenance.
+  for (const [localId, flowId] of Object.entries(record.entities?.flows ?? {})) {
+    const ref: PackageEntityRef = { kind: 'flow', id: flowId, label: localId };
+    if (hasProvenance && !created!.flows.includes(flowId)) {
+      summary.skipped.push({ ...ref, reason: 'adopted-not-created' });
+      continue;
+    }
+    await runDelete(ref, () => flowService.deleteFlow(flowId));
+  }
+
+  // 3. MCP servers. Registry servers use package-owned names; remote servers are
+  //    an upsert on a package-declared name. Safe to remove for legacy ledgers.
+  for (const name of record.entities?.servers ?? []) {
+    const ref: PackageEntityRef = { kind: 'server', id: name };
+    if (hasProvenance && !created!.servers.includes(name)) {
+      summary.skipped.push({ ...ref, reason: 'adopted-not-created' });
+      continue;
+    }
+    await runDelete(ref, () => mcpService.deleteServerConfig(name));
+  }
+
+  // 4. Models (last). CRITICAL: install ADOPTS pre-existing models by displayName
+  //    and updates them in place — those must NEVER be deleted. Without
+  //    provenance (legacy 3.27.0 ledger) we conservatively skip ALL models.
+  for (const [displayName, modelId] of Object.entries(record.entities?.models ?? {})) {
+    const ref: PackageEntityRef = { kind: 'model', id: modelId, label: displayName };
+    if (!hasProvenance) {
+      summary.skipped.push({ ...ref, reason: 'legacy-ledger-no-provenance' });
+      continue;
+    }
+    if (!created!.models.includes(modelId)) {
+      summary.skipped.push({ ...ref, reason: 'adopted-not-created' });
+      continue;
+    }
+    await runDelete(ref, () => modelService.deleteModel(modelId));
+  }
+
+  summary.hasErrors = summary.errors.length > 0;
+  summary.ok = !summary.hasErrors;
+
+  // Fail-soft persistence: only drop the ledger entry when nothing hard-errored,
+  // so the user can retry. On errors, keep the record for a retry.
+  if (!summary.hasErrors) {
+    try {
+      const latest = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+      delete latest[packageName];
+      await saveItem(StorageKey.PACKAGE_INSTALLS, latest);
+    } catch (err) {
+      log.warn('uninstallPackage: failed to delete ledger entry', err);
+    }
+  }
+
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,13 +536,16 @@ interface InstallCtx {
   secretRequired: (key: string) => boolean;
   summary: InstallSummary;
   ledgerEntities: PackageInstallRecord['entities'];
+  ledgerCreated: LedgerCreated;
+  /** Server names that already existed before this install began. */
+  existingServerNames: Set<string>;
 }
 
 async function installServer(
   server: NonNullable<PackageManifest['mcpServers']>[number],
   ctx: InstallCtx,
 ): Promise<void> {
-  const { secrets, secretProvided, secretRequired, summary, ledgerEntities } = ctx;
+  const { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames } = ctx;
   const source = serverSource(server);
 
   // Resolve env: literal values + values pulled from provided secrets. A missing
@@ -362,7 +581,10 @@ async function installServer(
       if (result.serverName) ledgerEntities.servers.push(result.serverName);
       const ref: InstallEntityRef = { type: 'server', name: server.localName, ...(result.serverName ? { id: result.serverName } : {}) };
       if (result.alreadyExisted) summary.updated.push(ref);
-      else summary.created.push(ref);
+      else {
+        if (result.serverName) ledgerCreated.servers.push(result.serverName);
+        summary.created.push(ref);
+      }
     } else {
       summary.skipped.push({ type: 'server', name: server.localName, note: result.error ?? (result.needsEnv ? `needs env: ${result.needsEnv.join(', ')}` : 'not installed') });
     }
@@ -383,6 +605,9 @@ async function installServer(
       return;
     }
     ledgerEntities.servers.push(server.localName);
+    // Remote servers are an upsert: classify created-vs-adopted from the
+    // pre-install snapshot so uninstall never deletes a user's own server.
+    if (!existingServerNames.has(server.localName)) ledgerCreated.servers.push(server.localName);
     summary.servers.push({ localName: server.localName, source, installed: true, serverName: server.localName, ...(disabled ? { disabled: true, needsEnv: missingRequired } : {}) });
     const ref: InstallEntityRef = { type: 'server', name: server.localName, id: server.localName };
     if (disabled) summary.disabled.push({ ...ref, note: `installed disabled — missing required secret(s) for: ${missingRequired.join(', ')}` });
@@ -422,7 +647,7 @@ async function installModel(
   model: NonNullable<PackageManifest['models']>[number],
   ctx: InstallCtx,
 ): Promise<void> {
-  const { secrets, secretProvided, secretRequired, summary, ledgerEntities } = ctx;
+  const { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated } = ctx;
 
   // Resolve the API key: global-var binding, provided secret, or empty (a
   // missing REQUIRED secret installs the model DISABLED, i.e. keyless).
@@ -470,6 +695,7 @@ async function installModel(
   const res = await modelService.addModel({ id, ...fields } as Model);
   if (res.success) {
     ledgerEntities.models[model.displayName] = id;
+    ledgerCreated.models.push(id);
     const ref: InstallEntityRef = { type: 'model', name: model.displayName, id };
     if (disabledNote) summary.disabled.push({ ...ref, note: disabledNote });
     else summary.created.push(ref);
@@ -482,6 +708,7 @@ async function installFlows(
   manifest: PackageManifest,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
+  ledgerCreated: LedgerCreated,
 ): Promise<Record<string, string>> {
   const flows = manifest.flows ?? [];
   // Build the manifest-local-id -> installed-id map first, so cross-flow
@@ -502,7 +729,10 @@ async function installFlows(
       ledgerEntities.flows[manifestFlow.id] = newId;
       const ref: InstallEntityRef = { type: 'flow', name: manifestFlow.name, id: newId };
       if (wasPresent) summary.updated.push(ref);
-      else summary.created.push(ref);
+      else {
+        ledgerCreated.flows.push(newId);
+        summary.created.push(ref);
+      }
     } else {
       summary.skipped.push({ type: 'flow', name: manifestFlow.name, note: res.error });
     }
@@ -539,6 +769,7 @@ async function installPlannedExecution(
   flowIdMap: Record<string, string>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
+  ledgerCreated: LedgerCreated,
 ): Promise<void> {
   const scheduler = getSchedulerService();
   const id = deterministicExecutionId(packageName, pe.name);
@@ -556,6 +787,7 @@ async function installPlannedExecution(
   const created = await scheduler.create(config);
   if (created.execution) {
     ledgerEntities.plannedExecutions.push(id);
+    ledgerCreated.plannedExecutions.push(id);
     summary.created.push({ type: 'plannedExecution', name: pe.name, id });
     summary.disabled.push({ type: 'plannedExecution', name: pe.name, id, note: 'created disabled — enable it after review' });
     return;
