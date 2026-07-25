@@ -556,3 +556,75 @@ describe('generateFlow — signals (issue #132)', () => {
     expect(signal!.data.properties!.payloadTemplate).toBe('blockers found');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scratchpad-variable guard (issue #217)
+// ---------------------------------------------------------------------------
+
+describe('generateFlow — scratchpad-var guard (issue #217)', () => {
+  it('injects the generated-flow data-flow policy into the system prompt', async () => {
+    await generateFlow({ description: 'x', modelId: 'model-gen' });
+    const prompt = createCompletionMock.mock.calls[0][0].messages[0].content as string;
+    expect(prompt).toContain('GENERATED-FLOW DATA-FLOW POLICY');
+    expect(prompt).toContain('${res:NAME}');
+    expect(prompt).toContain('DO NOT emit ${var:NAME}');
+  });
+
+  it('rewrites a dangling ${var:NAME} out of the returned flow and reports it', async () => {
+    const varSpec = {
+      name: 'leaky_flow',
+      description: 'reads a variable nobody captures',
+      nodes: [
+        { key: 's', type: 'start', prompt: 'You do work.' },
+        { key: 'a', type: 'process', model: 'model-abc', prompt: 'Do the first step.' },
+        { key: 'b', type: 'process', model: 'model-abc', prompt: 'Continue using: ${var:missing}.' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'a' },
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'f' },
+      ],
+    };
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(varSpec)));
+    const result = await generateFlow({ description: 'do two steps', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // No dangling scratchpad reference survives anywhere in the compiled flow.
+    expect(JSON.stringify(result.flow)).not.toContain('${var:');
+    // The guard surfaces what it did as an advisory warning.
+    expect(result.validation.issues.some((i) => i.code === 'var-dangling')).toBe(true);
+  });
+
+  it('converts a var read by an isolated step into a run resource', async () => {
+    const varSpec = {
+      name: 'report_flow',
+      description: 'writer then isolated critic',
+      nodes: [
+        { key: 's', type: 'start', prompt: 'You coordinate writing.' },
+        { key: 'w', type: 'process', model: 'model-abc', prompt: 'Draft the report.', captureVariable: 'report' },
+        {
+          key: 'c',
+          type: 'process',
+          model: 'model-abc',
+          inputMode: 'isolated',
+          isolatedPrompt: 'Critique this report:\n\n${var:report}',
+        },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'w' },
+        { from: 'w', to: 'c' },
+        { from: 'c', to: 'f' },
+      ],
+    };
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(varSpec)));
+    const result = await generateFlow({ description: 'write then critique', modelId: 'model-gen' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const flat = JSON.stringify(result.flow);
+    expect(flat).not.toContain('${var:report}');
+    expect(flat).toContain('${res:report}');
+    expect(result.validation.issues.some((i) => i.code === 'var-resource')).toBe(true);
+  });
+});
