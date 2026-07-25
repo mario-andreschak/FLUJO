@@ -3,8 +3,20 @@
  * (output/exit code, non-zero exit, timeout kill) and background sessions
  * (start → wait → result, kill a long runner, unknown-session errors).
  */
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+jest.mock('@/backend/services/mcp/internal/registry', () => ({
+  BASH_SERVER_NAME: 'bash',
+  getInternalServerRoots: jest.fn(),
+}));
+
+import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
 import { bashToolDefinitions, bashCallTool, _resetBashSessionsForTests } from '@/backend/services/mcp/internal/bashTools';
+
+const mockedRoots = getInternalServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };
@@ -16,8 +28,14 @@ function parse(r: CallToolResult): Record<string, unknown> {
 
 const isWin = process.platform === 'win32';
 
+beforeEach(async () => {
+  const { getDataDir } = await import('@/utils/paths');
+  mockedRoots.mockResolvedValue([getDataDir()]);
+});
+
 afterEach(() => {
   _resetBashSessionsForTests();
+  mockedRoots.mockReset();
 });
 
 describe('bash tool definitions', () => {

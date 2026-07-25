@@ -111,11 +111,11 @@ const BASH_ROOT_ENV_VARS = ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'];
  * and enforce the effective confinement roots when present. Throws on a
  * confinement violation so callers surface a precise error (issue #175).
  */
-function resolveCwd(input: unknown, roots: string[] | null): string {
+function resolveCwd(input: unknown, roots: string[]): string {
   const dataDir = getDataDir();
   const raw = typeof input === 'string' ? input.trim() : '';
   const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
-  if (roots && !roots.some((root) => isInside(root, resolved))) {
+  if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
   }
   return resolved;
@@ -305,7 +305,7 @@ function maybeNormalize(text: string, normalize: boolean): string {
   return normalize ? text.replace(/\r\n?/g, '\n') : text;
 }
 
-async function runTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function runTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
@@ -371,7 +371,7 @@ function scheduleReap(session: BashSession): void {
   session.reapTimer.unref?.();
 }
 
-function startTool(args: Record<string, unknown>, roots: string[] | null): CallToolResult {
+function startTool(args: Record<string, unknown>, roots: string[]): CallToolResult {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 

@@ -7,7 +7,16 @@ import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+jest.mock('@/backend/services/mcp/internal/registry', () => ({
+  FILESYSTEM_SERVER_NAME: 'filesystem',
+  getInternalServerRoots: jest.fn(),
+}));
+
+import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
 import { filesystemToolDefinitions, filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
+
+const mockedRoots = getInternalServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };
@@ -44,9 +53,11 @@ describe('filesystem operations', () => {
   let dir: string;
   beforeEach(async () => {
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-fs-'));
+    mockedRoots.mockResolvedValue([dir]);
   });
   afterEach(async () => {
     await fsp.rm(dir, { recursive: true, force: true });
+    mockedRoots.mockReset();
   });
 
   it('writes and reads a file round-trip', async () => {
