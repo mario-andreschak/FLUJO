@@ -18,6 +18,9 @@ export class ToolHandler {
   /**
    * Sanitizes a JSON Schema to ensure compatibility with all LLM providers
    * Specifically removes unsupported 'format' fields from string properties
+   * and filters 'required' arrays to only reference keys defined in 'properties'
+   * (Google AI Studio / Gemini via OpenRouter rejects schemas where required
+   * contains keys not present in properties).
    */
   static sanitizeSchema(schema: any): any {
     if (!schema || typeof schema !== 'object') return schema;
@@ -43,6 +46,25 @@ export class ToolHandler {
       Object.keys(result.properties).forEach(key => {
         result.properties[key] = ToolHandler.sanitizeSchema(result.properties[key]);
       });
+    }
+
+    // Google AI Studio (and other strict providers) reject schemas where `required`
+    // references property names not defined in `properties`. Filter required so it
+    // only contains keys that are actually declared. Remove `required` entirely when
+    // it would become empty or when there are no `properties` at all.
+    if (Array.isArray(result.required)) {
+      if (result.properties && typeof result.properties === 'object') {
+        const definedKeys = new Set(Object.keys(result.properties));
+        result.required = (result.required as unknown[]).filter(
+          (k): k is string => typeof k === 'string' && definedKeys.has(k)
+        );
+        if (result.required.length === 0) {
+          delete result.required;
+        }
+      } else {
+        // No properties declared → `required` can only be invalid; drop it.
+        delete result.required;
+      }
     }
     
     // Process array items
