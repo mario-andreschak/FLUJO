@@ -128,6 +128,10 @@ interface DragState {
 const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   variant,
   id,
+  source,
+  target,
+  sourceHandleId,
+  targetHandleId,
   sourceX,
   sourceY,
   targetX,
@@ -141,7 +145,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   selected
 }) => {
   const theme = useTheme();
-  const { deleteElements, screenToFlowPosition } = useReactFlow();
+  const { deleteElements, screenToFlowPosition, getNode } = useReactFlow();
 
   const [hovered, setHovered] = useState(false);
   // Waypoints being edited right now — rendered live, committed on release.
@@ -158,6 +162,29 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   // is legible on the canvas. Only standard edges carry routing conditions.
   const conditionLabel =
     variant === 'standard' && edgeData?.condition ? formatConditionLabel(edgeData.condition) : '';
+  // Resource (data-flow) edges are directional: resource → process means the
+  // step CONSUMES the artifact; process → resource means it PRODUCES it. Show
+  // that role as a small badge so data-flow direction is legible on the canvas
+  // (issue #223). Prefer the endpoint node types (authoritative, mirrors
+  // FlowConverter's consume/produce folding); fall back to the handle ids when
+  // a node lookup is momentarily unavailable during a live drag. A process
+  // resource handle is the only one carrying both 'process' and 'resource'.
+  const isProcessResourceHandle = (h?: string | null): boolean =>
+    !!h && h.includes('process') && h.includes('resource');
+  let resourceRole: 'consume' | 'produce' | '' = '';
+  if (variant === 'resource') {
+    const srcType = getNode(source)?.type;
+    const tgtType = getNode(target)?.type;
+    if (srcType === 'resource' && tgtType === 'process') {
+      resourceRole = 'consume';
+    } else if (srcType === 'process' && tgtType === 'resource') {
+      resourceRole = 'produce';
+    } else if (isProcessResourceHandle(sourceHandleId)) {
+      resourceRole = 'produce';
+    } else if (isProcessResourceHandle(targetHandleId)) {
+      resourceRole = 'consume';
+    }
+  }
   // (data.waypoint is the single-waypoint shape from the first iteration of
   // this feature — treat it as a one-entry array.)
   const storedWaypoints = edgeData?.waypoints ?? (edgeData?.waypoint ? [edgeData.waypoint] : []);
@@ -216,6 +243,11 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
       : variant === 'resource'
       ? (selected ? RESOURCE_EDGE_COLOR_SELECTED : RESOURCE_EDGE_COLOR)
       : (selected ? theme.palette.primary.main : theme.palette.text.secondary),
+    // A static dash marks resource (data-flow) wiring so it reads differently
+    // from solid MCP tool wiring and animated control edges even for
+    // color-vision-deficient users (issue #223). Applied in the renderer only
+    // — the persisted edge shape stays untouched, so saved flows never change.
+    ...(variant === 'resource' ? { strokeDasharray: '6 4' } : {}),
     // Give each animated edge a slightly different (deterministic) speed so
     // overlapping siblings on the same handle drift out of phase. Inline
     // animation-duration (a longhand) overrides the `animation` shorthand from
@@ -361,6 +393,34 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
             title={`Routing condition: ${conditionLabel}`}
           >
             {conditionLabel}
+          </div>
+        )}
+        {/* Consume/produce badge on a resource (data-flow) edge so the
+            direction of data flow is legible on the canvas (issue #223).
+            Non-interactive and offset above the path midpoint, matching the
+            condition badge; teal to tie it to the resource-edge stroke. */}
+        {resourceRole && (
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${controlsPoint.x}px,${controlsPoint.y - 18}px)`,
+              pointerEvents: 'none',
+              background: selected ? RESOURCE_EDGE_COLOR_SELECTED : RESOURCE_EDGE_COLOR,
+              color: '#ffffff',
+              borderRadius: 4,
+              padding: '1px 6px',
+              fontSize: 10,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              boxShadow: theme.shadows[1],
+              zIndex: 1002,
+            }}
+            className="nodrag nopan"
+            title={resourceRole === 'consume'
+              ? 'This step consumes (reads) the resource'
+              : 'This step produces (writes) the resource'}
+          >
+            {resourceRole}
           </div>
         )}
         {/* Waypoint dots — on the path, drag to move, double-click to remove */}

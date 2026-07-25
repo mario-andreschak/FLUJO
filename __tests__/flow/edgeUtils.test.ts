@@ -6,7 +6,7 @@
  * pair regardless of side or handle, one flow-control edge per direction, and
  * handle-aware edge ids so parallel edges never collide.
  */
-import { Connection, Edge } from '@xyflow/react';
+import { Connection, Edge, MarkerType } from '@xyflow/react';
 import {
   validateConnection,
   isConnectionAllowed,
@@ -210,6 +210,11 @@ describe('createEdgeFromConnection — resource edges', () => {
     expect((produce.data as any).edgeType).toBe('resource');
     // Resource edges are static config wiring, never animated flow control.
     expect(produce.animated).toBe(false);
+    // Teal stroke + directional closed-arrow marker distinguish it from the
+    // gray/animated control edge and the blue MCP edge (issue #223).
+    expect((produce.style as any).stroke).toBe('#009688');
+    expect((produce.markerEnd as any).type).toBe(MarkerType.ArrowClosed);
+    expect((produce.markerEnd as any).color).toBe('#009688');
   });
 
   it('types a resource → process (consume) connection as a resourceEdge', () => {
@@ -220,6 +225,8 @@ describe('createEdgeFromConnection — resource edges', () => {
     expect(consume.type).toBe('resourceEdge');
     expect((consume.data as any).edgeType).toBe('resource');
     expect(consume.animated).toBe(false);
+    expect((consume.style as any).stroke).toBe('#009688');
+    expect((consume.markerEnd as any).type).toBe(MarkerType.ArrowClosed);
   });
 });
 

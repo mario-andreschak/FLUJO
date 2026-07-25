@@ -205,12 +205,26 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
-    return edges.filter(edge => 
-      edge.source && 
-      edge.target && 
-      edge.sourceHandle && 
-      edge.targetHandle
-    );
+    return edges
+      .filter(edge =>
+        edge.source &&
+        edge.target &&
+        edge.sourceHandle &&
+        edge.targetHandle
+      )
+      // Resilience for previously-saved / AI-generated flows (issue #223):
+      // rendering keys off `edge.type` but every logic path discriminates on
+      // `data.edgeType`. If a legacy payload marked an edge as a resource
+      // (data-flow) edge in its data but missed the matching `type`, it would
+      // render as a plain control edge. Coerce the render type in memory only
+      // — the persisted file is never rewritten — so resource edges always show
+      // the resource styling regardless of edge age.
+      .map(edge =>
+        (edge.data as { edgeType?: string } | undefined)?.edgeType === 'resource' &&
+        edge.type !== 'resourceEdge'
+          ? { ...edge, type: 'resourceEdge' }
+          : edge
+      );
   }, []);
 
   // Initialize history with initial state
