@@ -68,10 +68,11 @@ describe('bash cwd confinement (issue #175)', () => {
     expect(text(r)).toMatch(/outside/i);
   });
 
-  it('is unconfined when neither env nor persisted roots are set', async () => {
+  it('blocks access when neither env nor persisted roots are set (default deny)', async () => {
     mockedRoots.mockResolvedValue([]);
-    const r = await bashCallTool('run', { command: 'echo free', cwd: os.tmpdir() });
-    expect(r.isError).toBeUndefined();
+    const r = await bashCallTool('run', { command: 'echo blocked', cwd: os.tmpdir() });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/outside/i);
   });
 
   it('keeps FLUJO_BASH_ROOTS as a hard ceiling over persisted roots', async () => {
@@ -100,30 +101,33 @@ describe('bash cwd confinement (issue #175)', () => {
 });
 
 describe('bash env scrubbing (issue #175)', () => {
+  let dir: string;
   const prevSecret = process.env.FAKE_SECRET;
   const prevInherit = process.env.FLUJO_BASH_INHERIT_ENV;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockedRoots.mockReset();
-    mockedRoots.mockResolvedValue([]); // unconfined so cwd never blocks these
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-bashenv-'));
+    mockedRoots.mockResolvedValue([dir]); // allow cwd in temp dir for testing
     process.env.FAKE_SECRET = SECRET;
     delete process.env.FLUJO_BASH_INHERIT_ENV;
   });
-  afterEach(() => {
+  afterEach(async () => {
     _resetBashSessionsForTests();
+    await fsp.rm(dir, { recursive: true, force: true });
     if (prevSecret === undefined) delete process.env.FAKE_SECRET; else process.env.FAKE_SECRET = prevSecret;
     if (prevInherit === undefined) delete process.env.FLUJO_BASH_INHERIT_ENV; else process.env.FLUJO_BASH_INHERIT_ENV = prevInherit;
   });
 
   it('does NOT leak a secret env var to spawned commands by default', async () => {
-    const r = await bashCallTool('run', { command: ECHO_SECRET });
+    const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
     const payload = JSON.parse(text(r)) as { output?: string };
     expect(payload.output ?? '').not.toContain(SECRET);
   });
 
   it('restores full env inheritance when FLUJO_BASH_INHERIT_ENV is set', async () => {
     process.env.FLUJO_BASH_INHERIT_ENV = '1';
-    const r = await bashCallTool('run', { command: ECHO_SECRET });
+    const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
     const payload = JSON.parse(text(r)) as { output?: string };
     expect(payload.output ?? '').toContain(SECRET);
   });

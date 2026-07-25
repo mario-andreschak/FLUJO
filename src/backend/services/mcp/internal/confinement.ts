@@ -47,10 +47,11 @@ export function envRoots(envVarNames: string | string[]): string[] | null {
 }
 
 /**
- * The effective confinement roots for a built-in server, or null when unconfined.
+ * The effective confinement roots for a built-in server, or an empty array when
+ * no roots are configured (disallowing all access by default).
  *
  * Precedence (per issue #170 D5): the env var(s) are a HARD CEILING.
- *  - No env, no persisted roots  -> null (full host access).
+ *  - No env, no persisted roots  -> [] (no access by default).
  *  - No env, persisted roots     -> confine to the persisted roots.
  *  - Env set                     -> persisted roots may only NARROW within the
  *                                   ceiling; any persisted root outside the env
@@ -60,15 +61,19 @@ export function envRoots(envVarNames: string | string[]): string[] | null {
 export async function loadEffectiveRoots(
   serverName: string,
   envVarNames: string | string[]
-): Promise<string[] | null> {
+): Promise<string[]> {
+  const { getDataDir } = await import('@/utils/paths');
+  const dataDir = getDataDir();
   const env = envRoots(envVarNames);
   let persisted: string[] = [];
   try {
-    persisted = (await getInternalServerRoots(serverName)).map((r) => path.resolve(r));
+    persisted = (await getInternalServerRoots(serverName)).map((r) =>
+      path.isAbsolute(r) ? path.resolve(r) : path.resolve(dataDir, r)
+    );
   } catch (err) {
     log.warn('loadEffectiveRoots: could not read persisted roots', err);
   }
-  if (!env) return persisted.length ? persisted : null;
+  if (!env) return persisted.length ? persisted : [];
   const confined = persisted.filter((p) => env.some((root) => isInside(root, p)));
   return confined.length ? confined : env;
 }

@@ -51,12 +51,12 @@ describe('filesystem persisted roots confinement', () => {
     expect(text(r)).toMatch(/outside/i);
   });
 
-  it('is unconfined when neither env nor persisted roots are set', async () => {
+  it('blocks all access when neither env nor persisted roots are set (default deny)', async () => {
     mockedRoots.mockResolvedValue([]);
-    const outside = path.join(os.tmpdir(), `flujo-roots-free-${Date.now()}.txt`);
+    const outside = path.join(os.tmpdir(), `flujo-roots-blocked-${Date.now()}.txt`);
     const r = await filesystemCallTool('write_file', { path: outside, content: 'x' });
-    expect(r.isError).toBeUndefined();
-    await fsp.rm(outside, { force: true });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/outside/i);
   });
 
   it('keeps the FLUJO_FS_ROOTS env as a hard ceiling over persisted roots', async () => {

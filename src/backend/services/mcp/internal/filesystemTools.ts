@@ -66,19 +66,17 @@ function errorResult(message: string): CallToolResult {
 
 /**
  * Resolve a user-supplied path against the data dir (for relative paths) and
- * enforce the effective confinement roots when present. Throws on a confinement
- * violation so callers surface a precise error.
+ * enforce the effective confinement roots. An empty roots array blocks all access.
+ * Throws on a confinement violation so callers surface a precise error.
  */
-function resolvePath(input: unknown, roots: string[] | null): string {
+function resolvePath(input: unknown, roots: string[]): string {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('Provide "path".');
   const dataDir = getDataDir();
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw);
 
-  if (roots) {
-    if (!roots.some((root) => isInside(root, resolved))) {
-      throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);
-    }
+  if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
+    throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);
   }
   return resolved;
 }
@@ -358,7 +356,7 @@ function detectEol(content: string): string {
   return content.includes('\r\n') ? '\r\n' : '\n';
 }
 
-async function readFileTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function readFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const filePath = resolvePath(args.path, roots);
   const content = await fs.readFile(filePath, 'utf8');
   const lines = splitLines(content);
@@ -379,7 +377,7 @@ async function readFileTool(args: Record<string, unknown>, roots: string[] | nul
   return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out });
 }
 
-async function writeFileTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function writeFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const filePath = resolvePath(args.path, roots);
   const content = typeof args.content === 'string' ? args.content : '';
   const mode = args.mode === 'append' || args.mode === 'insert' ? args.mode : 'overwrite';
@@ -453,7 +451,7 @@ function regionOffsets(text: string, start?: number, end?: number): { lo: number
   return { lo, hi: Math.max(lo, hi) };
 }
 
-async function editFileTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function editFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const filePath = resolvePath(args.path, roots);
   const hasDiff = typeof args.diff === 'string' && args.diff.trim().length > 0;
   const hasEdits = Array.isArray(args.edits) && args.edits.length > 0;
@@ -689,7 +687,7 @@ async function entryType(full: string): Promise<'file' | 'directory' | 'other'> 
   }
 }
 
-async function listDirTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function listDirTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const dirPath = resolvePath(args.path, roots);
   const names = await fs.readdir(dirPath);
   const entries = await Promise.all(
@@ -715,7 +713,7 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-async function dirTreeTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function dirTreeTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const rootPath = resolvePath(args.path, roots);
   const depth = Math.min(typeof args.depth === 'number' ? Math.max(1, Math.floor(args.depth)) : DEFAULT_TREE_DEPTH, MAX_TREE_DEPTH);
   let count = 0;
@@ -751,7 +749,7 @@ async function dirTreeTool(args: Record<string, unknown>, roots: string[] | null
   return dualResult({ path: rootPath, depth, truncated, tree });
 }
 
-async function searchTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function searchTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const rootPath = resolvePath(args.path, roots);
   const namePattern = typeof args.namePattern === 'string' ? args.namePattern.toLowerCase() : '';
   const contentPattern = typeof args.content === 'string' ? args.content.toLowerCase() : '';
@@ -801,7 +799,7 @@ async function searchTool(args: Record<string, unknown>, roots: string[] | null)
   return dualResult({ matches, truncated });
 }
 
-async function getFileInfoTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function getFileInfoTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const target = resolvePath(args.path, roots);
   const st = await fs.stat(target);
   return dualResult({
@@ -815,13 +813,13 @@ async function getFileInfoTool(args: Record<string, unknown>, roots: string[] | 
   });
 }
 
-async function createDirectoryTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function createDirectoryTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const dirPath = resolvePath(args.path, roots);
   await fs.mkdir(dirPath, { recursive: true });
   return dualResult({ path: dirPath, created: true });
 }
 
-async function moveTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function moveTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const source = resolvePath(args.source, roots);
   const destination = resolvePath(args.destination, roots);
   await fs.mkdir(path.dirname(destination), { recursive: true });
@@ -829,7 +827,7 @@ async function moveTool(args: Record<string, unknown>, roots: string[] | null): 
   return dualResult({ source, destination });
 }
 
-async function deleteTool(args: Record<string, unknown>, roots: string[] | null): Promise<CallToolResult> {
+async function deleteTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const target = resolvePath(args.path, roots);
   const recursive = args.recursive === true;
   await fs.rm(target, { recursive, force: false });

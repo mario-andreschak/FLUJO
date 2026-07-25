@@ -3,8 +3,25 @@
  * (output/exit code, non-zero exit, timeout kill) and background sessions
  * (start → wait → result, kill a long runner, unknown-session errors).
  */
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { bashToolDefinitions, bashCallTool, _resetBashSessionsForTests } from '@/backend/services/mcp/internal/bashTools';
+
+jest.mock('@/backend/services/mcp/internal/registry', () => ({
+  BASH_SERVER_NAME: 'bash',
+  getInternalServerRoots: jest.fn(),
+}));
+
+import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import {
+  bashToolDefinitions,
+  bashCallTool,
+  _resetBashSessionsForTests,
+  _resetBashShellCacheForTests,
+} from '@/backend/services/mcp/internal/bashTools';
+
+const mockedRoots = getInternalServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };
@@ -16,8 +33,15 @@ function parse(r: CallToolResult): Record<string, unknown> {
 
 const isWin = process.platform === 'win32';
 
+beforeEach(async () => {
+  const { getDataDir } = await import('@/utils/paths');
+  mockedRoots.mockResolvedValue([getDataDir()]);
+});
+
 afterEach(() => {
   _resetBashSessionsForTests();
+  _resetBashShellCacheForTests();
+  mockedRoots.mockReset();
 });
 
 describe('bash tool definitions', () => {
@@ -60,6 +84,42 @@ describe('bash run (foreground)', () => {
   it('normalizes CRLF to LF when requested', async () => {
     const r = await bashCallTool('run', { command: 'echo hi', normalizeNewlines: true });
     expect(text(r)).not.toContain('\r');
+  });
+});
+
+describe('bash shell selection (issue #225)', () => {
+  it('resolves "bash" to a real bash executable exposing unix utilities, when one is installed', async () => {
+    const r = await bashCallTool('run', { command: 'echo bash-test | grep -q bash-test && echo found', shell: 'bash' });
+    const out = parse(r);
+    if (out.shellFallback) return; // No bash install found on this machine at all — nothing to assert.
+    expect(out.shell).toBe('bash');
+    expect(out.output as string).toContain('found');
+  });
+
+  it('falls back to the default shell (and reports it) when the requested shell is unavailable', async () => {
+    const originalPath = process.env.PATH;
+    const originalWinPath = process.env.Path;
+    const originalProgramFiles = process.env.ProgramFiles;
+    const originalProgramFilesX86 = process.env['ProgramFiles(x86)'];
+    const originalLocalAppData = process.env.LocalAppData;
+    process.env.PATH = '';
+    process.env.Path = '';
+    process.env.ProgramFiles = '';
+    delete process.env['ProgramFiles(x86)'];
+    process.env.LocalAppData = '';
+    try {
+      const r = await bashCallTool('run', { command: 'echo fallback-test', shell: 'bash' });
+      const out = parse(r);
+      expect(out.shell).toBe('default');
+      expect(out.shellFallback).toEqual({ requestedShell: 'bash', usedShell: 'default' });
+      expect(out.output as string).toContain('fallback-test');
+    } finally {
+      process.env.PATH = originalPath;
+      process.env.Path = originalWinPath;
+      process.env.ProgramFiles = originalProgramFiles;
+      if (originalProgramFilesX86 !== undefined) process.env['ProgramFiles(x86)'] = originalProgramFilesX86;
+      process.env.LocalAppData = originalLocalAppData;
+    }
   });
 });
 
