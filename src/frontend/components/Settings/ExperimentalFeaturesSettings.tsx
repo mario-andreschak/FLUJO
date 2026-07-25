@@ -32,6 +32,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleClaudeSessionResumeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Claude session resume toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        claudeSessionResume: event.target.checked,
+      },
+    });
+  };
+
   return (
     <Box sx={{ p: 2 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -49,6 +60,27 @@ export default function ExperimentalFeaturesSettings() {
           Experimental features may be incomplete or unstable and can change or be
           removed at any time. When enabled, they become visible in the app — for
           example the <strong>Waves</strong> entry in the top navigation.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.claudeSessionResume ?? false}
+              onChange={handleClaudeSessionResumeChange}
+              name="claudeSessionResume"
+            />
+          }
+          label="Reuse Claude session across turns (reduce token usage)"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          For models using the <strong>Claude&nbsp;subscription</strong> (Agent&nbsp;SDK)
+          adapter, resume one session per node instead of re-sending the whole
+          conversation each turn — so only the newest message is sent. This can
+          dramatically cut token usage on long chats. It changes how conversation
+          context reaches the model, so it is off by default; if you notice a model
+          losing track of earlier context, turn it back off.
         </Typography>
       </FormControl>
 

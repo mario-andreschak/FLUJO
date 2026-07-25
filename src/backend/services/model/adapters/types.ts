@@ -39,6 +39,18 @@ export interface CompletionInput {
    */
   conversationId?: string;
   nodeId?: string;
+  /**
+   * Opt-in to Agent SDK session REUSE for self-orchestrating adapters (Claude
+   * subscription) — issue #154. When true (and `conversationId`+`nodeId` are
+   * present and a reusable session exists for this node), the adapter resumes
+   * the persisted SDK session and sends only the per-turn delta instead of
+   * re-flattening the whole history. When false/omitted the adapter always
+   * re-flattens (the always-correct fallback). Gated by the experimental
+   * `claudeSessionResume` setting and only set for full-history nodes (a
+   * wire-scoped view can't be reconciled against the session's watermark).
+   * Request/response adapters ignore it.
+   */
+  sessionResume?: boolean;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionTool[];
   /** Sampling temperature. */

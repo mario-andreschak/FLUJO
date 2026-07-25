@@ -134,24 +134,23 @@ function isHandoffName(name: string): boolean {
  * runs are unchanged (preserving the #89/#87 prefix-cache stability); only
  * flows that previously LOST their tool history change.
  *
- * KNOWN LIMITATION (#87) — quadratic re-send: every node call spawns a fresh
- * `query()` (a new `claude` subprocess, no `resume`/`session_id`) and re-sends
- * the ENTIRE prior conversation flattened here. Only `systemPrompt` + tool defs
- * form a cacheable prefix; the conversation body is re-tokenized each turn, so
+ * QUADRATIC RE-SEND (#87) and its fix (#154): by DEFAULT every node call spawns
+ * a fresh `query()` (a new `claude` subprocess, no `resume`) and re-sends the
+ * ENTIRE prior conversation flattened here. Only `systemPrompt` + tool defs form
+ * a cacheable prefix; the conversation body is re-tokenized each turn, so
  * cumulative input grows ~O(n^2) with conversation length. The reporting side of
  * this was fixed by surfacing cache RE-READ tokens separately (see claudeUsage
- * .ts) so warmed-cache reads stop inflating the headline. The efficiency side
- * — reusing the SDK session per conversation via `resume` + a persisted
- * `session_id` and sending only the per-turn delta — is tracked as issue #154.
+ * .ts) so warmed-cache reads stop inflating the headline.
  *
- * #154 STATUS: the enabling infrastructure has landed (Phase 0/1) — a per-
- * `(conversationId, nodeId)` session registry (claudeSessionStore.ts) that keys
- * on a prefix hash of `systemPrompt` + tool set and invalidates on prefix change
- * / history divergence / error / handoff, plus capture of the SDK `session_id`
- * here and per-turn token instrumentation. The behaviour change itself (flipping
- * the send path to `resume` + delta) is the next increment, gated on live
- * token-curve verification because it touches conversation-context correctness.
- * Until then this flatten path remains the always-correct behaviour and fallback.
+ * #154 STATUS: the efficiency fix — reuse the SDK session per `(conversationId,
+ * nodeId)` via `resume` and send only the per-turn delta — is now IMPLEMENTED,
+ * behind the experimental `claudeSessionResume` setting (threaded as
+ * `CompletionInput.sessionResume`). When it is ON and a reusable session exists,
+ * `createCompletion` resumes that session (so its prior turns are loaded
+ * natively) and this function is called only over the DELTA messages. When it is
+ * OFF — the default — this flatten path over the whole history remains the
+ * always-correct behaviour and the fallback whenever a session can't be reused
+ * (prefix change, history divergence, error, handoff, or a scoped wire view).
  */
 export function buildUserMessage(
   messages: OpenAI.ChatCompletionMessageParam[],
@@ -329,6 +328,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     conversationId,
     nodeId,
     runResourceMarkers,
+    sessionResume,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
     // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
@@ -344,16 +344,19 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
 
-    const { systemPrompt, content: userContent } = buildUserMessage(messages, runResourceMarkers);
+    // The FULL flatten of the whole history. `systemPrompt` is the hoisted,
+    // prefix-stable system block (unchanged turn to turn for a given node); its
+    // `content` is the always-correct fallback we send when NOT resuming.
+    const { systemPrompt, content: fullContent } = buildUserMessage(messages, runResourceMarkers);
 
     // #154 session tracking. When the caller identifies the conversation+node,
     // key a reusable Agent SDK session on a hash of the reusable prefix
     // (systemPrompt + tool set). We capture the SDK `session_id` below and, once
-    // the run succeeds, record it so a later turn of the SAME single-node Flow
-    // could `resume` instead of re-flattening the whole history. This increment
-    // records + measures only (the flatten path below is unchanged); the resume
-    // send-path flip is the follow-up. `findReusableSession` here surfaces, per
-    // turn, whether reuse WOULD be possible — the Phase-0 measurement signal.
+    // the run succeeds, record it (watermarked by the total message count the
+    // session now reflects) so a later turn of the SAME single-node Flow can
+    // `resume` instead of re-flattening the whole history. `findReusableSession`
+    // surfaces whether reuse is possible this turn — used both as the Phase-0
+    // measurement signal AND, when `sessionResume` is on, to actually resume.
     const sessionTracking =
       conversationId && nodeId
         ? {
@@ -365,6 +368,43 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
         : undefined;
     let capturedSessionId: string | undefined;
+
+    // Decide the send path (#154). When session reuse is enabled AND a reusable
+    // session exists for this (conversation, node) with a matching prefix and a
+    // non-shrunk history, RESUME it and send only the messages appended since
+    // the session's watermark (`seenMessageCount`) — the SDK already holds every
+    // prior turn NATIVELY, so re-sending them would duplicate context. Otherwise
+    // fall back to the full flatten (the always-correct path). The systemPrompt
+    // is still passed on resume: the SDK applies it per-invocation (it is not
+    // part of the persisted transcript), and the prefix-hash match guarantees it
+    // is byte-identical to what the session was built with.
+    let resumeSessionId: string | undefined;
+    let userContent: string | Anthropic.ContentBlockParam[] = fullContent;
+    if (sessionResume && sessionTracking) {
+      const reusable = findReusableSession(
+        sessionTracking.key,
+        sessionTracking.prefixHash,
+        messages.length,
+      );
+      // Only resume when there are genuinely new messages beyond the watermark;
+      // an empty delta would mean "nothing new to say" (degenerate) — fall back
+      // to the full flatten rather than send an empty turn.
+      if (reusable && messages.length > reusable.seenMessageCount) {
+        const delta = buildUserMessage(messages.slice(reusable.seenMessageCount), runResourceMarkers);
+        // `content` is a string OR a content-block array; both expose `.length`,
+        // so a non-empty delta means there is genuinely something new to send.
+        if (delta.content.length > 0) {
+          resumeSessionId = reusable.sessionId;
+          userContent = delta.content;
+          log.debug('Claude subscription resuming session (#154)', {
+            key: sessionTracking.key,
+            resumeSessionId,
+            seenMessageCount: reusable.seenMessageCount,
+            deltaMessages: messages.length - reusable.seenMessageCount,
+          });
+        }
+      }
+    }
 
     const usedNames = new Set<string>();
     // Spawn-with-brief (issue #156): a routing model may call handoff tools
@@ -559,6 +599,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         env: childEnv,
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
+        // #154: resume the persisted session so its prior turns are loaded
+        // NATIVELY and only the delta (userContent above) is sent this turn.
+        // forkSession is left unset ⇒ the resumed session CONTINUES (same id,
+        // appends), which is what accumulates context across turns.
+        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
         // Disable Claude Code's built-in tool suite so ONLY FLUJO's MCP tools are
         // offered to the model (issue #166). `tools: []` is the SDK-documented
@@ -757,37 +802,6 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       totalOutputTokens,
     });
 
-    // #154 session bookkeeping + Phase-0 instrumentation. A handoff routes to a
-    // different node with fresh context, so drop the session; a normal turn
-    // records the captured session for a potential future `resume`. Either way,
-    // log the per-turn token split and whether a reusable session WAS available
-    // this turn — the measurement signal that quantifies the pending resume win.
-    if (sessionTracking) {
-      const reusableSessionAvailable = Boolean(
-        findReusableSession(sessionTracking.key, sessionTracking.prefixHash, messages.length),
-      );
-      if (handoffCalls.length > 0 || !capturedSessionId) {
-        invalidateSession(sessionTracking.key);
-      } else {
-        recordSession(sessionTracking.key, {
-          sessionId: capturedSessionId,
-          prefixHash: sessionTracking.prefixHash,
-          seenMessageCount: messages.length,
-        });
-      }
-      log.debug('Claude session usage (#154)', {
-        conversationId,
-        nodeId,
-        reusableSessionAvailable,
-        capturedSession: Boolean(capturedSessionId),
-        inputMessages: messages.length,
-        promptTokens,
-        cacheReadTokens,
-        completionTokens,
-        endedByHandoff: handoffCalls.length > 0,
-      });
-    }
-
     // The per-tool assistant(tool_call)+tool(result) pairs, and now each turn's
     // narration text, were already recorded and streamed live as they happened
     // (see recordToolPair and the `assistant` branch above). So here we only add
@@ -814,6 +828,45 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
     } else if (!streamedText) {
       recordMessage({ role: 'assistant', content: finalText || '' });
+    }
+
+    // #154 session bookkeeping + instrumentation. Runs AFTER the whole transcript
+    // is recorded, so the watermark reflects EVERY message the session now holds:
+    // this call's INPUT (`messages`) plus everything the SDK just generated
+    // (`transcript`) — which the caller (ModelHandler) appends to the
+    // conversation verbatim. The next turn's delta is therefore exactly the new
+    // messages beyond this count. A handoff routes to a different node with fresh
+    // context, so drop the session; a normal turn records the captured session
+    // (same id when resumed with forkSession unset, a fresh id on a first run).
+    // `reusableSessionAvailable` is logged as the measurement signal.
+    if (sessionTracking) {
+      const reusableSessionAvailable = Boolean(
+        findReusableSession(sessionTracking.key, sessionTracking.prefixHash, messages.length),
+      );
+      if (handoffCalls.length > 0 || !capturedSessionId) {
+        invalidateSession(sessionTracking.key);
+      } else {
+        recordSession(sessionTracking.key, {
+          sessionId: capturedSessionId,
+          prefixHash: sessionTracking.prefixHash,
+          seenMessageCount: messages.length + transcript.length,
+        });
+      }
+      log.debug('Claude session usage (#154)', {
+        conversationId,
+        nodeId,
+        sessionResume: Boolean(sessionResume),
+        resumedThisTurn: Boolean(resumeSessionId),
+        reusableSessionAvailable,
+        capturedSession: Boolean(capturedSessionId),
+        inputMessages: messages.length,
+        transcriptMessages: transcript.length,
+        watermark: messages.length + transcript.length,
+        promptTokens,
+        cacheReadTokens,
+        completionTokens,
+        endedByHandoff: handoffCalls.length > 0,
+      });
     }
 
     const completion: OpenAI.Chat.Completions.ChatCompletion = {

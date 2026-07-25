@@ -96,6 +96,16 @@ export interface OnboardingSettings {
 export interface ExperimentalSettings {
   /** When true, experimental UI (e.g. the Waves nav entry) is revealed. */
   enabled: boolean;
+  /**
+   * When true, the Claude Subscription adapter REUSES its Agent SDK session
+   * across turns of the same single-node Flow — resuming the persisted session
+   * (`resume`) and sending only the per-turn delta instead of re-flattening the
+   * whole conversation each turn (issue #154). Off by default: it changes how
+   * conversation context reaches the model, so it stays opt-in until verified on
+   * real token curves. Independent of `enabled` (a backend behaviour, not a UI
+   * reveal). A missing value is treated as disabled.
+   */
+  claudeSessionResume?: boolean;
 }
 
 /**

@@ -31,6 +31,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
+import { loadItem } from '@/utils/storage/backend';
+import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
@@ -182,6 +184,23 @@ export class ModelHandler {
       return isCancelledByAncestry(conversationId, FlowExecutor.conversationStates);
     } catch (err) {
       log.warn(`Cancellation check failed for conversation ${conversationId}`, { err });
+      return false;
+    }
+  }
+
+  /**
+   * Read the experimental `claudeSessionResume` flag (issue #154) from the
+   * persisted Settings blob. Reading the backend storage directly is fine here
+   * — the HTTP-route lock gate does not apply to in-process reads, and Settings
+   * are not encrypted. Best-effort: any failure (or a missing value) reads as
+   * disabled, so the adapter keeps its always-correct full-flatten behaviour.
+   */
+  private static async isClaudeSessionResumeEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.claudeSessionResume);
+    } catch (err) {
+      log.warn('Failed to read claudeSessionResume setting; defaulting to disabled', { err });
       return false;
     }
   }
@@ -500,6 +519,7 @@ export class ModelHandler {
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
+    let modelAdapter: string | undefined;
     const nodeDisplayName = nodeName;
     try {
       const model = await modelService.getModel(modelId);
@@ -508,10 +528,21 @@ export class ModelHandler {
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
+        modelAdapter = model.adapter;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    // #154 session reuse (experimental). Only for the self-orchestrating Claude
+    // subscription adapter, only for FULL-HISTORY nodes (a scoped `wireMessages`
+    // view can't be reconciled against the session's message-count watermark),
+    // and only when the experimental setting is on. When off/ineligible the
+    // adapter always re-flattens the whole history (the correct fallback).
+    const sessionResume =
+      modelAdapter === 'claude-cli' && !wireMessages
+        ? await ModelHandler.isClaudeSessionResumeEnabled()
+        : false;
 
     // Resolve the effective agentic-turn cap. Precedence: per-node override →
     // bound-model setting → system default (50). This replaces the former
@@ -643,6 +674,7 @@ export class ModelHandler {
       nodeId,
       localToolExecutors,
       runResourceMarkers,
+      sessionResume,
     });
 
     if (!response.success) {
@@ -788,6 +820,10 @@ export class ModelHandler {
        * the producing tool_call_id; used by self-orchestrating adapters for
        * resource-aware truncation markers (issue #168). */
       runResourceMarkers?: Map<string, ToolResourceMarker>;
+      /** #154: opt-in to Agent SDK session reuse (resume + delta) for the Claude
+       * subscription adapter. Resolved by callModel from the experimental setting
+       * and node eligibility. */
+      sessionResume?: boolean;
     }
   ): Promise<Result<ModelCallResult>> {
     // Add verbose logging of the input parameters
@@ -971,6 +1007,7 @@ export class ModelHandler {
               conversationId: opts?.conversationId,
               nodeId: opts?.nodeId,
               runResourceMarkers: opts?.runResourceMarkers,
+              sessionResume: opts?.sessionResume,
             }));
           } finally {
             stopCancelWatch();
