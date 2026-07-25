@@ -13,6 +13,14 @@ const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 // resolved it is used verbatim, so larger caps are honored (issue #173).
 const DEFAULT_MAX_TOKENS = 8192;
 
+const CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const modelCapabilityCache = new Map<string, { supportsTemperature: boolean; expiresAt: number }>();
+
+/** Clears the capability cache. Call in tests between cases. */
+export function clearModelCapabilityCache(): void {
+  modelCapabilityCache.clear();
+}
+
 /**
  * Static denylist of model-name substrings that no longer accept the
  * `temperature` sampling parameter (Anthropic deprecated it for adaptive-
@@ -25,7 +33,7 @@ const DEFAULT_MAX_TOKENS = 8192;
  *   that the retry path catches; a missing temperature on a model that wants it
  *   would silently change behaviour.
  */
-const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
+export const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-opus-4-9',
@@ -35,13 +43,72 @@ const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
   'claude-haiku-5',
 ] as const;
 
+async function fetchTemperatureSupportFromApi(
+  client: Anthropic,
+  modelName: string
+): Promise<boolean | null> {
+  try {
+    const model = await client.models.retrieve(modelName);
+    const caps = (model as unknown as Record<string, unknown>)['capabilities'] as Record<string, unknown> | undefined;
+    const thinking = caps?.['thinking'] as Record<string, unknown> | undefined;
+    const types = thinking?.['types'] as Record<string, unknown> | undefined;
+    const adaptive = types?.['adaptive'] as Record<string, unknown> | undefined;
+    if (typeof adaptive?.['supported'] === 'boolean') {
+      // adaptive.supported === true → model uses only adaptive thinking → no temperature
+      return !adaptive['supported'];
+    }
+    return null; // capability field absent — unknown
+  } catch {
+    return null; // API unavailable or model not returned — fall back to static list
+  }
+}
+
 /**
  * Returns true when the Anthropic model is expected to accept the `temperature`
  * parameter; false for models that reject it with a 400.
+ *
+ * Resolution order:
+ * 1. Cache hit (keyed by lowercase model name, TTL 5 min).
+ * 2. Live API lookup via client.models.retrieve (when client is provided).
+ * 3. Static denylist fallback (TEMPERATURE_DEPRECATED_SUBSTRINGS).
  */
-export function anthropicModelSupportsTemperature(modelName: string): boolean {
-  const lower = modelName.toLowerCase();
-  return !TEMPERATURE_DEPRECATED_SUBSTRINGS.some(s => lower.includes(s));
+export async function anthropicModelSupportsTemperature(
+  modelName: string,
+  client?: Anthropic
+): Promise<boolean> {
+  const key = modelName.toLowerCase();
+
+  // 1. Cache hit
+  const cached = modelCapabilityCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.supportsTemperature;
+  }
+
+  // 2. Live API lookup
+  if (client) {
+    const apiResult = await fetchTemperatureSupportFromApi(client, modelName);
+    if (apiResult !== null) {
+      modelCapabilityCache.set(key, {
+        supportsTemperature: apiResult,
+        expiresAt: Date.now() + CAPABILITY_CACHE_TTL_MS,
+      });
+      return apiResult;
+    }
+    log.debug(
+      'Anthropic Models API returned no temperature capability info; using static denylist',
+      { model: modelName }
+    );
+  }
+
+  // 3. Static denylist fallback
+  const staticResult = !TEMPERATURE_DEPRECATED_SUBSTRINGS.some(s => key.includes(s));
+  if (client) {
+    modelCapabilityCache.set(key, {
+      supportsTemperature: staticResult,
+      expiresAt: Date.now() + CAPABILITY_CACHE_TTL_MS,
+    });
+  }
+  return staticResult;
 }
 
 /**
@@ -245,7 +312,10 @@ export class AnthropicAdapter implements CompletionAdapter {
     const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
     const anthropicTools = toAnthropicTools(tools);
 
-    const includeTemperature = anthropicModelSupportsTemperature(model.name);
+    // NOTE: anthropicModelSupportsTemperature is now async (issue #275): it first
+    // checks a short-lived cache, then queries the Anthropic Models API for
+    // live capability data, and finally falls back to the static denylist.
+    const includeTemperature = await anthropicModelSupportsTemperature(model.name, client);
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: model.name,
       max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -282,6 +352,88 @@ export class AnthropicAdapter implements CompletionAdapter {
         const paramsWithoutTemp = { ...params };
         delete (paramsWithoutTemp as Partial<typeof paramsWithoutTemp>).temperature;
         resp = await client.messages.create(paramsWithoutTemp, signal ? { signal } : undefined);
+      } else {
+        throw err;
+      }
+    }
+    return { completion: toChatCompletion(model.name, resp) };
+  }
+
+  /**
+   * Streaming variant of createCompletion: uses the Anthropic SDK's
+   * client.messages.stream() helper to open a native streaming connection,
+   * then collects the final assembled Message via stream.finalMessage().
+   *
+   * AUDIT NOTE (issue #274): As of the audit at baseSha
+   * 18dbcbbbf7223aba499f4bc8f5489e5a52010ef8 there was no streaming branch in
+   * this adapter. This method adds one proactively so that the same temperature
+   * guard and catch-and-retry applied to createCompletion cannot be bypassed by
+   * callers that prefer native SDK streaming.
+   *
+   * The interface contract is identical to createCompletion: callers receive a
+   * CompletionResult containing an OpenAI-shaped ChatCompletion.
+   */
+  async createStreamCompletion({
+    model,
+    apiKey,
+    messages,
+    tools,
+    temperature,
+    maxTokens,
+    signal,
+  }: CompletionInput): Promise<CompletionResult> {
+    const client = new Anthropic({
+      apiKey,
+      ...(model.baseUrl ? { baseURL: model.baseUrl } : {}),
+      timeout: LLM_REQUEST_TIMEOUT_MS,
+    });
+
+    const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
+    const anthropicTools = toAnthropicTools(tools);
+
+    // NOTE: anthropicModelSupportsTemperature is now async (changed by issue #275).
+    const includeTemperature = await anthropicModelSupportsTemperature(model.name, client);
+    const params: Anthropic.MessageCreateParamsNonStreaming = {
+      model: model.name,
+      max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(includeTemperature ? { temperature } : {}),
+      messages: anthropicMessages,
+      ...(system ? { system } : {}),
+      ...(anthropicTools ? { tools: anthropicTools } : {}),
+    };
+
+    log.debug('createStreamCompletion via Anthropic SDK', {
+      model: model.name,
+      toolCount: anthropicTools?.length ?? 0,
+      hasSystem: Boolean(system),
+    });
+
+    let resp: Anthropic.Message;
+    try {
+      const stream = client.messages.stream(
+        params as Parameters<typeof client.messages.stream>[0],
+        signal ? { signal } : undefined
+      );
+      resp = await stream.finalMessage();
+    } catch (err) {
+      if (
+        err instanceof Anthropic.BadRequestError &&
+        err.message.includes('temperature') &&
+        err.message.toLowerCase().includes('deprecated') &&
+        'temperature' in params
+      ) {
+        log.warn(
+          'Anthropic API (streaming) rejected temperature for model; retrying without it. ' +
+            'Consider adding this model to TEMPERATURE_DEPRECATED_SUBSTRINGS.',
+          { model: model.name }
+        );
+        const paramsWithoutTemp = { ...params };
+        delete (paramsWithoutTemp as Partial<typeof paramsWithoutTemp>).temperature;
+        const retryStream = client.messages.stream(
+          paramsWithoutTemp as Parameters<typeof client.messages.stream>[0],
+          signal ? { signal } : undefined
+        );
+        resp = await retryStream.finalMessage();
       } else {
         throw err;
       }
