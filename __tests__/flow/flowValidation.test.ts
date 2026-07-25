@@ -533,6 +533,144 @@ describe('validateFlow — obsolete handoff pills (issue #180)', () => {
   });
 });
 
+describe('validateFlow — unreferenced handoff targets (issue #219)', () => {
+  const messagesFor = (r: { issues: { code: string; message: string }[] }, code: string) =>
+    r.issues.filter((i) => i.code === code).map((i) => i.message);
+
+  it('warns when an outgoing handoff target is never referenced in the prompt', () => {
+    // p can hand off to q and finish, but the prompt only mentions handoff_to_q,
+    // so handoff_to_finish is a reachable successor the model is never told about.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_q')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-target-unreferenced');
+    expect(messagesFor(r, 'handoff-target-unreferenced').join(' ')).toContain('handoff_to_finish');
+    expect(r.isRunnable).toBe(true); // warning only — never blocks a run
+  });
+
+  it('does not warn when every outgoing handoff target is referenced', () => {
+    const prompt =
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_q')} ` +
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_finish')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-target-unreferenced');
+  });
+
+  it('guard: a node with no handoff pills is never flagged for unreferenced targets', () => {
+    // No handoff pill in the prompt → not a handoff-routing node → the reverse
+    // check is skipped entirely (otherwise every successor would be noise).
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: 'just do the work' }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-target-unreferenced');
+  });
+
+  it('counts a bidirectional back-edge target as referenced (no warning)', () => {
+    const prompt =
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_b')} ` +
+      `${encodeBindingPill('tool', 'handoff', 'handoff_to_finish')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('b', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), biEdge('b', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).not.toContain('handoff-target-unreferenced');
+  });
+
+  it('warns for an unreferenced bidirectional back-edge target', () => {
+    // p reaches b via the bidirectional edge but the prompt only mentions finish.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_finish')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('b', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), biEdge('b', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-target-unreferenced');
+    expect(messagesFor(r, 'handoff-target-unreferenced').join(' ')).toContain('handoff_to_b');
+  });
+
+  it('reports both a stale pill and an unreferenced target together (both warning-only)', () => {
+    // Prompt references a stale handoff (no matching edge) and omits the real
+    // successors q and finish → forward + reverse checks both fire; still runnable.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_xyz')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('q', { boundModel: 'm1' }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'p'), edge('p', 'q'), edge('p', 'finish'), edge('q', 'finish')],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    expect(codes(r)).toContain('handoff-pill-obsolete');
+    expect(codes(r)).toContain('handoff-target-unreferenced');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('names the collision-suffixed variant when two successors slug to the same base', () => {
+    // Two successors both labelled 'Claude Opus' slug to handoff_to_claude_opus and
+    // handoff_to_claude_opus_2 (input/edge order). Prompt references only the first,
+    // so the _2 variant must be the one reported as unreferenced.
+    const prompt = `${encodeBindingPill('tool', 'handoff', 'handoff_to_claude_opus')}`;
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        processNode('p', { boundModel: 'm1', promptTemplate: prompt }),
+        processNode('a', { boundModel: 'm1' }, 'Claude Opus'),
+        processNode('b', { boundModel: 'm1' }, 'Claude Opus'),
+        finishNode(),
+      ],
+      edges: [
+        edge('start', 'p'),
+        edge('p', 'a'),
+        edge('p', 'b'),
+        edge('a', 'finish'),
+        edge('b', 'finish'),
+      ],
+    };
+    const r = validateFlow(flow, { models: [{ id: 'm1' }] });
+    const msgs = messagesFor(r, 'handoff-target-unreferenced');
+    expect(msgs.join(' ')).toContain('handoff_to_claude_opus_2');
+    // the referenced base name must NOT be reported as unreferenced
+    expect(msgs.some((m) => /handoff_to_claude_opus[^_0-9]/.test(m) && !m.includes('handoff_to_claude_opus_2'))).toBe(false);
+  });
+});
+
 describe('validateFlow — MCP server with zero tools (issue #180)', () => {
   it('warns when a process node is wired to a connected server exposing 0 tools', () => {
     const flow: VFlow = {

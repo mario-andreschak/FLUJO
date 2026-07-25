@@ -770,6 +770,9 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     // Built lazily (only if a handoff pill actually appears) so nodes without
     // handoff pills pay nothing.
     let handoffNames: Set<string> | null = null;
+    // Handoff tool names the prompt actually references. Used by the reverse check
+    // below to spot outgoing handoff targets the model is never told to route to.
+    const referencedHandoffNames = new Set<string>();
     const seen = new Set<string>();
     for (const binding of findBindings(promptTemplate)) {
       // Handoff pills aren't server-bound: their validity is whether the named
@@ -780,6 +783,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         const hkey = `handoff:${binding.name}`;
         if (seen.has(hkey)) continue;
         seen.add(hkey);
+        referencedHandoffNames.add(binding.name);
         if (!handoffNames) handoffNames = handoffToolNamesForNode(node.id, nodes, edges);
         if (!handoffNames.has(binding.name)) {
           add(
@@ -814,6 +818,26 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" no longer provides.`,
           node
         );
+      }
+    }
+
+    // --- Reverse handoff check (issue #219): outgoing handoff targets the prompt
+    // never references, so the model may never route there. Only run on nodes that
+    // already use >=1 handoff pill (i.e. handoff-routing nodes); a node with no
+    // handoff pills may route via edge-conditions/post-routing or be mid-authoring,
+    // so flagging every successor would be pure noise. Report-only, never blocks.
+    if (referencedHandoffNames.size > 0) {
+      const validHandoffNames =
+        handoffNames ?? handoffToolNamesForNode(node.id, nodes, edges);
+      for (const toolName of validHandoffNames) {
+        if (!referencedHandoffNames.has(toolName)) {
+          add(
+            'warning',
+            'handoff-target-unreferenced',
+            `Process node "${getNodeLabel(node)}" can hand off to "${toolName}" but its prompt never references \${tool:handoff__${toolName}}, so the model may never route there.`,
+            node
+          );
+        }
       }
     }
   }
