@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { withTransientRetry } from '@/backend/utils/transientRetry';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
 
@@ -10,6 +11,11 @@ const log = createLogger('backend/services/model/adapters/openaiAdapter');
  * OpenAI, OpenRouter, X.ai, Ollama, and the "OpenAI Format" variants of Gemini
  * and Anthropic. Uses the shared hardened client (keep-alive disabled) to avoid
  * the intermittent "Premature close" transport bug.
+ *
+ * A thin `withTransientRetry` wrapper re-issues the HTTP request (up to 3
+ * total attempts, 500 ms → 1 s back-off) when the provider resets the
+ * connection while reading the response body — the ECONNRESET / "Invalid
+ * response body" window that the OpenAI SDK's own `maxRetries` cannot cover.
  */
 export class OpenAiAdapter implements CompletionAdapter {
   async createCompletion({
@@ -50,9 +56,13 @@ export class OpenAiAdapter implements CompletionAdapter {
 
     // No `stream: true`, so the SDK resolves to a ChatCompletion. The abort
     // signal (Stop button) cancels the in-flight HTTP request.
-    const completion = (await openai.chat.completions.create(
-      requestParams,
-      signal ? { signal } : undefined
+    // withTransientRetry re-issues the entire request when a transient
+    // transport error (ECONNRESET, "Invalid response body", …) is detected
+    // while reading the response body — after the provider has already sent
+    // HTTP 200 OK, where the SDK's own maxRetries is no longer in the path.
+    const completion = (await withTransientRetry(
+      () => openai.chat.completions.create(requestParams, signal ? { signal } : undefined),
+      { signal }
     )) as OpenAI.Chat.Completions.ChatCompletion;
     return { completion };
   }
