@@ -34,6 +34,19 @@ jest.mock('@/backend/services/mcp/connection', () => ({
   safelyCloseClient: jest.fn(async () => {}),
 }));
 
+// The experimental beta-protocol gate reads the Settings blob from on-disk
+// storage on every connect (betaClient.ts). Same fake-timer reasoning as the
+// registry mock below: mock it to pure, no-I/O behavior so the gate resolves
+// within advanceTimersByTimeAsync — and so this suite is hermetic against the
+// developer's local settings.
+jest.mock('@/backend/services/mcp/betaClient', () => ({
+  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+  createNewBetaClient: jest.fn(),
+  createBetaTransport: jest.fn(),
+  isBetaClient: jest.fn(() => false),
+  negotiatedProtocolVersion: jest.fn(() => undefined),
+}));
+
 // The built-in-server registry reads persisted overrides from on-disk storage
 // (loadItem). This suite is about MCPService's reconnect logic in isolation and
 // runs under fake timers; a real fs read inside the retry callback would not

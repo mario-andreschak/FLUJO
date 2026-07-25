@@ -3,6 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPToolResponse as ToolResponse, MCPServiceResponse } from '@/shared/types/mcp';
+import { isBetaClient } from './betaClient';
 
 const log = createLogger('backend/services/mcp/tools');
 
@@ -158,18 +159,24 @@ export async function callTool(
     log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
 
     log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
-    const response = await client.callTool(
-      { name: toolName, arguments: normalizedArgs },
-      undefined,
-      {
-        timeout: timeoutMs,
-        resetTimeoutOnProgress: true,
-        onprogress: (progress) => {
-          log.debug(`Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ''}${progress.message ? ` — ${progress.message}` : ''}`);
-          onProgress?.(progress);
-        },
-      }
-    );
+    const callOptions = {
+      timeout: timeoutMs,
+      resetTimeoutOnProgress: true,
+      onprogress: (progress: ToolCallProgress) => {
+        log.debug(`Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ''}${progress.message ? ` — ${progress.message}` : ''}`);
+        onProgress?.(progress);
+      },
+    };
+    // The ONE v1/v2 signature difference FLUJO hits (see betaClient.ts): v1 is
+    // callTool(params, resultSchema?, options?), the v2-beta SDK dropped the
+    // schema parameter — passing options in the v1 slot would silently discard
+    // the timeout and progress forwarding.
+    const response = isBetaClient(client)
+      ? await (client.callTool as unknown as (
+          params: { name: string; arguments: Record<string, unknown> },
+          options?: typeof callOptions
+        ) => ReturnType<Client['callTool']>).call(client, { name: toolName, arguments: normalizedArgs }, callOptions)
+      : await client.callTool({ name: toolName, arguments: normalizedArgs }, undefined, callOptions);
 
     return {
       success: true,

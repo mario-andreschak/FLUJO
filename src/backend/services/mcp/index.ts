@@ -100,6 +100,12 @@ import {
   shouldRecreateClient,
   safelyCloseClient
 } from './connection';
+import {
+  isMcpBetaProtocolEnabled,
+  createNewBetaClient,
+  createBetaTransport,
+  negotiatedProtocolVersion,
+} from './betaClient';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
 import { INTERNAL_SERVER_NAME } from './internalServerConfig';
 import {
@@ -532,6 +538,11 @@ export class MCPService {
       // header material — and thus the key — changes.
       config = await resolveConfigHeaders(config);
 
+      // Experimental v2-beta protocol (betaClient.ts). Resolved once per attempt so
+      // shouldRecreateClient and the factories below agree; websocket configs always
+      // stay on the v1 SDK (the v2 SDK has no websocket transport).
+      const useBeta = (await isMcpBetaProtocolEnabled()) && config.transport !== 'websocket';
+
       // Check if we already have a client for this server
       let client = this.clients.get(config.name);
 
@@ -547,7 +558,7 @@ export class MCPService {
       // checks here are cheap and local (no network round-trip), preserving the fast
       // path for the common case.
       if (client) {
-        const { needsNewClient, reason } = shouldRecreateClient(client, config);
+        const { needsNewClient, reason } = shouldRecreateClient(client, config, useBeta);
         if (!needsNewClient) {
           log.info(`connectServer: Server ${config.name} is already connected`);
           this.lastConnectionError.delete(config.name);
@@ -570,14 +581,19 @@ export class MCPService {
         client = undefined;
       }
 
-      // Create a new client
-      client = createNewClient(config);
-      const transport = createTransport(config);
+      // Create a new client (v2-beta when the experimental toggle is on — the beta
+      // client negotiates per server and falls back to the classic handshake, so
+      // existing servers keep working either way).
+      client = useBeta ? createNewBetaClient(config) : createNewClient(config);
+      const transport = useBeta ? createBetaTransport(config) : createTransport(config);
 
-      // Add stderr capture
-      if (transport instanceof StdioClientTransport && transport.stderr) {
+      // Add stderr capture. Duck-typed on the stderr stream (present on both the v1
+      // and v2-beta stdio transports when spawned with stderr: 'pipe') instead of a
+      // v1 instanceof, so beta stdio servers get the same capture.
+      const stdioStderr = (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
+      if (stdioStderr && typeof stdioStderr.on === 'function') {
         const serverName = config.name;
-        transport.stderr.on('data', (data: Buffer) => {
+        stdioStderr.on('data', (data: Buffer) => {
           const stderrMessage = data.toString();
           log.warn(`stderr: [${serverName}]: ${stderrMessage}`);
 
@@ -738,7 +754,11 @@ export class MCPService {
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
 
-      log.info(`connectServer: Successfully connected to ${config.name}`);
+      const negotiated = negotiatedProtocolVersion(client);
+      log.info(
+        `connectServer: Successfully connected to ${config.name}` +
+        (negotiated ? ` (beta SDK, negotiated MCP protocol ${negotiated})` : '')
+      );
       return { success: true };
     } catch (error) {
       log.error(`connectServer: Failed to connect to server ${config.name}:`, error);
@@ -856,7 +876,7 @@ export class MCPService {
 
     const stderrLogs: string[] = [];
     let client: Client | null = null;
-    let transport: ReturnType<typeof createTransport> | null = null;
+    let transport: ReturnType<typeof createTransport> | ReturnType<typeof createBetaTransport> | null = null;
 
     try {
       // For remote (streamable/sse) servers the browser may send back a MASKED secret header
@@ -881,17 +901,22 @@ export class MCPService {
       // the live connection would (shares createTransport). Global bindings / encrypted
       // secrets are resolved here; plain values pass through unchanged.
       const connectConfig = await resolveConfigHeaders(toTest);
-      client = createNewClient(connectConfig);
-      transport = createTransport(connectConfig);
+      // Same experimental v2-beta routing as the live connection, so Test Run
+      // probes exactly what connectServer would build.
+      const useBeta = (await isMcpBetaProtocolEnabled()) && connectConfig.transport !== 'websocket';
+      client = useBeta ? createNewBetaClient(connectConfig) : createNewClient(connectConfig);
+      transport = useBeta ? createBetaTransport(connectConfig) : createTransport(connectConfig);
 
       // Capture stdio stderr (for stdio servers) and transport errors so we can build a
       // meaningful message if the handshake fails. When a live-output sink is attached
       // (issue #64), also forward each chunk AS IT ARRIVES so a slow cold `npx`/`uvx`
       // start fills the console instead of looking frozen. (The child's stdout is the
       // MCP JSON-RPC channel owned by the SDK transport, so only stderr + lifecycle
-      // markers are reliably streamable for stdio.)
-      if (transport instanceof StdioClientTransport && transport.stderr) {
-        transport.stderr.on('data', (data: Buffer) => {
+      // markers are reliably streamable for stdio.) Duck-typed on the stderr stream so
+      // the v2-beta stdio transport is covered too.
+      const probeStderr = (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
+      if (probeStderr && typeof probeStderr.on === 'function') {
+        probeStderr.on('data', (data: Buffer) => {
           const chunk = data.toString();
           stderrLogs.push(chunk);
           emit({ type: 'stderr', data: chunk });

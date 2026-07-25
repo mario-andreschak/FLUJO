@@ -43,6 +43,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleMcpBetaProtocolChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`MCP beta protocol toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        mcpBetaProtocol: event.target.checked,
+      },
+    });
+  };
+
   return (
     <Box sx={{ p: 2 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -81,6 +92,29 @@ export default function ExperimentalFeaturesSettings() {
           dramatically cut token usage on long chats. It changes how conversation
           context reaches the model, so it is off by default; if you notice a model
           losing track of earlier context, turn it back off.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.mcpBetaProtocol ?? false}
+              onChange={handleMcpBetaProtocolChange}
+              name="mcpBetaProtocol"
+            />
+          }
+          label="MCP beta protocol (spec 2026-07-28)"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Connect to MCP servers using the <strong>v2 beta SDK</strong> with automatic
+          version negotiation: servers that already speak the new stateless
+          2026-07-28 protocol are used natively, and every other server
+          transparently falls back to the classic handshake — so existing servers
+          keep working. The beta SDK&apos;s API may still change before its stable
+          release; if a server misbehaves with this on, turn it off and reconnect.
+          Websocket servers always use the stable SDK. Changing this rebuilds
+          server connections on their next use.
         </Typography>
       </FormControl>
 

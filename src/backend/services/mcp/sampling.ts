@@ -76,10 +76,22 @@ function toOpenAiMessages(params: {
  * sampling capability.
  */
 export function registerSamplingHandler(client: Client, config: MCPServerConfig): void {
+  client.setRequestHandler(CreateMessageRequestSchema, createSamplingHandler(config));
+}
+
+/**
+ * The `sampling/createMessage` handler body, shared by the v1 registration
+ * above and the v2-beta client (betaClient.ts). Each created handler carries
+ * its own rolling-window rate-limit state, matching the per-client lifetime
+ * the state had when it lived inside registerSamplingHandler.
+ */
+export function createSamplingHandler(
+  config: MCPServerConfig
+): (request: { params?: unknown }) => Promise<CreateMessageResult> {
   // Timestamps of recent sampling calls, for the rolling-window rate limit.
   const recentCalls: number[] = [];
 
-  client.setRequestHandler(CreateMessageRequestSchema, async (request): Promise<CreateMessageResult> => {
+  return async (request): Promise<CreateMessageResult> => {
     const policy = policyOf(config);
     if (!policy?.enabled || !policy.modelId) {
       throw new McpError(ErrorCode.InvalidRequest, 'Sampling is not enabled for this server');
@@ -125,5 +137,5 @@ export function registerSamplingHandler(client: Client, config: MCPServerConfig)
       model: model.name,
       stopReason: 'endTurn',
     };
-  });
+  };
 }

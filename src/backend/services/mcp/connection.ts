@@ -38,7 +38,19 @@ function capabilityKey(config: MCPServerConfig): string {
 // shouldRecreateClient can compare config-to-config (see stdioConfigKey /
 // httpConfigKey below). __flujoStdioKey covers stdio; __flujoHttpKey covers the
 // streamable/SSE (HTTP) auth material that the URL check alone cannot see.
-interface TransportWithConfigKey { __flujoStdioKey?: string; __flujoHttpKey?: string }
+// __flujoKind identifies the transport type without instanceof so the check also
+// works for v2-beta transports (different classes, see betaClient.ts).
+export interface TransportWithConfigKey {
+  __flujoStdioKey?: string;
+  __flujoHttpKey?: string;
+  __flujoKind?: 'stdio' | 'streamable' | 'sse' | 'websocket';
+}
+
+// Marker stashed on clients built by the v2-beta path (betaClient.ts), so
+// shouldRecreateClient can rebuild a connection when the experimental
+// mcpBetaProtocol toggle flips — a v1 client must never be reused as a beta
+// client or vice versa.
+export interface ClientWithBetaMarker { __flujoBeta?: boolean }
 
 const log = createLogger('backend/services/mcp/connection');
 
@@ -91,7 +103,7 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
  * keys/values. Values are normally already resolved plain strings (see resolveConfigHeaders);
  * this stays defensive against a residual `{ value, metadata }` object by reading `.value`.
  */
-function flattenCustomHeaders(headers: Record<string, MCPHeaderValue>): Record<string, string> {
+export function flattenCustomHeaders(headers: Record<string, MCPHeaderValue>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, raw] of Object.entries(headers)) {
     if (!key) continue;
@@ -129,7 +141,7 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
  * restart death-spiral. So the transport is keyed with the RAW config at creation time
  * and compared raw-to-raw here.
  */
-function stdioConfigKey(config: MCPStdioConfig): string {
+export function stdioConfigKey(config: MCPStdioConfig): string {
   return JSON.stringify({
     command: config.command,
     args: config.args ?? [],
@@ -151,7 +163,7 @@ function stdioConfigKey(config: MCPStdioConfig): string {
  * acting instance) yet the planned execution still failed with `unauthorized`. The
  * transport is keyed with these fields at creation time and compared raw-to-raw here.
  */
-function httpConfigKey(config: MCPServerConfig): string {
+export function httpConfigKey(config: MCPServerConfig): string {
   // MCPStreamableConfig & MCPSSEConfig intersects to `never` (their `transport` literals
   // conflict), so read the shared HTTP fields off an explicit optional shape instead.
   const c = config as unknown as {
@@ -342,16 +354,24 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
 }
 
 /**
- * Create a stdio transport for the MCP client
+ * The fully resolved spawn parameters for a stdio server: the configured
+ * command/args after the Windows .bat rewrite and Node-toolchain resolution,
+ * the flattened env, and the absolute working directory. Shared by the v1
+ * transport factory below and the v2-beta factory (betaClient.ts) so both
+ * spawn a byte-identical process.
  */
-export function createStdioTransport(config: MCPServerConfig): StdioClientTransport {
-  log.debug('Entering createStdioTransport method');
-  
-  // Ensure we're working with a stdio config
-  if (config.transport !== 'stdio') {
-    throw new Error('Cannot create stdio transport for non-stdio config');
-  }
-  
+export interface StdioLaunch {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+}
+
+/**
+ * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
+ */
+export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
+
   // For Windows .bat files, we need to use cmd.exe to execute them
   let command = config.command;
   let args = config.args ? [...config.args] : [];
@@ -442,18 +462,34 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 
+  // Transform the env object to extract only the value part from each key
+  const transformedEnv = transformEnv(config.env);
+  log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
+
+  return { command, args, env: transformedEnv, cwd };
+}
+
+/**
+ * Create a stdio transport for the MCP client
+ */
+export function createStdioTransport(config: MCPServerConfig): StdioClientTransport {
+  log.debug('Entering createStdioTransport method');
+
+  // Ensure we're working with a stdio config
+  if (config.transport !== 'stdio') {
+    throw new Error('Cannot create stdio transport for non-stdio config');
+  }
+
+  const { command, args, env, cwd } = resolveStdioLaunch(config);
+
   // Create the transport with stderr capture
   log.info(`Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`);
 
-  // Transform the env object to extract only the value part from each key
-  const transformedEnv = transformEnv(config.env);
-
-  log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
   const transportoptions: StdioServerParameters = {
-    command: command, 
+    command: command,
     args: args,
-    env: transformedEnv,
-    cwd: cwd, 
+    env: env,
+    cwd: cwd,
     stderr: 'pipe'
   };
 
@@ -474,11 +510,16 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 }
 
 /**
- * Check if an existing client needs to be recreated
+ * Check if an existing client needs to be recreated.
+ *
+ * `useBetaProtocol` is the CURRENT value of the experimental mcpBetaProtocol
+ * setting (see betaClient.ts). A client built by the other SDK generation can
+ * never be reused — the toggle flip rebuilds the connection on next connect.
  */
 export function shouldRecreateClient(
   client: Client,
-  config: MCPServerConfig
+  config: MCPServerConfig,
+  useBetaProtocol = false
 ): { needsNewClient: boolean; reason?: string } {
   log.debug('Entering shouldRecreateClient method');
 
@@ -501,6 +542,36 @@ export function shouldRecreateClient(
   const currentCapKey = (client as unknown as ClientWithCapKey).__flujoCapKey ?? '';
   if (currentCapKey !== capabilityKey(config)) {
     return { needsNewClient: true, reason: 'Client capabilities (sampling) changed' };
+  }
+
+  // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always
+  // stay on the v1 SDK (the v2 SDK has no websocket transport), so for them the
+  // toggle is not a config change.
+  const clientIsBeta = (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
+  const wantBeta = useBetaProtocol && config.transport !== 'websocket';
+  if (clientIsBeta !== wantBeta) {
+    return {
+      needsNewClient: true,
+      reason: wantBeta ? 'Beta MCP protocol enabled' : 'Beta MCP protocol disabled',
+    };
+  }
+
+  // A v2-beta client's transports are different classes, so the v1 instanceof checks
+  // below cannot see them. Its transports carry the same raw config keys plus an
+  // explicit kind marker (stashed in betaClient.ts), so compare those instead.
+  if (clientIsBeta) {
+    const transport = client.transport as unknown as TransportWithConfigKey | undefined;
+    if (!transport || transport.__flujoKind !== config.transport) {
+      return { needsNewClient: true, reason: `Transport type changed to ${config.transport}` };
+    }
+    if (config.transport === 'stdio') {
+      if (transport.__flujoStdioKey !== stdioConfigKey(config)) {
+        return { needsNewClient: true, reason: 'Connection parameters changed' };
+      }
+    } else if (transport.__flujoHttpKey !== httpConfigKey(config)) {
+      return { needsNewClient: true, reason: `${config.transport} auth/connection parameters changed` };
+    }
+    return { needsNewClient: false };
   }
 
   // Check if transport type has changed
@@ -654,12 +725,12 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
   const gracePeriodMs = options?.gracePeriodMs ?? 15000;
   const killEscalationMs = options?.killEscalationMs ?? 5000;
   try {
-    // Check if the transport is stdio
-    if (client.transport instanceof StdioClientTransport) {
-      const stdioTransport = client.transport as StdioClientTransport;
-      const child: ChildProcess | undefined = (stdioTransport as unknown as { _process: ChildProcess | undefined })._process;
-
-      if (child && child.exitCode === null && child.signalCode === null) {
+    // Check if the transport is stdio. Duck-typed on the private _process field
+    // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
+    // instanceof, so beta-built connections get the same graceful shutdown.
+    const child: ChildProcess | undefined = (client.transport as unknown as { _process?: ChildProcess } | undefined)?._process;
+    if (child && typeof child.kill === 'function') {
+      if (child.exitCode === null && child.signalCode === null) {
         // First close stdin to signal graceful shutdown (the MCP stdio convention)
         try {
           if (child.stdin && !child.stdin.destroyed) {

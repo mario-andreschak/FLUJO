@@ -207,16 +207,25 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
 }
 
 /**
- * Register the `roots/list` request handler on a client so the server can discover the
- * workspace folders FLUJO has scoped it to. Called for EVERY client (the roots
- * capability is always declared); roots are resolved fresh on each request — config
- * re-read from storage, node overlay and global-variable values read live — so they
- * always reflect the current state without ever needing a reconnect.
+ * The `roots/list` handler body, shared by the v1 registration below and the
+ * v2-beta client (betaClient.ts): roots are resolved fresh on each request —
+ * config re-read from storage, node overlay and global-variable values read
+ * live — so they always reflect the current state without ever needing a
+ * reconnect.
  */
-export function registerRootsHandler(client: Client, config: MCPServerConfig): void {
-  client.setRequestHandler(ListRootsRequestSchema, async () => {
+export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
+  return async () => {
     const roots = await resolveServerRoots(await freshestConfig(config));
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
-  });
+  };
+}
+
+/**
+ * Register the `roots/list` request handler on a client so the server can discover the
+ * workspace folders FLUJO has scoped it to. Called for EVERY client (the roots
+ * capability is always declared).
+ */
+export function registerRootsHandler(client: Client, config: MCPServerConfig): void {
+  client.setRequestHandler(ListRootsRequestSchema, createRootsListHandler(config));
 }
