@@ -67,6 +67,50 @@ describe('buildWaveGraph lazy hover expansion (#144)', () => {
   });
 });
 
+describe('buildWaveGraph off-chain hiding on active chain (#209)', () => {
+  /** Two independent linear chains sharing one wave: r1 → a1 and r2 → a2. */
+  function multiRootWave(): Wave {
+    return {
+      id: 'm',
+      rootExecutionIds: ['r1', 'r2'],
+      nodes: [
+        cnode('r1', fixed, true),
+        cnode('a1', evt),
+        cnode('r2', fixed, true),
+        cnode('a2', evt),
+      ],
+      edges: [edge('r1', 'a1'), edge('r2', 'a2')],
+      hasCycle: false,
+    };
+  }
+
+  test('with nothing active, every root card renders', () => {
+    const g = buildWaveGraph({ wave: multiRootWave(), now: NOW, windowMs: WAVE_WINDOWS['6h'], hoveredKey: null });
+    expect(keysOf(g)).toEqual([makeKey('r1', 0), makeKey('r2', 0)]);
+  });
+
+  test('hovering one root hides the other root (and its chain)', () => {
+    const g = buildWaveGraph({ wave: multiRootWave(), now: NOW, windowMs: WAVE_WINDOWS['6h'], hoveredKey: makeKey('r1', 0) });
+    expect(keysOf(g)).toEqual([makeKey('a1', 0), makeKey('r1', 0)]);
+    // The off-chain root and its successor are gone.
+    expect(g.nodes.some((n) => n.baseId === 'r2' || n.baseId === 'a2')).toBe(false);
+  });
+
+  test('hovering a deep node keeps its ancestors and still hides off-chain roots', () => {
+    const g = buildWaveGraph({ wave: multiRootWave(), now: NOW, windowMs: WAVE_WINDOWS['6h'], hoveredKey: makeKey('a1', 0) });
+    expect(keysOf(g)).toEqual([makeKey('a1', 0), makeKey('r1', 0)]);
+    // The hovered node's spanning-tree ancestor (its root) stays visible.
+    expect(g.nodes.some((n) => n.baseId === 'r1')).toBe(true);
+    expect(g.nodes.some((n) => n.baseId === 'r2')).toBe(false);
+  });
+
+  test('switching the active chain swaps which chain is visible', () => {
+    const g = buildWaveGraph({ wave: multiRootWave(), now: NOW, windowMs: WAVE_WINDOWS['6h'], hoveredKey: makeKey('r2', 0) });
+    expect(keysOf(g)).toEqual([makeKey('a2', 0), makeKey('r2', 0)]);
+    expect(g.nodes.some((n) => n.baseId === 'r1')).toBe(false);
+  });
+});
+
 describe('buildWaveGraph recursion handling (#144)', () => {
   function cyclicWave(): Wave {
     return {

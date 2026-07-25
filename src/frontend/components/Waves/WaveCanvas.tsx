@@ -13,22 +13,53 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Box, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+import type { NodeProps } from '@xyflow/react';
 import type { Wave } from '@/shared/types/waves/waves';
 import TriggerChainNode from './TriggerChainNode';
 import ClockAnchorNode from './ClockAnchorNode';
-import { buildWaveGraph, edgeLabel, CLOCK_X, BASE_Y } from './waveGraph';
+import { buildWaveGraph, edgeLabel, CLOCK_X, BASE_Y, TIMELINE_X0, TIMELINE_W } from './waveGraph';
 import {
   DEFAULT_WAVE_WINDOW,
   WAVE_WINDOWS,
   WAVE_WINDOW_KEYS,
+  timelineTicks,
   type WaveWindowKey,
 } from './waveTimeline';
 
-const nodeTypes = { trigger: TriggerChainNode, clock: ClockAnchorNode };
+/** Y of the bottom time axis — sits just above the root lane (#209). */
+const AXIS_Y = BASE_Y - 48;
+
+/**
+ * A single non-interactive tick on the timeline axis (#209): an offset-from-now
+ * label above a short mark. Rendered as a React Flow node so it shares the card
+ * coordinate space and stays aligned under pan/zoom.
+ */
+function TimeAxisTick({ data }: NodeProps) {
+  const { label } = data as unknown as { label: string };
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        transform: 'translateX(-50%)',
+        pointerEvents: 'none',
+        userSelect: 'none',
+      }}
+    >
+      <Typography variant="caption" sx={{ fontSize: 10, opacity: 0.55, whiteSpace: 'nowrap' }}>
+        {label}
+      </Typography>
+      <Box sx={{ width: '1px', height: 14, bgcolor: 'rgba(0,0,0,0.25)', mt: 0.25 }} />
+    </Box>
+  );
+}
+
+const nodeTypes = { trigger: TriggerChainNode, clock: ClockAnchorNode, tick: TimeAxisTick };
 
 interface WaveCanvasProps {
   wave: Wave;
-  height?: number;
+  height?: number | string;
 }
 
 /**
@@ -42,7 +73,12 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
   const [now, setNow] = useState(() => Date.now());
   const [windowKey, setWindowKey] = useState<WaveWindowKey>(DEFAULT_WAVE_WINDOW);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  // Click-to-pin (#209): a pinned chain holds open (ignoring hover-out) until the
+  // canvas background is clicked. The pin always wins over transient hover.
+  const [pinnedKey, setPinnedKey] = useState<string | null>(null);
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const effectiveKey = pinnedKey ?? hoveredKey;
 
   const hasTimeline = useMemo(() => wave.nodes.some((n) => n.timing.mode === 'timeline'), [wave]);
 
@@ -66,8 +102,8 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
   }, [wave]);
 
   const graph = useMemo(
-    () => buildWaveGraph({ wave, now, windowMs, hoveredKey }),
-    [wave, now, windowMs, hoveredKey],
+    () => buildWaveGraph({ wave, now, windowMs, hoveredKey: effectiveKey }),
+    [wave, now, windowMs, effectiveKey],
   );
 
   const nodes: Node[] = useMemo(() => {
@@ -91,12 +127,25 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         isRoot: gn.isRoot,
         hasSuccessors: gn.hasSuccessors,
         expanded: gn.expanded,
+        pinned: gn.key === pinnedKey,
       },
       draggable: false,
       connectable: false,
     }));
-    return [clock, ...cards];
-  }, [graph, now]);
+    // Bottom time axis (#209): only for time-based waves, aligned to card x.
+    const ticks: Node[] = hasTimeline
+      ? timelineTicks(now, windowMs).map((t, i) => ({
+          id: `__tick_${i}__`,
+          type: 'tick',
+          position: { x: TIMELINE_X0 + t.fraction * TIMELINE_W, y: AXIS_Y },
+          data: { label: t.label },
+          draggable: false,
+          selectable: false,
+          connectable: false,
+        }))
+      : [];
+    return [clock, ...ticks, ...cards];
+  }, [graph, now, pinnedKey, hasTimeline, windowMs]);
 
   const edges: Edge[] = useMemo(() => {
     return graph.edges.map((ge) => {
@@ -139,13 +188,23 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         panOnDrag
         onNodeMouseEnter={(_e, node) => {
           if (clearTimer.current) clearTimeout(clearTimer.current);
-          setHoveredKey(node.type === 'clock' ? null : node.id);
+          if (node.type === 'clock' || node.type === 'tick') {
+            setHoveredKey(null);
+            return;
+          }
+          setHoveredKey(node.id);
         }}
         onNodeMouseLeave={() => {
           if (clearTimer.current) clearTimeout(clearTimer.current);
           // Grace period so the mouse can travel to a freshly-revealed child.
           clearTimer.current = setTimeout(() => setHoveredKey(null), 260);
         }}
+        onNodeClick={(_e, node) => {
+          if (node.type === 'clock' || node.type === 'tick') return;
+          // Toggle the pin: click the pinned node again to release it (#209).
+          setPinnedKey((prev) => (prev === node.id ? null : node.id));
+        }}
+        onPaneClick={() => setPinnedKey(null)}
         proOptions={{ hideAttribution: true }}
       >
         <Background />
@@ -169,7 +228,7 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         )}
         <Panel position="bottom-right">
           <Typography variant="caption" sx={{ opacity: 0.55, bgcolor: 'background.paper', px: 0.5, borderRadius: 0.5 }}>
-            hover a card to follow its chain
+            {pinnedKey ? 'chain pinned — click the background to release' : 'hover a card to follow its chain · click to pin'}
           </Typography>
         </Panel>
       </ReactFlow>

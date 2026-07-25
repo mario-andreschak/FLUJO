@@ -95,3 +95,66 @@ export function formatIn(runAt: number | null, now: number): string {
   if (hours > 0) return `in ${hours}h ${String(minutes).padStart(2, '0')}m`;
   return `in ${minutes}m`;
 }
+
+/* --------------------------------------------------------------------- */
+/* Time axis ticks (#209)                                                 */
+/* --------------------------------------------------------------------- */
+
+export interface TimelineTick {
+  /** Absolute timestamp (ms) the tick marks. */
+  atMs: number;
+  /** Horizontal fraction across the window `[0,1]` (0 = now, 1 = a window away). */
+  fraction: number;
+  /** Compact offset-from-now label, e.g. "now", "10m", "1h", "1h 30m". */
+  label: string;
+}
+
+/** Hard cap on rendered ticks so a pathological window can never explode them. */
+const MAX_TICKS = 200;
+
+/**
+ * Choose a sensible tick step (ms) for the bottom time axis given the window.
+ * Mirrors the card placement so ticks read naturally:
+ *   - 1h  → every 10 minutes
+ *   - 6h  → every 1 hour
+ *   - 1d  → every 4 hours
+ * Any other window falls back to ~six evenly spaced ticks.
+ */
+export function timelineTickStep(windowMs: number): number {
+  if (windowMs <= WAVE_WINDOWS['1h']) return 10 * 60 * 1000;
+  if (windowMs <= WAVE_WINDOWS['6h']) return 60 * 60 * 1000;
+  if (windowMs <= WAVE_WINDOWS['1d']) return 4 * 60 * 60 * 1000;
+  return Math.max(60 * 1000, Math.round(windowMs / 6));
+}
+
+/** Human-readable offset-from-now label for a tick. */
+function tickLabel(offsetMs: number): string {
+  if (offsetMs <= 0) return 'now';
+  const totalMinutes = Math.round(offsetMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+/**
+ * Build the tick marks for the bottom time axis, from `now` (fraction 0, left,
+ * next to the clock) out to `now + windowMs` (fraction 1, far right). Each tick's
+ * `fraction` is computed the same way as {@link timelineFraction}, so a tick and
+ * a card scheduled at the same instant land at exactly the same x. Pure and
+ * deterministic for a fixed `now`.
+ */
+export function timelineTicks(now: number, windowMs: number, step?: number): TimelineTick[] {
+  if (!Number.isFinite(now) || !Number.isFinite(windowMs) || windowMs <= 0) return [];
+  const s = step && step > 0 ? step : timelineTickStep(windowMs);
+  const out: TimelineTick[] = [];
+  for (let offset = 0; offset <= windowMs + 1 && out.length < MAX_TICKS; offset += s) {
+    out.push({
+      atMs: now + offset,
+      fraction: Math.min(1, offset / windowMs),
+      label: tickLabel(offset),
+    });
+  }
+  return out;
+}

@@ -5,6 +5,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Box, Chip, Stack, Tooltip, Typography } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import PushPinIcon from '@mui/icons-material/PushPin';
 import type { WaveChainNode } from '@/shared/types/waves/waves';
 import { triggerKindMeta } from './triggerKindMeta';
 import { formatIn } from './waveTimeline';
@@ -21,6 +22,8 @@ export interface TriggerChainNodeData {
   hasSuccessors: boolean;
   /** Its next level is currently expanded. */
   expanded: boolean;
+  /** This card is the pinned (click-to-hold) chain anchor (#209). */
+  pinned?: boolean;
   [key: string]: unknown;
 }
 
@@ -31,7 +34,7 @@ export interface TriggerChainNodeData {
  * revealed by hovering (handled by the canvas).
  */
 export default function TriggerChainNode({ data }: NodeProps) {
-  const { chainNode, now, runAt, isRoot, hasSuccessors, expanded } =
+  const { chainNode, now, runAt, isRoot, hasSuccessors, expanded, pinned } =
     data as unknown as TriggerChainNodeData;
   const meta = triggerKindMeta(chainNode.triggerKind);
 
@@ -57,9 +60,14 @@ export default function TriggerChainNode({ data }: NodeProps) {
         borderRadius: 1,
         border: '1px solid rgba(0,0,0,0.15)',
         borderTop: `4px solid ${meta.color}`,
-        outline: expanded ? `2px solid ${meta.color}` : 'none',
+        outline: pinned
+          ? `2px solid ${meta.color}`
+          : expanded
+            ? `2px solid ${meta.color}`
+            : 'none',
+        outlineOffset: pinned ? 2 : 0,
         bgcolor: 'background.paper',
-        boxShadow: expanded ? 4 : 2,
+        boxShadow: pinned ? 6 : expanded ? 4 : 2,
         p: 1,
         opacity: chainNode.enabled ? 1 : 0.55,
         transition: 'box-shadow 120ms ease, outline-color 120ms ease',
@@ -124,7 +132,16 @@ export default function TriggerChainNode({ data }: NodeProps) {
 
       <SubflowTree subflows={chainNode.subflows} />
 
-      {hasSuccessors && !expanded && (
+      {pinned && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.5, color: meta.color }}>
+          <PushPinIcon sx={{ fontSize: 13 }} />
+          <Typography variant="caption" sx={{ fontSize: 10, fontWeight: 600 }}>
+            pinned
+          </Typography>
+        </Box>
+      )}
+
+      {hasSuccessors && !expanded && !pinned && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.5, opacity: 0.55 }}>
           <UnfoldMoreIcon sx={{ fontSize: 13, transform: 'rotate(90deg)' }} />
           <Typography variant="caption" sx={{ fontSize: 10 }}>

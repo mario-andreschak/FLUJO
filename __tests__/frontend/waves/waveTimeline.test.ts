@@ -1,6 +1,8 @@
 import {
   enumerateOccurrences,
   timelineFraction,
+  timelineTicks,
+  timelineTickStep,
   WAVE_WINDOWS,
   MAX_OCCURRENCES,
 } from '@/frontend/components/Waves/waveTimeline';
@@ -60,5 +62,44 @@ describe('timelineFraction', () => {
 
   test('a null run time is treated as 0', () => {
     expect(timelineFraction(null, FROM, WAVE_WINDOWS['6h'])).toBe(0);
+  });
+});
+
+describe('timelineTicks (#209)', () => {
+  test('per-window step choices produce evenly spaced ticks spanning [now, now+window]', () => {
+    expect(timelineTickStep(WAVE_WINDOWS['1h'])).toBe(10 * 60 * 1000);
+    expect(timelineTickStep(WAVE_WINDOWS['6h'])).toBe(60 * 60 * 1000);
+    expect(timelineTickStep(WAVE_WINDOWS['1d'])).toBe(4 * 60 * 60 * 1000);
+
+    const ticks = timelineTicks(FROM, WAVE_WINDOWS['1h']);
+    // 0,10,20,30,40,50,60 minutes = 7 ticks.
+    expect(ticks).toHaveLength(7);
+    expect(ticks[0].fraction).toBe(0);
+    expect(ticks[ticks.length - 1].fraction).toBe(1);
+    // Evenly spaced by 10 minutes.
+    for (let i = 1; i < ticks.length; i++) {
+      expect(ticks[i].atMs - ticks[i - 1].atMs).toBe(10 * 60 * 1000);
+    }
+  });
+
+  test('labels are offset-from-now (now, 10m, 1h, ...)', () => {
+    const ticks = timelineTicks(FROM, WAVE_WINDOWS['1h']);
+    expect(ticks.map((t) => t.label)).toEqual(['now', '10m', '20m', '30m', '40m', '50m', '1h']);
+    const sixHour = timelineTicks(FROM, WAVE_WINDOWS['6h']);
+    expect(sixHour[0].label).toBe('now');
+    expect(sixHour[1].label).toBe('1h');
+  });
+
+  test('each tick lands exactly where a card at that instant would (aligns with timelineFraction)', () => {
+    const windowMs = WAVE_WINDOWS['6h'];
+    for (const t of timelineTicks(FROM, windowMs)) {
+      expect(t.fraction).toBeCloseTo(timelineFraction(t.atMs, FROM, windowMs), 6);
+    }
+  });
+
+  test('invalid inputs yield no ticks', () => {
+    expect(timelineTicks(NaN, WAVE_WINDOWS['1h'])).toEqual([]);
+    expect(timelineTicks(FROM, 0)).toEqual([]);
+    expect(timelineTicks(FROM, -1000)).toEqual([]);
   });
 });

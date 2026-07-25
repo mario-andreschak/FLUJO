@@ -134,15 +134,23 @@ export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
   const hoveredOcc = hoveredKey ? occOf(hoveredKey) : null;
 
   // Expanded base ids = hovered node + its spanning-tree ancestors (so the whole
-  // followed path stays open while descendants are revealed).
+  // followed path stays open while descendants are revealed). Walking to the top
+  // of the spanning tree also gives us the root that owns the active chain, which
+  // we use to hide every OTHER root card while a chain is being followed (#209).
   const expandedBase = new Set<string>();
+  let activeRootBase: string | null = null;
   if (hoveredBase) {
     let cur: string | undefined = hoveredBase;
     const guard = new Set<string>();
     while (cur && !guard.has(cur)) {
       guard.add(cur);
       expandedBase.add(cur);
-      cur = parentOf.get(cur);
+      const parent = parentOf.get(cur);
+      if (!parent) {
+        activeRootBase = cur;
+        break;
+      }
+      cur = parent;
     }
   }
 
@@ -196,6 +204,12 @@ export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
   };
 
   for (const inst of rootInstances) {
+    // While a chain is active (hovered or pinned), isolate it: render only the
+    // root instance that owns the followed chain and hide all off-chain roots
+    // (#209). With nothing active, every root card shows as before.
+    if (hoveredKey && !(inst.baseId === activeRootBase && inst.occ === hoveredOcc)) {
+      continue;
+    }
     const x = TIMELINE_X0 + rootFraction(inst) * TIMELINE_W;
     addNode(inst.baseId, inst.occ, 0, x, inst.runAt, true);
     descend(inst.baseId, inst.occ, 0, x);
