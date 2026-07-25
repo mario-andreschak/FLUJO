@@ -145,6 +145,15 @@ const ENV_ALLOWLIST = new Set([
 ]);
 
 /**
+ * Returns the managed utilities directory path where Unix-like utilities
+ * (BusyBox applets on Windows) are installed. This directory is prepended to
+ * the child process PATH so that tools like grep, find, sed, awk are available.
+ */
+function getManagedUtilsDir(): string {
+  return path.join(getDataDir(), 'bash-utils');
+}
+
+/**
  * Build the child process environment. By default only the minimal allow-list is
  * passed (secrets never leave the backend). Setting `FLUJO_BASH_INHERIT_ENV` to a
  * truthy value restores full `process.env` inheritance for power users.
