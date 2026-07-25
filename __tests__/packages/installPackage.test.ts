@@ -40,10 +40,12 @@ jest.mock('@/backend/services/flow', () => ({
 
 const updateServerConfigMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
+const deleteServerConfigMock = jest.fn();
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     updateServerConfig: (...a: unknown[]) => updateServerConfigMock(...a),
     loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...a),
+    deleteServerConfig: (...a: unknown[]) => deleteServerConfigMock(...a),
   },
 }));
 
@@ -102,6 +104,7 @@ beforeEach(() => {
   saveFlowMock.mockResolvedValue({ success: true });
   updateServerConfigMock.mockResolvedValue({ name: 'x' });
   loadServerConfigsMock.mockResolvedValue([]);
+  deleteServerConfigMock.mockResolvedValue({ success: true });
   schedulerCreateMock.mockResolvedValue({ execution: { id: 'x' } });
   schedulerUpdateMock.mockResolvedValue({ execution: { id: 'x' } });
 });
@@ -257,5 +260,105 @@ describe('installPackage — ledger + status', () => {
     const last = await getLastInstallSummary('my-pkg');
     expect(last).not.toBeNull();
     expect(last!.package?.name).toBe('my-pkg');
+  });
+});
+
+describe('installPackage — adopt-and-configure', () => {
+  // For adopt tests, pre-populate so that the 'web' server exists before install.
+  beforeEach(() => {
+    loadServerConfigsMock.mockResolvedValue([{ name: 'web', transport: 'stdio', env: {} }]);
+  });
+
+  it('Test A: happy path — merges env, marks isSecret, classifies as updated not created', async () => {
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      secrets: { API_KEY: 'sk-1' },
+      consentGranted: true,
+    });
+
+    // Registry install NOT called — adopt path took over.
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+
+    // updateServerConfig called with the merged env, isSecret tagged.
+    expect(updateServerConfigMock).toHaveBeenCalledWith('web', {
+      env: { WEB_KEY: { value: 'sk-1', metadata: { isSecret: true } } },
+    });
+
+    // Server classified as updated, not created.
+    expect(summary.updated.some((u) => u.type === 'server' && u.name === 'web')).toBe(true);
+    expect(summary.created.filter((c) => c.type === 'server')).toHaveLength(0);
+
+    // Ledger: entities includes 'web', created does NOT.
+    const file = store.get('package_installs') as Record<string, {
+      entities?: { servers: string[] };
+      created?: { servers: string[] };
+    }>;
+    expect(file['my-pkg'].created!.servers).toEqual([]);
+    expect(file['my-pkg'].entities!.servers).toContain('web');
+  });
+
+  it('Test B: missing required secret — partial merge, note added, server not disabled', async () => {
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      secrets: {},
+      consentGranted: true,
+    });
+
+    // updateServerConfig still called (partial merge, key omitted).
+    expect(updateServerConfigMock).toHaveBeenCalledWith('web', expect.objectContaining({ env: expect.any(Object) }));
+
+    // The updated entry for the server has a note mentioning the missing env name.
+    const serverUpdate = summary.updated.find((u) => u.type === 'server');
+    expect(serverUpdate).toBeDefined();
+    expect(serverUpdate!.note).toContain('WEB_KEY');
+
+    // Server is NOT in the disabled list.
+    expect(summary.disabled.filter((d) => d.type === 'server')).toHaveLength(0);
+  });
+
+  it('Test C: updateServerConfig fails — server goes to skipped, not updated', async () => {
+    updateServerConfigMock.mockResolvedValueOnce({ success: false, error: 'disk full' });
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      secrets: { API_KEY: 'sk-1' },
+      consentGranted: true,
+    });
+
+    expect(summary.skipped.some((s) => s.type === 'server' && s.name === 'web')).toBe(true);
+    expect(summary.updated.filter((u) => u.type === 'server')).toHaveLength(0);
+  });
+
+  it('Test D: remote server buildRemoteServerConfig tags envFromSecret env values as isSecret', async () => {
+    // Override to use a remote-server manifest (no adopt path).
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: '1',
+      name: 'remote-pkg',
+      version: '1.0.0',
+      secrets: [{ key: 'API_KEY', required: true }],
+      mcpServers: [
+        {
+          localName: 'my-remote',
+          ref: { kind: 'remote', transport: 'streamable', serverUrl: 'https://example.com/mcp' },
+          envFromSecret: { API_KEY: 'API_KEY' },
+        },
+      ],
+    });
+    // No pre-existing servers — remote server is a fresh upsert.
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'remote-pkg',
+      secrets: { API_KEY: 'sk-1' },
+      consentGranted: true,
+    });
+
+    expect(updateServerConfigMock).toHaveBeenCalledTimes(1);
+    const config = updateServerConfigMock.mock.calls[0][1] as { env: Record<string, unknown> };
+    expect(config.env['API_KEY']).toEqual({ value: 'sk-1', metadata: { isSecret: true } });
   });
 });
