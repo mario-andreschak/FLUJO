@@ -14,6 +14,7 @@
  * When neither is set the server is unconfined (full host access).
  */
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createLogger } from '@/utils/logger';
 import { getInternalServerRoots } from './registry';
 
@@ -47,16 +48,44 @@ export function envRoots(envVarNames: string | string[]): string[] | null {
 }
 
 /**
+ * Resolve one raw root entry (a filesystem path, a `file://` URI, or a string
+ * containing `${global:VAR}` references) into an absolute host path. Relative
+ * paths resolve against the FLUJO data directory — the same posture the tools
+ * themselves use for relative user paths. Returns null for blank/invalid input.
+ */
+async function resolveRootToPath(entry: string, dataDir: string): Promise<string | null> {
+  const { resolveGlobalVars } = await import('@/backend/utils/resolveGlobalVars');
+  const resolved = ((await resolveGlobalVars(entry)) as string).trim();
+  if (!resolved) return null;
+  if (resolved.startsWith('file://')) {
+    try {
+      return path.resolve(fileURLToPath(resolved));
+    } catch (err) {
+      log.warn(`resolveRootToPath: could not parse file URI "${resolved}"`, err);
+      return null;
+    }
+  }
+  return path.isAbsolute(resolved) ? path.resolve(resolved) : path.resolve(dataDir, resolved);
+}
+
+/**
  * The effective confinement roots for a built-in server, or an empty array when
  * no roots are configured (disallowing all access by default).
  *
+ * The candidate set is the UNION of two sources:
+ *  - persisted server-level roots (MCP manager override, issue #170), and
+ *  - node-level roots contributed by FlowBuilder MCP nodes bound to this server
+ *    (issue 46). Built-in servers enforce confinement directly (they never go
+ *    through the `roots/list` protocol handler), so without this merge a root
+ *    added on an MCP node would be silently ignored.
+ *
  * Precedence (per issue #170 D5): the env var(s) are a HARD CEILING.
- *  - No env, no persisted roots  -> [] (no access by default).
- *  - No env, persisted roots     -> confine to the persisted roots.
- *  - Env set                     -> persisted roots may only NARROW within the
- *                                   ceiling; any persisted root outside the env
- *                                   is dropped, and if none remain the env roots
- *                                   themselves are the effective set.
+ *  - No env, no configured roots -> [] (no access by default).
+ *  - No env, configured roots    -> confine to those roots.
+ *  - Env set                     -> configured roots may only NARROW within the
+ *                                   ceiling; any root outside the env is dropped,
+ *                                   and if none remain the env roots themselves
+ *                                   are the effective set.
  */
 export async function loadEffectiveRoots(
   serverName: string,
@@ -65,15 +94,30 @@ export async function loadEffectiveRoots(
   const { getDataDir } = await import('@/utils/paths');
   const dataDir = getDataDir();
   const env = envRoots(envVarNames);
-  let persisted: string[] = [];
+
+  const candidates: string[] = [];
   try {
-    persisted = (await getInternalServerRoots(serverName)).map((r) =>
-      path.isAbsolute(r) ? path.resolve(r) : path.resolve(dataDir, r)
-    );
+    for (const r of await getInternalServerRoots(serverName)) {
+      candidates.push(path.isAbsolute(r) ? path.resolve(r) : path.resolve(dataDir, r));
+    }
   } catch (err) {
     log.warn('loadEffectiveRoots: could not read persisted roots', err);
   }
-  if (!env) return persisted.length ? persisted : [];
-  const confined = persisted.filter((p) => env.some((root) => isInside(root, p)));
+  try {
+    // Node-level roots (issue 46) are contributed by FlowBuilder MCP nodes and may
+    // be paths, file:// URIs, or contain ${global:VAR} references — resolve them the
+    // same way the roots/list handler does so both consumers agree.
+    const { getNodeRoots } = await import('@/backend/services/mcp/roots');
+    for (const raw of getNodeRoots(serverName)) {
+      const resolved = await resolveRootToPath(raw, dataDir);
+      if (resolved) candidates.push(resolved);
+    }
+  } catch (err) {
+    log.warn('loadEffectiveRoots: could not read node roots', err);
+  }
+
+  const configured = Array.from(new Set(candidates));
+  if (!env) return configured;
+  const confined = configured.filter((p) => env.some((root) => isInside(root, p)));
   return confined.length ? confined : env;
 }
