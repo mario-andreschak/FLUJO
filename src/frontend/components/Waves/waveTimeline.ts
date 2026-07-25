@@ -11,6 +11,7 @@
  * scheduler) and is safe to bundle in the browser.
  */
 
+import type { Wave } from '@/shared/types/waves/waves';
 import { Cron } from 'croner';
 
 /** Selectable look-ahead windows for the timeline. */
@@ -157,4 +158,30 @@ export function timelineTicks(now: number, windowMs: number, step?: number): Tim
     });
   }
   return out;
+}
+
+/**
+ * Choose the most readable WaveWindowKey for a given wave by estimating the
+ * shortest cron interval among its timeline-mode roots. Targets showing roughly
+ * 4–6 occurrences (interval × 6). Falls back to DEFAULT_WAVE_WINDOW when no
+ * cron pattern is present.
+ */
+export function autoWindowForWave(wave: Wave, now: number): WaveWindowKey {
+  let minIntervalMs = Infinity;
+  for (const node of wave.nodes) {
+    if (node.timing.mode !== 'timeline') continue;
+    const cron = (node.timing as { cron?: string }).cron;
+    if (!cron) continue;
+    // Sample 3 occurrences within a 1-day window to derive the interval.
+    const occs = enumerateOccurrences(cron, now, 24 * 60 * 60 * 1000, 3);
+    if (occs.length >= 2) {
+      const interval = occs[1] - occs[0];
+      if (interval < minIntervalMs) minIntervalMs = interval;
+    }
+  }
+  if (!Number.isFinite(minIntervalMs)) return DEFAULT_WAVE_WINDOW;
+  const targetWindow = minIntervalMs * 6;
+  if (targetWindow <= WAVE_WINDOWS['1h']) return '1h';
+  if (targetWindow <= WAVE_WINDOWS['6h']) return '6h';
+  return '1d';
 }
