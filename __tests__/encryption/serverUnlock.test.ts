@@ -11,6 +11,11 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
+// Each test drives the REAL crypto path, i.e. one-or-more PBKDF2(100k-iteration)
+// derivations, which is deliberately slow. Give generous headroom over the suite
+// default so CPU/CI variance doesn't flake these out (mirrors dekInvariant.test.ts).
+jest.setTimeout(60000);
+
 let tmpDir: string;
 
 type Secure = typeof import('@/utils/encryption/secure');

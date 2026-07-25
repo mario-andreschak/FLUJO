@@ -16,6 +16,11 @@ import os from 'os';
 import path from 'path';
 import { makeLocalRequest } from '../utils/localRequest';
 
+// Each test drives the REAL crypto path, i.e. one-or-more PBKDF2(100k-iteration)
+// derivations, which is deliberately slow. Give generous headroom over the suite
+// default so CPU/CI variance doesn't flake these out (mirrors dekInvariant.test.ts).
+jest.setTimeout(60000);
+
 let tmpDir: string;
 
 function clearGlobalEncryptionState(): void {
