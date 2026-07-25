@@ -159,4 +159,10 @@ export interface CompletionResult {
  */
 export interface CompletionAdapter {
   createCompletion(input: CompletionInput): Promise<CompletionResult>;
+  /**
+   * Optional streaming variant. Adapters that support native SDK streaming
+   * (currently only AnthropicAdapter) implement this. Returns the same
+   * CompletionResult shape as createCompletion.
+   */
+  createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
 }
