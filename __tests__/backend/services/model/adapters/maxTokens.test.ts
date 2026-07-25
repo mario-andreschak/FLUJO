@@ -21,7 +21,11 @@ jest.mock('@/backend/services/model/openaiClient', () => {
 // Mock the Anthropic SDK (default export is the client constructor).
 jest.mock('@anthropic-ai/sdk', () => {
   const create = jest.fn();
-  const Anthropic = jest.fn().mockImplementation(() => ({ messages: { create } }));
+  const retrieve = jest.fn();
+  const Anthropic = jest.fn().mockImplementation(() => ({
+    messages: { create },
+    models: { retrieve },
+  }));
   return { __esModule: true, default: Anthropic, __create: create };
 });
 
