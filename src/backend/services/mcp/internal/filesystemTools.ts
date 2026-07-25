@@ -114,6 +114,9 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'write_file',
       description:
         'Create or write a text file (parent directories are created). "mode": "overwrite" (default) replaces the whole file, or a line range when "startLine"/"endLine" (1-based inclusive) are given; "append" adds content at the end; "insert" inserts content before "startLine". Returns { path, bytesWritten, mode, ... }.',
+      // #216: feed the docked diff canvas (ui://devcanvas/diff) so successive
+      // writes update one persistent tab. See internal/filesystemResources.ts.
+      _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
       inputSchema: {
         type: 'object',
         properties: {
@@ -143,6 +146,8 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'edit_file',
       description:
         'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the unique occurrence of oldText. startLine/endLine are an optional disambiguation HINT (if exactly one match starts in that range it wins); a wrong/missing range still works as long as oldText is unique in the file. Include enough surrounding context to make oldText unique. Or (2) "diff": a unified diff string ("@@ -a,b +c,d @@" hunks) applied atomically — hunks are relocated to where their context actually matches, so slightly-off @@ line numbers still apply, and CRLF files are handled. Fails with no partial write only when text is missing/ambiguous or a hunk context is not found. Returns { path, editsApplied|applied, diff:{added,removed} }.',
+      // #216: also feed the docked diff canvas so edits show live in the canvas.
+      _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
       inputSchema: {
         type: 'object',
         properties: {

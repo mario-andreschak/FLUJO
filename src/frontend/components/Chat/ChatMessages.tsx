@@ -37,6 +37,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
+import WidgetsIcon from '@mui/icons-material/Widgets'; // #216: canvas-app launcher
 import { ChatMessage } from './index';
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -73,6 +74,23 @@ interface ChatMessagesProps {
    * a stable callback — it crosses the memoized MessageBubble boundary.
    */
   onAppMessage?: (text: string) => void;
+  /**
+   * #216: route a tool result's `ui://` app into the docked canvas surface
+   * instead of rendering it inline. Clicking the bubble launcher is the
+   * click-to-mount consent gate. When omitted, apps render inline as before.
+   */
+  onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
+  /** #216: identities (`serverName::uri`) already open in the canvas. */
+  canvasKeys?: Set<string>;
+}
+
+/** #216: payload handed up when the user opens a tool's app in the canvas. */
+export interface CanvasLaunchInfo {
+  serverName: string;
+  uri: string;
+  toolName?: string;
+  toolArgs?: string;
+  resultContent?: string;
 }
 
 // Type guard to check if a message has tool_calls
@@ -319,7 +337,7 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
  * local state; the component is keyed by the stable message id so the state
  * survives the parent list's re-renders.
  */
-const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId: string; onAppMessage?: (text: string) => void }> = ({ pairs, messageId, onAppMessage }) => {
+const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId: string; onAppMessage?: (text: string) => void; onOpenInCanvas?: (info: CanvasLaunchInfo) => void; canvasKeys?: Set<string> }> = ({ pairs, messageId, onAppMessage, onOpenInCanvas, canvasKeys }) => {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
@@ -426,14 +444,45 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
                   rendered read-only in a sandboxed iframe. Present only when the
                   server has the MCP Apps opt-in enabled (gated server-side). */}
               {pair.result?.ui?.uri && pair.result.ui.serverName && (
-                <McpAppFrame
-                  serverName={pair.result.ui.serverName}
-                  uri={pair.result.ui.uri}
-                  toolName={pair.toolCall.function.name}
-                  toolArgs={pair.toolCall.function.arguments}
-                  toolResultContent={typeof pair.result.content === 'string' ? pair.result.content : undefined}
-                  onAppMessage={onAppMessage}
-                />
+                onOpenInCanvas ? (
+                  // #216: route to the docked canvas. The launcher click is the
+                  // click-to-mount consent gate — nothing untrusted runs until
+                  // the user opens it. No live iframe is mounted inline.
+                  (() => {
+                    const ui = pair.result.ui;
+                    const isOpen = !!canvasKeys?.has(`${ui.serverName}::${ui.uri}`);
+                    return (
+                      <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
+                        <WidgetsIcon fontSize="small" color="primary" />
+                        <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>
+                          Interactive app from {ui.serverName}
+                        </Typography>
+                        <Button
+                          size="small"
+                          variant={isOpen ? 'text' : 'outlined'}
+                          onClick={() => onOpenInCanvas({
+                            serverName: ui.serverName,
+                            uri: ui.uri,
+                            toolName: pair.toolCall.function.name,
+                            toolArgs: pair.toolCall.function.arguments,
+                            resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
+                          })}
+                        >
+                          {isOpen ? 'Show in canvas' : 'Open in canvas'}
+                        </Button>
+                      </Box>
+                    );
+                  })()
+                ) : (
+                  <McpAppFrame
+                    serverName={pair.result.ui.serverName}
+                    uri={pair.result.ui.uri}
+                    toolName={pair.toolCall.function.name}
+                    toolArgs={pair.toolCall.function.arguments}
+                    toolResultContent={typeof pair.result.content === 'string' ? pair.result.content : undefined}
+                    onAppMessage={onAppMessage}
+                  />
+                )
               )}
             </Box>
           </Collapse>
@@ -459,6 +508,10 @@ interface MessageBubbleProps {
   toolCallPairs?: ToolCallPair<ChatMessage>[];
   /** #97: stable MCP App -> conversation return channel (see ChatMessagesProps). */
   onAppMessage?: (text: string) => void;
+  /** #216: route a tool app to the docked canvas (see ChatMessagesProps). */
+  onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
+  /** #216: identities already open in the canvas. */
+  canvasKeys?: Set<string>;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -485,6 +538,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   showRaw,
   toolCallPairs,
   onAppMessage,
+  onOpenInCanvas,
+  canvasKeys,
   hoistedHandoffs,
   isBeingEdited,
   onMenuOpen,
@@ -692,7 +747,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             bubble; clicking a node reveals that call's parameters AND its result
             together. Pairs are handoff-filtered and computed by the container. */}
         {toolCallPairs && toolCallPairs.length > 0 && (
-          <ToolCallTimeline pairs={toolCallPairs} messageId={message.id} onAppMessage={onAppMessage} />
+          <ToolCallTimeline pairs={toolCallPairs} messageId={message.id} onAppMessage={onAppMessage} onOpenInCanvas={onOpenInCanvas} canvasKeys={canvasKeys} />
         )}
 
         {/* Display tool call result for tool messages. Handoff results are the
@@ -793,6 +848,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
   onAppMessage, // #97: MCP App -> conversation return channel (stable)
+  onOpenInCanvas, // #216: route a tool app to the docked canvas
+  canvasKeys, // #216: identities already open in the canvas
 }) => {
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
@@ -970,6 +1027,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             showRaw={!!showRawToolResult[message.id]}
             toolCallPairs={renderPairsById.get(message.id)}
             onAppMessage={onAppMessage}
+            onOpenInCanvas={onOpenInCanvas}
+            canvasKeys={canvasKeys}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}

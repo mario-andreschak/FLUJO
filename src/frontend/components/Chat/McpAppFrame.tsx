@@ -40,6 +40,28 @@ interface McpAppFrameProps {
    * omitted (e.g. the tool tester), app messages are logged only.
    */
   onAppMessage?: (text: string) => void;
+  /**
+   * #216: when the app requests the `pip` display mode (or the user pops it
+   * out), the parent is asked to claim it into the docked canvas surface.
+   * Optional — when omitted (inline chat timeline), pip is treated like inline.
+   */
+  onRequestDock?: () => void;
+  /**
+   * #216: fired once after handshake with whether the app advertised `pip`
+   * support (`availableDisplayModes` includes `pip`). Lets the parent surface a
+   * "dock this" affordance passively — no server metadata required.
+   */
+  onDockable?: (dockable: boolean) => void;
+  /**
+   * #216: render as a persistent host inside the DevCanvasDock. The frame
+   * auto-mounts (the click-to-mount consent gate already happened in the
+   * bubble), drops its own collapse chrome, and fills its container. It is
+   * shown/hidden via CSS only (`visible`) — NEVER unmounted on tab switch — so
+   * the live iframe/bridge is never reparented (the load-bearing invariant).
+   */
+  docked?: boolean;
+  /** #216: CSS-only visibility for a docked host (tab switch / collapse). */
+  visible?: boolean;
 }
 
 /** Flatten MCP content blocks (or structured content) to a single text line. */
@@ -143,6 +165,19 @@ function safeParse(raw: string | undefined): any {
 }
 
 /**
+ * Normalize a stored tool-result string into a valid MCP CallToolResult for the
+ * bridge: pass a real `{content:[…]}` through, otherwise wrap the raw text.
+ * Returns null when there is nothing to push.
+ */
+function buildToolResult(raw: string | undefined): any | null {
+  const resultData = safeParse(raw);
+  if (resultData && typeof resultData === 'object') {
+    return Array.isArray(resultData.content) ? resultData : { content: [{ type: 'text', text: raw }] };
+  }
+  return null;
+}
+
+/**
  * MCP Apps (SEP-1865 / spec 2026-01-26, #97) — Phase 2 interactive renderer.
  *
  * Renders a tool's linked `ui://` UI resource as a LIVE, bidirectionally
@@ -154,12 +189,12 @@ function safeParse(raw: string | undefined): any {
  * the tool input/result to the app and brokers the app's own `tools/call` /
  * `resources/read` back through FLUJO's MCP layer (same server only).
  */
-const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, toolArgs, toolResultContent, onAppMessage }) => {
+const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, toolArgs, toolResultContent, onAppMessage, onRequestDock, onDockable, docked = false, visible = true }) => {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [displayMode, setDisplayMode] = useState<'inline' | 'fullscreen'>('inline');
+  const [displayMode, setDisplayMode] = useState<'inline' | 'fullscreen' | 'pip'>('inline');
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -168,6 +203,17 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
   // Always call the latest callback without remounting the bridge on prop change.
   const onAppMessageRef = useRef(onAppMessage);
   useEffect(() => { onAppMessageRef.current = onAppMessage; }, [onAppMessage]);
+  const onRequestDockRef = useRef(onRequestDock);
+  useEffect(() => { onRequestDockRef.current = onRequestDock; }, [onRequestDock]);
+  const onDockableRef = useRef(onDockable);
+  useEffect(() => { onDockableRef.current = onDockable; }, [onDockable]);
+  const dockedRef = useRef(docked);
+  useEffect(() => { dockedRef.current = docked; }, [docked]);
+  // #216 Phase 6: the last result payload pushed to the app, so a prop change
+  // (a later tool result for the SAME serverName::uri) re-feeds the existing
+  // bridge instead of remounting the iframe.
+  const initializedRef = useRef(false);
+  const lastResultRef = useRef<string | undefined>(undefined);
 
   const teardown = useCallback(() => {
     try { bridgeRef.current?.close(); } catch { /* noop */ }
@@ -200,7 +246,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
       const allow = buildAllowAttribute(app.permissions as any);
       if (allow) iframe.setAttribute('allow', allow);
-      iframe.style.cssText = 'width:100%;min-height:120px;height:200px;border:none;border-radius:4px;background:#fff;';
+      iframe.style.cssText = dockedRef.current
+        ? 'width:100%;height:100%;border:none;background:#fff;'
+        : 'width:100%;min-height:120px;height:200px;border:none;border-radius:4px;background:#fff;';
       containerRef.current.appendChild(iframe);
       iframeRef.current = iframe;
 
@@ -234,8 +282,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
           hostContext: {
             theme: theme.palette.mode === 'dark' ? 'dark' : 'light',
             platform: 'web',
-            displayMode: 'inline',
-            availableDisplayModes: ['inline', 'fullscreen'],
+            displayMode: dockedRef.current ? 'pip' : 'inline',
+            availableDisplayModes: ['inline', 'fullscreen', 'pip'],
             containerDimensions: { maxHeight: 6000 },
           },
         },
@@ -298,10 +346,25 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
         return {};
       };
       bridge.onsizechange = async ({ width, height }) => {
+        if (dockedRef.current) return; // a docked host fills its container height
         if (typeof height === 'number' && height > 0) iframe.style.height = `${height}px`;
         if (typeof width === 'number' && width > 0) iframe.style.minWidth = `min(${width}px, 100%)`;
       };
       bridge.onrequestdisplaymode = async ({ mode }) => {
+        // #216: honor the standard `pip` mode by promoting the app to the docked
+        // canvas. Without a dock sink (e.g. the tool tester) fall back to inline
+        // rather than leaving the app in a broken pip state.
+        if (mode === 'pip') {
+          if (onRequestDockRef.current) {
+            onRequestDockRef.current();
+            setDisplayMode('pip');
+            bridge.sendHostContextChange({ displayMode: 'pip' });
+            return { mode: 'pip' };
+          }
+          setDisplayMode('inline');
+          bridge.sendHostContextChange({ displayMode: 'inline' });
+          return { mode: 'inline' };
+        }
         const next = mode === 'fullscreen' ? 'fullscreen' : 'inline';
         setDisplayMode(next);
         bridge.sendHostContextChange({ displayMode: next });
@@ -310,15 +373,20 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
 
       // 6. Handshake, then push the triggering tool's input + result.
       bridge.oninitialized = () => {
+        // #216: passively detect pip support from the app's advertised modes so
+        // the parent can offer a "dock this" affordance — no server metadata.
+        try {
+          const modes = bridge.getAppCapabilities()?.availableDisplayModes;
+          onDockableRef.current?.(Array.isArray(modes) && modes.includes('pip'));
+        } catch { /* capabilities are optional */ }
         const args = safeParse(toolArgs);
         if (args && typeof args === 'object') bridge.sendToolInput({ arguments: args });
-        const resultData = safeParse(toolResultContent);
-        if (resultData && typeof resultData === 'object') {
-          // Stored content may be the CallToolResult itself ({content:[…]}) or a
-          // bare payload; wrap the latter so the app always gets a valid result.
-          const result = Array.isArray(resultData.content) ? resultData : { content: [{ type: 'text', text: toolResultContent }] };
-          bridge.sendToolResult(result);
-        }
+        // Stored content may be the CallToolResult itself ({content:[…]}) or a
+        // bare payload; buildToolResult wraps the latter.
+        const initial = buildToolResult(toolResultContent);
+        if (initial) bridge.sendToolResult(initial);
+        lastResultRef.current = toolResultContent;
+        initializedRef.current = true;
         setLoading(false);
       };
 
@@ -341,6 +409,27 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
     }
   }, [expanded, mount]);
 
+  // #216: a docked host auto-mounts (the launcher click already served as the
+  // consent gate) and then stays mounted for the life of the tab — visibility is
+  // CSS-only, so the live iframe/bridge is never reparented.
+  useEffect(() => {
+    if (docked && !mountedRef.current) void mount();
+  }, [docked, mount]);
+
+  // #216 Phase 6: re-feed a later tool result for the SAME serverName::uri
+  // through the existing bridge (no remount). Runs only post-handshake and only
+  // when the payload actually changed.
+  useEffect(() => {
+    if (!initializedRef.current || !bridgeRef.current) return;
+    if (toolResultContent === lastResultRef.current) return;
+    const result = buildToolResult(toolResultContent);
+    if (result) {
+      try { bridgeRef.current.sendToolResult(result); }
+      catch (e) { log.warn('MCP App re-feed failed', e); }
+    }
+    lastResultRef.current = toolResultContent;
+  }, [toolResultContent]);
+
   // Keep the app's theme in sync with FLUJO's.
   useEffect(() => {
     bridgeRef.current?.sendHostContextChange({ theme: theme.palette.mode === 'dark' ? 'dark' : 'light' });
@@ -348,6 +437,31 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
 
   // Tear down on unmount.
   useEffect(() => () => teardown(), [teardown]);
+
+  // #216: docked host — no collapse chrome (the dock owns the tab UI), fills its
+  // container, and toggles visibility via CSS only (never unmounts on switch).
+  if (docked) {
+    return (
+      <Box
+        sx={{
+          height: '100%',
+          width: '100%',
+          minHeight: 0,
+          display: visible ? 'flex' : 'none',
+          flexDirection: 'column',
+        }}
+      >
+        {loading && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
+            <CircularProgress size={16} thickness={6} />
+            <Typography variant="body2" color="text.secondary">Loading the app…</Typography>
+          </Box>
+        )}
+        {error && <Alert severity="error" sx={{ m: 1 }}>{error}</Alert>}
+        <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, width: '100%', display: error ? 'none' : 'block' }} />
+      </Box>
+    );
+  }
 
   return (
     <Box

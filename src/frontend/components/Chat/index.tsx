@@ -18,7 +18,18 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
+import type { CanvasLaunchInfo } from './ChatMessages';
 import ChatInput from './ChatInput';
+import DevCanvasDock from './DevCanvasDock'; // #216: docked MCP Apps canvas
+import {
+  emptyCanvasState,
+  openCanvasApp,
+  updateCanvasApp,
+  setActiveCanvasTab,
+  closeCanvasApp,
+  canvasEntries,
+  type CanvasState,
+} from './canvasState';
 import {
   QueueMap,
   QueuedMessage,
@@ -2147,6 +2158,60 @@ const Chat: React.FC = () => {
     void handleSendMessageRef.current(text);
   }, []);
 
+  // --- #216: conversation-level docked MCP Apps canvas ---------------------
+  const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
+  // Identities currently open in the canvas (drives the bubble launcher label).
+  const canvasKeys = useMemo(() => new Set(canvasState.order), [canvasState.order]);
+
+  // Launcher click = click-to-mount consent gate: open (or focus) the app in the
+  // docked canvas. LRU eviction beyond the cap is logged, never silent.
+  const handleOpenInCanvas = useCallback((info: CanvasLaunchInfo) => {
+    setCanvasState((prev) => {
+      const { state, evicted } = openCanvasApp(prev, info);
+      if (evicted.length) log.info(`Canvas tab cap reached — evicted (LRU): ${evicted.join(', ')}`);
+      return state;
+    });
+  }, []);
+  const handleSelectCanvasTab = useCallback((key: string) => {
+    setCanvasState((prev) => setActiveCanvasTab(prev, key));
+  }, []);
+  const handleCloseCanvasTab = useCallback((key: string) => {
+    setCanvasState((prev) => closeCanvasApp(prev, key));
+  }, []);
+
+  // Reset the canvas when switching conversations (per-conversation surface).
+  useEffect(() => {
+    setCanvasState(emptyCanvasState);
+  }, [currentConversationId]);
+
+  // Phase 6 live update-in-place: when a later tool result for an ALREADY-OPEN
+  // canvas app arrives, re-feed the existing tab (badge if backgrounded). Only
+  // touches keys already docked; never auto-opens a new tab.
+  const canvasOrderKey = canvasState.order.join('|');
+  useEffect(() => {
+    const msgs = detailedConversation?.messages;
+    if (!msgs || canvasState.order.length === 0) return;
+    const latest = new Map<string, string>();
+    for (const m of msgs) {
+      const ui = (m as FlujoChatMessage).ui;
+      if (m.role === 'tool' && ui?.uri && ui?.serverName && typeof m.content === 'string') {
+        latest.set(`${ui.serverName}::${ui.uri}`, m.content);
+      }
+    }
+    setCanvasState((prev) => {
+      let next = prev;
+      for (const key of prev.order) {
+        const entry = prev.entries[key];
+        const content = latest.get(key);
+        if (entry && content !== undefined && content !== entry.latestResultContent) {
+          next = updateCanvasApp(next, { serverName: entry.serverName, uri: entry.uri, resultContent: content });
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailedConversation?.messages, canvasOrderKey]);
+
   // Edit a message and re-send the conversation (operates on detailedConversation)
   const handleEditMessage = async (messageId: string, newContent: string, processNodeId?: string | null) => {
     if (!detailedConversation) return;
@@ -2882,6 +2947,8 @@ const Chat: React.FC = () => {
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
                 onAppMessage={handleAppMessage}
+                onOpenInCanvas={handleOpenInCanvas}
+                canvasKeys={canvasKeys}
               />
 
               {/* Completion banner: shown once the run has reached a Finish node
@@ -3047,6 +3114,17 @@ const Chat: React.FC = () => {
           </Fab>
         </Zoom>
         </Box>
+
+        {/* #216: docked, tabbed MCP Apps canvas surface. Pinned above the input,
+            hidden entirely when no app is docked. Hosts are mounted once and
+            shown/hidden via CSS (never reparented). */}
+        <DevCanvasDock
+          entries={canvasEntries(canvasState)}
+          activeKey={canvasState.activeKey}
+          onSelectTab={handleSelectCanvasTab}
+          onCloseTab={handleCloseCanvasTab}
+          onAppMessage={handleAppMessage}
+        />
 
         {/* Chat input */}
         <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>

@@ -16,9 +16,16 @@
 import type { MCPResource, MCPReadResourceResult, MCPServiceResponse } from '@/shared/types/mcp';
 
 export const FILESYSTEM_APP_URI = 'ui://filesystem/browser';
+/**
+ * #216: the docked "dev canvas" diff app. A `pip`-capable, persistent surface
+ * that the mutation tools (`write_file`, `edit_file`) point their `_meta.ui`
+ * link at, so every edit feeds the SAME docked tab and updates in place instead
+ * of spawning a fresh iframe per write.
+ */
+export const DEVCANVAS_DIFF_URI = 'ui://devcanvas/diff';
 const APP_MIME_TYPE = 'text/html;profile=mcp-app';
 
-/** resources/list for the filesystem server: just the browser app. */
+/** resources/list for the filesystem server: the browser app + the diff canvas. */
 export function filesystemListResources(): { resources: MCPResource[]; error?: string } {
   return {
     resources: [
@@ -28,28 +35,35 @@ export function filesystemListResources(): { resources: MCPResource[]; error?: s
         mimeType: APP_MIME_TYPE,
         description: 'Interactive file browser (navigate, preview, upload, download) for the filesystem server.',
       },
+      {
+        uri: DEVCANVAS_DIFF_URI,
+        name: 'devcanvas_diff',
+        mimeType: APP_MIME_TYPE,
+        description: 'Docked diff canvas that shows file writes/edits live as they happen (pip display mode).',
+      },
     ],
   };
 }
 
 /** True when a URI is one this module serves. */
 export function isFilesystemAppUri(uri: string): boolean {
-  return uri === FILESYSTEM_APP_URI;
+  return uri === FILESYSTEM_APP_URI || uri === DEVCANVAS_DIFF_URI;
 }
 
-/** resources/read for `ui://filesystem/browser`. */
+/** resources/read for the filesystem server's built-in MCP Apps. */
 export function filesystemReadResource(uri: string): MCPServiceResponse<MCPReadResourceResult> {
   if (!isFilesystemAppUri(uri)) {
     return { success: false, error: `Not a filesystem app URI: ${uri}`, statusCode: 404 };
   }
+  const html = uri === DEVCANVAS_DIFF_URI ? DEVCANVAS_DIFF_HTML : FILESYSTEM_APP_HTML;
   return {
     success: true,
     data: {
       contents: [
         {
-          uri: FILESYSTEM_APP_URI,
+          uri,
           mimeType: APP_MIME_TYPE,
-          text: FILESYSTEM_APP_HTML,
+          text: html,
           // Self-contained: no external network/resources, so the default-deny
           // sandbox CSP is sufficient. An empty `ui` block still marks intent.
           _meta: { ui: { csp: {}, permissions: {} } },
@@ -317,6 +331,153 @@ const FILESYSTEM_APP_HTML = `<!doctype html>
   }).catch(function (e) {
     setMsg(listEl, "Failed to initialize app: " + (e && e.message ? e.message : e), true);
   });
+})();
+</script>
+</body>
+</html>`;
+
+
+/**
+ * #216 — the docked diff canvas View. Dependency-free, backtick-free MCP Apps
+ * client over postMessage (same dialect as the file browser above). It
+ * advertises `pip` support so FLUJO can dock it, and renders a live, newest-
+ * first log of file writes/edits fed through the standard tool-result channel.
+ * Each `write_file` / `edit_file` result appends a change card; re-feeds for the
+ * same docked tab update it in place (no new iframe).
+ */
+const DEVCANVAS_DIFF_HTML = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0; --accent:#1565c0; --add:#e6ffed; --addln:#22863a; --hover:#f5f5f5; }
+  [data-theme="dark"] { --bg:#1e1e1e; --fg:#e8e8e8; --muted:#9e9e9e; --border:#3a3a3a; --accent:#64b5f6; --add:#0f2f18; --addln:#7bd88f; --hover:#2a2a2a; }
+  * { box-sizing: border-box; }
+  html,body { margin:0; padding:0; height:100%; }
+  body { font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
+  #wrap { padding:10px; }
+  h3 { margin:0 0 8px; font-size:14px; }
+  .empty { color:var(--muted); padding:10px 2px; }
+  .card { border:1px solid var(--border); border-radius:6px; margin-bottom:8px; overflow:hidden; }
+  .card h4 { margin:0; padding:6px 10px; background:var(--hover); font-size:12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; display:flex; gap:8px; align-items:center; }
+  .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--border); color:var(--muted); }
+  .stat { font-size:11px; color:var(--addln); }
+  pre { margin:0; padding:8px 10px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:var(--bg); }
+  .del { color:#d32f2f; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h3>Diff canvas</h3>
+  <div id="log"><div class="empty">Waiting for file writes / edits...</div></div>
+</div>
+<script>
+(function () {
+  var parentWin = window.parent;
+  var logEl = document.getElementById("log");
+  var changes = [];
+  var seen = 0;
+
+  function post(msg) { parentWin.postMessage(msg, "*"); }
+  function notify(method, params) { post({ jsonrpc: "2.0", method: method, params: params || {} }); }
+
+  function applyTheme(ctx) {
+    var theme = ctx && ctx.theme ? ctx.theme : "light";
+    document.documentElement.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
+  }
+  function sendSize() {
+    try {
+      var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+      notify("ui/notifications/size-changed", { width: 0, height: h });
+    } catch (e) {}
+  }
+  function payloadOf(result) {
+    if (!result) return null;
+    if (result.structuredContent) return result.structuredContent;
+    try {
+      var t = result.content && result.content[0] && result.content[0].text;
+      return t ? JSON.parse(t) : null;
+    } catch (e) { return null; }
+  }
+
+  function render() {
+    if (!changes.length) { logEl.innerHTML = '<div class="empty">Waiting for file writes / edits...</div>'; sendSize(); return; }
+    logEl.innerHTML = "";
+    for (var i = changes.length - 1; i >= 0; i--) {
+      var c = changes[i];
+      var card = document.createElement("div"); card.className = "card";
+      var h = document.createElement("h4");
+      var nm = document.createElement("span"); nm.textContent = c.path || "(unknown path)"; nm.style.flex = "1";
+      h.appendChild(nm);
+      if (c.mode) { var b = document.createElement("span"); b.className = "badge"; b.textContent = c.mode; h.appendChild(b); }
+      if (c.stat) { var s = document.createElement("span"); s.className = "stat"; s.textContent = c.stat; h.appendChild(s); }
+      card.appendChild(h);
+      if (c.body) { var pre = document.createElement("pre"); pre.textContent = c.body; card.appendChild(pre); }
+      logEl.appendChild(card);
+    }
+    sendSize();
+  }
+
+  function addFromResult(payload, args) {
+    if (!payload && !args) return;
+    var p = payload || {};
+    var a = args || {};
+    var change = { path: p.path || a.path || "", mode: p.mode || (a.edits ? "edit" : (a.diff ? "diff" : undefined)), stat: "", body: "" };
+    if (p.diff && (typeof p.diff.added === "number" || typeof p.diff.removed === "number")) {
+      change.stat = "+" + (p.diff.added || 0) + " -" + (p.diff.removed || 0);
+    } else if (typeof p.bytesWritten === "number") {
+      change.stat = p.bytesWritten + " B";
+    } else if (typeof p.editsApplied === "number") {
+      change.stat = p.editsApplied + " edit(s)";
+    } else if (typeof p.applied === "number") {
+      change.stat = p.applied + " edit(s)";
+    }
+    if (typeof a.content === "string") change.body = a.content.slice(0, 4000);
+    else if (typeof a.diff === "string") change.body = a.diff.slice(0, 4000);
+    changes.push(change);
+    render();
+  }
+
+  var lastArgs = null;
+  window.addEventListener("message", function (event) {
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.method === "ui/notifications/host-context-changed") { applyTheme(m.params); return; }
+    if (m.method === "ui/notifications/tool-input") { lastArgs = m.params && m.params.arguments; return; }
+    if (m.method === "ui/notifications/tool-result") {
+      addFromResult(payloadOf(m.params && m.params.result ? m.params.result : m.params), lastArgs);
+      lastArgs = null;
+      return;
+    }
+    if (m.method === "ping" && m.id !== undefined) { post({ jsonrpc: "2.0", id: m.id, result: {} }); return; }
+    if (m.method === "ui/resource-teardown" && m.id !== undefined) { post({ jsonrpc: "2.0", id: m.id, result: {} }); return; }
+  });
+
+  // Handshake: advertise pip so the host can dock this app.
+  var idc = 1; var pending = {};
+  function rpc(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = idc++; pending[id] = { resolve: resolve, reject: reject };
+      post({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    });
+  }
+  window.addEventListener("message", function (event) {
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) {
+      var pr = pending[m.id]; if (!pr) return; delete pending[m.id];
+      if (m.error) pr.reject(new Error(m.error.message || "RPC error")); else pr.resolve(m.result);
+    }
+  });
+  rpc("ui/initialize", {
+    appInfo: { name: "devcanvas-diff", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
+    protocolVersion: "2026-01-26"
+  }).then(function (result) {
+    applyTheme(result && result.hostContext);
+    notify("ui/notifications/initialized", {});
+    sendSize();
+  }).catch(function () { sendSize(); });
 })();
 </script>
 </body>
