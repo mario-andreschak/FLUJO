@@ -25,6 +25,7 @@
  * block; failures come back as `isError: true` rather than thrown.
  */
 import path from 'path';
+import fs from 'fs';
 import { spawn, type ChildProcess } from 'child_process';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { killProcessTree } from '@/utils/process/killProcessTree';
@@ -43,6 +44,79 @@ const MAX_SESSIONS = 25;
 const SESSION_TTL_MS = 10 * 60_000;
 
 type ShellKind = 'default' | 'pwsh' | 'bash';
+
+/**
+ * Locate an executable by name on `PATH` ourselves (rather than relying on
+ * `spawn`'s own resolution) so we can know in advance whether `pwsh`/`bash`
+ * are actually available and degrade gracefully instead of failing async with
+ * ENOENT (issue #225).
+ */
+function findExecutableOnPath(name: string): string | null {
+  const pathEnv = process.env.PATH ?? process.env.Path ?? '';
+  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+  const exts = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    : [''];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, `${name}${ext}`);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        /* not found here, keep looking */
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Well-known install locations for Git for Windows' `bash.exe`, checked when
+ * it isn't on `PATH`. Git for Windows bundles real Unix utilities (grep,
+ * find, sed, …) and is already installed on most Windows dev machines, so
+ * this is enough to make `shell: "bash"` actually work there without
+ * bundling a utilities layer of our own (issue #225).
+ */
+function windowsGitBashCandidates(): string[] {
+  const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LocalAppData]
+    .filter((v): v is string => Boolean(v));
+  return roots.flatMap((root) => [
+    path.join(root, 'Git', 'bin', 'bash.exe'),
+    path.join(root, 'Git', 'usr', 'bin', 'bash.exe'),
+    path.join(root, 'Programs', 'Git', 'bin', 'bash.exe'),
+    path.join(root, 'Programs', 'Git', 'usr', 'bin', 'bash.exe'),
+  ]);
+}
+
+let cachedBashPath: string | null | undefined;
+function resolveBashExecutable(): string | null {
+  if (cachedBashPath !== undefined) return cachedBashPath;
+  let found = findExecutableOnPath('bash');
+  if (!found && process.platform === 'win32') {
+    found = windowsGitBashCandidates().find((candidate) => {
+      try {
+        return fs.statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    }) ?? null;
+  }
+  cachedBashPath = found;
+  return found;
+}
+
+let cachedPwshPath: string | null | undefined;
+function resolvePwshExecutable(): string | null {
+  if (cachedPwshPath !== undefined) return cachedPwshPath;
+  cachedPwshPath = findExecutableOnPath('pwsh');
+  return cachedPwshPath;
+}
+
+/** Test-only: forget cached shell-executable lookups. */
+export function _resetBashShellCacheForTests(): void {
+  cachedBashPath = undefined;
+  cachedPwshPath = undefined;
+}
 
 interface BashSession {
   id: string;
@@ -160,22 +234,41 @@ function buildChildEnv(): NodeJS.ProcessEnv {
   return out;
 }
 
+interface SpawnPlan {
+  file: string;
+  args: string[];
+  useShell: boolean;
+  /** The shell actually used, which may differ from what was requested (see `fallbackFrom`). */
+  effectiveShell: ShellKind;
+  /** Set when the requested shell wasn't available and we degraded to the default shell. */
+  fallbackFrom?: ShellKind;
+}
+
 /**
  * Build the spawn arguments for the requested shell. Returns the command, argv
- * and whether Node's `shell:true` wrapping applies. `pwsh`/`bash` are launched
- * explicitly (no shell wrapper); the default kind relies on `shell:true`.
+ * and whether Node's `shell:true` wrapping applies. `pwsh`/`bash` are resolved
+ * to a concrete executable path up front (checking Git for Windows' well-known
+ * install locations for `bash` when it isn't on `PATH`); if the requested
+ * shell can't be found at all, this degrades to the default OS shell rather
+ * than failing, matching the tool's documented behavior (issue #225).
  */
-function buildSpawn(command: string, shell: ShellKind): { file: string; args: string[]; useShell: boolean } {
+function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
   if (shell === 'pwsh') {
-    // pwsh (PowerShell 7+) is cross-platform; fall back to Windows PowerShell.
-    const file = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
-    return { file, args: ['-NoProfile', '-NonInteractive', '-Command', command], useShell: false };
+    const resolved = resolvePwshExecutable();
+    if (resolved) {
+      return { file: resolved, args: ['-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
+    }
+    return { file: command, args: [], useShell: true, effectiveShell: 'default', fallbackFrom: 'pwsh' };
   }
   if (shell === 'bash') {
-    return { file: 'bash', args: ['-c', command], useShell: false };
+    const resolved = resolveBashExecutable();
+    if (resolved) {
+      return { file: resolved, args: ['-c', command], useShell: false, effectiveShell: 'bash' };
+    }
+    return { file: command, args: [], useShell: true, effectiveShell: 'default', fallbackFrom: 'bash' };
   }
   // Default OS shell via Node's shell wrapper.
-  return { file: command, args: [], useShell: true };
+  return { file: command, args: [], useShell: true, effectiveShell: 'default' };
 }
 
 function coerceShell(input: unknown): ShellKind {
@@ -185,17 +278,24 @@ function coerceShell(input: unknown): ShellKind {
 interface SpawnOutcome {
   child: ChildProcess;
   startError?: string;
+  effectiveShell: ShellKind;
+  fallbackFrom?: ShellKind;
 }
 
 function startChild(command: string, cwd: string, shell: ShellKind): SpawnOutcome {
-  const { file, args, useShell } = buildSpawn(command, shell);
+  const { file, args, useShell, effectiveShell, fallbackFrom } = buildSpawn(command, shell);
   // POSIX: detached so killProcessTree can signal the whole group (see killProcessTree).
   const detached = process.platform !== 'win32';
   try {
     const child = spawn(file, args, { cwd, shell: useShell, env: buildChildEnv(), detached });
-    return { child };
+    return { child, effectiveShell, fallbackFrom };
   } catch (err) {
-    return { child: undefined as unknown as ChildProcess, startError: err instanceof Error ? err.message : String(err) };
+    return {
+      child: undefined as unknown as ChildProcess,
+      startError: err instanceof Error ? err.message : String(err),
+      effectiveShell,
+      fallbackFrom,
+    };
   }
 }
 
@@ -310,7 +410,7 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
   const cwd = resolveCwd(args.cwd, roots);
-  const shell = coerceShell(args.shell);
+  const requestedShell = coerceShell(args.shell);
   const normalize = args.normalizeNewlines === true;
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
   const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
@@ -323,9 +423,10 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
 
     const append = makeAppender(() => output, (v, t) => { output = v; truncated = t || truncated; });
 
-    const { child, startError } = startChild(command, cwd, shell);
+    const { child, startError, effectiveShell, fallbackFrom } = startChild(command, cwd, requestedShell);
+    const shellFallback = fallbackFrom ? { requestedShell: fallbackFrom, usedShell: effectiveShell } : undefined;
     if (startError || !child) {
-      resolve(textResult({ error: `Failed to start command (${shell}): ${startError ?? 'unknown error'}`, cwd, shell }, true));
+      resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellFallback }, true));
       return;
     }
 
@@ -347,18 +448,18 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
     child.stderr?.on('data', (d: Buffer) => append(d.toString()));
 
     child.on('error', (err: Error) => {
-      // ENOENT for pwsh/bash means the requested shell isn't installed.
+      // ENOENT here means the resolved executable vanished between resolution and spawn.
       append(`\n${err.message}`);
-      finish(textResult({ error: `Command failed to start (${shell}): ${err.message}`, cwd, shell, output: maybeNormalize(output, normalize) }, true));
+      finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, shellFallback, output: maybeNormalize(output, normalize) }, true));
     });
 
     child.on('close', (code: number | null) => {
       const finalOut = maybeNormalize(output, normalize);
       if (timedOut) {
-        finish(textResult({ timedOut: true, cwd, shell, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]` }, true));
+        finish(textResult({ timedOut: true, cwd, shell: effectiveShell, shellFallback, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]` }, true));
         return;
       }
-      finish(textResult({ exitCode: code, cwd, shell, truncated, output: finalOut }, code !== 0));
+      finish(textResult({ exitCode: code, cwd, shell: effectiveShell, shellFallback, truncated, output: finalOut }, code !== 0));
     });
   });
 }
@@ -390,10 +491,11 @@ function startTool(args: Record<string, unknown>, roots: string[]): CallToolResu
   registerExitCleanup();
 
   const cwd = resolveCwd(args.cwd, roots);
-  const shell = coerceShell(args.shell);
-  const { child, startError } = startChild(command, cwd, shell);
+  const requestedShell = coerceShell(args.shell);
+  const { child, startError, effectiveShell, fallbackFrom } = startChild(command, cwd, requestedShell);
+  const shellFallback = fallbackFrom ? { requestedShell: fallbackFrom, usedShell: effectiveShell } : undefined;
   if (startError || !child) {
-    return textResult({ error: `Failed to start command (${shell}): ${startError ?? 'unknown error'}`, cwd, shell }, true);
+    return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellFallback }, true);
   }
 
   const id = `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -426,7 +528,7 @@ function startTool(args: Record<string, unknown>, roots: string[]): CallToolResu
     scheduleReap(session);
   });
 
-  return textResult({ sessionId: id, cwd, shell });
+  return textResult({ sessionId: id, cwd, shell: effectiveShell, shellFallback });
 }
 
 function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Record<string, unknown> {
