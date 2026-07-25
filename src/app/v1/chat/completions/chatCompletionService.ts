@@ -23,17 +23,6 @@ export function countTokens(text: string): number {
 // Using OpenAI's type for token usage - Keep as is
 export type TokenUsage = OpenAI.CompletionUsage;
 
-// isRetryableError - Keep as is
-export function isRetryableError(error: any): boolean {
-  log.verbose('Checking if error is retryable', { errorType: typeof error, status: error.status, code: error.code, message: error.message }); // Changed to verbose
-  if (error.status === 429) return true;
-  if (error.status >= 500 && error.status < 600) return true;
-  if (error.message?.includes('timeout') || error.code === 'ETIMEDOUT') return true;
-  if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') return true;
-  log.verbose('Error is not retryable', { error }); // Changed to verbose
-  return false;
-}
-
 // Persist conversation state WITHOUT the in-memory-only debug execution trace
 // (keeps the on-disk conversation lean). See persistConversationState.
 const persistState = persistConversationState;
