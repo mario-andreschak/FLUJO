@@ -403,6 +403,11 @@ export class SubflowNode extends BaseNode {
       // depth and maxChainDepth stays effective for nested signals (issue #117).
       chainDepth: sharedState.chainDepth ?? 0,
       parentRunId: sharedState.conversationId,
+      // Wave lineage (issue #220): carry the parent run's planned-execution id
+      // down to each persisted child run so a sub-flow conversation inherits the
+      // parent's wave membership instead of being bucketed as "Ad-hoc". Absent
+      // for an ad-hoc parent (no wave), which correctly keeps the child ad-hoc.
+      plannedExecutionId: sharedState.plannedExecutionId,
       showSteps,
       persistConversation,
       // The engine attaches the run's emit to sharedState for the duration of
@@ -692,6 +697,7 @@ export class SubflowNode extends BaseNode {
       depth: prepResult.depth,
       chainDepth: prepResult.chainDepth,
       parentRunId: prepResult.parentRunId,
+      ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
       ...(childEmit ? { emit: childEmit } : {}),
     });
 
@@ -784,6 +790,7 @@ export class SubflowNode extends BaseNode {
           depth: prepResult.depth,
           chainDepth: prepResult.chainDepth,
           parentRunId: prepResult.parentRunId,
+          ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
           ...(emit ? { emit } : {}),
         });
         results[i] =

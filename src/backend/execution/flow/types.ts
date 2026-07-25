@@ -876,6 +876,11 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     chainDepth?: number;
     /** Parent conversation id, for nesting provenance. */
     parentRunId?: string;
+    /** The parent run's planned-execution id (issue #220), passed unchanged to
+     *  each child run so a persisted sub-flow conversation inherits the parent's
+     *  wave membership instead of falling into the "Ad-hoc" bucket. Undefined for
+     *  ad-hoc parent runs (no wave), which keeps the child ad-hoc too. */
+    plannedExecutionId?: string;
     /** Whether the child run's events are folded into the parent conversation
      *  (outputMode 'steps', the default) or hidden ('final-only'). */
     showSteps: boolean;

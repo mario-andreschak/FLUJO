@@ -96,6 +96,22 @@ describe('SubflowNode spawn-with-brief — caller tasks (issue #156)', () => {
     expect(exec.outputText).toBe('OUT_audit security\n\nOUT_check cleanliness\n\nOUT_assess reuse');
   });
 
+  it('propagates the parent plannedExecutionId to EVERY spawned lane so they join the parent wave (#220)', async () => {
+    const node = makeNode();
+    const params = makeParams({ subflowId: 'agent', allowCallerFanout: true });
+    const shared = makeShared({
+      plannedExecutionId: 'exec-77',
+      handoffInput: { targetNodeId: 'sub-1', prompt: '', tasks: ['task one', 'task two'] },
+    });
+    const prep = await node.prep(shared, params);
+    await node.execCore(prep);
+
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    for (const call of runFlowMock.mock.calls) {
+      expect(call[0].plannedExecutionId).toBe('exec-77');
+    }
+  });
+
   it('appends each brief to the shared transcript in history inputMode', async () => {
     const node = makeNode();
     const params = makeParams({ subflowId: 'agent', allowCallerFanout: true, inputMode: 'full-history' });

@@ -350,6 +350,24 @@ describe('SubflowNode', () => {
     expect(runFlowMock).toHaveBeenCalledWith(expect.objectContaining({ depth: 4 }));
   });
 
+  // --- Wave lineage: inherit the parent's plannedExecutionId (issue #220) ---
+
+  it('propagates the parent run plannedExecutionId to the child run so it joins the same wave (#220)', async () => {
+    // Without this the persisted sub-flow conversation carried no
+    // plannedExecutionId and fell into the "Ad-hoc" wave bucket.
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState({ plannedExecutionId: 'exec-42' }));
+
+    expect(runFlowMock.mock.calls[0][0].plannedExecutionId).toBe('exec-42');
+  });
+
+  it('omits plannedExecutionId when the parent run has none (an ad-hoc parent stays ad-hoc) (#220)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    await node.run(makeState()); // no plannedExecutionId on the parent
+
+    expect(runFlowMock.mock.calls[0][0].plannedExecutionId).toBeUndefined();
+  });
+
   // --- Debugging: persist the subflow's own conversation (issue #125) ---
 
   it('persists the child run as its own conversation when saveConversation is true (issue #125)', async () => {
