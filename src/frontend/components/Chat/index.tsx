@@ -13,6 +13,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import EditIcon from '@mui/icons-material/Edit';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
@@ -34,6 +35,7 @@ import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
+import ExecutedFlowPanel from './ExecutedFlowPanel';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { getStartNode } from '@/utils/shared/getStartNode';
 import Spinner from '@/frontend/components/shared/Spinner';
@@ -53,6 +55,7 @@ import {
   resourceActivityKey,
 } from '@/utils/shared/liveActivity';
 import { LiveLanes, EMPTY_LIVE_LANES, applyLaneEvent } from '@/utils/shared/liveLanes';
+import { deriveExecutedNodeIds } from '@/utils/shared/executedNodes';
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
@@ -287,6 +290,57 @@ const Chat: React.FC = () => {
       window.localStorage.setItem('flujo-debugger-expanded', debuggerExpanded ? '1' : '0');
     }
   }, [debuggerExpanded]);
+
+  // Executed-steps panel (issue #213): a hideable, resizable side panel that
+  // renders the current conversation's flow and highlights the executed path.
+  // Both preferences are UI-level (not per-conversation), so visibility/width
+  // naturally persist when switching between conversations and across reloads.
+  const [workflowPanelVisible, setWorkflowPanelVisible] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('flujo-workflow-panel-visible') === '1';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('flujo-workflow-panel-visible', workflowPanelVisible ? '1' : '0');
+    }
+  }, [workflowPanelVisible]);
+  const [workflowPanelWidth, setWorkflowPanelWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 320;
+    const saved = Number(window.localStorage.getItem('flujo-workflow-panel-width'));
+    return Number.isFinite(saved) && saved > 0 ? saved : 320;
+  });
+  // Delta-based resize so the width is correct regardless of the panel's
+  // position in the flex row (it may sit left of the debugger dock).
+  const startWorkflowResize = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    let startWidth = 0;
+    setWorkflowPanelWidth(w => { startWidth = w; return w; });
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    const onMove = (ev: PointerEvent) => {
+      // Dragging the divider left (clientX decreases) grows the panel.
+      const width = Math.min(
+        Math.max(startWidth + (startX - ev.clientX), 240),
+        Math.round(window.innerWidth * 0.7)
+      );
+      setWorkflowPanelWidth(width);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      setWorkflowPanelWidth(w => {
+        if (w > 0) window.localStorage.setItem('flujo-workflow-panel-width', String(Math.round(w)));
+        return w;
+      });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
 
   const startDebuggerResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -764,6 +818,19 @@ const Chat: React.FC = () => {
         })) || [],
     [flows, detailedConversation?.flowId]
   );
+
+  // Node ids actually executed in this conversation, for the Executed-Steps
+  // panel (issue #213). Union of three graceful-fallback sources so the path is
+  // recoverable whether or not the run's SharedState is currently hydrated:
+  //  1. per-message processNodeId (append-style log, always on old convos),
+  //  2. the nodeExecutionTracker (populated in debug + normal runs),
+  //  3. the executionTrace (debug mode only).
+  // Only visited nodes are added, so an untaken branch (B xor C) stays dimmed.
+  const executedNodeIds = useMemo(() => deriveExecutedNodeIds({
+    messages: detailedConversation?.messages,
+    nodeExecutionTracker: debugState?.trackingInfo?.nodeExecutionTracker,
+    executionTrace: debugState?.executionTrace,
+  }), [detailedConversation?.messages, debugState]);
 
   // The node the NEXT message will be processed on, for the chat input's node
   // pill: a manual pick wins, then the server's currentNodeId, then the most
@@ -2683,6 +2750,17 @@ const Chat: React.FC = () => {
                       <EditIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
+                  {/* Toggle the Executed-Steps path panel (issue #213). */}
+                  <Tooltip title={workflowPanelVisible ? 'Hide executed steps' : 'Show executed steps'}>
+                    <IconButton
+                      size="small"
+                      color={workflowPanelVisible ? 'primary' : 'default'}
+                      onClick={() => setWorkflowPanelVisible(v => !v)}
+                      aria-label="Toggle executed steps panel"
+                    >
+                      <AccountTreeOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                 </>
               )}
             </Box>
@@ -2972,6 +3050,48 @@ const Chat: React.FC = () => {
           />
         </Box>
         </Box> {/* End Chat Area */}
+
+        {/* Executed-Steps panel (issue #213): a hideable, resizable side panel
+            that renders the current conversation's flow and highlights the
+            executed path. Independent of the debugger — works for normal,
+            non-debug chats. */}
+        {workflowPanelVisible && currentConversationId && (
+          <>
+            {/* Draggable divider: resizes the executed-steps panel. */}
+            <Box
+              onPointerDown={startWorkflowResize}
+              sx={{
+                width: '6px',
+                flexShrink: 0,
+                cursor: 'col-resize',
+                bgcolor: 'divider',
+                transition: 'background-color 120ms',
+                '&:hover': { bgcolor: 'primary.main' },
+                touchAction: 'none',
+              }}
+              aria-label="Resize executed steps panel"
+            />
+            <Box
+              sx={{
+                width: `${workflowPanelWidth}px`,
+                minWidth: 240,
+                maxWidth: '70vw',
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+              }}
+            >
+              <ExecutedFlowPanel
+                flowId={detailedConversation?.flowId || currentConversationSummary?.flowId || null}
+                flowSnapshot={debugState?.flowSnapshot ?? null}
+                executedNodeIds={executedNodeIds}
+                liveActivity={liveActivity}
+                onClose={() => setWorkflowPanelVisible(false)}
+              />
+            </Box>
+          </>
+        )}
 
         {/* Debugger Area (open for the whole debug session, not only when paused).
             Docked side-panel layout — shown unless the user expanded it into the
