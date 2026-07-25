@@ -54,15 +54,43 @@ export const ServerRefSchema = z.discriminatedUnion('kind', [
   RemoteServerRefSchema,
 ]);
 
-export const ManifestServerSchema = z.object({
-  /** The name this server is installed under in FLUJO (referenced by flows). */
-  localName: z.string().min(1),
-  ref: ServerRefSchema,
-  /** Literal environment values, by env-var name. */
-  env: z.record(z.string(), z.string()).optional(),
-  /** Map of env-var name -> secret key; resolved from the supplied secrets. */
-  envFromSecret: z.record(z.string(), z.string()).optional(),
-});
+export const ManifestServerSchema = z
+  .object({
+    /** The name this server is installed under in FLUJO (referenced by flows). */
+    localName: z.string().min(1),
+    ref: ServerRefSchema,
+    /** Literal environment values, by env-var name. */
+    env: z.record(z.string(), z.string()).optional(),
+    /** Map of env-var name -> secret key; resolved from the supplied secrets. */
+    envFromSecret: z.record(z.string(), z.string()).optional(),
+    /** Literal HTTP header values (for non-secret headers on remote servers only). */
+    headers: z.record(z.string(), z.string()).optional(),
+    /**
+     * Map of HTTP header name → secret key; resolved from the supplied secrets.
+     * The stored value becomes the verbatim header value (e.g. "Bearer ghp_xxx" —
+     * no automatic prefix is applied; callers must supply the full header value).
+     * Valid only when ref.kind === 'remote'; rejected for registry refs.
+     */
+    headersFromSecret: z.record(z.string(), z.string()).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.ref.kind !== 'remote') {
+      if (val.headers && Object.keys(val.headers).length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['headers'],
+          message: '`headers` is only valid on remote server refs',
+        });
+      }
+      if (val.headersFromSecret && Object.keys(val.headersFromSecret).length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['headersFromSecret'],
+          message: '`headersFromSecret` is only valid on remote server refs',
+        });
+      }
+    }
+  });
 export type ManifestServer = z.infer<typeof ManifestServerSchema>;
 
 export const ManifestModelSchema = z.object({
