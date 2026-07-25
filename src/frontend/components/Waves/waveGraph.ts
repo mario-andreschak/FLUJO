@@ -28,13 +28,13 @@ import { enumerateOccurrences, timelineFraction } from './waveTimeline';
 export const CLOCK_X = 16;
 export const BASE_Y = 24;
 /** Vertical distance between chain levels. */
-export const LANE_H = 150;
+export const LANE_H = 220;
 /** Left edge of the timeline band (right of the clock). */
 export const TIMELINE_X0 = 160;
 /** Width of the timeline band the window is mapped across. */
 export const TIMELINE_W = 620;
 /** Horizontal spacing between sibling cards in an expanded level. */
-export const CHILD_SPACING = 250;
+export const CHILD_SPACING = 320;
 
 /* --------------------------------------------------------------------- */
 /* Public shapes                                                          */

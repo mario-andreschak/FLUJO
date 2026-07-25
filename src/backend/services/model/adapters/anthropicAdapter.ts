@@ -14,6 +14,37 @@ const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 const DEFAULT_MAX_TOKENS = 8192;
 
 /**
+ * Static denylist of model-name substrings that no longer accept the
+ * `temperature` sampling parameter (Anthropic deprecated it for adaptive-
+ * thinking models starting with claude-opus-4-7).
+ *
+ * Rules:
+ * - Match is case-insensitive substring; we use lowercase model names.
+ * - Prefer false-negatives (include temperature) over false-positives (break
+ *   the call) for unknown models: an unsupported temperature produces a 400
+ *   that the retry path catches; a missing temperature on a model that wants it
+ *   would silently change behaviour.
+ */
+const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
+  'claude-opus-4-7',
+  'claude-opus-4-8',
+  'claude-opus-4-9',
+  'claude-fable-4',
+  'claude-fable-5',
+  'claude-sonnet-5',
+  'claude-haiku-5',
+] as const;
+
+/**
+ * Returns true when the Anthropic model is expected to accept the `temperature`
+ * parameter; false for models that reject it with a 400.
+ */
+export function anthropicModelSupportsTemperature(modelName: string): boolean {
+  const lower = modelName.toLowerCase();
+  return !TEMPERATURE_DEPRECATED_SUBSTRINGS.some(s => lower.includes(s));
+}
+
+/**
  * Convert OpenAI-format messages into Anthropic's shape:
  *   - system messages are hoisted into the top-level `system` string
  *   - assistant tool_calls become `tool_use` content blocks
@@ -214,10 +245,11 @@ export class AnthropicAdapter implements CompletionAdapter {
     const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
     const anthropicTools = toAnthropicTools(tools);
 
+    const includeTemperature = anthropicModelSupportsTemperature(model.name);
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: model.name,
       max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-      temperature,
+      ...(includeTemperature ? { temperature } : {}),
       messages: anthropicMessages,
       ...(system ? { system } : {}),
       ...(anthropicTools ? { tools: anthropicTools } : {}),
@@ -230,7 +262,30 @@ export class AnthropicAdapter implements CompletionAdapter {
     });
 
     // The abort signal (Stop button) cancels the in-flight HTTP request.
-    const resp = await client.messages.create(params, signal ? { signal } : undefined);
+    let resp: Anthropic.Message;
+    try {
+      resp = await client.messages.create(params, signal ? { signal } : undefined);
+    } catch (err) {
+      // Some models (e.g. claude-opus-4-7+) reject `temperature` with a 400.
+      // When not yet covered by the static denylist, auto-retry without it.
+      if (
+        err instanceof Anthropic.BadRequestError &&
+        err.message.includes('temperature') &&
+        err.message.toLowerCase().includes('deprecated') &&
+        'temperature' in params
+      ) {
+        log.warn(
+          'Anthropic API rejected temperature for model; retrying without it. ' +
+            'Consider adding this model to TEMPERATURE_DEPRECATED_SUBSTRINGS.',
+          { model: model.name }
+        );
+        const paramsWithoutTemp = { ...params };
+        delete (paramsWithoutTemp as Partial<typeof paramsWithoutTemp>).temperature;
+        resp = await client.messages.create(paramsWithoutTemp, signal ? { signal } : undefined);
+      } else {
+        throw err;
+      }
+    }
     return { completion: toChatCompletion(model.name, resp) };
   }
 }
