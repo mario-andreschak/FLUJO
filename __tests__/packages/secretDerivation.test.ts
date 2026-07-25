@@ -31,6 +31,8 @@ import {
 } from '@/backend/services/packages/deriveSecrets';
 import { buildManifestFromEntities } from '@/backend/services/packages/buildPackage';
 import {
+  buildManualProposal,
+  MANUAL_EXCERPT_MAX,
   secretProposalId,
   toProposalSecretName,
   type SecretProposal,
@@ -111,10 +113,55 @@ describe('detectHeuristicSecrets', () => {
     expect(posix[0].excerpt).toBe('/home/alice/project/data');
   });
 
-  it('detects owner/repo slugs', () => {
-    const out = detectHeuristicSecrets([T('a', 'clone mario-andreschak/FLUJO now')]);
+  it('detects owner/repo slugs only in a VCS context by default (issue #208)', () => {
+    // A bare word/word slug is NOT flagged by default anymore.
+    const bare = detectHeuristicSecrets([T('a', 'clone mario-andreschak/FLUJO now')]);
+    expect(bare.some((p) => p.kind === 'repo')).toBe(false);
+
+    // In a real VCS URL it IS flagged (high confidence).
+    const ctx = detectHeuristicSecrets([T('a', 'clone https://github.com/mario-andreschak/FLUJO.git')]);
+    const repo = ctx.find((p) => p.kind === 'repo');
+    expect(repo).toMatchObject({ excerpt: 'mario-andreschak/FLUJO', confidence: 'high' });
+
+    const ssh = detectHeuristicSecrets([T('b', 'git@github.com:mario-andreschak/FLUJO.git')]);
+    expect(ssh.some((p) => p.kind === 'repo' && p.excerpt === 'mario-andreschak/FLUJO')).toBe(true);
+  });
+
+  it('does not flag ordinary word/word strings like files/folders (issue #208)', () => {
+    const out = detectHeuristicSecrets([T('a', 'copy files/folders into src/utils please')]);
+    expect(out.some((p) => p.kind === 'repo')).toBe(false);
+  });
+
+  it('flags bare owner/repo slugs only when opt-in enableRepoSlug is set (low confidence)', () => {
+    const out = detectHeuristicSecrets([T('a', 'clone mario-andreschak/FLUJO now')], {
+      enableRepoSlug: true,
+    });
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ kind: 'repo', excerpt: 'mario-andreschak/FLUJO' });
+    expect(out[0]).toMatchObject({ kind: 'repo', excerpt: 'mario-andreschak/FLUJO', confidence: 'low' });
+    // Even opt-in, common non-repo tokens are stop-listed.
+    const stop = detectHeuristicSecrets([T('b', 'files/folders')], { enableRepoSlug: true });
+    expect(stop.some((p) => p.kind === 'repo')).toBe(false);
+  });
+
+  it('allow-lists well-known system paths but keeps user-profile paths (issue #208)', () => {
+    const system = detectHeuristicSecrets([T('a', 'binary at /usr/local/bin/node here')]);
+    expect(system.some((p) => p.kind === 'path')).toBe(false);
+    const winSystem = detectHeuristicSecrets([T('b', 'dll in C:\\Windows\\System32\\kernel32.dll')]);
+    expect(winSystem.some((p) => p.kind === 'path')).toBe(false);
+    const userPath = detectHeuristicSecrets([T('c', 'lives in /home/alice/project/data')]);
+    expect(userPath.some((p) => p.kind === 'path')).toBe(true);
+  });
+
+  it('defaults the noisy entropy rule OFF (issue #208)', () => {
+    // A high-entropy blob NOT attached to a secret-ish key is ignored by default.
+    const off = detectHeuristicSecrets([T('a', 'ref A1b2C3d4E5f6G7h8I9j0K1l2m3N4 here')]);
+    expect(off.some((p) => p.excerpt === 'A1b2C3d4E5f6G7h8I9j0K1l2m3N4')).toBe(false);
+    // ...but ON when explicitly enabled, tagged low confidence.
+    const on = detectHeuristicSecrets([T('a', 'ref A1b2C3d4E5f6G7h8I9j0K1l2m3N4 here')], {
+      enableEntropy: true,
+    });
+    const hit = on.find((p) => p.excerpt === 'A1b2C3d4E5f6G7h8I9j0K1l2m3N4');
+    expect(hit).toMatchObject({ confidence: 'low' });
   });
 
   it('detects credential-bearing URLs and prefers them over inner spans', () => {
@@ -324,7 +371,7 @@ describe('backstopScan', () => {
 describe('deriveSecretProposals (heuristic + optional model)', () => {
   it('merges heuristic and model proposals over the extracted content', async () => {
     const entities = {
-      flows: [flow('f', [promptNode('n', 'repo mario-andreschak/FLUJO')])],
+      flows: [flow('f', [promptNode('n', 'repo https://github.com/mario-andreschak/FLUJO')])],
       models: [],
       plannedExecutions: [pe('p', 'email carol@example.com')],
     };
@@ -409,5 +456,40 @@ describe('buildManifestFromEntities with #195 substitutions', () => {
     expect(result.ok).toBe(true);
     expect(result.json).toContain('data.json');
     expect(result.package?.secrets ?? []).toHaveLength(0);
+  });
+});
+
+// --- manual proposals (issue #208) ------------------------------------------
+
+describe('buildManualProposal', () => {
+  it('builds an accepted manual proposal and flows through substitutions', () => {
+    const p = buildManualProposal({ excerpt: 'my-instance-value', secretName: 'my_val', kind: 'other' });
+    expect(p).not.toBeNull();
+    expect(p).toMatchObject({
+      excerpt: 'my-instance-value',
+      source: 'manual',
+      accepted: true,
+      suggestedSecretName: 'MY_VAL',
+    });
+    const subs = proposalsToSubstitutions([p as SecretProposal]);
+    expect(subs[0]).toMatchObject({ excerpt: 'my-instance-value', secretName: 'MY_VAL' });
+  });
+
+  it('coerces an invalid name to a valid identifier and defaults kind', () => {
+    const p = buildManualProposal({ excerpt: 'x', secretName: 'bad name!' });
+    expect(p?.kind).toBe('other');
+    expect(p?.suggestedSecretName).toMatch(/^SECRET_/);
+  });
+
+  it('rejects empty or oversized input', () => {
+    expect(buildManualProposal({ excerpt: '   ', secretName: 'N' })).toBeNull();
+    expect(buildManualProposal({ excerpt: 'a'.repeat(MANUAL_EXCERPT_MAX + 1), secretName: 'N' })).toBeNull();
+  });
+
+  it('produces a stable id for the same location + excerpt', () => {
+    const a = buildManualProposal({ excerpt: 'dup', secretName: 'A' });
+    const b = buildManualProposal({ excerpt: 'dup', secretName: 'B' });
+    expect(a?.id).toBe(b?.id);
+    expect(a?.id).toBe(secretProposalId('manual', 'dup'));
   });
 });

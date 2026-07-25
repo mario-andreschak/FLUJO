@@ -588,7 +588,12 @@ function restrictToResolved(resolved: ResolvedSelection, entities: PackageEntiti
  */
 export async function deriveSecretsForSelection(
   selection: PackageSelection,
-  options: { modelIdentifier?: string; entropyThreshold?: number; enableEntropy?: boolean } = {},
+  options: {
+    modelIdentifier?: string;
+    entropyThreshold?: number;
+    enableEntropy?: boolean;
+    enableRepoSlug?: boolean;
+  } = {},
 ): Promise<DeriveResult> {
   const { resolved, entities } = await resolvePackageSelection(selection);
   const scanEntities = restrictToResolved(resolved, entities);
@@ -596,6 +601,7 @@ export async function deriveSecretsForSelection(
   const deriveOptions: import('./deriveSecrets').DeriveOptions = {
     entropyThreshold: options.entropyThreshold,
     enableEntropy: options.enableEntropy,
+    enableRepoSlug: options.enableRepoSlug,
   };
   if (options.modelIdentifier) {
     const { modelService } = await import('@/backend/services/model');

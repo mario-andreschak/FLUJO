@@ -19,21 +19,58 @@ import { SECRET_PLACEHOLDER_REGEX } from '@/shared/types/package/constants';
 import {
   secretProposalId,
   toProposalSecretName,
+  type SecretConfidence,
   type SecretKind,
   type SecretProposal,
 } from '@/shared/types/package/secretProposal';
 import type { ScanTarget } from './secretScanTargets';
 
 /** Default Shannon-entropy threshold (bits/char) for the generic-token rule. */
-export const DEFAULT_ENTROPY_THRESHOLD = 3.5;
+export const DEFAULT_ENTROPY_THRESHOLD = 4.0;
 /** Minimum length a bare token must reach before the entropy rule considers it. */
-export const MIN_ENTROPY_TOKEN_LENGTH = 20;
+export const MIN_ENTROPY_TOKEN_LENGTH = 24;
 
 export interface HeuristicOptions {
   /** Override the entropy threshold (bits/char). */
   entropyThreshold?: number;
-  /** Turn the (noisier) high-entropy generic-token rule off. Default on. */
+  /**
+   * Turn the (noisy) high-entropy generic-token rule ON. Default OFF (issue
+   * #208): it produced hundreds of false positives on ordinary long strings.
+   */
   enableEntropy?: boolean;
+  /**
+   * Turn the (noisy) bare `word/word` owner/repo-slug rule ON. Default OFF
+   * (issue #208): it fired on ordinary strings like `files/folders`. When off,
+   * only owner/repo slugs in an explicit VCS context (github.com/…, git@…) are
+   * flagged.
+   */
+  enableRepoSlug?: boolean;
+}
+
+/**
+ * POSIX path prefixes that are almost always system/tooling paths, not
+ * instance-specific secrets. User-profile paths (`/home/…`, `/Users/…`) are
+ * deliberately NOT here — those are the real per-machine leak we want to keep.
+ */
+const POSIX_PATH_ALLOW_PREFIXES = [
+  '/usr/', '/bin/', '/sbin/', '/lib/', '/lib64/', '/etc/', '/var/', '/opt/',
+  '/proc/', '/sys/', '/dev/', '/tmp/', '/run/', '/boot/', '/mnt/', '/srv/',
+  '/node_modules/',
+];
+
+/** Windows path prefixes that are system/tooling locations, not secrets. */
+const WINDOWS_PATH_ALLOW_PREFIXES = [
+  'c:\\windows', 'c:\\program files', 'c:\\programdata',
+];
+
+/** Is this matched path a well-known non-secret system/tooling path? */
+function isAllowlistedPath(pathValue: string): boolean {
+  const lower = pathValue.toLowerCase();
+  if (lower.includes('node_modules/') || lower.includes('node_modules\\')) return true;
+  if (/^[a-z]:\\/.test(lower)) {
+    return WINDOWS_PATH_ALLOW_PREFIXES.some((p) => lower.startsWith(p));
+  }
+  return POSIX_PATH_ALLOW_PREFIXES.some((p) => lower.startsWith(p));
 }
 
 /** Shannon entropy in bits/char of a string. 0 for empty. */
@@ -56,6 +93,7 @@ interface RawMatch {
   kind: SecretKind;
   priority: number; // lower wins on overlap
   rationale: string;
+  confidence: SecretConfidence;
 }
 
 /** A rule = a global regex + how to interpret its matches. */
@@ -64,6 +102,7 @@ interface Rule {
   kind: SecretKind;
   priority: number;
   rationale: string;
+  confidence: SecretConfidence;
   /** Which capture group is the secret span (default 0 = whole match). */
   group?: number;
 }
@@ -75,6 +114,7 @@ const RULES: Rule[] = [
     kind: 'url-cred',
     priority: 1,
     rationale: 'URL with embedded credentials',
+    confidence: 'high',
   },
   {
     // Authorization-style bearer tokens.
@@ -82,37 +122,75 @@ const RULES: Rule[] = [
     kind: 'token',
     priority: 2,
     rationale: 'Bearer token',
+    confidence: 'high',
+    group: 1,
+  },
+  {
+    // owner/repo slug in an EXPLICIT VCS context: github.com/owner/repo,
+    // gitlab.com/owner/repo, bitbucket.org/owner/repo, or git@host:owner/repo.
+    // High-confidence + always on (issue #208): the bare word/word slug is the
+    // noisy one and is opt-in below.
+    re: /(?:https?:\/\/)?(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99}?))(?=(?:\.git)?(?![A-Za-z0-9._/-]))/gi,
+    kind: 'repo',
+    priority: 3,
+    rationale: 'owner/repo slug in a VCS URL',
+    confidence: 'high',
+    group: 1,
+  },
+  {
+    re: /\bgit@[A-Za-z0-9.-]+:([A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99}?))(?=(?:\.git)?(?![A-Za-z0-9._/-]))/gi,
+    kind: 'repo',
+    priority: 3,
+    rationale: 'owner/repo slug in a git SSH URL',
+    confidence: 'high',
     group: 1,
   },
   {
     // Email addresses.
     re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
     kind: 'email',
-    priority: 3,
+    priority: 4,
     rationale: 'Email address',
+    confidence: 'medium',
   },
   {
     // Windows absolute paths: C:\Users\... (at least one backslash segment).
     re: /\b[A-Za-z]:\\[^\s"'<>|?*]+/g,
     kind: 'path',
-    priority: 4,
+    priority: 5,
     rationale: 'Windows absolute file path',
+    confidence: 'medium',
   },
   {
     // POSIX absolute paths: /home/alice/... (>= 2 segments, not a bare "/x").
     re: /(?<![A-Za-z0-9._~:/])\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+/g,
     kind: 'path',
-    priority: 5,
-    rationale: 'POSIX absolute file path',
-  },
-  {
-    // owner/repo slug: two GitHub-name-shaped tokens separated by a single slash.
-    re: /(?<![A-Za-z0-9._/-])[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._/-])/g,
-    kind: 'repo',
     priority: 6,
-    rationale: 'owner/repo slug',
+    rationale: 'POSIX absolute file path',
+    confidence: 'medium',
   },
 ];
+
+/**
+ * The noisy bare `word/word` owner/repo-slug rule. OFF by default (issue #208);
+ * enabled only via `enableRepoSlug`. Low confidence — default-rejected in the UI.
+ */
+const REPO_SLUG_RULE: Rule = {
+  re: /(?<![A-Za-z0-9._/-])[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._/-])/g,
+  kind: 'repo',
+  priority: 8,
+  rationale: 'owner/repo-shaped slug (opt-in, low confidence)',
+  confidence: 'low',
+};
+
+/**
+ * Common two-segment `word/word` tokens that are NOT repos — skipped even when
+ * the opt-in bare-slug rule is on, to cut the worst of the noise.
+ */
+const REPO_SLUG_STOPLIST = new Set([
+  'and/or', 'input/output', 'read/write', 'client/server', 'tcp/ip',
+  'files/folders', 'yes/no', 'true/false', 'on/off', 'src/utils', 'a/b',
+]);
 
 /** Assignment rule: `SECRET_ISH_KEY = value` / `secret-ish-key: value`. */
 const ASSIGNMENT_RE = /(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]{1,64})\s*[:=]\s*("[^"]{4,}"|'[^']{4,}'|[^\s"']{6,})/g;
@@ -131,16 +209,29 @@ function looksLikeToken(token: string, threshold: number): boolean {
   return shannonEntropy(token) >= threshold;
 }
 
-function collectRuleMatches(text: string): RawMatch[] {
+function collectRuleMatches(text: string, rules: Rule[]): RawMatch[] {
   const matches: RawMatch[] = [];
-  for (const rule of RULES) {
+  for (const rule of rules) {
     const re = new RegExp(rule.re.source, rule.re.flags);
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       const groupIdx = rule.group ?? 0;
       const value = m[groupIdx];
-      if (!value) continue;
+      if (!value) {
+        if (re.lastIndex === m.index) re.lastIndex++;
+        continue;
+      }
       const start = m.index + (groupIdx > 0 ? m[0].indexOf(value) : 0);
+      // Allow-list well-known non-secret system paths (issue #208).
+      if (rule.kind === 'path' && isAllowlistedPath(value)) {
+        if (re.lastIndex === m.index) re.lastIndex++;
+        continue;
+      }
+      // Skip common non-repo word/word tokens for the opt-in slug rule.
+      if (rule.kind === 'repo' && rule.confidence === 'low' && REPO_SLUG_STOPLIST.has(value.toLowerCase())) {
+        if (re.lastIndex === m.index) re.lastIndex++;
+        continue;
+      }
       matches.push({
         start,
         end: start + value.length,
@@ -148,6 +239,7 @@ function collectRuleMatches(text: string): RawMatch[] {
         kind: rule.kind,
         priority: rule.priority,
         rationale: rule.rationale,
+        confidence: rule.confidence,
       });
       if (re.lastIndex === m.index) re.lastIndex++; // zero-width guard
     }
@@ -176,6 +268,7 @@ function collectAssignmentMatches(text: string): RawMatch[] {
       kind: 'token',
       priority: 2, // same tier as bearer tokens — strong signal
       rationale: `Value assigned to secret-like key "${key}"`,
+      confidence: 'high',
     });
   }
   return matches;
@@ -195,6 +288,7 @@ function collectEntropyMatches(text: string, threshold: number): RawMatch[] {
       kind: 'token',
       priority: 7,
       rationale: `High-entropy string (${shannonEntropy(token).toFixed(2)} bits/char)`,
+      confidence: 'low',
     });
   }
   return matches;
@@ -251,13 +345,16 @@ export function detectHeuristicSecrets(
   options: HeuristicOptions = {},
 ): SecretProposal[] {
   const threshold = options.entropyThreshold ?? DEFAULT_ENTROPY_THRESHOLD;
-  const enableEntropy = options.enableEntropy !== false;
+  // Noisy rules are OFF by default (issue #208) — opt-in only.
+  const enableEntropy = options.enableEntropy === true;
+  const enableRepoSlug = options.enableRepoSlug === true;
+  const rules = enableRepoSlug ? [...RULES, REPO_SLUG_RULE] : RULES;
   const proposals: SecretProposal[] = [];
   const seen = new Set<string>();
 
   for (const target of targets) {
     const raw = [
-      ...collectRuleMatches(target.text),
+      ...collectRuleMatches(target.text, rules),
       ...collectAssignmentMatches(target.text),
       ...(enableEntropy ? collectEntropyMatches(target.text, threshold) : []),
     ].filter((m) => !hasPlaceholder(m.value));
@@ -272,6 +369,7 @@ export function detectHeuristicSecrets(
         excerpt: match.value,
         kind: match.kind,
         source: 'heuristic',
+        confidence: match.confidence,
         suggestedSecretName: suggestSecretName(match.kind, match.value),
         rationale: match.rationale,
       });

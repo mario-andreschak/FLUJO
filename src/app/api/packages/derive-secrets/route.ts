@@ -58,12 +58,14 @@ export async function POST(request: NextRequest) {
       ? raw.entropyThreshold
       : undefined;
   const enableEntropy = typeof raw.enableEntropy === 'boolean' ? raw.enableEntropy : undefined;
+  const enableRepoSlug = typeof raw.enableRepoSlug === 'boolean' ? raw.enableRepoSlug : undefined;
 
   try {
     const result = await deriveSecretsForSelection(selection, {
       modelIdentifier,
       entropyThreshold,
       enableEntropy,
+      enableRepoSlug,
     });
     return NextResponse.json(result);
   } catch (err) {

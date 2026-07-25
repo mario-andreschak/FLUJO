@@ -54,12 +54,17 @@ class PackageService {
    */
   async deriveSecrets(
     selection: PackageSelection,
-    options: { modelIdentifier?: string } = {},
+    options: { modelIdentifier?: string; enableEntropy?: boolean; enableRepoSlug?: boolean } = {},
   ): Promise<DeriveSecretsResult> {
     const response = await fetch('/api/packages/derive-secrets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selection, modelIdentifier: options.modelIdentifier }),
+      body: JSON.stringify({
+        selection,
+        modelIdentifier: options.modelIdentifier,
+        enableEntropy: options.enableEntropy,
+        enableRepoSlug: options.enableRepoSlug,
+      }),
     });
     const body = await response.json();
     if (!response.ok) {

@@ -26,9 +26,13 @@ import {
   Step,
   StepLabel,
   Stepper,
+  Switch,
   TextField,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
+import RegistryAccountSettings from '@/frontend/components/Settings/RegistryAccountSettings';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
@@ -41,7 +45,8 @@ import type {
   PackageSelection,
   ResolveResult,
 } from '@/frontend/services/packages';
-import type { SecretProposal } from '@/shared/types/package/secretProposal';
+import type { SecretKind, SecretProposal } from '@/shared/types/package/secretProposal';
+import { buildManualProposal, SECRET_KINDS } from '@/shared/types/package/secretProposal';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages/PackageWizard');
@@ -75,6 +80,8 @@ interface Props {
  * downloaded via `/api/packages/build`. No secret values ever leave the host.
  */
 export default function PackageWizard({ open, onClose }: Props) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [activeStep, setActiveStep] = useState(0);
 
   // Step 0 — available entities + user selection.
@@ -102,6 +109,17 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [deriveError, setDeriveError] = useState<string | null>(null);
   const [deriveWarnings, setDeriveWarnings] = useState<string[]>([]);
   const [scanModelId, setScanModelId] = useState<string>('');
+  // Step 2 triage controls (issue #208): search + noisy-rule opt-ins.
+  const [proposalFilter, setProposalFilter] = useState('');
+  const [scanEntropy, setScanEntropy] = useState(false);
+  const [scanRepoSlug, setScanRepoSlug] = useState(false);
+  // Step 2 manual-add form (issue #208).
+  const [manualExcerpt, setManualExcerpt] = useState('');
+  const [manualName, setManualName] = useState('');
+  const [manualKind, setManualKind] = useState<SecretKind>('other');
+  const [manualError, setManualError] = useState<string | null>(null);
+  // Step 4 inline registry login (issue #208).
+  const [loginOpen, setLoginOpen] = useState(false);
 
   // Step 3 — metadata.
   const [name, setName] = useState('');
@@ -208,15 +226,25 @@ export default function PackageWizard({ open, onClose }: Props) {
       setDeriving(true);
       setDeriveError(null);
       try {
-        const res = await getPackageService().deriveSecrets(selection, { modelIdentifier });
+        const res = await getPackageService().deriveSecrets(selection, {
+          modelIdentifier,
+          enableEntropy: scanEntropy,
+          enableRepoSlug: scanRepoSlug,
+        });
         setContentProposals((prev) => {
+          // Keep the user's per-row accept/rename choices across a re-scan, and
+          // preserve any manually-added rows (they never come back from the API).
           const acceptedById = new Map(prev.map((p) => [p.id, p.accepted]));
           const nameById = new Map(prev.map((p) => [p.id, p.suggestedSecretName]));
-          return res.proposals.map((p) => ({
+          const manual = prev.filter((p) => p.source === 'manual');
+          const scanned = res.proposals.map((p) => ({
             ...p,
-            accepted: acceptedById.has(p.id) ? acceptedById.get(p.id) : true,
+            // Default-accept everything except low-confidence noise (issue #208).
+            accepted: acceptedById.has(p.id) ? acceptedById.get(p.id) : p.confidence !== 'low',
             suggestedSecretName: nameById.get(p.id) ?? p.suggestedSecretName,
           }));
+          const scannedIds = new Set(scanned.map((p) => p.id));
+          return [...scanned, ...manual.filter((p) => !scannedIds.has(p.id))];
         });
         setDeriveWarnings(res.warnings ?? []);
       } catch (err) {
@@ -226,7 +254,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         setDerivedOnce(true);
       }
     },
-    [selection],
+    [selection, scanEntropy, scanRepoSlug],
   );
 
   const toggleProposal = (id: string) =>
@@ -235,6 +263,40 @@ export default function PackageWizard({ open, onClose }: Props) {
     setContentProposals((prev) => prev.map((p) => ({ ...p, accepted })));
   const renameProposal = (id: string, name: string) =>
     setContentProposals((prev) => prev.map((p) => (p.id === id ? { ...p, suggestedSecretName: name } : p)));
+
+  /** Add a user-entered secret to the review list (issue #208). */
+  const addManualProposal = () => {
+    setManualError(null);
+    const proposal = buildManualProposal({
+      excerpt: manualExcerpt,
+      secretName: manualName,
+      kind: manualKind,
+    });
+    if (!proposal) {
+      setManualError('Enter a non-empty value to redact (under 2000 characters).');
+      return;
+    }
+    setContentProposals((prev) =>
+      prev.some((p) => p.id === proposal.id) ? prev : [proposal, ...prev],
+    );
+    setManualExcerpt('');
+    setManualName('');
+    setManualKind('other');
+  };
+
+  const filteredProposals = useMemo(() => {
+    const q = proposalFilter.trim().toLowerCase();
+    if (!q) return contentProposals;
+    return contentProposals.filter((p) =>
+      `${p.excerpt} ${p.location} ${p.kind} ${p.suggestedSecretName}`.toLowerCase().includes(q),
+    );
+  }, [contentProposals, proposalFilter]);
+
+  const kindCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of contentProposals) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [contentProposals]);
 
   // Auto-run the offline heuristic derivation when the user reaches the step.
   useEffect(() => {
@@ -499,20 +561,42 @@ export default function PackageWizard({ open, onClose }: Props) {
 
             {contentProposals.length > 0 && (
               <>
-                <Stack direction="row" spacing={1}>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {kindCounts.map(([kind, count]) => (
+                    <Chip key={kind} size="small" variant="outlined" label={`${kind}: ${count}`} />
+                  ))}
+                </Stack>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                   <Button size="small" onClick={() => setAllProposals(true)}>
                     Accept all
                   </Button>
                   <Button size="small" onClick={() => setAllProposals(false)}>
                     Reject all
                   </Button>
-                  <Box sx={{ flex: 1 }} />
+                  <TextField
+                    size="small"
+                    placeholder="Filter detected secrets…"
+                    value={proposalFilter}
+                    onChange={(e) => setProposalFilter(e.target.value)}
+                    sx={{ minWidth: 200, flex: 1 }}
+                  />
                   <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
                     {contentProposals.filter((p) => p.accepted).length} of {contentProposals.length} accepted
                   </Typography>
                 </Stack>
                 <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 280, overflow: 'auto' }}>
-                  {contentProposals.map((p) => (
+                  {filteredProposals.length === 0 && (
+                    <ListItem>
+                      <ListItemText
+                        primary={
+                          <Typography variant="body2" color="text.secondary">
+                            No rows match “{proposalFilter}”.
+                          </Typography>
+                        }
+                      />
+                    </ListItem>
+                  )}
+                  {filteredProposals.map((p) => (
                     <ListItem key={p.id} alignItems="flex-start" divider>
                       <ListItemIcon sx={{ minWidth: 36, mt: 1 }}>
                         <Checkbox
@@ -531,8 +615,22 @@ export default function PackageWizard({ open, onClose }: Props) {
                               label={p.source}
                               size="small"
                               variant="outlined"
-                              color={p.source === 'model' ? 'secondary' : 'default'}
+                              color={p.source === 'model' ? 'secondary' : p.source === 'manual' ? 'primary' : 'default'}
                             />
+                            {p.confidence && (
+                              <Chip
+                                label={p.confidence}
+                                size="small"
+                                variant="outlined"
+                                color={
+                                  p.confidence === 'high'
+                                    ? 'success'
+                                    : p.confidence === 'low'
+                                      ? 'warning'
+                                      : 'default'
+                                }
+                              />
+                            )}
                             <Box component="code" sx={{ wordBreak: 'break-all' }}>
                               {p.excerpt.length > 80 ? `${p.excerpt.slice(0, 80)}…` : p.excerpt}
                             </Box>
@@ -573,6 +671,78 @@ export default function PackageWizard({ open, onClose }: Props) {
             )}
 
             <Divider />
+            <Typography variant="subtitle2">Add a secret manually</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Enter any value that should be redacted from the package. It is treated purely
+              as text to replace with a <code>{'{{secret.NAME}}'}</code> placeholder — it is
+              never executed.
+            </Typography>
+            {manualError && <Alert severity="error">{manualError}</Alert>}
+            <Stack direction="row" spacing={1} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+              <TextField
+                size="small"
+                label="Value to redact"
+                value={manualExcerpt}
+                onChange={(e) => setManualExcerpt(e.target.value)}
+                sx={{ minWidth: 240, flex: 1 }}
+              />
+              <TextField
+                size="small"
+                label="Secret name"
+                value={manualName}
+                onChange={(e) => setManualName(e.target.value)}
+                sx={{ minWidth: 180 }}
+              />
+              <Select
+                size="small"
+                value={manualKind}
+                onChange={(e) => setManualKind(e.target.value as SecretKind)}
+                sx={{ minWidth: 120 }}
+              >
+                {SECRET_KINDS.map((k) => (
+                  <MenuItem key={k} value={k}>
+                    {k}
+                  </MenuItem>
+                ))}
+              </Select>
+              <Button variant="outlined" onClick={addManualProposal} disabled={!manualExcerpt.trim()}>
+                Add
+              </Button>
+            </Stack>
+
+            <Divider />
+            <Typography variant="subtitle2">Advanced scan options</Typography>
+            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={scanEntropy}
+                    onChange={(e) => {
+                      setScanEntropy(e.target.checked);
+                      setDerivedOnce(false);
+                    }}
+                  />
+                }
+                label="Aggressive entropy scan"
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={scanRepoSlug}
+                    onChange={(e) => {
+                      setScanRepoSlug(e.target.checked);
+                      setDerivedOnce(false);
+                    }}
+                  />
+                }
+                label="Detect bare owner/repo slugs"
+              />
+              <Button size="small" variant="text" onClick={() => void runDerive()} disabled={deriving}>
+                Re-scan
+              </Button>
+            </Stack>
+
+            <Divider />
             <Typography variant="subtitle2">Optional: model-driven scan</Typography>
             <Alert severity="info">
               Running the model-driven pass sends the packaged content above to the selected
@@ -590,7 +760,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                   <em>Select a model…</em>
                 </MenuItem>
                 {entities.models.map((m) => (
-                  <MenuItem key={m.id} value={m.label}>
+                  <MenuItem key={m.id} value={m.id}>
                     {m.label}
                   </MenuItem>
                 ))}
@@ -697,9 +867,18 @@ export default function PackageWizard({ open, onClose }: Props) {
                       {publishResult.error || 'Failed to publish package.'}
                     </Alert>
                   )}
-                  <Button variant="outlined" onClick={() => void publishToRegistry()} disabled={publishing}>
-                    {publishing ? 'Publishing…' : 'Publish to registry'}
-                  </Button>
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    <Button variant="outlined" onClick={() => void publishToRegistry()} disabled={publishing}>
+                      {publishing ? 'Publishing…' : 'Publish to registry'}
+                    </Button>
+                    {publishResult &&
+                      !publishResult.ok &&
+                      (publishResult.code === 'not_authenticated' || publishResult.code === 'unconfirmed') && (
+                        <Button variant="contained" onClick={() => setLoginOpen(true)} disabled={publishing}>
+                          Log in to registry
+                        </Button>
+                      )}
+                  </Stack>
                 </>
               )}
             </Stack>
@@ -712,30 +891,59 @@ export default function PackageWizard({ open, onClose }: Props) {
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>Create package</DialogTitle>
-      <DialogContent dividers>
-        <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
-          {STEPS.map((label) => (
-            <Step key={label}>
-              <StepLabel>{label}</StepLabel>
-            </Step>
-          ))}
-        </Stepper>
-        {renderStepContent()}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>{buildResult?.ok ? 'Close' : 'Cancel'}</Button>
-        <Box sx={{ flex: 1 }} />
-        <Button onClick={handleBack} disabled={activeStep === 0 || building || resolving}>
-          Back
-        </Button>
-        {activeStep < 4 && (
-          <Button variant="contained" onClick={handleNext} disabled={nextDisabled}>
-            {activeStep === 3 ? 'Build' : 'Next'}
+    <>
+      <Dialog
+        open={open}
+        onClose={onClose}
+        maxWidth="lg"
+        fullWidth
+        fullScreen={fullScreen}
+        PaperProps={{ sx: { height: fullScreen ? '100%' : '90vh', maxHeight: fullScreen ? '100%' : '90vh' } }}
+      >
+        <DialogTitle>Create package</DialogTitle>
+        <DialogContent dividers sx={{ overflow: 'auto' }}>
+          <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
+            {STEPS.map((label) => (
+              <Step key={label}>
+                <StepLabel>{label}</StepLabel>
+              </Step>
+            ))}
+          </Stepper>
+          {renderStepContent()}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose}>{buildResult?.ok ? 'Close' : 'Cancel'}</Button>
+          <Box sx={{ flex: 1 }} />
+          <Button onClick={handleBack} disabled={activeStep === 0 || building || resolving}>
+            Back
           </Button>
-        )}
-      </DialogActions>
-    </Dialog>
+          {activeStep < 4 && (
+            <Button variant="contained" onClick={handleNext} disabled={nextDisabled}>
+              {activeStep === 3 ? 'Build' : 'Next'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={loginOpen} onClose={() => setLoginOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Log in to the package registry</DialogTitle>
+        <DialogContent dividers>
+          <RegistryAccountSettings />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLoginOpen(false)}>Done</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setLoginOpen(false);
+              void publishToRegistry();
+            }}
+            disabled={publishing}
+          >
+            Retry publish
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
   );
 }
