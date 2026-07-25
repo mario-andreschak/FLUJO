@@ -31,6 +31,8 @@ import WiredResources, { WiredResource } from './ProcessNodePropertiesModal/Serv
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
+import CaptureFields from './shared/CaptureFields';
+import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjusted path
 import { createLogger } from '@/utils/logger';
 
@@ -50,6 +52,12 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   // prompt through the handoff tool that overrides the isolated prompt below).
   const [allowCallerPrompt, setAllowCallerPrompt] = useState(true);
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
+  // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
+  // into scope + key for editing and recombined via buildKvRef on save.
+  const [captureVariable, setCaptureVariable] = useState('');
+  const [captureResource, setCaptureResource] = useState('');
+  const [captureKvScope, setCaptureKvScope] = useState<KvRefScope>('folder');
+  const [captureKvKey, setCaptureKvKey] = useState('');
   const [activeTab, setActiveTab] = useState<string>('server');
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
@@ -144,6 +152,13 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       setIsolatedPrompt(node.data.properties?.isolatedPrompt || '');
       setAllowCallerPrompt(node.data.properties?.allowCallerPrompt !== false);
       setOutputMode(node.data.properties?.outputMode || 'full-conversation');
+
+      // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
+      setCaptureVariable(node.data.properties?.captureVariable || '');
+      setCaptureResource(node.data.properties?.captureResource || '');
+      const kvParsed = parseKvRef(node.data.properties?.captureKv || '');
+      setCaptureKvScope(kvParsed.scope);
+      setCaptureKvKey(kvParsed.key || '');
     }
   }, [node, open]);
 
@@ -204,24 +219,44 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     }
   };
 
+  // Inject a ${var:}/${res:}/${kv:} reference into the prompt editor at the
+  // cursor, mirroring the tool/resource binding insert helpers above.
+  const handleInsertCaptureRef = (ref: string): void => {
+    const needsSpace = promptTemplate.length > 0 && !promptTemplate.endsWith(' ') && !promptTemplate.endsWith('\n');
+    const textToInsert = (needsSpace ? ' ' : '') + ref;
+    if (promptBuilderRef.current) {
+      promptBuilderRef.current.insertText(textToInsert);
+    } else {
+      log.warn('promptBuilderRef.current is null, cannot insert capture reference');
+    }
+  };
+
   const handleSave = () => {
     if (node && nodeData) {
       // Make sure to include the prompt template and toggle states in the saved data
-      const updatedNodeData = {
-        ...nodeData,
-        properties: {
-          ...nodeData.properties,
-          promptTemplate: promptTemplate,
-          excludeModelPrompt: excludeModelPrompt,
-          excludeStartNodePrompt: excludeStartNodePrompt,
-          excludeSystemPrompt: excludeSystemPrompt,
-          inputMode: inputMode,
-          isolatedPrompt: isolatedPrompt,
-          allowCallerPrompt: allowCallerPrompt,
-          outputMode: outputMode,
-        }
+      const properties: Record<string, any> = {
+        ...nodeData.properties,
+        promptTemplate: promptTemplate,
+        excludeModelPrompt: excludeModelPrompt,
+        excludeStartNodePrompt: excludeStartNodePrompt,
+        excludeSystemPrompt: excludeSystemPrompt,
+        inputMode: inputMode,
+        isolatedPrompt: isolatedPrompt,
+        allowCallerPrompt: allowCallerPrompt,
+        outputMode: outputMode,
       };
-      onSave(node.id, updatedNodeData);
+
+      // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
+      // when empty, so flowToSpec never emits an empty captureX and existing
+      // flows without these fields stay byte-identical.
+      const cv = captureVariable.trim();
+      if (cv) properties.captureVariable = cv; else delete properties.captureVariable;
+      const cr = captureResource.trim();
+      if (cr) properties.captureResource = cr; else delete properties.captureResource;
+      const ckv = buildKvRef(captureKvScope, captureKvKey);
+      if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
+
+      onSave(node.id, { ...nodeData, properties });
       onClose();
     }
   };
@@ -351,6 +386,18 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
             </Box>
             <Box>
               <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
+            </Box>
+            <Box sx={{ mt: 3 }}>
+              <CaptureFields
+                value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}
+                onChange={(patch) => {
+                  if (patch.captureVariable !== undefined) setCaptureVariable(patch.captureVariable);
+                  if (patch.captureResource !== undefined) setCaptureResource(patch.captureResource);
+                  if (patch.captureKvScope !== undefined) setCaptureKvScope(patch.captureKvScope);
+                  if (patch.captureKvKey !== undefined) setCaptureKvKey(patch.captureKvKey);
+                }}
+                onInsertRef={handleInsertCaptureRef}
+              />
             </Box>
           </Grid>
 
