@@ -41,7 +41,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import type { Model } from '@/shared/types/model';
 import type { ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
-import type { MCPServerConfig } from '@/shared/types/mcp';
+import type { MCPServerConfig, EnvVarValue } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/packages/installPackage');
 
@@ -281,13 +281,18 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     plannedExecutions: [],
   };
 
-  // Snapshot MCP server names that pre-exist BEFORE we install any, so remote
-  // (upsert) servers can be classified created-vs-adopted for uninstall.
+  // Snapshot MCP server names + configs that pre-exist BEFORE we install any,
+  // so remote (upsert) servers can be classified created-vs-adopted for uninstall,
+  // and registry servers with matching localName can be adopted in place.
   const existingServerNames = new Set<string>();
+  const existingServerConfigs = new Map<string, MCPServerConfig>();
   try {
     const configs = await mcpService.loadServerConfigs();
     if (Array.isArray(configs)) {
-      for (const c of configs) existingServerNames.add(c.name);
+      for (const c of configs) {
+        existingServerNames.add(c.name);
+        existingServerConfigs.set(c.name, c);
+      }
     }
   } catch (err) {
     log.warn('installPackage: failed to snapshot existing server names', err);
@@ -295,12 +300,12 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 
   // 4. MCP servers (before flows so name-based boundServer references resolve).
   for (const server of manifest.mcpServers ?? []) {
-    await installServer(server, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames });
+    await installServer(server, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
   }
 
   // 5. Models (before flows so name-based boundModel references resolve).
   for (const model of manifest.models ?? []) {
-    await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames });
+    await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
@@ -504,9 +509,14 @@ function buildPreview(manifest: PackageManifest, secretProvided: (k: string) => 
     servers: (manifest.mcpServers ?? []).map((s) => ({
       localName: s.localName,
       source: serverSource(s),
-      requiredEnvMissing: Object.entries(s.envFromSecret ?? {})
+      // Include both envFromSecret and headersFromSecret field names in the
+      // missing list so the consent screen shows all required fields.
+      requiredEnvMissing: [
+        ...Object.entries(s.envFromSecret ?? {}),
+        ...Object.entries(s.headersFromSecret ?? {}),
+      ]
         .filter(([, key]) => (manifest.secrets ?? []).some((sec) => sec.key === key && sec.required) && !secretProvided(key))
-        .map(([envName]) => envName),
+        .map(([name]) => name),
     })),
     models: (manifest.models ?? []).map((m) => ({
       displayName: m.displayName,
@@ -539,6 +549,112 @@ interface InstallCtx {
   ledgerCreated: LedgerCreated;
   /** Server names that already existed before this install began. */
   existingServerNames: Set<string>;
+  /** Full server configs snapshot taken before install began (for adopt-and-configure). */
+  existingServerConfigs: Map<string, MCPServerConfig>;
+}
+
+/**
+ * Adopt-and-configure: when a registry-ref server's localName already exists in
+ * FLUJO, merge the manifest env into the existing config rather than running a
+ * new registry install. Secret-derived values are tagged isSecret for
+ * encryption at rest. The server is classified as `updated` (never `created`)
+ * so uninstall will skip it.
+ */
+async function adoptAndConfigureServer(
+  server: NonNullable<PackageManifest['mcpServers']>[number],
+  ctx: InstallCtx,
+  missingRequired: string[],
+): Promise<void> {
+  const { secrets, secretProvided, summary, ledgerEntities, existingServerConfigs } = ctx;
+  const source = serverSource(server);
+
+  const existingConfig = existingServerConfigs.get(server.localName);
+  if (!existingConfig) {
+    // Snapshot was stale — nothing to adopt; skip without error.
+    summary.servers.push({ localName: server.localName, source, installed: false,
+      error: 'server vanished between snapshot and install' });
+    summary.skipped.push({ type: 'server', name: server.localName,
+      note: 'server not found in configs (stale snapshot)' });
+    return;
+  }
+
+  // Merge env: existing keys preserved, manifest literal env keys win (plain strings),
+  // envFromSecret keys win and are tagged isSecret for encryption at rest.
+  const mergedEnv: Record<string, EnvVarValue> = { ...(existingConfig.env ?? {}) };
+  for (const [envName, value] of Object.entries(server.env ?? {})) {
+    mergedEnv[envName] = value; // non-secret literal
+  }
+  for (const [envName, secretKey] of Object.entries(server.envFromSecret ?? {})) {
+    if (secretProvided(secretKey)) {
+      mergedEnv[envName] = { value: secrets[secretKey], metadata: { isSecret: true } };
+    }
+    // Missing required secret: skip the key — don't disable a pre-existing server.
+  }
+
+  // Save merged env. updateServerConfig reconnects the server automatically when
+  // the config meaningfully changed.
+  const saved = await mcpService.updateServerConfig(
+    server.localName,
+    { env: mergedEnv } as Partial<MCPServerConfig>,
+  );
+  const failed =
+    !Array.isArray(saved) &&
+    saved &&
+    'success' in saved &&
+    (saved as { success?: boolean }).success === false;
+  if (failed) {
+    const error = (saved as { error?: string }).error ?? 'unknown error';
+    summary.servers.push({ localName: server.localName, source, installed: false, error });
+    summary.skipped.push({ type: 'server', name: server.localName, note: error });
+    return;
+  }
+
+  // Classify as updated (not created) — uninstall must never delete this server.
+  ledgerEntities.servers.push(server.localName);
+  // NOTE: intentionally NOT adding to ledgerCreated.servers
+  summary.servers.push({
+    localName: server.localName, source, installed: true,
+    serverName: server.localName, alreadyExisted: true,
+  });
+  const note = missingRequired.length > 0
+    ? `env partially merged — missing required secret(s) for: ${missingRequired.join(', ')}`
+    : undefined;
+  summary.updated.push({
+    type: 'server', name: server.localName, id: server.localName,
+    ...(note ? { note } : {}),
+  });
+}
+
+/**
+ * After a successful new registry install, re-load the installed config and tag
+ * any env entries that came from envFromSecret as isSecret so they are
+ * encrypted at rest. Fail-soft: a tagging failure is logged but not fatal.
+ */
+async function tagSecretEnvKeys(
+  serverName: string,
+  envFromSecret: Record<string, string>,
+  secrets: Record<string, string>,
+  secretProvided: (k: string) => boolean,
+): Promise<void> {
+  const allConfigs = await mcpService.loadServerConfigs().catch(() => null);
+  if (!Array.isArray(allConfigs)) return;
+  const existing = allConfigs.find((c) => c.name === serverName);
+  if (!existing) return;
+
+  let changed = false;
+  const updatedEnv: Record<string, EnvVarValue> = { ...(existing.env ?? {}) };
+  for (const [envName, secretKey] of Object.entries(envFromSecret)) {
+    if (secretProvided(secretKey)) {
+      updatedEnv[envName] = { value: secrets[secretKey], metadata: { isSecret: true } };
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  try {
+    await mcpService.updateServerConfig(serverName, { env: updatedEnv } as Partial<MCPServerConfig>);
+  } catch (err) {
+    log.warn(`tagSecretEnvKeys: failed to re-tag secret env for "${serverName}"`, err);
+  }
 }
 
 async function installServer(
@@ -560,7 +676,39 @@ async function installServer(
     }
   }
 
+  // Resolve headers for remote servers (literal + secret-derived).
+  // For registry servers, headers are schema-rejected; guard here defensively.
+  const resolvedHeaders: Record<string, import('@/shared/types/mcp').MCPHeaderValue> = {};
+  if (server.ref.kind === 'remote') {
+    // Literal header values
+    for (const [headerName, headerValue] of Object.entries(server.headers ?? {})) {
+      resolvedHeaders[headerName] = headerValue;
+    }
+    // Secret-derived header values
+    for (const [headerName, secretKey] of Object.entries(server.headersFromSecret ?? {})) {
+      if (secretProvided(secretKey)) {
+        resolvedHeaders[headerName] = { value: secrets[secretKey], metadata: { isSecret: true } };
+      } else if (secretRequired(secretKey)) {
+        missingRequired.push(headerName);
+      }
+      // If not required and not provided: skip
+    }
+  } else if (
+    (server.headers && Object.keys(server.headers).length > 0) ||
+    (server.headersFromSecret && Object.keys(server.headersFromSecret).length > 0)
+  ) {
+    log.warn('installServer: headers/headersFromSecret are ignored for non-remote server refs', server.localName);
+  }
+
   if (server.ref.kind === 'registry') {
+    // ADOPT-AND-CONFIGURE: if a server with this localName already exists,
+    // merge env into it rather than installing a new server from the registry.
+    if (existingServerNames.has(server.localName)) {
+      await adoptAndConfigureServer(server, ctx, missingRequired);
+      return;
+    }
+
+    // NEW INSTALL: fail-soft if a required secret is missing.
     if (missingRequired.length > 0) {
       summary.disabled.push({ type: 'server', name: server.localName, note: `missing required secret(s) for: ${missingRequired.join(', ')}` });
       summary.servers.push({ localName: server.localName, source, installed: false, needsEnv: missingRequired });
@@ -584,6 +732,10 @@ async function installServer(
       else {
         if (result.serverName) ledgerCreated.servers.push(result.serverName);
         summary.created.push(ref);
+        // Tag secret-derived env keys as isSecret for encryption at rest.
+        if (result.serverName && Object.keys(server.envFromSecret ?? {}).length > 0) {
+          await tagSecretEnvKeys(result.serverName, server.envFromSecret ?? {}, secrets, secretProvided);
+        }
       }
     } else {
       summary.skipped.push({ type: 'server', name: server.localName, note: result.error ?? (result.needsEnv ? `needs env: ${result.needsEnv.join(', ')}` : 'not installed') });
@@ -594,8 +746,9 @@ async function installServer(
   // Remote (sse / streamable / websocket) — plain config creation. Install
   // DISABLED when a required secret is missing (rather than dropping it).
   const disabled = missingRequired.length > 0;
+  const secretEnvKeys = new Set(Object.keys(server.envFromSecret ?? {}));
   try {
-    const config = buildRemoteServerConfig(server, env, disabled);
+    const config = buildRemoteServerConfig(server, env, disabled, resolvedHeaders, secretEnvKeys);
     const saved = await mcpService.updateServerConfig(server.localName, config);
     const failed = !Array.isArray(saved) && saved && 'success' in saved && (saved as { success?: boolean }).success === false;
     if (failed) {
@@ -623,6 +776,8 @@ function buildRemoteServerConfig(
   server: NonNullable<PackageManifest['mcpServers']>[number],
   env: Record<string, string>,
   disabled: boolean,
+  headers: Record<string, import('@/shared/types/mcp').MCPHeaderValue> = {},
+  secretEnvKeys: Set<string> = new Set(),
 ): MCPServerConfig {
   if (server.ref.kind !== 'remote') {
     throw new Error('buildRemoteServerConfig called for a non-remote ref');
@@ -633,14 +788,25 @@ function buildRemoteServerConfig(
     disabled,
     autoApprove: [] as string[],
     rootPath: '',
-    env: Object.fromEntries(Object.entries(env).map(([k, v]) => [k, { value: v }])),
+    env: Object.fromEntries(
+      Object.entries(env).map(([k, v]) => [
+        k,
+        secretEnvKeys.has(k) ? { value: v, metadata: { isSecret: true } } : v,
+      ])
+    ),
     _buildCommand: '',
     _installCommand: '',
   };
   if (transport === 'websocket') {
     return { ...base, transport: 'websocket', websocketUrl: server.ref.serverUrl } as MCPServerConfig;
   }
-  return { ...base, transport, serverUrl: server.ref.serverUrl } as MCPServerConfig;
+  const hasHeaders = Object.keys(headers).length > 0;
+  return {
+    ...base,
+    transport,
+    serverUrl: server.ref.serverUrl,
+    ...(hasHeaders ? { headers } : {}),
+  } as MCPServerConfig;
 }
 
 async function installModel(
