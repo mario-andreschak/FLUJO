@@ -50,6 +50,20 @@ export function parseKvRef(raw: string): { scope: KvRefScope; key: string } {
 }
 
 /**
+ * Inverse of `parseKvRef`: combine a scope + key back into the raw token stored
+ * in a node's `captureKv` property. The default `folder` scope is emitted as a
+ * BARE key (matching the DSL default and `parseKvRef`'s fallback), while `flow`
+ * and `global` are emitted as `scope/key`. An empty/whitespace key yields '' so
+ * callers can omit the property entirely. Guarantees a lossless round-trip with
+ * `parseKvRef` so the UI never drifts from the runtime resolver's grammar.
+ */
+export function buildKvRef(scope: KvRefScope, key: string): string {
+  const k = (key ?? '').trim();
+  if (!k) return '';
+  return scope === 'folder' ? k : `${scope}/${k}`;
+}
+
+/**
  * Replace every `${kv:NAME}` in `text` with `map[rawToken]`. An UNKNOWN token
  * resolves to '' (empty string), NOT the literal — mirrors resolveRunVars, so a
  * small model never parrots a raw `${kv:...}`. Pure and total: never throws.
