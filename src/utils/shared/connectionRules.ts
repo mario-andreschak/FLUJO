@@ -78,6 +78,10 @@ export function getConnectionError(
   if (targetType === 'trigger') {
     return 'Trigger nodes cannot have incoming connections';
   }
+  // Trigger nodes can ONLY connect to Start nodes (issue #241).
+  if (sourceType === 'trigger' && targetType !== 'start') {
+    return 'Trigger nodes can only connect to the Start node';
+  }
   if (targetType === 'start') {
     return 'Start nodes cannot have incoming connections';
   }
