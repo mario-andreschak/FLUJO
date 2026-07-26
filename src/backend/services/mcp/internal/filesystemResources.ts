@@ -13,6 +13,7 @@
  * and brokers its tool calls back through the filesystem server (confined to
  * the configured roots), it is exactly as constrained as the tools themselves.
  */
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/ext-apps';
 import type { MCPResource, MCPReadResourceResult, MCPServiceResponse } from '@/shared/types/mcp';
 
 export const FILESYSTEM_APP_URI = 'ui://filesystem/browser';
@@ -332,7 +333,7 @@ const FILESYSTEM_APP_HTML = `<!doctype html>
   rpc("ui/initialize", {
     appInfo: { name: "filesystem-browser", version: "1.0.0" },
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-    protocolVersion: "2026-01-26"
+    protocolVersion: "${LATEST_PROTOCOL_VERSION}"
   }).then(function (result) {
     applyTheme(result && result.hostContext);
     notify("ui/notifications/initialized", {});
@@ -482,7 +483,7 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
   rpc("ui/initialize", {
     appInfo: { name: "devcanvas-diff", version: "1.0.0" },
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
-    protocolVersion: "2026-01-26"
+    protocolVersion: "${LATEST_PROTOCOL_VERSION}"
   }).then(function (result) {
     applyTheme(result && result.hostContext);
     notify("ui/notifications/initialized", {});
