@@ -871,7 +871,7 @@ async function getAllowedDirectoriesTool(
   return dualResult({ directories: roots });
 }
 
-export async function filesystemCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
+export async function filesystemCallTool(toolName: string, args: Record<string, unknown>, callerNodeId?: string): Promise<CallToolResult> {
   try {
     // MCP App launcher (#97): pure UI trigger — returns immediately without
     // touching the filesystem. The app renders in chat; the user's pick returns
@@ -881,7 +881,7 @@ export async function filesystemCallTool(toolName: string, args: Record<string, 
         'File browser shown to the user. Waiting for them to select a file — their choice will arrive as a follow-up message. Do not proceed until then.',
       );
     }
-    const roots = await loadEffectiveRoots(FILESYSTEM_SERVER_NAME, 'FLUJO_FS_ROOTS');
+    const roots = await loadEffectiveRoots(FILESYSTEM_SERVER_NAME, 'FLUJO_FS_ROOTS', callerNodeId);
     switch (toolName) {
       case 'read_file':
         return await readFileTool(args, roots);

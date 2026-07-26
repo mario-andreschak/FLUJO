@@ -71,7 +71,7 @@ export interface CompletionInput {
    * `timeout` is the tool's per-call timeout in seconds (-1 = none; unset = the
    * 5-minute default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string }>;
   /**
    * Executors for caller-defined "virtual" tools (entries in `tools` that are
    * neither handoffs nor MCP tools), keyed by function name — e.g. the flow

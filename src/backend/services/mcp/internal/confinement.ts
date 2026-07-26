@@ -97,7 +97,8 @@ async function resolveRootToPath(entry: string, dataDir: string): Promise<string
  */
 export async function loadEffectiveRoots(
   serverName: string,
-  envVarNames: string | string[]
+  envVarNames: string | string[],
+  callerNodeId?: string
 ): Promise<string[]> {
   const { getDataDir } = await import('@/utils/paths');
   const dataDir = getDataDir();
@@ -115,8 +116,21 @@ export async function loadEffectiveRoots(
     // Node-level roots (issue 46) are contributed by FlowBuilder MCP nodes and may
     // be paths, file:// URIs, or contain ${global:VAR} references — resolve them the
     // same way the roots/list handler does so both consumers agree.
-    const { getNodeRoots } = await import('@/backend/services/mcp/roots');
-    for (const raw of getNodeRoots(serverName)) {
+    //
+    // Issue #266 — per-call per-node confinement: when a callerNodeId is supplied
+    // AND that specific node has registered roots for this server, confine this call
+    // to ONLY that node's roots instead of the global union across all nodes. When
+    // the node has no registered roots we fall back to the global union so legacy
+    // call sites and nodes that omit roots are unaffected.
+    const { getNodeRoots, getNodeRootsForId } = await import('@/backend/services/mcp/roots');
+    const nodeRawRoots =
+      callerNodeId !== undefined
+        ? (() => {
+            const perNode = getNodeRootsForId(serverName, callerNodeId);
+            return perNode.length > 0 ? perNode : getNodeRoots(serverName);
+          })()
+        : getNodeRoots(serverName);
+    for (const raw of nodeRawRoots) {
       const resolved = await resolveRootToPath(raw, dataDir);
       if (resolved) candidates.push(resolved);
     }

@@ -616,15 +616,15 @@ function listSessionsTool(): CallToolResult {
   return textResult({ sessions: list });
 }
 
-export async function bashCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
+export async function bashCallTool(toolName: string, args: Record<string, unknown>, callerNodeId?: string): Promise<CallToolResult> {
   try {
     switch (toolName) {
       case 'run': {
-        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS);
+        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
         return await runTool(args, roots);
       }
       case 'start': {
-        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS);
+        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
         return startTool(args, roots);
       }
       case 'status':

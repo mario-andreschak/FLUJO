@@ -1190,7 +1190,7 @@ export class MCPService {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void): Promise<MCPServiceResponse> {
+  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void, callerNodeId?: string): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
 
     // The built-in internal server dispatches in-process. The dispatcher always
@@ -1204,7 +1204,7 @@ export class MCPService {
         return { success: false, error };
       }
       const { internalCallToolFor } = await import('./internal/dispatch');
-      const result = await internalCallToolFor(this, serverName, toolName, args);
+      const result = await internalCallToolFor(this, serverName, toolName, args, callerNodeId);
       log.info(`callTool: Dispatched internal tool ${toolName} on ${serverName}`);
       return { success: true, data: result };
     }

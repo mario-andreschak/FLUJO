@@ -103,6 +103,17 @@ export function getNodeRoots(serverName: string): string[] {
   return out;
 }
 
+/**
+ * Returns the roots registered by a specific node for the given server, or an
+ * empty array if that node has none. Used by confinement.ts for per-call
+ * per-node root enforcement (issue #266).
+ */
+export function getNodeRootsForId(serverName: string, nodeId: string): string[] {
+  const entry = nodeRootsRegistry().get(nodeId);
+  if (!entry || entry.serverName !== serverName) return [];
+  return entry.roots;
+}
+
 /** Test hook: wipe all node-level roots registrations. */
 export function _resetNodeRootsForTests(): void {
   nodeRootsRegistry().clear();

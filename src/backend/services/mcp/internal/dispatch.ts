@@ -37,7 +37,8 @@ export async function internalCallToolFor(
   service: InternalDispatchService,
   serverName: string,
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  callerNodeId?: string
 ): Promise<CallToolResult> {
   switch (serverName) {
     case INTERNAL_SERVER_NAME: {
@@ -46,11 +47,11 @@ export async function internalCallToolFor(
     }
     case FILESYSTEM_SERVER_NAME: {
       const { filesystemCallTool } = await import('./filesystemTools');
-      return filesystemCallTool(toolName, args);
+      return filesystemCallTool(toolName, args, callerNodeId);
     }
     case BASH_SERVER_NAME: {
       const { bashCallTool } = await import('./bashTools');
-      return bashCallTool(toolName, args);
+      return bashCallTool(toolName, args, callerNodeId);
     }
     default:
       return {

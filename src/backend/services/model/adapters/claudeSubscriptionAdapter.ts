@@ -534,13 +534,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           });
         }
 
-        const { server, tool: originalTool, timeout } = decoded!;
+        const { server, tool: originalTool, timeout, nodeId: callerNodeId } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
-          const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS);
+          const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, undefined, callerNodeId);
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {

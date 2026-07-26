@@ -1398,7 +1398,8 @@ export class ModelHandler {
               progress: progress.progress,
               total: progress.total,
               message: progress.message
-            })
+            }),
+            decoded.nodeId
           );
 
           // Tier 3 data flow: auto-capture binary/large tool results as

@@ -174,7 +174,7 @@ export class MCPNode extends BaseNode {
       // be decoded later, including across a tool-approval resume (#16).
       sharedState.toolNameMap = sharedState.toolNameMap || {};
       for (const tool of availableTools) {
-        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName, timeout: tool.timeout };
+        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName, timeout: tool.timeout, nodeId: node_params?.id };
       }
 
       // Get tool names for logging
