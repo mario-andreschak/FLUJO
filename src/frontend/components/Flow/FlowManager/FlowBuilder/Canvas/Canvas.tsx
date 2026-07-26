@@ -22,7 +22,8 @@ import { styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode, RESOURCE_COLOR, SIGNAL_COLOR } from '../CustomNodes';
+import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode, TriggerNode, RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR } from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge, ResourceEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
@@ -69,6 +70,7 @@ export const nodeTypes = {
   subflow: SubflowNode,
   resource: ResourceNode,
   signal: SignalNode,
+  trigger: TriggerNode,
 };
 
 export const edgeTypes = {
@@ -132,6 +134,11 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       label: 'Signal Node',
       description: 'Emit an event to trigger another flow',
     },
+    {
+      type: 'trigger',
+      label: 'Trigger Node',
+      description: 'Schedule or event-trigger for this flow',
+    },
   ];
 
   // Filter node types based on validation
@@ -152,6 +159,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         return <div style={{ width: 24, height: 24, backgroundColor: RESOURCE_COLOR, borderRadius: '50%' }}></div>;
       case 'signal':
         return <div style={{ width: 24, height: 24, backgroundColor: SIGNAL_COLOR, borderRadius: '50%' }}></div>;
+      case 'trigger':
+        return <div style={{ width: 24, height: 24, backgroundColor: TRIGGER_COLOR, borderRadius: '50%' }}></div>;
       default:
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
     }
@@ -465,6 +474,28 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         // Included only because it touches a protected Start node — keep it.
         return !(requestedIds.has(e.source) || requestedIds.has(e.target));
       });
+
+      // Disarm any Trigger node being deleted: set the linked PlannedExecution
+      // to enabled=false so the SchedulerService stops firing it, but preserve
+      // the record for audit purposes (issue #241, Phase 4.6.3).
+      const triggerNodesToDelete = deletableNodes.filter(n => n.type === 'trigger');
+      if (triggerNodesToDelete.length > 0) {
+        await Promise.all(
+          triggerNodesToDelete.map(async (tn) => {
+            const execId = tn.data?.properties?.executionId;
+            if (typeof execId === 'string' && execId) {
+              try {
+                await plannedExecutionsService.update(execId, { enabled: false });
+              } catch (e) {
+                // Best-effort: if the API call fails, still allow the node to be
+                // deleted from the canvas. The execution record will remain armed
+                // but the canvas-level link is gone.
+                console.warn('TriggerNode: failed to disarm PlannedExecution', execId, e);
+              }
+            }
+          })
+        );
+      }
 
       if (deletableNodes.length === 0 && deletableEdges.length === 0) {
         return false;

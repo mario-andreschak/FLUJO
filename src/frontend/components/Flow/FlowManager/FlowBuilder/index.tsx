@@ -61,6 +61,7 @@ import EdgePropertiesModal from './Modals/EdgePropertiesModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
+import TriggerNodePropertiesModal from './Modals/TriggerNodePropertiesModal';
 import FlowVersionHistoryDialog from './Modals/FlowVersionHistoryDialog';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
@@ -168,6 +169,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [subflowModalOpen, setSubflowModalOpen] = useState(false);
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [signalModalOpen, setSignalModalOpen] = useState(false);
+  const [triggerModalOpen, setTriggerModalOpen] = useState(false);
+  // Notice shown when the user tries to drop a second Trigger node (one per flow).
+  const [triggerDropNotice, setTriggerDropNotice] = useState<string | null>(null);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
   // The edge whose properties (Tier 2b routing condition) are being edited.
   const [editingEdge, setEditingEdge] = useState<Edge | null>(null);
@@ -797,6 +801,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setSubflowModalOpen(false);
     setResourceModalOpen(false);
     setSignalModalOpen(false);
+    setTriggerModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, [edges]);
@@ -864,6 +869,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setResourceModalOpen(true);
     } else if (node.data.type === 'signal') {
       setSignalModalOpen(true);
+    } else if (node.data.type === 'trigger') {
+      setTriggerModalOpen(true);
     } else {
       setProcessModalOpen(true);
     }
@@ -878,6 +885,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       const type = event.dataTransfer.getData('application/reactflow');
       log.debug(`onDrop: Node type from data transfer: ${type}`);
       
+      // Enforce one-trigger-per-flow constraint (issue #241).
+      if (type === 'trigger') {
+        const hasTrigger = (reactFlowInstance?.getNodes() || []).some(n => n.type === 'trigger');
+        if (hasTrigger) {
+          setTriggerDropNotice('A Trigger node already exists in this flow. Only one Trigger node is allowed per flow.');
+          setTimeout(() => setTriggerDropNotice(null), 5000);
+          return;
+        }
+      }
+
       // Check if we have all the required data to create a node
       if (!type || !reactFlowInstance) {
         log.debug(`onDrop: Missing required data - type: ${!!type}, reactFlowInstance: ${!!reactFlowInstance}`);
@@ -1088,6 +1105,19 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             <Box sx={{ flex: 1 }} />
           </ToolbarContainer>
 
+          {/* One-per-flow Trigger drop notice (issue #241). */}
+          <Collapse in={!!triggerDropNotice} unmountOnExit>
+            {triggerDropNotice && (
+              <Alert
+                severity="warning"
+                onClose={() => setTriggerDropNotice(null)}
+                sx={{ mb: 1 }}
+              >
+                {triggerDropNotice}
+              </Alert>
+            )}
+          </Collapse>
+
           {/* AI-Improve result notice (issue #99) — dismissible summary of the last revision. */}
           <Collapse in={!!improveNotice} unmountOnExit>
             {improveNotice && (
@@ -1176,6 +1206,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         open={signalModalOpen}
         node={nodeToEdit}
         onClose={() => setSignalModalOpen(false)}
+        onSave={handleNodeUpdate}
+      />
+
+      <TriggerNodePropertiesModal
+        open={triggerModalOpen}
+        node={nodeToEdit}
+        flowId={initialFlow?.id || ''}
+        onClose={() => { setTriggerModalOpen(false); setNodeToEdit(null); }}
         onSave={handleNodeUpdate}
       />
 

@@ -19,6 +19,7 @@ import OutputIcon from '@mui/icons-material/Output';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import BoltIcon from '@mui/icons-material/Bolt';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import type { NodeType } from '@/frontend/types/flow/flow';
@@ -34,6 +35,11 @@ const RESOURCE_COLOR_LIGHT = '#4DB6AC';
 export const SIGNAL_COLOR = '#7E57C2';
 const SIGNAL_COLOR_LIGHT = '#B39DDB';
 
+// Trigger nodes (issue #241) use a pink/rose literal — visually distinct from
+// all other node types.
+export const TRIGGER_COLOR = '#E91E63';
+export const TRIGGER_COLOR_LIGHT = '#F48FB1';
+
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
 const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
@@ -44,6 +50,7 @@ const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: 
   subflow: { main: (t) => t.palette.warning.main, light: (t) => t.palette.warning.light },
   resource: { main: () => RESOURCE_COLOR, light: () => RESOURCE_COLOR_LIGHT },
   signal: { main: () => SIGNAL_COLOR, light: () => SIGNAL_COLOR_LIGHT },
+  trigger: { main: () => TRIGGER_COLOR, light: () => TRIGGER_COLOR_LIGHT },
 };
 
 const nodeMainColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
@@ -122,6 +129,8 @@ const getNodeIcon = (type: NodeType) => {
       return <DescriptionIcon sx={{ color: RESOURCE_COLOR }} />;
     case 'signal':
       return <NotificationsActiveIcon sx={{ color: SIGNAL_COLOR }} />;
+    case 'trigger':
+      return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
     default:
       return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
   }
@@ -303,14 +312,23 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
         </>
       );
     } else if (nodeType === 'start') {
-      // Start nodes only have a bottom connector
+      // Start nodes have a bottom connector (to the rest of the flow) and
+      // a top target handle so a Trigger node can connect into it (issue #241).
       return (
-        <Handle 
-          id="start-bottom"
-          type="source" 
-          position={Position.Bottom} 
-          style={getProcessHandleStyle(theme)} 
-        />
+        <>
+          <Handle
+            id="start-top"
+            type="target"
+            position={Position.Top}
+            style={getProcessHandleStyle(theme)}
+          />
+          <Handle
+            id="start-bottom"
+            type="source"
+            position={Position.Bottom}
+            style={getProcessHandleStyle(theme)}
+          />
+        </>
       );
     } else if (nodeType === 'finish') {
       // Finish nodes only have a top connector
@@ -358,6 +376,17 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
             style={getProcessHandleStyle(theme)}
           />
         </>
+      );
+    } else if (nodeType === 'trigger') {
+      // Trigger nodes (issue #241) sit ABOVE the Start node. They have only a
+      // bottom source handle — the edge flows Trigger → Start.
+      return (
+        <Handle
+          id="trigger-bottom"
+          type="source"
+          position={Position.Bottom}
+          style={{ ...getProcessHandleStyle(theme), backgroundColor: TRIGGER_COLOR }}
+        />
       );
     }
 
@@ -457,4 +486,8 @@ export const ResourceNode = memo(function ResourceNode(props: NodeProps) {
 
 export const SignalNode = memo(function SignalNode(props: NodeProps) {
   return <CustomNode {...props} nodeType="signal" selected={props.selected} />;
+});
+
+export const TriggerNode = memo(function TriggerNode(props: NodeProps) {
+  return <CustomNode {...props} nodeType="trigger" selected={props.selected} />;
 });

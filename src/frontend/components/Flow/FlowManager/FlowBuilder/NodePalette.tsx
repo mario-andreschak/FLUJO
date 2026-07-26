@@ -10,7 +10,8 @@ import OutputIcon from '@mui/icons-material/Output';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
-import { RESOURCE_COLOR, SIGNAL_COLOR } from './CustomNodes';
+import BoltIcon from '@mui/icons-material/Bolt';
+import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT } from './CustomNodes';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -44,6 +45,8 @@ const NodeItem = styled(Paper, {
       ? RESOURCE_COLOR
       : nodeType === 'signal'
       ? SIGNAL_COLOR
+      : nodeType === 'trigger'
+      ? TRIGGER_COLOR
       : theme.palette.info.main
   }`,
   boxShadow: theme.shadows[2],
@@ -61,6 +64,8 @@ const NodeItem = styled(Paper, {
         ? RESOURCE_COLOR
         : nodeType === 'signal'
         ? SIGNAL_COLOR
+        : nodeType === 'trigger'
+        ? TRIGGER_COLOR
         : theme.palette.info.main
     }, 0 3px 10px rgba(0,0,0,0.1)`
   },
@@ -86,6 +91,8 @@ const NodeHeader = styled(Box, {
       ? '#4DB6AC' // RESOURCE_COLOR light
       : nodeType === 'signal'
       ? '#B39DDB' // SIGNAL_COLOR light
+      : nodeType === 'trigger'
+      ? TRIGGER_COLOR_LIGHT
       : theme.palette.info.light
   }`,
   marginBottom: theme.spacing(1),
@@ -134,6 +141,11 @@ const nodeTypes: Array<{
     label: 'Signal Node',
     description: 'Emit a named signal to trigger another flow',
   },
+  {
+    type: 'trigger',
+    label: 'Trigger Node',
+    description: 'Schedule or event-trigger for this flow (one per flow)',
+  },
 ];
 
 // Helper function to get the appropriate icon for each node type
@@ -151,6 +163,8 @@ const getNodeIcon = (type: NodeType) => {
       return <DescriptionIcon sx={{ color: RESOURCE_COLOR }} />;
     case 'signal':
       return <NotificationsActiveIcon sx={{ color: SIGNAL_COLOR }} />;
+    case 'trigger':
+      return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
     default:
       return <SettingsIcon color="secondary" />;
   }

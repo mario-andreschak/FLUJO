@@ -62,6 +62,22 @@ export function getConnectionError(
   targetType: string | undefined,
   targetHandleId: string | null | undefined
 ): string | null {
+  // Trigger nodes are the only nodes allowed to connect INTO a Start node
+  // (issue #241). The edge must use the dedicated trigger-bottom -> start-top
+  // handles so the intent is unambiguous.
+  if (sourceType === 'trigger' && targetType === 'start') {
+    if (sourceHandleId && sourceHandleId !== 'trigger-bottom') {
+      return 'Trigger nodes must connect via their bottom handle';
+    }
+    if (targetHandleId && targetHandleId !== 'start-top') {
+      return 'Trigger nodes must connect to the top handle of the Start node';
+    }
+    return null; // valid
+  }
+  // Trigger nodes cannot be the TARGET of any other connection.
+  if (targetType === 'trigger') {
+    return 'Trigger nodes cannot have incoming connections';
+  }
   if (targetType === 'start') {
     return 'Start nodes cannot have incoming connections';
   }
@@ -123,6 +139,8 @@ export function defaultTargetHandleFor(nodeType: NodeType, sourceHandleId?: stri
   if (nodeType === 'resource') return 'resource-in';
   if (nodeType === 'process' && isResourceHandle(sourceHandleId)) return 'process-left-resource';
   if (nodeType === 'process' && isMcpHandle(sourceHandleId)) return 'process-left-mcp';
+  // Trigger nodes connect to the dedicated start-top handle (issue #241).
+  if (nodeType === 'start') return 'start-top';
   return `${nodeType}-top`;
 }
 
@@ -134,7 +152,9 @@ export function validTargetTypesFor(
   sourceType?: NodeType,
   sourceHandleId?: string | null
 ): NodeType[] {
-  const all: NodeType[] = ['process', 'finish', 'mcp', 'subflow', 'resource', 'signal'];
+  // Trigger nodes can only connect to Start (issue #241).
+  if (sourceType === 'trigger') return ['start'];
+  const all: NodeType[] = ['process', 'finish', 'mcp', 'subflow', 'resource', 'signal', 'trigger'];
   if (!sourceType || !sourceHandleId) return all;
   return all.filter(
     t => getConnectionError(sourceType, sourceHandleId, t, defaultTargetHandleFor(t, sourceHandleId)) === null
