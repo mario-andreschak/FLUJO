@@ -875,7 +875,14 @@ export async function filesystemCallTool(toolName: string, args: Record<string, 
         return errorResult(`Unknown tool on the built-in filesystem server: ${toolName}`);
     }
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     log.warn('filesystemCallTool failed', { toolName, err });
-    return textResult(`Tool failed: ${err instanceof Error ? err.message : String(err)}`, true);
+    // Return a JSON-structured error so payloadOf() in the in-chat file-browser
+    // HTML can extract the real message instead of falling back to a generic string.
+    return {
+      isError: true,
+      content: [{ type: 'text' as const, text: JSON.stringify({ error: msg }) }],
+      structuredContent: { error: msg },
+    } satisfies StructuredResult;
   }
 }

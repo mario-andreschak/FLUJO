@@ -31,6 +31,9 @@ ENV NODE_ENV=production \
     # Mark the install so /api/update reports "pull a new image" instead of a
     # broken in-app git updater (see src/utils/paths.ts + api/update/route.ts).
     FLUJO_CONTAINER=1
+    # Optional: restrict the in-chat file-browser MCP tool to specific host directories
+    # (requires a matching bind-mount in docker-compose.yml):
+    # ENV FLUJO_FS_ROOTS=/data/files
 
 # Runtime toolchains for on-demand MCP server installation/execution:
 #  - git: Marketplace/manual server clones

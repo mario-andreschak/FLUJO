@@ -19,12 +19,17 @@ services:
       - flujo-mcp-servers:/app/mcp-servers
       # To use the fileWatch trigger, bind-mount the watched host folder, e.g.:
       # - /path/on/host/watched:/data/watched
+      # To browse host files via the filesystem file-browser MCP App, bind-mount a
+      # host directory and uncomment FLUJO_FS_ROOTS below, e.g.:
+      # - /path/on/host/files:/data/files:ro
     # Uncomment to pass configuration into the container:
     # environment:
     #   # Trust a private/corporate CA for MCP servers over HTTPS (mount the file too):
     #   - FLUJO_EXTRA_CA_CERTS=/certs/root-ca.crt
     #   # Claude Subscription in-container (generate on the host with `claude setup-token`):
     #   - CLAUDE_CODE_OAUTH_TOKEN=...
+    #   # Filesystem roots for the in-chat file-browser MCP tool (matches bind-mount above):
+    #   - FLUJO_FS_ROOTS=/data/files
     restart: unless-stopped
 
 volumes:

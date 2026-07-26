@@ -186,7 +186,17 @@ const FILESYSTEM_APP_HTML = `<!doctype html>
     setMsg(listEl, "Loading " + path + " ...");
     try {
       var res = await rpc("tools/call", { name: "list_dir", arguments: { path: path } });
-      if (res && res.isError) throw new Error((payloadOf(res) || {}).error || "list_dir failed");
+      if (res && res.isError) {
+        var errMsg = (payloadOf(res) || {}).error || "list_dir failed";
+        // Detect the unconfigured-roots scenario and provide actionable guidance.
+        if (errMsg.indexOf("outside the configured filesystem roots") !== -1) {
+          errMsg = "No filesystem roots configured. "
+            + "To browse files: go to MCP Manager → Filesystem → Roots and add a directory, "
+            + "or set the FLUJO_FS_ROOTS environment variable. "
+            + "In Docker, also add a host bind-mount to docker-compose.yml.";
+        }
+        throw new Error(errMsg);
+      }
       var data = payloadOf(res) || {};
       cwd = data.path || path;
       pathEl.textContent = cwd;

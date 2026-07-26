@@ -11,7 +11,15 @@
  *  - user-configured roots persisted via the MCP manager UI, which may only
  *    NARROW within the env ceiling (never widen it).
  *
- * When neither is set the server is unconfined (full host access).
+ * Access-control priority (highest wins):
+ *  - FLUJO_FS_ROOTS (or server-specific) env variable sets a hard ceiling.
+ *  - User-configured roots must fall within that ceiling.
+ *  - No env, no configured roots → falls back to [getDataDir()] (the FLUJO data
+ *    directory) so the file browser works out-of-the-box in a fresh Docker container.
+ *  - No env, configured roots   → confine to those roots only.
+ *  - Env set                    → configured roots may only NARROW within the
+ *                                  ceiling; any root outside is dropped, and if
+ *                                  none remain the env roots themselves are used.
  */
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -69,8 +77,7 @@ async function resolveRootToPath(entry: string, dataDir: string): Promise<string
 }
 
 /**
- * The effective confinement roots for a built-in server, or an empty array when
- * no roots are configured (disallowing all access by default).
+ * The effective confinement roots for a built-in server.
  *
  * The candidate set is the UNION of two sources:
  *  - persisted server-level roots (MCP manager override, issue #170), and
@@ -80,7 +87,8 @@ async function resolveRootToPath(entry: string, dataDir: string): Promise<string
  *    added on an MCP node would be silently ignored.
  *
  * Precedence (per issue #170 D5): the env var(s) are a HARD CEILING.
- *  - No env, no configured roots -> [] (no access by default).
+ *  - No env, no configured roots -> [getDataDir()] (default: the FLUJO working
+ *                                   directory, e.g. /app in Docker).
  *  - No env, configured roots    -> confine to those roots.
  *  - Env set                     -> configured roots may only NARROW within the
  *                                   ceiling; any root outside the env is dropped,
@@ -117,7 +125,14 @@ export async function loadEffectiveRoots(
   }
 
   const configured = Array.from(new Set(candidates));
-  if (!env) return configured;
+  if (!env) {
+    if (configured.length === 0) {
+      // No env ceiling, no user-configured roots → fall back to the data directory
+      // so the file browser is usable by default (e.g. in a fresh Docker container).
+      return [dataDir];
+    }
+    return configured;
+  }
   const confined = configured.filter((p) => env.some((root) => isInside(root, p)));
   return confined.length ? confined : env;
 }
