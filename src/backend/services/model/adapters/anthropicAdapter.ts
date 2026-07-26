@@ -205,6 +205,14 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
     }
   }
 
+  // Anthropic API requires the last message to be a user turn.
+  // If the message list (after all processing) still ends with an assistant
+  // turn, drop it. This prevents a 400 on models that don't support prefill.
+  while (out.length > 0 && out[out.length - 1].role === 'assistant') {
+    out.pop();
+    log.warn('toAnthropicMessages: stripped trailing assistant message — Anthropic API requires user-last');
+  }
+
   return {
     system: systemParts.length > 0 ? systemParts.join('\n\n') : undefined,
     messages: out,

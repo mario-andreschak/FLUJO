@@ -39,6 +39,25 @@ const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
 );
 
+/**
+ * Returns true for adapters/providers that require the wire to end with a
+ * user or tool role. Anthropic's API (and every proxy that forwards to it,
+ * including OpenRouter and Requesty) does NOT support "assistant prefill" —
+ * passing a trailing role:"assistant" message causes a 400.
+ *
+ * OpenAI itself permits a trailing assistant turn for steering (prefill),
+ * but only on its own endpoints. We therefore guard on provider identity.
+ */
+function requiresUserLastMessage(model: { adapter?: string; provider?: string }): boolean {
+  return (
+    model.adapter === 'anthropic' ||
+    model.provider === 'openrouter' ||
+    model.provider === 'requesty' ||
+    // Anthropic-OpenAI-format endpoint also rejects trailing assistant
+    (model.provider === 'anthropic' && model.adapter === 'openai')
+  );
+}
+
 // How often the in-flight-completion cancellation watch polls the conversation's
 // isCancelled flag. The flag lives in process memory (set by the cancel route),
 // so polling is cheap; 250ms keeps Stop feeling immediate.
@@ -888,6 +907,22 @@ export class ModelHandler {
       // clean conversation. See ~/.claude/plans/execution-core-v2.md.
       let apiMessages: OpenAI.ChatCompletionMessageParam[] = toApiMessages(messages);
       let effectiveTools: OpenAI.ChatCompletionTool[] | undefined = tools;
+
+      // Strip trailing assistant message(s) for providers that require the last
+      // message to be user/tool role. This is a wire-only mutation — sharedState is
+      // not affected. Trailing assistant turns arise from:
+      //   1. scopeMessagesForInput (latest-message mode, settled conversation)
+      //   2. stripHandoffPlumbing (handoff prose → plain assistant turn)
+      //   3. SubflowNode framed-result push
+      if (requiresUserLastMessage(model)) {
+        while (apiMessages.length > 0 && apiMessages[apiMessages.length - 1].role === 'assistant') {
+          apiMessages = apiMessages.slice(0, -1);
+          log.debug('Stripped trailing assistant message for provider that requires user-last wire', {
+            provider: model.provider,
+            adapter: model.adapter,
+          });
+        }
+      }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
       // re-send the whole growing history every turn; a single fat tool result
