@@ -96,6 +96,56 @@ export function isMCPResourceToolName(name: string): boolean {
 }
 
 /**
+ * The eligible server names for resource exposure, derived purely from the node
+ * CONFIGURATION (bound server + enabledResources) and sorted.
+ *
+ * Deliberately probe-free: the tool description below embeds this list, and the
+ * description is part of the serialized tool block that must stay byte-identical
+ * turn to turn for the provider prefix cache to keep hitting (#89). Deriving it
+ * from which `resources/list` calls happened to SUCCEED made a transient server
+ * failure silently rewrite the tool block — a 100% cache miss on that turn.
+ * Configuration is flow-static, so this list is stable for the life of a run.
+ */
+function eligibleResourceServers(mcpNodes: MCPNodeReference[]): string[] {
+  const names = new Set<string>();
+  for (const mcpNode of mcpNodes ?? []) {
+    const { boundServer, enabledResources } = mcpNode.properties;
+    if (!boundServer) continue;
+    if (!shouldExposeResources(enabledResources)) continue;
+    names.add(boundServer);
+  }
+  // Locale-independent sort, matching ToolHandler's ordering of the tool block.
+  return Array.from(names).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * The `list_mcp_resources` tool definition — PURE and deterministic given the
+ * node configuration. Split out from the probing `buildMCPResourceTools` so the
+ * definition can be rebuilt identically on a later turn (sticky arming, see
+ * SharedState.armedSyntheticTools) without re-probing the servers.
+ */
+export function buildListMCPResourcesTool(mcpNodes: MCPNodeReference[]): ToolDefinition {
+  const serverList = eligibleResourceServers(mcpNodes).join(', ');
+  return {
+    name: LIST_MCP_RESOURCES_TOOL_NAME,
+    description:
+      `List the native MCP resources and resource templates available from bound servers (${serverList}). ` +
+      'Returns a JSON object with a "servers" array, each entry containing the server name, its ' +
+      '"resources" list (uri, name, description, mimeType) and its "templates" list (uriTemplate, name, ' +
+      'description, mimeType). Once you have a resource URI call read_resource to fetch its content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        server_filter: {
+          type: 'string',
+          description: `Optional server name to restrict results to. One of: ${serverList}.`,
+        },
+      },
+    },
+  };
+}
+
+/**
  * Build the `list_mcp_resources` synthetic tool definition for the given
  * MCPNodeReferences. Returns [] when:
  * - no MCP nodes are provided, or
@@ -103,7 +153,11 @@ export function isMCPResourceToolName(name: string): boolean {
  * - all eligible servers return empty resource + template lists.
  *
  * The empty-return keeps the tool set byte-identical for resource-free steps,
- * preserving the provider prefix-cache (#89 stability).
+ * preserving the provider prefix-cache (#89 stability). The probe decides only
+ * PRESENCE; the definition's bytes come from `buildListMCPResourcesTool`, which
+ * never depends on the probe's outcome. Once presence has been established for a
+ * conversation, ProcessNode.prep keeps the tool armed (sticky) so a later
+ * listing failure cannot drop it back out of the block.
  */
 export async function buildMCPResourceTools(
   mcpNodes: MCPNodeReference[],
@@ -111,7 +165,6 @@ export async function buildMCPResourceTools(
   if (!mcpNodes || mcpNodes.length === 0) return [];
 
   let totalCount = 0;
-  const serverNames: string[] = [];
 
   for (const mcpNode of mcpNodes) {
     const { boundServer, enabledResources } = mcpNode.properties;
@@ -133,11 +186,7 @@ export async function buildMCPResourceTools(
         enabledResources,
       );
 
-      const count = filteredResources.length + filteredTemplates.length;
-      if (count > 0 && !serverNames.includes(boundServer)) {
-        serverNames.push(boundServer);
-        totalCount += count;
-      }
+      totalCount += filteredResources.length + filteredTemplates.length;
     } catch (err) {
       // Listing failure is non-fatal — resources are additive, not blocking.
       log.warn('buildMCPResourceTools: failed to list resources from server, skipping', {
@@ -149,26 +198,7 @@ export async function buildMCPResourceTools(
 
   if (totalCount === 0) return [];
 
-  const serverList = serverNames.join(', ');
-  return [
-    {
-      name: LIST_MCP_RESOURCES_TOOL_NAME,
-      description:
-        `List the native MCP resources and resource templates available from bound servers (${serverList}). ` +
-        'Returns a JSON object with a "servers" array, each entry containing the server name, its ' +
-        '"resources" list (uri, name, description, mimeType) and its "templates" list (uriTemplate, name, ' +
-        'description, mimeType). Once you have a resource URI call read_resource to fetch its content.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          server_filter: {
-            type: 'string',
-            description: `Optional server name to restrict results to. One of: ${serverList}.`,
-          },
-        },
-      },
-    },
-  ];
+  return [buildListMCPResourcesTool(mcpNodes)];
 }
 
 /**

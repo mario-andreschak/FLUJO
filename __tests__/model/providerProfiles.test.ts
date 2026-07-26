@@ -9,6 +9,7 @@ describe('provider profiles', () => {
     const ids = PROVIDER_PROFILES.map(p => p.id);
     expect(ids).toEqual([
       'openai',
+      'openai-responses',
       'openrouter',
       'requesty',
       'xai',
@@ -32,6 +33,15 @@ describe('provider profiles', () => {
     expect(getProviderProfile('claude-subscription', 'claude-cli').id).toBe('claude-subscription');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
     expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
+    expect(getProviderProfile('openai', 'openai-responses').id).toBe('openai-responses');
+  });
+
+  it('does not let the Responses profile shadow plain OpenAI', () => {
+    // Both profiles share provider 'openai', so resolution must key on the adapter.
+    // The plain profile is listed first and stays the answer for adapter 'openai'
+    // and for legacy models with no adapter at all.
+    expect(getProviderProfile('openai', 'openai').id).toBe('openai');
+    expect(getProviderProfile('openai', undefined).id).toBe('openai');
   });
 
   it('defaults legacy models (no adapter) to the OpenAI-compatible profile', () => {

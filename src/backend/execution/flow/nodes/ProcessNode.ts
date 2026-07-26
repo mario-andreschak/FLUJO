@@ -5,7 +5,8 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
-import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
+import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
+import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
 import { buildHandoffDescription } from '../buildHandoffDescription';
@@ -309,6 +310,16 @@ export class ProcessNode extends BaseNode {
     // Check if tools are already available in shared state
     let availableTools: ToolDefinition[] = [];
 
+    // Hoisted out of the else-branch below: the bound MCP nodes are needed for
+    // resource-tool dispatch and for the synthetic-tool arming decision
+    // regardless of whether the tool DEFINITIONS came from shared state or from a
+    // fresh processMCPNodes call. (Previously this only ran on the fresh path, so
+    // a step served from sharedState.mcpContext lost its server routing context.)
+    const mcpNodes = node_params?.properties?.mcpNodes || [];
+
+    // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
+    sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
+
     if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
       // Use tools already processed by MCPNode
       log.info('Using MCP tools from shared state', {
@@ -316,12 +327,6 @@ export class ProcessNode extends BaseNode {
       });
       availableTools = sharedState.mcpContext.availableTools;
     } else {
-      // Only process MCP nodes if tools are not available in shared state
-      const mcpNodes = node_params?.properties?.mcpNodes || [];
-
-      // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
-      sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
-
       if (mcpNodes.length > 0) {
         log.info('No MCP tools found in shared state, processing MCP nodes', {
           mcpNodesCount: mcpNodes.length
@@ -470,28 +475,70 @@ export class ProcessNode extends BaseNode {
       );
     }
 
-    // Issue #168: auto-expose the `read_resource` tool when the wire history
-    // actually references a run resource (a `flujo://run/...` marker left by an
-    // oversized captured tool result/args), so the model can dereference it back
-    // to full content — even when the flujo MCP server isn't attached. Gated on
-    // the marker being present so resource-free flows keep a byte-identical tool
-    // set (preserving the #89 provider prefix-cache stability). Scanned over the
-    // SCOPED wire view the model actually receives; the node's own live loop has
-    // produced nothing yet at prep time, so only PRIOR history is inspected.
+    // Issue #168 / #239: expose the synthetic `read_resource` tool so the model
+    // can dereference a `flujo://run/...` marker (left by an oversized captured
+    // tool result/args, or by compaction) back to full content — even when the
+    // flujo MCP server isn't attached — and can fetch native MCP resource URIs it
+    // discovers via list_mcp_resources.
+    //
+    // Arming is FRONT-LOADED and MONOTONE, for prefix-cache stability (#89).
+    // The original gate armed the tool the first turn a `flujo://run/` URI showed
+    // up on the wire. That is inherently a mid-conversation flip: turn N has no
+    // URI and turn N+1 does, so the tool block — which serializes AHEAD of the
+    // messages — changes shape exactly once per run, invalidating the ENTIRE
+    // provider prefix cache on that turn. Since compaction can mint a URI from
+    // any oversized tool result, "a URI might appear later" is true for
+    // essentially every tool-using step, so waiting for the marker bought no
+    // token saving and cost a guaranteed full cache miss.
+    //
+    // Instead: decide from conditions known AT PREP TIME, before any URI exists —
+    // does this step have MCP tools (whose results can be captured/compacted into
+    // a URI), a write_resource tool, wired resource nodes, or native resources?
+    // Resource-free, tool-free steps still get a byte-identical tool set to
+    // before, which is what the original gate was protecting.
     const wireForScan = prepResult.wireMessages ?? wireBase;
+    // Retained for conversations RESUMED from before this change, whose history
+    // already carries a URI but whose step might not match the conditions below.
     const historyHasRunResourceUri = wireForScan.some(
       (m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME),
     );
-    // Also offer read_resource when native MCP resources are exposed (issue #239):
-    // the model needs to be able to fetch resources it discovers via list_mcp_resources.
-    const hasNativeResources = availableTools.some((t) => t.name === 'list_mcp_resources');
-    if (
-      (historyHasRunResourceUri || hasNativeResources) &&
-      !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
-    ) {
-      // prepResult.availableTools is the same array reference, so this is picked
-      // up by execCore's toolNameMap build and the model call.
+    const hasMcpTools = availableTools.some((t) => !!t.server);
+    const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
+    const hasResourceNodes = (node_params?.properties?.resourceNodes?.length ?? 0) > 0;
+    const hasNativeResources = availableTools.some(
+      (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
+    );
+    const shouldArmReadResource =
+      hasMcpTools ||
+      hasWriteResource ||
+      hasResourceNodes ||
+      hasNativeResources ||
+      historyHasRunResourceUri;
+
+    // Sticky arming: a synthetic tool offered once on this conversation keeps
+    // being offered. Guards the reverse flip — e.g. a server's resource listing
+    // succeeding on turn 1 (arming list_mcp_resources) and throwing on turn 2,
+    // which would otherwise drop the tool and rewrite the block.
+    const armed = new Set(sharedState.armedSyntheticTools ?? []);
+    if (shouldArmReadResource) armed.add(READ_RESOURCE_TOOL_NAME);
+    if (hasNativeResources) armed.add(LIST_MCP_RESOURCES_TOOL_NAME);
+
+    // prepResult.availableTools is the same array reference, so these are picked
+    // up by execCore's toolNameMap build and the model call.
+    if (armed.has(READ_RESOURCE_TOOL_NAME) &&
+        !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)) {
       availableTools.push(buildReadResourceTool());
+    }
+    if (armed.has(LIST_MCP_RESOURCES_TOOL_NAME) && mcpNodes.length > 0 &&
+        !availableTools.some((t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME)) {
+      // Rebuilt from configuration only (no re-probe), so the bytes match the
+      // definition emitted on the turn that armed it.
+      log.info('Re-arming list_mcp_resources from sticky state (probe unavailable this turn)');
+      availableTools.push(buildListMCPResourcesTool(mcpNodes));
+    }
+
+    if (armed.size > 0) {
+      sharedState.armedSyntheticTools = Array.from(armed).sort();
     }
 
     log.info('Assembled node context', {

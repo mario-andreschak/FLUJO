@@ -118,6 +118,21 @@ export interface ExperimentalSettings {
    * transport). A missing value is treated as disabled.
    */
   mcpBetaProtocol?: boolean;
+  /**
+   * Cap, in characters, on each tool DESCRIPTION sent to the model. 0 / undefined
+   * disables capping.
+   *
+   * The tool block is the largest fixed cost of a tool-using step (~20k tokens for
+   * a few bound MCP servers) and stateless Chat Completions re-sends it every turn.
+   * Lossless trimming — schema bookkeeping keywords, redundant titles, template
+   * literal indentation — is always applied and needs no setting. This value
+   * enables the LOSSY tier: verbose servers are where the real tokens are, but
+   * shortening a description removes information the model might have used, so it
+   * stays opt-in. Truncation lands on a sentence boundary, and per-property
+   * descriptions get a quarter of this budget. ~600–1000 is a reasonable starting
+   * point; a missing value keeps every description intact.
+   */
+  toolDescriptionMaxChars?: number;
 }
 
 /**

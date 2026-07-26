@@ -1,12 +1,14 @@
 import { Model } from '@/shared/types/model';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
+import { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
 import { AnthropicAdapter } from './anthropicAdapter';
 import { GeminiAdapter } from './geminiAdapter';
 import { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
+export { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
 export { AnthropicAdapter } from './anthropicAdapter';
 export { GeminiAdapter } from './geminiAdapter';
 export { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
@@ -18,6 +20,8 @@ export { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
  */
 export function getCompletionAdapter(model: Model): CompletionAdapter {
   switch (model.adapter) {
+    case 'openai-responses':
+      return new OpenAiResponsesAdapter();
     case 'anthropic':
       return new AnthropicAdapter();
     case 'gemini':

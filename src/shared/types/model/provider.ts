@@ -16,9 +16,16 @@ export type ModelProvider =
 /**
  * Which backend completion adapter (and SDK) drives a model.
  *
- * - 'openai'     -> OpenAiAdapter, the OpenAI-compatible HTTP path used by every
- *                   classic provider and by the "OpenAI Format" variants of
- *                   Gemini / Anthropic.
+ * - 'openai'     -> OpenAiAdapter, the OpenAI-compatible HTTP path (Chat
+ *                   Completions) used by every classic provider and by the
+ *                   "OpenAI Format" variants of Gemini / Anthropic.
+ * - 'openai-responses' -> OpenAiResponsesAdapter, OpenAI's Responses API. Same
+ *                   stateless request/response contract as 'openai' (FLUJO keeps
+ *                   owning the history — no previous_response_id), but carries
+ *                   encrypted REASONING items across turns, so a gpt-5 / o-series
+ *                   model in an agentic tool loop stops re-deriving its own
+ *                   reasoning each iteration. Only worthwhile for reasoning
+ *                   models; 'openai' remains the default everywhere else.
  * - 'gemini'     -> GeminiAdapter, native Google GenAI SDK.
  * - 'anthropic'  -> AnthropicAdapter, native Anthropic SDK.
  * - 'claude-cli' -> ClaudeSubscriptionAdapter, drives the `claude` CLI against a
@@ -26,6 +33,7 @@ export type ModelProvider =
  */
 export type ModelAdapter =
   | 'openai'
+  | 'openai-responses'
   | 'gemini'
   | 'anthropic'
   | 'claude-cli';
@@ -138,6 +146,19 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'OpenAI SDK',
     baseUrl: 'https://api.openai.com/v1',
     showBaseUrl: true,
+  },
+  {
+    id: 'openai-responses',
+    label: 'OpenAI (Responses API)',
+    provider: 'openai',
+    adapter: 'openai-responses',
+    sdkLabel: 'OpenAI SDK (Responses)',
+    baseUrl: 'https://api.openai.com/v1',
+    showBaseUrl: true,
+    // Worth choosing only for reasoning models — the adapter's reason to exist is
+    // carrying encrypted reasoning items across turns of an agentic tool loop.
+    // Non-reasoning models should stay on the plain 'OpenAI' profile.
+    defaultModels: ['gpt-5', 'gpt-5-mini', 'o4-mini', 'o3'],
   },
   {
     id: 'openrouter',

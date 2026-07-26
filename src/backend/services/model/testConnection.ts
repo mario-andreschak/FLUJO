@@ -296,19 +296,28 @@ export async function testModelConnection(params: {
   const { modelName, baseUrl, apiKey, provider, adapter, model } = params;
   log.info('Testing model connection', { modelName, baseUrl, provider, adapter, hasApiKey: Boolean(apiKey) });
 
-  // Native adapters (Anthropic / Gemini / Claude subscription) don't speak the
-  // OpenAI protocol, so run a single adapter round-trip instead of the
-  // SDK+axios cross-check. Requires the stored Model object.
+  // Anything other than the plain Chat Completions path is tested with a single
+  // round-trip through its own adapter rather than the SDK+axios cross-check:
+  // the native adapters (Anthropic / Gemini / Claude subscription) don't speak
+  // the OpenAI protocol at all, and the Responses adapter speaks a different
+  // endpoint on it. Either way the cross-check has nothing to compare against, and
+  // the adapter round-trip is the authoritative "will my flows work" answer.
+  // Requires the stored Model object.
   if (adapter && adapter !== 'openai' && model) {
     const sdk = await attemptViaAdapter(model, apiKey);
+    // 'openai-responses' is still an OpenAI-hosted HTTP endpoint, so describing it
+    // as a "native SDK" adapter would be wrong.
+    const isNativeSdk = adapter !== 'openai-responses';
     const naAxios: ModelTestAttempt = {
       ok: sdk.ok,
       durationMs: 0,
-      content: 'n/a — native SDK adapter; the axios cross-check applies only to OpenAI-compatible endpoints.',
+      content: isNativeSdk
+        ? 'n/a — native SDK adapter; the axios cross-check applies only to OpenAI-compatible endpoints.'
+        : 'n/a — the axios cross-check targets the Chat Completions endpoint only.',
     };
     const diagnosis = sdk.ok
-      ? `Connected successfully via the ${adapter} adapter (native SDK). The model and credentials are working.`
-      : `The native ${adapter} adapter failed: ${sdk.error?.message ?? 'unknown error'}. ` +
+      ? `Connected successfully via the ${adapter} adapter${isNativeSdk ? ' (native SDK)' : ''}. The model and credentials are working.`
+      : `The ${adapter} adapter failed: ${sdk.error?.message ?? 'unknown error'}. ` +
         `Check the model name and the ${adapter === 'claude-cli' ? 'OAuth token (claude setup-token) and that the `claude` CLI is installed' : 'API key'}.`;
     return { ok: sdk.ok, model: modelName, baseUrl, provider, sdk, axios: naAxios, diagnosis };
   }

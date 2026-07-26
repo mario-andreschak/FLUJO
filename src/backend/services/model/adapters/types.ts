@@ -130,6 +130,16 @@ export interface CompletionInput {
    * tool. Request/response adapters ignore it. Omitted ⇒ plain truncation.
    */
   runResourceMarkers?: Map<string, ToolResourceMarker>;
+  /**
+   * Cache-routing hint for providers with a sharded automatic prompt cache
+   * (OpenAI's `prompt_cache_key`). Requests carrying the same key AND the same
+   * prefix are routed to the same machine, so a warm cache is actually found
+   * instead of missed on a cold shard. Derived from a hash of the tool block
+   * (see derivePromptCacheKey), so every request sharing that prefix shares the
+   * key. Adapters that don't support the parameter ignore it — the OpenAI
+   * adapter also drops it permanently for a provider that rejects it.
+   */
+  promptCacheKey?: string;
 }
 
 /**

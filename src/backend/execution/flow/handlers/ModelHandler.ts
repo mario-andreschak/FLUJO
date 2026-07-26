@@ -18,7 +18,9 @@ import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
-import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
+import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
+import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
+import { trimTools } from './trimToolBlock';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
@@ -226,6 +228,23 @@ export class ModelHandler {
   }
 
   /**
+   * Read the opt-in `toolDescriptionMaxChars` cap from the persisted Settings
+   * blob. Best-effort like the flag above: any failure (or a missing value) reads
+   * as 0, which leaves every tool description intact and keeps only the lossless
+   * trimming tier active.
+   */
+  private static async toolDescriptionCap(): Promise<number> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      const cap = settings?.experimental?.toolDescriptionMaxChars;
+      return typeof cap === 'number' && cap > 0 ? cap : 0;
+    } catch (err) {
+      log.warn('Failed to read toolDescriptionMaxChars setting; leaving descriptions intact', { err });
+      return 0;
+    }
+  }
+
+  /**
    * Fold a message streamed from a self-orchestrating adapter (Claude
    * subscription) into the conversation's live in-memory SharedState AS it is
    * produced (keyed by id, so it is idempotent w.r.t. the same message being
@@ -338,6 +357,15 @@ export class ModelHandler {
    * tool still executes. The tool block is re-sorted by name to stay byte-stable
    * turn to turn (prefix cache, #89). Returns the tools unchanged when no arming
    * is needed.
+   *
+   * SAFETY NET ONLY as of the prefix-cache work: ProcessNode.prep now arms
+   * read_resource up front for any step that could ever mint a run-resource URI
+   * (MCP tools present, write_resource offered, resource nodes wired, native
+   * resources exposed), so by the time compaction can produce a marker the tool
+   * is already in the block and this is a no-op. It stays as a backstop for
+   * non-ProcessNode callers and for conversations resumed from before that
+   * change — but note that when it DOES fire it reshapes the tool block
+   * mid-conversation and costs a full prefix-cache miss on that turn.
    */
   private static ensureReadResourceArmed(
     apiMessages: OpenAI.ChatCompletionMessageParam[],
@@ -980,6 +1008,28 @@ export class ModelHandler {
         });
       }
 
+      // Shrink the serialized tool block. It is the largest fixed cost of a
+      // tool-using step and stateless Chat Completions re-sends it on every turn of
+      // the agentic loop, so bytes removed here are saved once per turn. Lossless
+      // by default (schema bookkeeping keywords, titles that restate the property
+      // name, template-literal indentation in descriptions); description CAPPING is
+      // applied only when the user opted in via `toolDescriptionMaxChars`. Pure
+      // function of its input, so the block stays byte-stable turn to turn (#89).
+      if (sanitizedTools && sanitizedTools.length > 0) {
+        const descriptionMaxChars = await ModelHandler.toolDescriptionCap();
+        const { tools: trimmed, beforeChars, afterChars } = trimTools(sanitizedTools, {
+          descriptionMaxChars,
+        });
+        sanitizedTools = trimmed;
+        if (afterChars < beforeChars) {
+          log.debug('Tool block trimmed before send', {
+            beforeChars,
+            afterChars,
+            savedChars: beforeChars - afterChars,
+          });
+        }
+      }
+
       // Select the completion adapter for this model's provider/SDK. The
       // OpenAI-compatible adapter wraps the original hardened-client path; the
       // native adapters (Anthropic, Gemini, Claude CLI) translate to/from their
@@ -1035,6 +1085,13 @@ export class ModelHandler {
         }
 
         try {
+          // Fingerprint the cacheable prefix of THIS attempt (tool block + system
+          // message) and classify what drifted since the previous call on this
+          // conversation, so the cache outcome logged below can be attributed to a
+          // cause instead of just reported as a number. Observation only.
+          const prefixFingerprint = fingerprintPrefix(attemptMessages, attemptTools);
+          const prefixDrift = classifyDrift(opts?.conversationId, prefixFingerprint);
+
           // Make the API request through the selected adapter.
           let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
           let transcript: FlujoChatMessage[] | undefined;
@@ -1059,9 +1116,33 @@ export class ModelHandler {
               nodeId: opts?.nodeId,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: opts?.sessionResume,
+              // Derived from the tool-block hash, so every request sharing this
+              // prefix routes to the same prompt-cache shard (see
+              // derivePromptCacheKey). Adapters that don't support it ignore it.
+              promptCacheKey: derivePromptCacheKey(prefixFingerprint),
             }));
           } finally {
             stopCancelWatch();
+          }
+
+          // Prompt-cache effectiveness for this call, attributed to a prefix-drift
+          // cause. One INFO line per model call — this is the number the cost of a
+          // long agentic run turns on. Skipped when the provider reported no usage
+          // block at all (nothing to measure).
+          if (chatCompletion?.usage) {
+            const rawUsage = chatCompletion.usage as OpenAiUsageLike;
+            logCacheOutcome({
+              conversationId: opts?.conversationId,
+              nodeId: opts?.nodeId,
+              model: model.name,
+              provider: model.provider,
+              adapter: model.adapter,
+              promptTokens: rawUsage.prompt_tokens ?? 0,
+              completionTokens: rawUsage.completion_tokens ?? 0,
+              cachedTokens: rawUsage.prompt_tokens_details?.cached_tokens,
+              drift: prefixDrift,
+              fingerprint: prefixFingerprint,
+            });
           }
 
           // --- Log the raw response received ---

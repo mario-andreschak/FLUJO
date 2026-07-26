@@ -44,6 +44,7 @@ jest.mock('@/shared/types/runResources', () => ({
 
 import {
   buildMCPResourceTools,
+  buildListMCPResourcesTool,
   executeMCPResourceTool,
   executeNativeReadResource,
   isMCPResourceToolName,
@@ -312,5 +313,62 @@ describe('executeNativeReadResource', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('access denied');
+  });
+});
+
+/**
+ * Prefix-cache byte-stability (#89). The serialized tool block is re-sent on
+ * every stateless Chat Completions turn and only keeps hitting the provider's
+ * automatic prompt cache while it is byte-identical. list_mcp_resources embeds a
+ * server list in its description, so that list must NOT depend on which live
+ * resource listings happened to succeed on a given turn.
+ */
+describe('buildListMCPResourcesTool byte-stability', () => {
+  it('derives the server list from configuration, not from probe results', async () => {
+    const nodes = [mcpRef('server-b', 'all'), mcpRef('server-a', 'all')];
+
+    // Turn 1: both servers list successfully.
+    mockListServerResources.mockResolvedValue({ resources: [sampleResource('file://a.txt')] });
+    const turn1 = await buildMCPResourceTools(nodes);
+
+    // Turn 2: server-b's listing throws (transient), server-a still works.
+    mockListServerResources.mockImplementation((server: string) =>
+      server === 'server-b'
+        ? Promise.reject(new Error('connection reset'))
+        : Promise.resolve({ resources: [sampleResource('file://a.txt')] }),
+    );
+    const turn2 = await buildMCPResourceTools(nodes);
+
+    expect(turn1).toHaveLength(1);
+    expect(turn2).toHaveLength(1);
+    // Byte-identical despite the partial failure — this is the whole point.
+    expect(JSON.stringify(turn2[0])).toBe(JSON.stringify(turn1[0]));
+  });
+
+  it('sorts the server list so MCP-node ordering cannot change the bytes', () => {
+    const ab = buildListMCPResourcesTool([mcpRef('server-a', 'all'), mcpRef('server-b', 'all')]);
+    const ba = buildListMCPResourcesTool([mcpRef('server-b', 'all'), mcpRef('server-a', 'all')]);
+
+    expect(JSON.stringify(ba)).toBe(JSON.stringify(ab));
+    expect(ab.description).toContain('server-a, server-b');
+  });
+
+  it('excludes servers whose enabledResources is [] from the description', () => {
+    const def = buildListMCPResourcesTool([mcpRef('server-a', 'all'), mcpRef('server-b', [])]);
+
+    expect(def.description).toContain('server-a');
+    expect(def.description).not.toContain('server-b');
+  });
+
+  it('rebuilds a definition identical to the one the probing path emits', async () => {
+    const nodes = [mcpRef('server-a', 'all')];
+    mockListServerResources.mockResolvedValue({ resources: [sampleResource('file://a.txt')] });
+
+    const [probed] = await buildMCPResourceTools(nodes);
+    // Sticky re-arming (ProcessNode.prep) rebuilds without re-probing; the bytes
+    // must match or the re-arm would itself be a cache miss.
+    const rebuilt = buildListMCPResourcesTool(nodes);
+
+    expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(probed));
   });
 });

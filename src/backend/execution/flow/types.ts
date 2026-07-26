@@ -574,6 +574,23 @@ export interface SharedState {
      *  so native resource tools (list_mcp_resources, native read_resource) receive
      *  the correct server context. Cleared / overwritten on each node transition. */
     currentMCPNodes?: MCPNodeReference[];
+    /**
+     * Synthetic tools (`read_resource`, `list_mcp_resources`) that have been
+     * armed at any point in this conversation.
+     *
+     * These two tools used to be armed LAZILY — read_resource the first turn a
+     * `flujo://run/` URI appeared on the wire, list_mcp_resources whenever a live
+     * `resources/list` probe happened to succeed. Both decisions could flip
+     * mid-conversation, and because the tool block serializes AHEAD of the
+     * messages, a flip invalidates 100% of the provider's prefix cache for that
+     * turn (#89). Recording the arming here makes it MONOTONE: once a synthetic
+     * tool has been offered on this conversation it keeps being offered, even if
+     * the triggering condition transiently disappears (e.g. a server's resource
+     * listing fails on a later turn). Combined with the front-loaded arming
+     * decision in ProcessNode.prep, the tool block is byte-stable for the life of
+     * a run. Plain string[] so it persists with the conversation.
+     */
+    armedSyntheticTools?: string[];
     // Current node ID for stateful execution
     currentNodeId?: string;
     // Flag to indicate if handoff was requested
