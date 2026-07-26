@@ -47,6 +47,11 @@ describe('filesystem tool definitions', () => {
       ])
     );
   });
+
+  it('exposes get_allowed_directories', () => {
+    const names = filesystemToolDefinitions().map((t) => t.name);
+    expect(names).toContain('get_allowed_directories');
+  });
 });
 
 describe('filesystem operations', () => {
@@ -231,6 +236,29 @@ describe('filesystem operations', () => {
     expect(ok.isError).toBeUndefined();
     const raw = await fsp.readFile(p, 'utf8');
     expect(raw).toBe('foo\r\nbar\r\nfoo\r\n');
+  });
+
+  describe('get_allowed_directories', () => {
+    it('returns the effective roots', async () => {
+      // mockedRoots is already set to [dir] in beforeEach
+      const result = await filesystemCallTool('get_allowed_directories', {});
+      expect(result.isError).toBeFalsy();
+      const sc = structured(result) as { directories: string[] };
+      expect(sc.directories).toEqual([dir]);
+    });
+
+    it('returns the data-directory fallback when no user roots are configured', async () => {
+      // When getInternalServerRoots returns [] and no FLUJO_FS_ROOTS env is set,
+      // loadEffectiveRoots falls back to [getDataDir()] so the file browser is
+      // still usable by default. The tool must NOT return an error in this case.
+      mockedRoots.mockResolvedValueOnce([]);
+      const result = await filesystemCallTool('get_allowed_directories', {});
+      expect(result.isError).toBeFalsy();
+      const sc = structured(result) as { directories: string[] };
+      // At least one directory (the data dir fallback) must be present.
+      expect(Array.isArray(sc.directories)).toBe(true);
+      expect(sc.directories.length).toBeGreaterThan(0);
+    });
   });
 
   it('enforces FLUJO_FS_ROOTS confinement when configured', async () => {

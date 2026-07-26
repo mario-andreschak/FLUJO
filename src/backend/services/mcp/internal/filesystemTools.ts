@@ -348,6 +348,32 @@ export function filesystemToolDefinitions(): Tool[] {
         required: ['path', 'deleted'],
       },
     },
+    {
+      name: 'get_allowed_directories',
+      description:
+        'Returns the list of directories that this filesystem MCP server is ' +
+        'currently allowed to access. The list is the merged result of ' +
+        'server-level roots (configured via FLUJO MCP settings), MCP-node-level ' +
+        'roots (set in the FlowBuilder), and the FLUJO_FS_ROOTS environment ' +
+        'variable ceiling. When no roots are configured at all, returns the FLUJO ' +
+        'data directory as the default (so the file browser is usable out of the box).',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          directories: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Absolute paths of all allowed directories.',
+          },
+        },
+        required: ['directories'],
+      },
+    },
   ];
 }
 
@@ -839,6 +865,12 @@ async function deleteTool(args: Record<string, unknown>, roots: string[]): Promi
   return dualResult({ path: target, deleted: true });
 }
 
+async function getAllowedDirectoriesTool(
+  roots: string[]
+): Promise<CallToolResult> {
+  return dualResult({ directories: roots });
+}
+
 export async function filesystemCallTool(toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
     // MCP App launcher (#97): pure UI trigger — returns immediately without
@@ -871,6 +903,8 @@ export async function filesystemCallTool(toolName: string, args: Record<string, 
         return await moveTool(args, roots);
       case 'delete':
         return await deleteTool(args, roots);
+      case 'get_allowed_directories':
+        return await getAllowedDirectoriesTool(roots);
       default:
         return errorResult(`Unknown tool on the built-in filesystem server: ${toolName}`);
     }
