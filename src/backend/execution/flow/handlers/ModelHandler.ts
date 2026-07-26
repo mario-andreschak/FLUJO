@@ -1188,7 +1188,7 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    const { toolCalls, toolNameMap, emit, conversationId, node } = input;
+    const { toolCalls, toolNameMap, emit, conversationId, node, signal } = input;
 
     // Add verbose logging of the input
     log.verbose('processToolCalls input', input);
@@ -1399,7 +1399,8 @@ export class ModelHandler {
               total: progress.total,
               message: progress.message
             }),
-            decoded.nodeId
+            decoded.nodeId,
+            signal
           );
 
           // Tier 3 data flow: auto-capture binary/large tool results as

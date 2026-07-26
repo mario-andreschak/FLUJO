@@ -1190,7 +1190,7 @@ export class MCPService {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void, callerNodeId?: string): Promise<MCPServiceResponse> {
+  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void, callerNodeId?: string, signal?: AbortSignal): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
 
     // The built-in internal server dispatches in-process. The dispatcher always
@@ -1241,7 +1241,7 @@ export class MCPService {
       }
     }
 
-    const result = await callToolFunction(client, serverName, toolName, args, timeout, onProgress);
+    const result = await callToolFunction(client, serverName, toolName, args, timeout, onProgress, signal);
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
   }

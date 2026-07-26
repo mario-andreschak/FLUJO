@@ -101,6 +101,14 @@ export interface ToolCallProcessingInput {
    * not only between loop iterations (issue #109).
    */
   shouldAbort?: () => boolean;
+  /**
+   * AbortSignal threaded into MCP tool calls. When provided, it is forwarded to
+   * `MCPService.callTool` so that long-running Tasks-extension poll loops can be
+   * cancelled mid-flight (via `tasks/cancel`) when the user presses Stop.
+   * Optional: callers that only need between-call cancellation (via shouldAbort)
+   * need not provide this.
+   */
+  signal?: AbortSignal;
 }
 
 // Tool call processing result

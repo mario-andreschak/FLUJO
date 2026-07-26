@@ -220,7 +220,7 @@ describe('processToolCalls tool-args capture (#168)', () => {
     }));
 
     // The active call still executes with the FULL args (capture is lineage-only).
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'screenshot', bigArgs, expect.anything(), expect.anything());
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'screenshot', bigArgs, expect.anything(), expect.anything(), undefined, undefined);
   });
 
   it('does NOT capture sub-threshold args', async () => {

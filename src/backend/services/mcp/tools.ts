@@ -2,8 +2,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
-import { MCPToolResponse as ToolResponse, MCPServiceResponse } from '@/shared/types/mcp';
+import { MCPToolResponse as ToolResponse, MCPServiceResponse, isTaskCallResponse, MCPTaskHandle } from '@/shared/types/mcp';
 import { isBetaClient } from './betaClient';
+import { sleep } from '@/backend/utils/sleep';
 
 const log = createLogger('backend/services/mcp/tools');
 
@@ -127,7 +128,8 @@ export async function callTool(
   toolName: string,
   args: Record<string, unknown>,
   timeout?: number,
-  onProgress?: (progress: ToolCallProgress) => void
+  onProgress?: (progress: ToolCallProgress) => void,
+  signal?: AbortSignal
 ): Promise<MCPServiceResponse> {
   log.debug('Entering callTool method');
   if (!client) {
@@ -162,6 +164,7 @@ export async function callTool(
     const callOptions = {
       timeout: timeoutMs,
       resetTimeoutOnProgress: true,
+      ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
         log.debug(`Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ''}${progress.message ? ` — ${progress.message}` : ''}`);
         onProgress?.(progress);
@@ -177,6 +180,90 @@ export async function callTool(
           options?: typeof callOptions
         ) => ReturnType<Client['callTool']>).call(client, { name: toolName, arguments: normalizedArgs }, callOptions)
       : await client.callTool({ name: toolName, arguments: normalizedArgs }, undefined, callOptions);
+
+    // -----------------------------------------------------------------------
+    // MCP Tasks extension (SEP-2663 / spec 2026-07-28)
+    // If the server returned a task handle instead of a CallToolResult, enter
+    // a poll loop: poll tasks/get until a terminal status, forwarding status
+    // updates through the existing onProgress seam. If the caller aborts
+    // (user Stop), send tasks/cancel (best-effort) and throw.
+    // Only engaged on the v2 beta client path because Tasks require 2026-07-28
+    // protocol support; on v1 clients the response will never match the guard.
+    // -----------------------------------------------------------------------
+    if (isTaskCallResponse(response)) {
+      const taskHandle = response.task as MCPTaskHandle;
+      log.info(`Tool ${toolName} on ${serverName} returned task handle ${taskHandle.taskId} (status: ${taskHandle.status})`);
+      onProgress?.({ progress: 0, message: `Task ${taskHandle.taskId} created (${taskHandle.status})` });
+
+      const POLL_MIN_MS = 1_000;
+      const POLL_MAX_MS = 30_000;
+      const pollMs = Math.min(
+        Math.max(taskHandle.pollInterval ?? 5_000, POLL_MIN_MS),
+        POLL_MAX_MS
+      );
+
+      const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+      let currentStatus = taskHandle.status;
+      let elapsed = 0;
+
+      while (!TERMINAL.has(currentStatus)) {
+        if (signal?.aborted) {
+          // Best-effort cancel — ignore errors and throw regardless.
+          try {
+            await (client as unknown as { request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown> }).request(
+              { method: 'tasks/cancel', params: { taskId: taskHandle.taskId } },
+              undefined,
+              { signal, timeout: 10_000 }
+            );
+          } catch {
+            // Intentionally swallowed — best-effort only.
+          }
+          throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
+        }
+
+        await sleep(pollMs);
+        elapsed += pollMs;
+
+        const pollResponse = await (client as unknown as { request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown> }).request(
+          { method: 'tasks/get', params: { taskId: taskHandle.taskId } },
+          undefined,
+          { signal, timeout: timeoutMs }
+        ) as { task: MCPTaskHandle };
+
+        const task = pollResponse.task;
+        currentStatus = task.status;
+        log.debug(`Task ${taskHandle.taskId} poll: status=${task.status}, elapsed=${elapsed}ms`);
+
+        onProgress?.({
+          progress: task.status === 'completed' ? 100 : Math.min(99, Math.round(elapsed / 1000)),
+          message: `Task ${taskHandle.taskId}: ${task.status}`,
+        });
+
+        if (task.status === 'completed') {
+          return {
+            success: true,
+            data: task.result,
+            progressToken: taskHandle.taskId,
+          };
+        }
+        if (task.status === 'failed') {
+          return {
+            success: false,
+            error: task.error ?? `Task ${taskHandle.taskId} failed`,
+            progressToken: taskHandle.taskId,
+          };
+        }
+        // 'input_required': continue polling (tasks/update deferred to Phase 3)
+        // 'cancelled': loop will exit on next TERMINAL check
+      }
+
+      // Reached terminal 'cancelled' from the server side.
+      return {
+        success: false,
+        error: `Task ${taskHandle.taskId} was cancelled by the server`,
+        progressToken: taskHandle.taskId,
+      };
+    }
 
     return {
       success: true,

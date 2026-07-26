@@ -184,6 +184,43 @@ export type MCPWebSocketConfig = MCPManagerConfig & {
 
 export type MCPServerConfig = MCPStdioConfig | MCPWebSocketConfig | MCPSSEConfig | MCPStreamableConfig;
 
+// ---------------------------------------------------------------------------
+// MCP Tasks extension (SEP-2663 / spec 2026-07-28)
+// Servers that support the Tasks extension may respond to tools/call with a
+// task handle instead of a CallToolResult. FLUJO detects this shape, enters a
+// poll loop (tasks/get), and maps tasks/cancel onto its cancellation ancestry.
+// ---------------------------------------------------------------------------
+
+/** SEP-2663 task handle returned by tools/call instead of a CallToolResult */
+export interface MCPTaskHandle {
+  taskId: string;
+  status: 'working' | 'input_required' | 'completed' | 'failed' | 'cancelled';
+  /** Server-suggested poll interval in ms */
+  pollInterval?: number;
+  /** Present when status === 'completed' */
+  result?: unknown;
+  /** Present when status === 'failed' */
+  error?: string;
+}
+
+/** Top-level result shape from tools/call when the server returns a task */
+export interface MCPTaskCallResponse {
+  task: MCPTaskHandle;
+}
+
+/**
+ * Type guard: distinguishes a task-handle response from a classic CallToolResult.
+ * The discriminator is the presence of a `task` object with a string `taskId`.
+ */
+export function isTaskCallResponse(r: unknown): r is MCPTaskCallResponse {
+  return (
+    typeof r === 'object' &&
+    r !== null &&
+    'task' in r &&
+    typeof (r as MCPTaskCallResponse).task?.taskId === 'string'
+  );
+}
+
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
   data?: T;
