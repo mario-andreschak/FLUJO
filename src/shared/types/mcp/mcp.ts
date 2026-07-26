@@ -121,7 +121,20 @@ export type MCPManagerConfig = {
    * forwarded onward). Enabling this lets the server spend your model's API budget.
    */
   sampling?: MCPSamplingPolicy;
+  /**
+   * MCP elicitation (#238): opt-in capability letting this server ask the user for
+   * additional input during a tool call (server -> client `elicitation/create`, spec
+   * revision 2026-07-28). Opt-in: when absent/disabled, FLUJO declares NO elicitation
+   * capability and rejects any request. Unattended/scheduled runs auto-cancel elicitation
+   * requests rather than blocking. URL-mode elicitation is deferred to a follow-up.
+   */
+  elicitation?: MCPElicitationPolicy;
 }
+
+export type MCPElicitationPolicy = {
+  /** Master switch. When false/undefined, FLUJO does not advertise elicitation at all. */
+  enabled: boolean;
+};
 
 export type MCPSamplingPolicy = {
   /** Master switch. When false/undefined, FLUJO does not advertise sampling at all. */

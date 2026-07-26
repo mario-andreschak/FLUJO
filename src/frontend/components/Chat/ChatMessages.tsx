@@ -19,7 +19,13 @@ import {
   Switch,
   FormControlLabel,
   Collapse,
-  CircularProgress
+  CircularProgress,
+  TextField,
+  Select,
+  Checkbox,
+  FormControl,
+  InputLabel,
+  FormHelperText,
 } from '@mui/material';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -54,9 +60,18 @@ const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize
 const MESSAGES_WINDOW_INITIAL = 50;
 const MESSAGES_WINDOW_STEP = 200;
 
+/** Shape of a pending elicitation request surfaced from the `run:awaiting_elicitation` SSE event. */
+export interface PendingElicitation {
+  elicitationId: string;
+  message: string;
+  requestedSchema: Record<string, unknown>;
+}
+
 interface ChatMessagesProps {
   messages: ChatMessage[];
   pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[] | null; // Add pending calls prop
+  /** Active elicitation request from the server, if any. */
+  pendingElicitation?: PendingElicitation | null;
   availableNodes?: { id: string; label: string }[]; // Add available nodes for dropdown
   /** Resets the render window when the user switches conversations. */
   conversationId?: string;
@@ -68,6 +83,10 @@ interface ChatMessagesProps {
   onBeginEditMessage?: (messageId: string) => void;
   onApproveToolCall?: (toolCallId: string) => void; // Add approve handler prop
   onRejectToolCall?: (toolCallId: string) => void; // Add reject handler prop
+  /** Submit elicitation form — called with the collected field values. */
+  onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
+  /** Cancel the pending elicitation request. */
+  onCancelElicitation?: (elicitationId: string) => void;
   /**
    * #97: an MCP App handed a message/selection back to the model (ui/message /
    * ui/update-model-context). Wired to submit a follow-up user message. MUST be
@@ -836,9 +855,155 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   );
 });
 
+// ---------------------------------------------------------------------------
+// ElicitationFormCard — renders a server-supplied elicitation form
+// ---------------------------------------------------------------------------
+
+type FieldSchema = {
+  type?: string;
+  title?: string;
+  description?: string;
+  enum?: string[];
+  enumNames?: string[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  default?: unknown;
+};
+
+interface ElicitationFormCardProps {
+  elicitation: PendingElicitation;
+  onSubmit?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
+  onCancel?: (elicitationId: string) => void;
+}
+
+const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, onSubmit, onCancel }) => {
+  const { elicitationId, message, requestedSchema } = elicitation;
+  const schemaProps = (requestedSchema?.properties ?? {}) as Record<string, FieldSchema>;
+  const fieldNames = Object.keys(schemaProps);
+
+  const initValues = () => {
+    const vals: Record<string, string | number | boolean | string[]> = {};
+    for (const key of fieldNames) {
+      const f = schemaProps[key];
+      if (f.default !== undefined) vals[key] = f.default as string | number | boolean | string[];
+      else if (f.type === 'boolean') vals[key] = false;
+      else if (f.type === 'number' || f.type === 'integer') vals[key] = 0;
+      else vals[key] = '';
+    }
+    return vals;
+  };
+
+  const [values, setValues] = useState<Record<string, string | number | boolean | string[]>>(initValues);
+
+  const patch = (key: string, val: string | number | boolean | string[]) => {
+    setValues(prev => ({ ...prev, [key]: val }));
+  };
+
+  const handleSubmit = () => {
+    if (onSubmit) onSubmit(elicitationId, values);
+  };
+
+  const handleCancel = () => {
+    if (onCancel) onCancel(elicitationId);
+  };
+
+  return (
+    <Paper
+      elevation={2}
+      sx={{ p: 2, mt: 2, bgcolor: 'info.light', border: '1px solid', borderColor: 'info.main', borderRadius: 2 }}
+    >
+      <Typography variant="h6" sx={{ mb: 1 }}>Server needs more information</Typography>
+      <Typography variant="body2" sx={{ mb: 2 }}>{message}</Typography>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        {fieldNames.map((key) => {
+          const f = schemaProps[key];
+          const label = f.title || key;
+          const val = values[key];
+
+          if (f.type === 'boolean') {
+            return (
+              <FormControlLabel
+                key={key}
+                control={
+                  <Checkbox
+                    checked={!!val}
+                    onChange={(e) => patch(key, e.target.checked)}
+                    size="small"
+                  />
+                }
+                label={label}
+              />
+            );
+          }
+
+          if (f.enum && f.enum.length > 0) {
+            return (
+              <FormControl key={key} size="small" sx={{ minWidth: 200 }}>
+                <InputLabel>{label}</InputLabel>
+                <Select
+                  label={label}
+                  value={String(val ?? '')}
+                  onChange={(e) => patch(key, e.target.value)}
+                >
+                  {f.enum.map((opt, i) => (
+                    <MenuItem key={opt} value={opt}>
+                      {f.enumNames?.[i] || opt}
+                    </MenuItem>
+                  ))}
+                </Select>
+                {f.description && <FormHelperText>{f.description}</FormHelperText>}
+              </FormControl>
+            );
+          }
+
+          // string / number / integer
+          const isNumeric = f.type === 'number' || f.type === 'integer';
+          return (
+            <TextField
+              key={key}
+              size="small"
+              label={label}
+              type={isNumeric ? 'number' : 'text'}
+              value={String(val ?? '')}
+              helperText={f.description}
+              inputProps={{
+                minLength: f.minLength,
+                maxLength: f.maxLength,
+                min: f.minimum,
+                max: f.maximum,
+              }}
+              onChange={(e) => {
+                if (isNumeric) {
+                  const n = parseFloat(e.target.value);
+                  patch(key, isNaN(n) ? 0 : n);
+                } else {
+                  patch(key, e.target.value);
+                }
+              }}
+            />
+          );
+        })}
+      </Box>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 2 }}>
+        <Button variant="outlined" color="inherit" size="small" onClick={handleCancel} disabled={!onCancel}>
+          Cancel
+        </Button>
+        <Button variant="contained" color="primary" size="small" onClick={handleSubmit} disabled={!onSubmit}>
+          Submit
+        </Button>
+      </Box>
+    </Paper>
+  );
+};
+
+// ---------------------------------------------------------------------------
+
 const ChatMessages: React.FC<ChatMessagesProps> = ({
   messages,
   pendingToolCalls, // Destructure new prop
+  pendingElicitation,
   availableNodes = [], // Destructure with default empty array
   conversationId,
   editingMessageId,
@@ -847,6 +1012,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
+  onSubmitElicitation,
+  onCancelElicitation,
   onAppMessage, // #97: MCP App -> conversation return channel (stable)
   onOpenInCanvas, // #216: route a tool app to the docked canvas
   canvasKeys, // #216: identities already open in the canvas
@@ -1084,6 +1251,15 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         </MenuItem>
       </Menu>
 
+
+      {/* Display Pending Elicitation Form */}
+      {pendingElicitation && (
+        <ElicitationFormCard
+          elicitation={pendingElicitation}
+          onSubmit={onSubmitElicitation}
+          onCancel={onCancelElicitation}
+        />
+      )}
 
       {/* Display Pending Tool Calls for Approval */}
       {/* Add null check for pendingToolCalls before accessing length */}

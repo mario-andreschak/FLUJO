@@ -25,6 +25,7 @@ import {
 import { createOAuthClientProvider } from './oauth';
 import { createRootsListHandler } from './roots';
 import { samplingEnabled, samplingConfigKey, createSamplingHandler } from './sampling';
+import { elicitationEnabled, elicitationConfigKey, createElicitationHandler } from './elicitation';
 
 // ---------------------------------------------------------------------------
 // Experimental v2-beta MCP protocol support (spec revision 2026-07-28).
@@ -86,6 +87,7 @@ export function isBetaClient(client: Client): boolean {
  */
 export function createNewBetaClient(config: MCPServerConfig): Client {
   const serverHasSampling = samplingEnabled(config);
+  const serverHasElicitation = elicitationEnabled(config);
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
@@ -95,6 +97,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
       capabilities: {
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
+        ...(serverHasElicitation ? { elicitation: {} } : {}),
       },
       // 'auto': probe for a 2026-07-28 server, fall back to the classic
       // initialize handshake on anything else. Never 'pin' — FLUJO must keep
@@ -108,12 +111,17 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
     const handler = createSamplingHandler(config);
     client.setRequestHandler('sampling/createMessage', async (request) => handler(request));
   }
+  if (serverHasElicitation) {
+    const handler = createElicitationHandler(config);
+    client.setRequestHandler('elicitation/create', async (request) => handler(request));
+  }
 
   (client as unknown as ClientWithBetaMarker).__flujoBeta = true;
   // Same capability key the v1 factory stamps (see connection.ts ClientWithCapKey):
   // shouldRecreateClient compares it before its beta branch, so a beta client
   // without it would be needlessly rebuilt on every connect once sampling is on.
-  (client as unknown as { __flujoCapKey?: string }).__flujoCapKey = samplingConfigKey(config);
+  (client as unknown as { __flujoCapKey?: string }).__flujoCapKey =
+    samplingConfigKey(config) + '|' + elicitationConfigKey(config);
   log.info(`Created v2-beta MCP client for ${config.name} (version negotiation: auto)`);
   return client as unknown as Client;
 }

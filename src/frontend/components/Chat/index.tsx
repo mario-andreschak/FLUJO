@@ -18,7 +18,7 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
-import type { CanvasLaunchInfo } from './ChatMessages';
+import type { CanvasLaunchInfo, PendingElicitation } from './ChatMessages';
 import ChatInput from './ChatInput';
 import DevCanvasDock from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
@@ -266,6 +266,7 @@ const Chat: React.FC = () => {
   const [titleDraft, setTitleDraft] = useState<string>('');
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
+  const [pendingElicitation, setPendingElicitation] = useState<PendingElicitation | null>(null);
   // Flow the user asked to switch an already-executed conversation to; a
   // confirmation dialog is shown before the switch is applied (Cancel discards).
   const [pendingFlowSwitch, setPendingFlowSwitch] = useState<string | null>(null);
@@ -1212,6 +1213,17 @@ const Chat: React.FC = () => {
         }
         if (event.conversationId) patchConversationStatus(event.conversationId, 'awaiting_tool_approval');
         break;
+      case 'run:awaiting_elicitation':
+        // Same bleed-prevention rule as awaiting_approval: only surface for the
+        // viewed conversation.
+        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+          setPendingElicitation({
+            elicitationId: event.elicitationId,
+            message: event.message,
+            requestedSchema: event.requestedSchema,
+          });
+        }
+        break;
       case 'breakpoint:hit':
       case 'run:paused':
         // Flip the UI to paused; the awaited POST response carries the full
@@ -1227,6 +1239,10 @@ const Chat: React.FC = () => {
         if (event.conversationId) {
           markConvRunning(event.conversationId, false);
           patchConversationStatus(event.conversationId, event.status);
+        }
+        // Clear any pending elicitation when the run completes.
+        if (event.conversationId === currentConversationIdRef.current) {
+          setPendingElicitation(null);
         }
         // The live-view teardown (indicator, stream, input gate) belongs to
         // the run this client is tracking. Events normally only arrive from
@@ -2461,6 +2477,39 @@ const Chat: React.FC = () => {
     handleToolResponse('reject', toolCallId);
   };
 
+  const handleSubmitElicitation = async (
+    elicitationId: string,
+    content: Record<string, string | number | boolean | string[]>
+  ) => {
+    if (!currentConversationId) return;
+    log.info('Submitting elicitation form', { conversationId: currentConversationId, elicitationId });
+    setPendingElicitation(null);
+    try {
+      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'elicitation-submit', elicitationId, content }),
+      });
+    } catch (err) {
+      log.error('Failed to submit elicitation', { conversationId: currentConversationId, elicitationId, err });
+    }
+  };
+
+  const handleCancelElicitation = async (elicitationId: string) => {
+    if (!currentConversationId) return;
+    log.info('Cancelling elicitation', { conversationId: currentConversationId, elicitationId });
+    setPendingElicitation(null);
+    try {
+      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'elicitation-cancel', elicitationId }),
+      });
+    } catch (err) {
+      log.error('Failed to cancel elicitation', { conversationId: currentConversationId, elicitationId, err });
+    }
+  };
+
   // --- Debugger Control Handlers ---
   const handleDebugStep = async () => {
     if (!currentConversationId || !isDebugPaused) return;
@@ -2938,6 +2987,7 @@ const Chat: React.FC = () => {
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
+                pendingElicitation={pendingElicitation}
                 availableNodes={availableNodes} // Memoized nodes for the attribution pill
                 conversationId={detailedConversation.id} // Resets the render window on switch
                 editingMessageId={editingMessage?.messageId ?? null} // Bubble being edited (in the input)
@@ -2946,6 +2996,8 @@ const Chat: React.FC = () => {
                 onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
+                onSubmitElicitation={handleSubmitElicitation}
+                onCancelElicitation={handleCancelElicitation}
                 onAppMessage={handleAppMessage}
                 onOpenInCanvas={handleOpenInCanvas}
                 canvasKeys={canvasKeys}

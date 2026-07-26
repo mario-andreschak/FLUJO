@@ -12,6 +12,7 @@ import RunTools from './RunTools';
 import ArgumentsManager from './ArgumentsManager';
 import RootsManager from './RootsManager';
 import SamplingManager from './SamplingManager';
+import ElicitationManager from './ElicitationManager';
 import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
 import {
   handleSubmit,
@@ -614,6 +615,13 @@ const LocalServerTab: React.FC<TabProps> = ({
                     <SamplingManager
                       policy={localConfig.sampling}
                       onChange={(sampling) => setLocalConfig(prev => ({ ...prev, sampling }))}
+                    />
+                  </Box>
+
+                  <Box>
+                    <ElicitationManager
+                      policy={localConfig.elicitation}
+                      onChange={(elicitation) => setLocalConfig(prev => ({ ...prev, elicitation }))}
                     />
                   </Box>
                 </Stack>

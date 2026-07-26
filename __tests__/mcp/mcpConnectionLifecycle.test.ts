@@ -18,8 +18,8 @@ import {
   createStdioTransport,
   shouldRecreateClient,
   safelyCloseClient,
+  capabilityKey,
 } from '@/backend/services/mcp/connection';
-import { samplingConfigKey } from '@/backend/services/mcp/sampling';
 import { MCPServerConfig } from '@/shared/types/mcp';
 
 function stdioConfig(overrides: Record<string, unknown> = {}): MCPServerConfig {
@@ -42,9 +42,9 @@ function stdioConfig(overrides: Record<string, unknown> = {}): MCPServerConfig {
 function fakeClientFor(transport: unknown, config: MCPServerConfig): Client {
   return {
     transport,
-    // Mirrors capabilityKey() in connection.ts. Roots are deliberately NOT part of the
-    // key (issue 46): the capability is always declared and roots changes never rebuild.
-    __flujoCapKey: samplingConfigKey(config),
+    // Mirrors capabilityKey() in connection.ts (sampling + elicitation). Roots are NOT part
+    // of the key (issue 46): the capability is always declared and roots changes never rebuild.
+    __flujoCapKey: capabilityKey(config),
   } as unknown as Client;
 }
 

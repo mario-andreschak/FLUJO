@@ -17,6 +17,7 @@ import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
 import { getDataDir } from '@/utils/paths';
 import { registerRootsHandler } from './roots';
 import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
+import { elicitationEnabled, registerElicitationHandler, elicitationConfigKey } from './elicitation';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 import { normalizeHeaderValue, isMaskedHeaderValue } from '@/utils/mcp/headers';
 import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
@@ -29,9 +30,9 @@ import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
 // list_changed) — so no roots change may ever force a client rebuild (issue 46).
 interface ClientWithCapKey { __flujoCapKey?: string }
 
-/** Key of the config that drives client-declared capabilities (currently: sampling). */
-function capabilityKey(config: MCPServerConfig): string {
-  return samplingConfigKey(config);
+/** Key of the config that drives client-declared capabilities (sampling + elicitation). */
+export function capabilityKey(config: MCPServerConfig): string {
+  return samplingConfigKey(config) + '|' + elicitationConfigKey(config);
 }
 
 // We stash the RAW config key on the transport at creation time so
@@ -211,6 +212,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   // it is declared only when the server has an enabled sampling trust policy, so a
   // server can't ask FLUJO to run LLM calls unless the user opted in.
   const serverHasSampling = samplingEnabled(config);
+  const serverHasElicitation = elicitationEnabled(config);
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
@@ -221,6 +223,7 @@ export function createNewClient(config: MCPServerConfig): Client {
         experimental: {},
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
+        ...(serverHasElicitation ? { elicitation: {} } : {}),
       }
     }
   );
@@ -228,6 +231,9 @@ export function createNewClient(config: MCPServerConfig): Client {
   registerRootsHandler(client, config);
   if (serverHasSampling) {
     registerSamplingHandler(client, config);
+  }
+  if (serverHasElicitation) {
+    registerElicitationHandler(client, config);
   }
   (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
 
@@ -541,7 +547,7 @@ export function shouldRecreateClient(
   // announced via notifications/roots/list_changed — never a rebuild.
   const currentCapKey = (client as unknown as ClientWithCapKey).__flujoCapKey ?? '';
   if (currentCapKey !== capabilityKey(config)) {
-    return { needsNewClient: true, reason: 'Client capabilities (sampling) changed' };
+    return { needsNewClient: true, reason: 'Client capabilities (sampling/elicitation) changed' };
   }
 
   // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always

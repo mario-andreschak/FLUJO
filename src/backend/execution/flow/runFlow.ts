@@ -27,6 +27,7 @@ import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/executio
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -820,6 +821,30 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   emit({ type: 'run:start', flowId: sharedState.flowId });
 
+  // --- Elicitation context: bind active run to each MCP server in this flow ---
+  // The elicitation handler (registered at connect time) looks up the active
+  // conversationId + unattended flag here when a server calls elicitation/create.
+  const elicitationServerNames: string[] = [];
+  if (sharedState.flowId) {
+    try {
+      const elicitFlow = sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId);
+      if (elicitFlow) {
+        for (const node of elicitFlow.nodes || []) {
+          const serverName = node.data?.properties?.boundServer as string | undefined;
+          if (node.data?.type === 'mcp' && serverName) {
+            elicitationServerNames.push(serverName);
+            setElicitationContext(serverName, {
+              conversationId: effectiveConvId,
+              getUnattended: () => !!(sharedState.unattended),
+            });
+          }
+        }
+      }
+    } catch (err) {
+      log.debug('Could not enumerate MCP servers for elicitation context; skipping', { err });
+    }
+  }
+
   // --- Pre-run consistency check (blocking) ---
   // Only at the start of a run: a genuine new user turn or a brand-new
   // conversation (which covers subflow child runs — this lives in the keystone
@@ -1480,6 +1505,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   }
 
   // --- 3. Finalize ---
+  // Clear elicitation context for all MCP servers bound in this run.
+  for (const serverName of elicitationServerNames) {
+    clearElicitationContext(serverName);
+  }
+
   const finalExecutionTime = Date.now() - startTime;
   const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });

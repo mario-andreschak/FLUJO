@@ -13,6 +13,7 @@ export type ExecutionEventType =
   | 'run:start'
   | 'run:paused'
   | 'run:awaiting_approval'
+  | 'run:awaiting_elicitation'
   | 'run:done'
   | 'node:enter'
   | 'node:exit'
@@ -75,6 +76,15 @@ export interface RunPausedEvent extends ExecutionEventBase {
 export interface RunAwaitingApprovalEvent extends ExecutionEventBase {
   type: 'run:awaiting_approval';
   pendingToolCalls: OpenAI.ChatCompletionMessageToolCall[];
+}
+export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
+  type: 'run:awaiting_elicitation';
+  /** Stable ID for correlating the SSE event to the /respond route call. */
+  elicitationId: string;
+  /** Human-readable prompt from the server. */
+  message: string;
+  /** JSON Schema object subset describing the fields to collect. */
+  requestedSchema: Record<string, unknown>;
 }
 export interface RunDoneEvent extends ExecutionEventBase {
   type: 'run:done';
@@ -242,6 +252,7 @@ export type ExecutionEvent =
   | RunStartEvent
   | RunPausedEvent
   | RunAwaitingApprovalEvent
+  | RunAwaitingElicitationEvent
   | RunDoneEvent
   | NodeEnterEvent
   | NodeExitEvent
