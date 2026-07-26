@@ -1,5 +1,10 @@
 <img width="720" height="405" alt="output" src="https://github.com/user-attachments/assets/87ff1b2c-fec2-4652-a049-98e5ee699e00" />
 
+### ▶ FLUJO in 60 seconds
+
+[![Watch: FLUJO in 60 seconds — animated short](githubpages/img/short-poster.jpeg)](https://mario-andreschak.github.io/FLUJO/githubpages/short.html)
+
+*Click to watch*
 
 ## ⚡ Quick Install (recommended)
 
