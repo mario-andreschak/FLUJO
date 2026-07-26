@@ -26,16 +26,13 @@ const log = createLogger('backend/services/mcp/internal/registry');
 export const FILESYSTEM_SERVER_NAME = 'filesystem';
 export const BASH_SERVER_NAME = 'bash';
 
-export const BUILTIN_SERVER_NAMES: readonly string[] = [
-  INTERNAL_SERVER_NAME,
-  FILESYSTEM_SERVER_NAME,
-  BASH_SERVER_NAME,
-];
-
-/** Is this name one of FLUJO's built-in servers? (Pure string check — no I/O.) */
-export function isBuiltInServerName(name: string): boolean {
-  return BUILTIN_SERVER_NAMES.includes(name);
-}
+// Import from shared location and re-export for backward compatibility. The shared
+// version lives in @/utils/shared/mcpConstants so that pure client-side modules
+// (e.g. flowValidation.ts) can import isBuiltInServerName without pulling in
+// server-only dependencies.
+import { BUILTIN_SERVER_NAMES as _BUILTIN_SERVER_NAMES, isBuiltInServerName as _isBuiltInServerName } from '@/utils/shared/mcpConstants';
+export const BUILTIN_SERVER_NAMES: readonly string[] = _BUILTIN_SERVER_NAMES;
+export { _isBuiltInServerName as isBuiltInServerName };
 
 /**
  * Shared synthetic-config factory for the built-in servers that are NOT `flujo`.

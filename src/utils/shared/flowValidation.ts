@@ -21,6 +21,7 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
+import { isBuiltInServerName } from './mcpConstants';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -812,10 +813,13 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         context.serverTools[binding.server] &&
         !context.serverTools[binding.server].includes(binding.name)
       ) {
+        const shadowNote = isBuiltInServerName(binding.server)
+          ? ` (a stored server named "${binding.server}" shadows the built-in — their toolsets may differ)`
+          : '';
         add(
           'warning',
           'tool-unavailable',
-          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" no longer provides.`,
+          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" does not currently expose.${shadowNote}`,
           node
         );
       }
@@ -851,6 +855,9 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   if (context.serverTools) {
     for (const node of processNodes) {
       const connected = mcpServersConnectedToProcess(node.id, nodes, edges);
+      // Track tool-unavailable issues already emitted for this node (dedup across
+      // prompt-pill checks above and enabledTools checks below).
+      const warnedTools = new Set<string>();
       for (const server of connected) {
         const tools = context.serverTools[server];
         if (Array.isArray(tools) && tools.length === 0) {
@@ -860,6 +867,32 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
             `Process node "${getNodeLabel(node)}" is connected to MCP server "${server}", which currently exposes 0 tools. The connection has no effect until the server provides tools.`,
             node
           );
+        }
+        // --- enabledTools cross-check: tools explicitly enabled on the node ---
+        // The prompt-pill check above only covers pills in the template string.
+        // A node can also have an explicit enabledTools allow-list that restricts
+        // which server tools are offered; if a tool there is gone from the live
+        // list, flag it (same severity as prompt-pill: warning, not error).
+        if (Array.isArray(tools)) {
+          const enabledTools: string[] = Array.isArray(node.data?.properties?.enabledTools)
+            ? (node.data!.properties!.enabledTools as string[])
+            : [];
+          for (const toolName of enabledTools) {
+            const dedupeKey = `enabledTool:${server}:${toolName}`;
+            if (warnedTools.has(dedupeKey)) continue;
+            if (!tools.includes(toolName)) {
+              warnedTools.add(dedupeKey);
+              const shadowNote = isBuiltInServerName(server)
+                ? ` (stored server "${server}" shadows the built-in — their toolsets may differ)`
+                : '';
+              add(
+                'warning',
+                'tool-unavailable',
+                `Process node "${getNodeLabel(node)}" has enabledTool "${toolName}" which server "${server}" does not currently expose.${shadowNote}`,
+                node
+              );
+            }
+          }
         }
       }
     }

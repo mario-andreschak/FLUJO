@@ -22,16 +22,61 @@ export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidati
   }
 
   let servers: Array<{ name: string; status?: string }> | undefined;
+  let configs: any[] | undefined;
   try {
-    const configs = await mcpService.loadServerConfigs();
-    if (Array.isArray(configs)) {
-      servers = configs.map((s) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
+    const rawConfigs = await mcpService.loadServerConfigs();
+    if (Array.isArray(rawConfigs)) {
+      configs = rawConfigs;
+      servers = rawConfigs.map((s: { name: string; disabled?: boolean }) => ({
+        name: s.name,
+        status: s.disabled ? 'disabled' : undefined,
+      }));
     }
   } catch (error) {
     log.warn('validateFlowObjectForRun: could not load servers; skipping server checks', error);
   }
 
-  return validateFlow(flow as any, { models, servers });
+  // Build serverTools: query each MCP server referenced by an MCP node in this
+  // flow so the validator can flag tool-unavailable and mcp-server-no-tools.
+  // Mirrors the FlowValidationButton frontend pattern (see FlowValidationButton.tsx).
+  let serverTools: Record<string, string[]> | undefined;
+  try {
+    const disabledByName = new Map(
+      (Array.isArray(configs) ? configs : []).map(
+        (s: { name: string; disabled?: boolean }) => [s.name, !!s.disabled]
+      )
+    );
+    const flowServers = new Set<string>();
+    for (const node of ((flow as any).nodes ?? []) as any[]) {
+      const nodeType = node?.data?.type ?? node?.type;
+      const bound = node?.data?.properties?.boundServer;
+      if (nodeType === 'mcp' && typeof bound === 'string' && bound) {
+        flowServers.add(bound);
+      }
+    }
+
+    const entries = await Promise.all(
+      [...flowServers].map(async (name) => {
+        if (disabledByName.get(name)) return null; // disabled → leave as unknown
+        const res = await mcpService.listServerTools(name);
+        if (res.error || !Array.isArray(res.tools)) return null; // offline → unknown
+        const toolNames = (res.tools as Array<{ name?: string }>)
+          .map((t) => t?.name)
+          .filter((x): x is string => typeof x === 'string');
+        return [name, toolNames] as [string, string[]];
+      })
+    );
+
+    serverTools = {};
+    for (const entry of entries) {
+      if (entry) serverTools[entry[0]] = entry[1];
+    }
+  } catch (error) {
+    log.warn('validateFlowObjectForRun: could not gather serverTools; skipping tool checks', error);
+    serverTools = undefined;
+  }
+
+  return validateFlow(flow as any, { models, servers, serverTools });
 }
 
 /**
