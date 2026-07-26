@@ -112,6 +112,10 @@ export class ResourceHandler {
             sections.push(`### ${label}\n(resource ${uri} on ${server} could not be read: ${result.error ?? 'unknown error'})\n`);
             continue;
           }
+          // Best-effort subscription — non-blocking, swallows all errors internally.
+          // If the server supports resources/subscribe, subsequent list_changed and
+          // updated notifications for this URI will be tracked in pendingResourceUpdates.
+          void mcpService.subscribeToResource(server, uri);
           sections.push(renderContents(label, `${uri} from ${server}`, result.data as ResourceContentsLike));
           const first = (result.data as ResourceContentsLike).contents?.[0];
           input.emit?.({

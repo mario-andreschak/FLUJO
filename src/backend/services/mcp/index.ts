@@ -100,6 +100,7 @@ import {
   shouldRecreateClient,
   safelyCloseClient
 } from './connection';
+import { registerResourceNotificationHandlers } from './resourceNotifications';
 import {
   isMcpBetaProtocolEnabled,
   createNewBetaClient,
@@ -140,6 +141,15 @@ export class MCPService {
   private inFlightConnects: Map<string, Promise<MCPServiceResponse>> = new Map();
   private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
   private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
+
+  // Per-server resource list version counter (incremented on notifications/resources/list_changed).
+  // Exposed via getResourceListVersion() so the server-status API can include it in its
+  // response, and the frontend can detect a stale resource listing and auto-refresh.
+  private resourceListVersion: Map<string, number> = new Map();
+  // Per-server set of URIs that have received a notifications/resources/updated notification
+  // (sent by servers that support resources/subscribe, registered via subscribeToResource).
+  // ResourceHandler checks this before re-reading a bound resource node.
+  private pendingResourceUpdates: Map<string, Set<string>> = new Map();
 
   // Connected clients per server name. Global-backed (see __mcp_clients) so EVERY
   // MCPService instance shares the one map: a client registered or deregistered by any
@@ -189,6 +199,59 @@ export class MCPService {
   private deregisterClient(serverName: string): void {
     this.clients.delete(serverName);
     this.activeTransports.delete(serverName);
+  }
+
+  // -------------------------------------------------------------------------
+  // Resource notification callbacks (registered at connect time)
+  // -------------------------------------------------------------------------
+
+  private onResourceListChanged(serverName: string): void {
+    const prev = this.resourceListVersion.get(serverName) ?? 0;
+    this.resourceListVersion.set(serverName, prev + 1);
+    log.debug(`onResourceListChanged: server=${serverName} version=${prev + 1}`);
+  }
+
+  private onResourceUpdated(serverName: string, uri: string): void {
+    const set = this.pendingResourceUpdates.get(serverName) ?? new Set<string>();
+    set.add(uri);
+    this.pendingResourceUpdates.set(serverName, set);
+    log.debug(`onResourceUpdated: server=${serverName} uri=${uri}`);
+  }
+
+  /**
+   * The current monotonically-increasing resource list version for a server.
+   * Incremented every time the server sends a `notifications/resources/list_changed`
+   * notification. Called by the server-status API to expose the version to the frontend,
+   * which uses it to detect stale resource listings and auto-refresh.
+   */
+  getResourceListVersion(serverName: string): number {
+    return this.resourceListVersion.get(serverName) ?? 0;
+  }
+
+  /**
+   * Subscribe to change notifications for a specific resource URI on a server.
+   * Best-effort: silently skipped if the server doesn't advertise `resources.subscribe`
+   * capability, or if no live client exists.
+   *
+   * Called from ResourceHandler after successfully reading a bound resource node so that
+   * subsequent `notifications/resources/updated` events for that URI are tracked in
+   * `pendingResourceUpdates` — useful for long-running flows where the resource may
+   * update between steps.
+   */
+  async subscribeToResource(serverName: string, uri: string): Promise<void> {
+    try {
+      const client = this.getClient(serverName);
+      if (!client) return;
+      const caps = client.getServerCapabilities?.();
+      if (!caps?.resources?.subscribe) return;
+      await client.subscribeResource({ uri });
+      log.debug(`subscribeToResource: server=${serverName} uri=${uri}`);
+    } catch (err) {
+      // Non-fatal — subscription is best-effort. The server may not support it, or the
+      // resource URI may have no subscription handler. Swallow silently so a missing
+      // capability never breaks a flow run.
+      log.debug(`subscribeToResource: ignored error for ${serverName}/${uri}:`, err);
+    }
   }
 
   /**
@@ -586,6 +649,35 @@ export class MCPService {
       // existing servers keep working either way).
       client = useBeta ? createNewBetaClient(config) : createNewClient(config);
       const transport = useBeta ? createBetaTransport(config) : createTransport(config);
+
+      // Register resource-change notification handlers so FLUJO can detect when a server's
+      // resource listing changes (notifications/resources/list_changed) or a subscribed
+      // resource updates (notifications/resources/updated). Both paths use a method-string
+      // cast so they work without importing the v2 SDK types here.
+      if (!useBeta) {
+        // v1 SDK: use the Zod-schema-based setNotificationHandler from resourceNotifications.ts
+        registerResourceNotificationHandlers(
+          client,
+          config.name,
+          (name) => this.onResourceListChanged(name),
+          (name, uri) => this.onResourceUpdated(name, uri),
+        );
+      } else {
+        // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
+        // typed handler. Cast through unknown to call it without importing the beta types here.
+        const betaSetNotification = (client as unknown as {
+          setNotificationHandler: (method: string, handler: (n: unknown) => void) => void;
+        }).setNotificationHandler?.bind(client);
+        if (betaSetNotification) {
+          betaSetNotification('notifications/resources/list_changed', () => {
+            this.onResourceListChanged(config.name);
+          });
+          betaSetNotification('notifications/resources/updated', (notification: unknown) => {
+            const uri = (notification as { params?: { uri?: string } })?.params?.uri;
+            if (uri) this.onResourceUpdated(config.name, uri);
+          });
+        }
+      }
 
       // Add stderr capture. Duck-typed on the stderr stream (present on both the v1
       // and v2-beta stdio transports when spawned with stderr: 'pipe') instead of a

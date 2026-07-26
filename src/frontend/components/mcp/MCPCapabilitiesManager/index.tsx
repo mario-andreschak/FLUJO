@@ -88,6 +88,29 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
     load();
   }, [load]);
 
+  // Poll the server-status endpoint for a changing resourceListVersion (#240).
+  // When the backend increments it (on a notifications/resources/list_changed event),
+  // evict the frontend cache and re-fetch so the manager auto-refreshes without the
+  // user clicking the Refresh button.
+  useEffect(() => {
+    if (!serverName || !showResources) return;
+    // Start polling only after the initial load so we don't race with it.
+    const intervalId = setInterval(async () => {
+      try {
+        const status = await mcpService.getServerStatus(serverName);
+        const version = (status as { resourceListVersion?: number }).resourceListVersion ?? 0;
+        const changed = mcpService.checkResourceListVersion(serverName, version);
+        if (changed) {
+          log.debug(`MCPCapabilitiesManager: resource list changed for ${serverName} — auto-refreshing`);
+          await load();
+        }
+      } catch {
+        // Ignore polling errors — the Refresh button is always available as a fallback.
+      }
+    }, 10000); // 10-second poll interval
+    return () => clearInterval(intervalId);
+  }, [serverName, showResources, load]);
+
   const handleReadResource = async (uri: string, label: string) => {
     setPreviewTitle(`Resource: ${label}`);
     setPreviewContent('');

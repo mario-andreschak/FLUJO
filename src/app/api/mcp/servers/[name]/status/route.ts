@@ -23,7 +23,13 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
   try {
     const { name } = await params;
     const status = await mcpService.getServerStatus(name);
-    return json(status, 200);
+    // Attach the resource list version counter so the frontend can detect a stale
+    // listing and auto-refresh the MCP Capabilities Manager without user intervention.
+    const statusWithVersion = {
+      ...status,
+      resourceListVersion: mcpService.getResourceListVersion(name),
+    };
+    return json(statusWithVersion, 200);
   } catch (error) {
     log.error('Error handling GET request', error);
     return json(formatErrorResponse(error), 500);

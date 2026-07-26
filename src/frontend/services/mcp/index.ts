@@ -25,6 +25,10 @@ class MCPService {
   private resourcesCache: Map<string, { data: any, timestamp: number }> = new Map();
   private promptsCache: Map<string, { prompts: any[], timestamp: number }> = new Map();
   private CACHE_TTL = 60000; // 1 minute cache TTL
+  // Tracks the last-seen resourceListVersion per server (from the server-status API).
+  // When the version advances, checkResourceListVersion() evicts the resources cache so
+  // the next call to listServerResources() fetches fresh data from the backend.
+  private resourceListVersions: Map<string, number> = new Map();
 
   /**
    * Load server configurations from the backend
@@ -215,6 +219,26 @@ class MCPService {
       this.resourcesCache.clear();
       this.promptsCache.clear();
     }
+  }
+
+  /**
+   * Compare a fresh `resourceListVersion` (from the server-status API) against the
+   * locally-tracked version. If the version has advanced, evicts the resources listing
+   * cache for that server and returns `true` so the caller can re-fetch.
+   *
+   * Used by MCPCapabilitiesManager to implement auto-refresh when a server sends a
+   * `notifications/resources/list_changed` notification (#240).
+   */
+  checkResourceListVersion(serverName: string, newVersion: number): boolean {
+    const known = this.resourceListVersions.get(serverName) ?? -1;
+    if (newVersion > known) {
+      this.resourceListVersions.set(serverName, newVersion);
+      // Only invalidate the resources (prompt list is unchanged by list_changed).
+      this.resourcesCache.delete(serverName);
+      log.debug(`checkResourceListVersion: cache invalidated for ${serverName} (${known} -> ${newVersion})`);
+      return true;
+    }
+    return false;
   }
 
   /**
