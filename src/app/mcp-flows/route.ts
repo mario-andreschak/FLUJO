@@ -42,6 +42,12 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
+// MCP 2026-07-28 note: the new spec introduces `Mcp-Method` and `Mcp-Name` HTTP request
+// headers as advisory routing hints for load balancers and intermediate proxies. FLUJO
+// re-terminates every inbound MCP request (a fresh `Server` + `StreamableHTTPServerTransport`
+// is created per HTTP request), so routing is already handled by the URL path (`/mcp-flows`).
+// The `Mcp-Method`/`Mcp-Name` headers are safely ignored by the v1
+// `StreamableHTTPServerTransport`; no implementation is needed here.
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },

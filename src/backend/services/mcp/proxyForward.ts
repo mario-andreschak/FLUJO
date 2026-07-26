@@ -16,6 +16,7 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { isLocked } from '@/utils/encryption/lockGate';
 import type { Tool, CallToolResult, Resource, ResourceTemplate, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('backend/services/mcp/proxyForward');
 
@@ -140,7 +141,16 @@ export async function proxyListResourceTemplates(serverName: string): Promise<{ 
   return { resourceTemplates: (result.resourceTemplates ?? []) as ResourceTemplate[] };
 }
 
-/** Forward a `resources/read` to the downstream server. */
+/**
+ * Forward a `resources/read` to the downstream server.
+ *
+ * Error mapping:
+ * - Lock / connection failure → generic `Error` (SDK serialises as -32603 InternalError).
+ * - Missing or invalid resource URI → `McpError(-32602 InvalidParams)` rather than the
+ *   default -32603 InternalError. This matches the pattern already used in `resources.ts`
+ *   and is closer to the MCP 2026-07-28 spec intent (which introduces -32002 ResourceNotFound;
+ *   update when that code is exported by whichever SDK version is in use).
+ */
 export async function proxyReadResource(serverName: string, uri: string): Promise<ReadResourceResult> {
   if (await isLocked()) {
     throw new Error(LOCKED_MESSAGE);
@@ -151,7 +161,12 @@ export async function proxyReadResource(serverName: string, uri: string): Promis
   }
   const result = await mcpService.readResource(serverName, uri);
   if (!result.success || !result.data) {
-    throw new Error(`Failed to read resource '${uri}' from '${serverName}': ${result.error ?? 'unknown error'}`);
+    // Use InvalidParams (-32602) rather than InternalError (-32603) for missing/invalid
+    // resource URIs — this gives clients a recoverable, params-level signal.
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Resource not found: '${uri}' on server '${serverName}': ${result.error ?? 'unknown error'}`,
+    );
   }
   return result.data as ReadResourceResult;
 }
