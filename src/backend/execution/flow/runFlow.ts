@@ -626,6 +626,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         processNodeId: (msg as any).processNodeId || undefined,
       }));
     sharedState.messages = initialMessages;
+    // Stamp lastUserMessageAt for the initial user turn
+    const _initLastUser = [...initialMessages].reverse().find(m => m.role === 'user');
+    if (_initLastUser) {
+      sharedState.lastUserMessageAt = _initLastUser.timestamp ?? Date.now();
+    }
 
     try {
       sharedState.updatedAt = Date.now();
@@ -659,6 +664,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           return flujoMsg;
         });
       log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+      // Stamp lastUserMessageAt whenever a user turn is received
+      if (userTurn) {
+        const _existLastUser = [...sharedState.messages].reverse().find(m => m.role === 'user');
+        if (_existLastUser) {
+          sharedState.lastUserMessageAt = _existLastUser.timestamp ?? Date.now();
+        }
+      }
     }
     if (userTurn || sharedState.debugMode === undefined) {
       sharedState.debugMode = flujodebug;

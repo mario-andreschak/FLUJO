@@ -66,6 +66,7 @@ interface CreateConversationPayload {
   flowId: string | null;
   createdAt: number;
   updatedAt: number;
+  lastUserMessageAt?: number | null;
   /** Quick-Chats (issue #61): a self-contained flow definition to seed onto the
    *  conversation state instead of referencing a stored flow. When present, the
    *  engine resolves the flow from this snapshot; `flowId` must be the
@@ -150,6 +151,7 @@ export async function GET(request: NextRequest) {
             flowId: state.flowId || null,
             createdAt: state.createdAt || 0,
             updatedAt: state.updatedAt || 0,
+            lastUserMessageAt: state.lastUserMessageAt ?? null,
             status: state.status,
             // Wave grouping (issue #181): expose the already-persisted planned-
             // execution id so the sidebar can bucket conversations by wave.
@@ -182,6 +184,7 @@ export async function GET(request: NextRequest) {
         let status = live?.status ?? base.status;
         const title = live?.title ?? base.title;
         const updatedAt = live?.updatedAt ?? base.updatedAt;
+        const lastUserMessageAt = live?.lastUserMessageAt ?? base.lastUserMessageAt ?? null;
         // Prefer the live in-memory wave id for a running scheduler run (#181).
         const plannedExecutionId = live?.plannedExecutionId ?? base.plannedExecutionId ?? null;
 
@@ -198,7 +201,7 @@ export async function GET(request: NextRequest) {
           status = 'error';
         }
 
-        return { ...base, title, updatedAt, status, plannedExecutionId };
+        return { ...base, title, updatedAt, lastUserMessageAt, status, plannedExecutionId };
       } catch (parseError) {
         log.error(`Error reading or parsing conversation file: ${file}`, { requestId, filePath, error: parseError });
         // Under content search an unparseable file can't be said to match, so
@@ -234,8 +237,10 @@ export async function GET(request: NextRequest) {
     const validConversations = results.filter((conv): conv is ConversationListItem => conv !== null);
     log.debug(`Successfully processed ${validConversations.length} conversation files`, { requestId });
 
-    // Sort by updatedAt descending
-    validConversations.sort((a, b) => b.updatedAt - a.updatedAt);
+    // Sort by lastUserMessageAt descending (falls back to updatedAt for legacy conversations)
+    validConversations.sort((a, b) =>
+      (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)
+    );
 
     const duration = Date.now() - startTime;
     log.info(`Successfully retrieved conversation list`, { requestId, count: validConversations.length, duration: `${duration}ms` });

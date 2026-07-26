@@ -270,7 +270,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         }
         return true;
       })
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
   }, [conversations, search, searchDimension, contentMatchIds, statusFilter, flowFilter, dateFilter, flowMeta]);
 
   // Build the (optionally grouped) sections to render.

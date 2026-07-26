@@ -598,6 +598,10 @@ export interface SharedState {
     title: string;
     createdAt: number; // Timestamp (Date.now())
     updatedAt: number; // Timestamp (Date.now())
+    /** Timestamp of the most recent user-role message. Used by the sidebar to
+     *  sort conversations by user activity, not AI response activity. Optional
+     *  for backward-compatibility with persisted conversations that lack it. */
+    lastUserMessageAt?: number;
 
     // --- Debugger Fields ---
     /** Indicates if the flow is currently running in debug mode. */

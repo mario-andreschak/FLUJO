@@ -158,6 +158,9 @@ export interface ConversationListItem {
   flowId: string | null;
   createdAt: number;
   updatedAt: number;
+  /** Timestamp of the most recent user-role message; used for sidebar sort.
+   *  Optional/null for legacy conversations (falls back to updatedAt). */
+  lastUserMessageAt?: number | null;
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
   /** Id of the scheduler planned-execution that originated this conversation
    *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
@@ -591,7 +594,7 @@ const Chat: React.FC = () => {
       fetchedList = (await chatService.listConversations())
         // Never re-add a conversation whose DELETE is still in flight.
         .filter(c => !pendingDeleteIdsRef.current.has(c.id))
-        .sort((a, b) => b.updatedAt - a.updatedAt);
+        .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
       // Anything the backend returns is no longer client-only.
       for (const c of fetchedList) localOnlyConversationIdsRef.current.delete(c.id);
       setConversationList(prev => {
@@ -599,7 +602,7 @@ const Chat: React.FC = () => {
         // list can't contain them yet.
         const localOnly = prev.filter(c => localOnlyConversationIdsRef.current.has(c.id));
         const next = localOnly.length > 0
-          ? [...localOnly, ...fetchedList].sort((a, b) => b.updatedAt - a.updatedAt)
+          ? [...localOnly, ...fetchedList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
           : fetchedList;
         // Keep the previous array identity when nothing changed, so the
         // periodic silent refresh doesn't re-render the sidebar for no reason.
@@ -736,7 +739,7 @@ const Chat: React.FC = () => {
                 status: conversation.status ?? c.status,
               }
             : c
-        ).sort((a, b) => b.updatedAt - a.updatedAt)
+        ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
       );
       log.info('Fetched detailed conversation successfully', { conversationId: id });
     } catch (err: any) { // Use any for error checking
@@ -920,7 +923,7 @@ const Chat: React.FC = () => {
 
       // Update UI state *after* successful backend creation
       setConversationList(prevList =>
-        [createdConversationSummary, ...prevList].sort((a, b) => b.updatedAt - a.updatedAt) // Add and re-sort
+        [createdConversationSummary, ...prevList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)) // Add and re-sort
       );
       setCurrentConversationId(createdConversationSummary.id); // Select the new one
 
@@ -995,7 +998,7 @@ const Chat: React.FC = () => {
     });
 
     setConversationList(prev =>
-      [created, ...prev].sort((a, b) => b.updatedAt - a.updatedAt)
+      [created, ...prev].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
     );
     setCurrentConversationId(created.id);
     setDetailedConversation({
@@ -1028,7 +1031,7 @@ const Chat: React.FC = () => {
         conv.id === updatedWithTimestamp.id
           ? { ...conv, title: updatedWithTimestamp.title, updatedAt: updatedWithTimestamp.updatedAt } // Update relevant summary fields
           : conv
-      ).sort((a, b) => b.updatedAt - a.updatedAt) // Keep sorted
+      ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)) // Keep sorted
     );
   }, []);
 
@@ -1474,7 +1477,7 @@ const Chat: React.FC = () => {
         conv.id === currentConversationId
           ? { ...conv, flowId: flowId, updatedAt: Date.now() } // Update flowId and timestamp
           : conv
-      ).sort((a, b) => b.updatedAt - a.updatedAt) // Keep sorted
+      ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)) // Keep sorted
     );
     // --- End Optimistic UI Update ---
 
@@ -1506,7 +1509,7 @@ const Chat: React.FC = () => {
           conv.id === currentConversationId
             ? updatedSummaryFromServer // Replace with the full summary from server
             : conv
-        ).sort((a, b) => b.updatedAt - a.updatedAt) // Re-sort based on server timestamp
+        ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)) // Re-sort based on server timestamp
       );
       // --- End Confirm UI Update ---
 
@@ -1761,7 +1764,7 @@ const Chat: React.FC = () => {
               updatedAt: data.debugState.updatedAt // Use debug state timestamp
             }
           : c
-      ).sort((a, b) => b.updatedAt - a.updatedAt)); // Re-sort
+      ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))); // Re-sort
       return true; // Indicate debug state was handled
     } else if ((data.status === 'completed' || data.status === 'error') && isViewed) {
       // Only hide the debugger panel if the execution is definitively finished
@@ -1874,7 +1877,7 @@ const Chat: React.FC = () => {
                updatedAt: data.updatedAt || c.updatedAt // Always update timestamp
              }
            : c
-       ).sort((a, b) => b.updatedAt - a.updatedAt)); // Re-sort based on potentially new timestamp
+       ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))); // Re-sort based on potentially new timestamp
     }
 
 
@@ -2415,7 +2418,7 @@ const Chat: React.FC = () => {
     // Client-only until the first message is sent: shields it from list
     // refreshes and skips the (would-404) detail fetch.
     localOnlyConversationIdsRef.current.add(newId);
-    setConversationList(prevList => [newSummary, ...prevList].sort((a, b) => b.updatedAt - a.updatedAt));
+    setConversationList(prevList => [newSummary, ...prevList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)));
     setCurrentConversationId(newId); // Select the new split conversation
     // The useEffect for currentConversationId will fetch details, but we can set it directly
     setDetailedConversation(newSplitConversation);
