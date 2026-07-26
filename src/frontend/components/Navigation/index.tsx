@@ -1,16 +1,18 @@
 "use client"
-import { AppBar, Box, IconButton, Toolbar, Typography, useTheme as useMuiTheme } from '@mui/material';
+import { AppBar, Box, Drawer, IconButton, List, ListItemButton, ListItemText, Toolbar, Typography, useTheme as useMuiTheme, useMediaQuery } from '@mui/material';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Navigation');
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
+import MenuIcon from '@mui/icons-material/Menu';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { interceptNavigation } from '@/frontend/utils/navigationGuard';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useState } from 'react';
 
 interface NavItem {
   name: string;
@@ -38,6 +40,8 @@ export default function Navigation() {
   const pathname = usePathname();
   const router = useRouter();
   const { settings, settingsHydrated } = useStorage();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const isMobile = useMediaQuery(muiTheme.breakpoints.down('md'));
 
   log.debug(`Rendering Navigation component with pathname: ${pathname}`);
 
@@ -62,9 +66,27 @@ export default function Navigation() {
     }
   };
 
+  const handleDrawerNavClick = (href: string) => (e: React.MouseEvent) => {
+    setDrawerOpen(false);
+    handleNavClick(href)(e);
+  };
+
   return (
     <AppBar position="sticky" color="default" elevation={1}>
       <Toolbar>
+        {/* Hamburger menu button — visible only on mobile */}
+        {isMobile && (
+          <IconButton
+            edge="start"
+            color="inherit"
+            aria-label="open navigation menu"
+            onClick={() => setDrawerOpen(true)}
+            sx={{ mr: 1 }}
+          >
+            <MenuIcon />
+          </IconButton>
+        )}
+
         <Typography
           variant="h6"
           component={Link}
@@ -81,7 +103,8 @@ export default function Navigation() {
           FLUJO
         </Typography>
 
-        <Box sx={{ flexGrow: 1, display: 'flex', gap: 2 }}>
+        {/* Desktop nav links — hidden on mobile */}
+        <Box sx={{ flexGrow: 1, display: { xs: 'none', md: 'flex' }, gap: 2 }}>
           {visibleNavItems.map((item) => (
             <Typography
               key={item.path}
@@ -103,6 +126,9 @@ export default function Navigation() {
           ))}
         </Box>
 
+        {/* Spacer on mobile to push icons to the right */}
+        {isMobile && <Box sx={{ flexGrow: 1 }} />}
+
         <BugReportButton variant="icon" />
 
         <IconButton 
@@ -115,6 +141,53 @@ export default function Navigation() {
           {isDarkMode ? <Brightness7Icon /> : <Brightness4Icon />}
         </IconButton>
       </Toolbar>
+
+      {/* Mobile navigation drawer */}
+      <Drawer
+        anchor="left"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        ModalProps={{ keepMounted: true }}
+        PaperProps={{ sx: { width: 240 } }}
+      >
+        <Box sx={{ pt: 1 }}>
+          <Typography
+            variant="h6"
+            component={Link}
+            href="/"
+            onClick={handleDrawerNavClick('/')}
+            sx={{
+              display: 'block',
+              color: 'text.primary',
+              textDecoration: 'none',
+              fontWeight: 600,
+              px: 2,
+              py: 1.5,
+            }}
+          >
+            FLUJO
+          </Typography>
+          <List disablePadding>
+            {visibleNavItems.map((item) => (
+              <ListItemButton
+                key={item.path}
+                component={Link}
+                href={item.path}
+                data-tour={item.tour}
+                onClick={handleDrawerNavClick(item.path)}
+                selected={pathname === item.path}
+              >
+                <ListItemText
+                  primary={item.name}
+                  primaryTypographyProps={{
+                    fontWeight: pathname === item.path ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            ))}
+          </List>
+        </Box>
+      </Drawer>
     </AppBar>
   );
 }
