@@ -119,6 +119,15 @@ export interface ExperimentalSettings {
    */
   mcpBetaProtocol?: boolean;
   /**
+   * When true, FLUJO automatically unloads the previously-loaded Ollama model
+   * from VRAM before sending a completion request for a different model on the
+   * same Ollama server URL. This frees GPU memory on constrained hardware.
+   * Requests to the same Ollama URL are serialised while this is on, so it adds
+   * a small latency in parallel fan-out scenarios. Off by default: zero impact
+   * on existing behaviour.
+   */
+  autoUnloadOllamaModels?: boolean;
+  /**
    * Cap, in characters, on each tool DESCRIPTION sent to the model. 0 / undefined
    * disables capping.
    *

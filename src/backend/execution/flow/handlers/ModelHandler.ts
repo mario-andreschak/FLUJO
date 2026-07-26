@@ -36,6 +36,8 @@ import { registerPendingApproval, listPendingToolCalls } from '@/backend/executi
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
+import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } from '@/backend/services/ollama/modelRegistry';
+import { unloadModel } from '@/backend/services/ollama';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
@@ -223,6 +225,20 @@ export class ModelHandler {
       return Boolean(settings?.experimental?.claudeSessionResume);
     } catch (err) {
       log.warn('Failed to read claudeSessionResume setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  /**
+   * Read the `autoUnloadOllamaModels` flag from persisted settings.
+   * Best-effort: any failure returns false (disabled).
+   */
+  private static async isAutoUnloadOllamaEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.autoUnloadOllamaModels);
+    } catch (err) {
+      log.warn('Failed to read autoUnloadOllamaModels setting; defaulting to disabled', { err });
       return false;
     }
   }
@@ -1047,6 +1063,16 @@ export class ModelHandler {
       // --- Log the exact request being sent ---
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
+      // --- Auto-unload Ollama: resolve setting and root URL once, before the
+      // attempt closure captures them.  The lock is per root URL so parallel
+      // fan-out lanes that target DIFFERENT servers are not serialised. ---
+      const autoUnloadOllama = (model.provider === 'ollama' && Boolean(model.baseUrl))
+        ? await ModelHandler.isAutoUnloadOllamaEnabled()
+        : false;
+      const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
+        ? normaliseOllamaRoot(model.baseUrl)
+        : null;
+
       // One retryable attempt at the provider call. Extracted into a closure so
       // a context-length overflow (below) can be retried once with oversized
       // tool results shrunk to run-resource URIs, WITHOUT duplicating the
@@ -1096,7 +1122,16 @@ export class ModelHandler {
           let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
           let transcript: FlujoChatMessage[] | undefined;
           try {
-            ({ completion: chatCompletion, transcript } = await adapter.createCompletion({
+            // --- Auto-unload Ollama (opt-in feature, issue #242) ---
+            // When enabled and this is an Ollama model, wrap the completion
+            // inside a per-URL async lock so that:
+            //   1. Concurrent fan-out lanes on the SAME Ollama server are
+            //      serialised (prevents race on the loaded-model registry).
+            //   2. If a DIFFERENT model was the last to run on this server,
+            //      issue an explicit keep_alive:0 unload before loading the
+            //      new one — freeing VRAM on GPU-constrained hardware.
+            // When disabled (default), zero overhead: falls straight through.
+            const issueCompletion = async () => adapter.createCompletion({
               model,
               apiKey: decryptedApiKey,
               messages: attemptMessages,
@@ -1120,7 +1155,27 @@ export class ModelHandler {
               // prefix routes to the same prompt-cache shard (see
               // derivePromptCacheKey). Adapters that don't support it ignore it.
               promptCacheKey: derivePromptCacheKey(prefixFingerprint),
-            }));
+            });
+
+            if (autoUnloadOllama && ollamaRootForUnload) {
+              ({ completion: chatCompletion, transcript } = await withOllamaLock(
+                ollamaRootForUnload,
+                async () => {
+                  const prev = getLoadedModel(ollamaRootForUnload);
+                  if (prev && prev !== model.name) {
+                    log.info(
+                      `[ModelHandler] Auto-unloading Ollama model "${prev}" to free VRAM for "${model.name}" on ${ollamaRootForUnload}`
+                    );
+                    await unloadModel(ollamaRootForUnload, prev);
+                  }
+                  const res = await issueCompletion();
+                  setLoadedModel(ollamaRootForUnload, model.name);
+                  return res;
+                }
+              ));
+            } else {
+              ({ completion: chatCompletion, transcript } = await issueCompletion());
+            }
           } finally {
             stopCancelWatch();
           }

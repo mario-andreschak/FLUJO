@@ -43,6 +43,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleAutoUnloadOllamaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Auto-unload Ollama models toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        autoUnloadOllamaModels: event.target.checked,
+      },
+    });
+  };
+
   const handleMcpBetaProtocolChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`MCP beta protocol toggled: ${event.target.checked}`);
     updateSettings({
@@ -92,6 +103,25 @@ export default function ExperimentalFeaturesSettings() {
           dramatically cut token usage on long chats. It changes how conversation
           context reaches the model, so it is off by default; if you notice a model
           losing track of earlier context, turn it back off.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.autoUnloadOllamaModels ?? false}
+              onChange={handleAutoUnloadOllamaChange}
+              name="autoUnloadOllamaModels"
+            />
+          }
+          label="Auto-unload idle Ollama models"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          When a flow switches between different Ollama models on the same server,
+          automatically unload the previous model from VRAM before loading the new
+          one. Recommended for GPU-constrained hardware. Note: concurrent Ollama
+          requests to the same server are serialised while this is on.
         </Typography>
       </FormControl>
 
