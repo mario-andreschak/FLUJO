@@ -27,12 +27,13 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => null)) as {
       spec?: unknown;
       save?: boolean;
+      keepPills?: boolean;
     } | null;
     if (!body || typeof body !== 'object') {
       return json({ error: 'Request body must be a JSON object with a "spec" field' }, 400);
     }
 
-    const result = await compileSpec(body.spec, { save: body.save === true });
+    const result = await compileSpec(body.spec, { save: body.save === true, keepPills: body.keepPills === true });
 
     if (!result.success) {
       return json({ error: result.error, ...(result.issues ? { issues: result.issues } : {}) }, result.statusCode);

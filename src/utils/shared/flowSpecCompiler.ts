@@ -39,6 +39,7 @@ import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
+import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
@@ -290,6 +291,14 @@ export interface CompileOptions {
    * exactly where the user left them. Applied at depth 0 only.
    */
   positions?: Record<string, { x: number; y: number }>;
+  /**
+   * When true, binding pills (${tool:server__name}) that resolve against the node's wired
+   * servers or outgoing handoff edges are preserved intact in the compiled output instead of
+   * being stripped to the bare tool name. Pills that cannot be resolved are still stripped
+   * with a 'pill-unresolved' warning. Default: false (strip all pills — generator-safe
+   * behaviour used by the LLM flow-generation path).
+   */
+  keepPills?: boolean;
 }
 
 export interface CompileIssue {
@@ -357,22 +366,88 @@ export function sanitizeFlowName(raw: string | undefined, existingNames: string[
   }
 }
 
+interface ProcessPillsOptions {
+  keepPills?: boolean;
+  /** Server names wired to this node via its `servers` list. */
+  wiredServers?: Set<string>;
+  /** Handoff tool names (e.g. 'handoff_to_finish_node') for outgoing edges. */
+  validHandoffNames?: Set<string>;
+}
+
+interface ProcessPillsResult {
+  text: string;
+  /** True when at least one pill was stripped (replaced by bare tool name). */
+  stripped: boolean;
+  /** Pills that the caller asked to keep (keepPills) but could not resolve — stripped anyway. */
+  unresolved: string[];
+}
+
 /**
- * v1 generated prompts carry no binding pills — tools reach the model via MCP edges +
- * enabledTools, and pills are a whole codec/validation error class we skip. Any pill the
- * model emitted anyway is replaced by its plain tool/uri name.
+ * Process binding pills in a prompt template.
+ *
+ * Default (keepPills false): strips every pill unconditionally — v1 generator-safe
+ * behaviour. Any pill the LLM emitted is replaced by its bare tool name.
+ *
+ * keepPills true: preserves pills that resolve against the node's wired servers or
+ * outgoing handoff edges; strips any pill that cannot be resolved and records it in
+ * `unresolved` so the caller can emit a 'pill-unresolved' warning.
  */
-function stripPills(text: string): { text: string; stripped: boolean } {
+function processPills(text: string, opts: ProcessPillsOptions = {}): ProcessPillsResult {
+  const { keepPills = false, wiredServers = new Set(), validHandoffNames = new Set() } = opts;
   const bindings = findBindings(text);
-  if (bindings.length === 0) return { text, stripped: false };
+  if (bindings.length === 0) return { text, stripped: false, unresolved: [] };
+
   let out = '';
   let cursor = 0;
+  let anyStripped = false;
+  const unresolved: string[] = [];
+
   for (const b of bindings) {
-    out += text.slice(cursor, b.index) + b.name;
+    out += text.slice(cursor, b.index);
     cursor = b.index + b.fullMatch.length;
+
+    let keep = false;
+    if (keepPills) {
+      if (b.server === 'handoff') {
+        keep = validHandoffNames.has(b.name);
+      } else {
+        keep = wiredServers.has(b.server);
+      }
+    }
+
+    if (keep) {
+      out += b.fullMatch;      // preserve the full pill unchanged
+    } else {
+      out += b.name;           // strip to bare tool/resource name
+      anyStripped = true;
+      if (keepPills) {
+        unresolved.push(b.fullMatch);
+      }
+    }
   }
   out += text.slice(cursor);
-  return { text: out, stripped: true };
+  return { text: out, stripped: anyStripped, unresolved };
+}
+
+/**
+ * Build the set of valid handoff tool names for a spec node's outgoing control edges.
+ * Used by `processPills` under `keepPills` to decide whether a handoff pill resolves.
+ */
+function buildHandoffNamesForNode(
+  specKey: string,
+  specEdges: FlowSpecEdge[],
+  specNodesByKey: Map<string, FlowSpecNode>
+): Set<string> {
+  const outgoing = specEdges
+    .filter((e) => e.from === specKey)
+    .map((e) => specNodesByKey.get(e.to))
+    .filter(Boolean) as FlowSpecNode[];
+  const targets: HandoffTargetRef[] = outgoing.map((t) => ({
+    id: t.key ?? '',
+    label: t.label,
+    type: t.type,
+  }));
+  return new Set(buildHandoffToolNameMap(targets).values());
 }
 
 function defaultLabel(type: string): string {
@@ -544,6 +619,10 @@ export function compileFlowSpec(
     const nodesByKey = new Map<string, FlowNode>();
     const flowNodes: FlowNode[] = [];
     const mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }> = [];
+    // Spec-node-by-key map used for handoff pill resolution under keepPills.
+    const specNodesByKey = new Map<string, FlowSpecNode>(
+      specNodes.filter((n) => n?.key && typeof n.key === 'string').map((n) => [n.key, n])
+    );
 
     for (const specNode of specNodes) {
       const key = specNode?.key;
@@ -573,13 +652,25 @@ export function compileFlowSpec(
       const prompt = typeof specNode.prompt === 'string' ? specNode.prompt : undefined;
 
       if (type === 'start') {
-        const { text, stripped } = stripPills(prompt ?? '');
-        if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-        properties.promptTemplate = text;
+        const { text: startText, stripped: startStripped, unresolved: startUnresolved } = processPills(
+          prompt ?? '',
+          options.keepPills
+            ? { keepPills: true, wiredServers: new Set((specNode.servers ?? []).map((s) => s.name)), validHandoffNames: buildHandoffNamesForNode(key, specEdges, specNodesByKey) }
+            : {}
+        );
+        if (startStripped && !options.keepPills) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+        for (const u of startUnresolved) warn('pill-unresolved', `Node "${key}": pill "${u}" not resolved against wired servers — stripped.`, key);
+        properties.promptTemplate = startText;
       } else if (type === 'process') {
-        const { text, stripped } = stripPills(prompt ?? '');
-        if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-        properties.promptTemplate = text;
+        const { text: procText, stripped: procStripped, unresolved: procUnresolved } = processPills(
+          prompt ?? '',
+          options.keepPills
+            ? { keepPills: true, wiredServers: new Set((specNode.servers ?? []).map((s) => s.name)), validHandoffNames: buildHandoffNamesForNode(key, specEdges, specNodesByKey) }
+            : {}
+        );
+        if (procStripped && !options.keepPills) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+        for (const u of procUnresolved) warn('pill-unresolved', `Node "${key}": pill "${u}" not resolved against wired servers — stripped.`, key);
+        properties.promptTemplate = procText;
 
         if (specNode.model) {
           const resolved = resolveModel(specNode.model, models);
@@ -668,10 +759,16 @@ export function compileFlowSpec(
         }
         // A prompt on a subflow is its isolated-mode input (runtime back-compat treats a
         // promptTemplate with no inputMode as isolated).
+        // Note: subflow spec nodes have no `servers` array, so keepPills treats all their
+        // pills as unresolvable (they are stripped with a 'pill-unresolved' warning).
         if (prompt !== undefined) {
-          const { text, stripped } = stripPills(prompt);
-          if (stripped) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
-          properties.promptTemplate = text;
+          const { text: subText, stripped: subStripped, unresolved: subUnresolved } = processPills(
+            prompt,
+            options.keepPills ? { keepPills: true } : {}
+          );
+          if (subStripped && !options.keepPills) warn('pill-stripped', `Node "${key}": binding pills are not supported in generated prompts and were replaced with plain names.`, key);
+          for (const u of subUnresolved) warn('pill-unresolved', `Node "${key}": pill "${u}" not resolved against wired servers — stripped.`, key);
+          properties.promptTemplate = subText;
         }
         // Opt-in caller prompt (issue #96): only meaningful in isolated mode.
         if (typeof specNode.allowCallerPrompt === 'boolean') {

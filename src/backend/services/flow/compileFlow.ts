@@ -53,7 +53,7 @@ export type CompileSpecResult = CompileSpecSuccess | CompileSpecFailure;
 
 export async function compileSpec(
   spec: unknown,
-  options: { save?: boolean; updateFlowId?: string } = {}
+  options: { save?: boolean; updateFlowId?: string; keepPills?: boolean } = {}
 ): Promise<CompileSpecResult> {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
     return { success: false, error: 'The spec must be a JSON object (a FlowSpec)', statusCode: 400 };
@@ -71,7 +71,7 @@ export async function compileSpec(
     // subflow reference to the flow being replaced would recurse into itself.
     compileContext = { ...compileContext, flows: flows.filter((f) => f.id !== options.updateFlowId) };
   }
-  const compiled = compileFlowSpec(spec as FlowSpec, compileContext);
+  const compiled = compileFlowSpec(spec as FlowSpec, compileContext, { keepPills: options.keepPills });
 
   if (!compiled.flow) {
     return {

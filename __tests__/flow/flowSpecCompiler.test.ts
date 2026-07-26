@@ -1435,3 +1435,206 @@ describe('compileFlowSpec — agentic fan-out (allowCallerFanout, issue #130 Pha
     expect(gate.data.properties).not.toHaveProperty('allowCallerFanout');
   });
 });
+
+// ---------------------------------------------------------------------------
+// keepPills option (issue #264)
+// ---------------------------------------------------------------------------
+
+describe('compileFlowSpec — keepPills option (issue #264)', () => {
+  const pillContext: CompileContext = {
+    models: [{ id: 'model-abc', name: 'gpt-4o' }],
+    servers: [{ name: 'github-mcp-server' }, { name: 'brave-search' }],
+    serverTools: {
+      'github-mcp-server': ['issue_read', 'list_issues'],
+      'brave-search': ['web_search'],
+    },
+    flows: [{ id: 'flow-1', name: 'Summarizer' }],
+  };
+
+  function makeSpec(processPrompt: string, extraServers: Array<{ name: string; tools?: string[] }> = []): FlowSpec {
+    return {
+      name: 'test_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'System prompt.' },
+        {
+          key: 'step',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: processPrompt,
+          servers: [{ name: 'github-mcp-server', tools: ['issue_read'] }, ...extraServers],
+        },
+        { key: 'end', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'step' },
+        { from: 'step', to: 'end' },
+      ],
+    };
+  }
+
+  it('default (no keepPills): strips all pills with pill-stripped warning', () => {
+    const spec = makeSpec('Use ${tool:github-mcp-server__issue_read} to read the issue.');
+    const { flow, issues } = compileFlowSpec(spec, pillContext);
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    // pill stripped to bare name
+    expect(step.data.properties!.promptTemplate).toBe('Use issue_read to read the issue.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-stripped', severity: 'warning' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: preserves a pill that resolves against a wired server', () => {
+    const spec = makeSpec('Use ${tool:github-mcp-server__issue_read} to read the issue.');
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(step.data.properties!.promptTemplate).toBe('Use ${tool:github-mcp-server__issue_read} to read the issue.');
+    // no pill-stripped warning
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: strips an unwired server pill with pill-unresolved warning', () => {
+    // brave-search pill but server NOT in specNode.servers (only github-mcp-server is wired)
+    const spec = makeSpec('Search with ${tool:brave-search__web_search} please.');
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    // stripped to bare name
+    expect(step.data.properties!.promptTemplate).toBe('Search with web_search please.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-unresolved', severity: 'warning' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+  });
+
+  it('keepPills true: preserves a valid handoff pill matching an outgoing edge target', () => {
+    const spec: FlowSpec = {
+      name: 'handoff_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'router',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Hand off via ${tool:handoff__handoff_to_finish_node}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish', label: 'Finish Node' },
+      ],
+      edges: [
+        { from: 'start', to: 'router' },
+        { from: 'router', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const router = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(router.data.properties!.promptTemplate).toBe('Hand off via ${tool:handoff__handoff_to_finish_node}.');
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: strips a handoff pill referencing a non-existent target', () => {
+    const spec: FlowSpec = {
+      name: 'bad_handoff_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'router',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Hand off via ${tool:handoff__handoff_to_nonexistent_node}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish', label: 'Finish Node' },
+      ],
+      edges: [
+        { from: 'start', to: 'router' },
+        { from: 'router', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const router = flow!.nodes.find((n) => n.type === 'process')!;
+    // stripped: handoff_to_nonexistent_node is not in the outgoing edge targets
+    expect(router.data.properties!.promptTemplate).toBe('Hand off via handoff_to_nonexistent_node.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-unresolved', severity: 'warning' }));
+  });
+
+  it('default (no keepPills): strips handoff pills with pill-stripped, not pill-unresolved', () => {
+    const spec: FlowSpec = {
+      name: 'default_strip_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'router',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Hand off via ${tool:handoff__handoff_to_finish_node}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish', label: 'Finish Node' },
+      ],
+      edges: [
+        { from: 'start', to: 'router' },
+        { from: 'router', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext);
+    const router = flow!.nodes.find((n) => n.type === 'process')!;
+    expect(router.data.properties!.promptTemplate).toBe('Hand off via handoff_to_finish_node.');
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'pill-stripped', severity: 'warning' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: non-binding tokens (${var:}, ${global:}, ${kv:}) are never touched', () => {
+    const spec: FlowSpec = {
+      name: 'var_flow',
+      nodes: [
+        { key: 'start', type: 'start', prompt: 'Start.' },
+        {
+          key: 'step',
+          type: 'process',
+          model: 'gpt-4o',
+          prompt: 'Input: ${var:TASK}, global: ${global:ENV}, kv: ${kv:COUNTER}, res: ${res:artifact}.',
+          servers: [],
+        },
+        { key: 'end', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'step' },
+        { from: 'step', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const step = flow!.nodes.find((n) => n.type === 'process')!;
+    // Non-binding tokens should pass through completely unchanged
+    expect(step.data.properties!.promptTemplate).toBe(
+      'Input: ${var:TASK}, global: ${global:ENV}, kv: ${kv:COUNTER}, res: ${res:artifact}.'
+    );
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+
+  it('keepPills true: wired server pill on a start node is preserved', () => {
+    const spec: FlowSpec = {
+      name: 'start_pill_flow',
+      nodes: [
+        {
+          key: 'start',
+          type: 'start',
+          prompt: 'You can use ${tool:github-mcp-server__issue_read} for issues.',
+          // start nodes can also declare servers in the spec
+          servers: [{ name: 'github-mcp-server', tools: ['issue_read'] }],
+        },
+        { key: 'step', type: 'process', model: 'gpt-4o', prompt: 'Do work.', servers: [] },
+        { key: 'end', type: 'finish' },
+      ],
+      edges: [
+        { from: 'start', to: 'step' },
+        { from: 'step', to: 'end' },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, pillContext, { keepPills: true });
+    const startNode = flow!.nodes.find((n) => n.type === 'start')!;
+    expect(startNode.data.properties!.promptTemplate).toBe(
+      'You can use ${tool:github-mcp-server__issue_read} for issues.'
+    );
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-stripped' }));
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'pill-unresolved' }));
+  });
+});

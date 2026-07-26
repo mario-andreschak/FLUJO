@@ -56,6 +56,11 @@ function specInputSchema(): Tool['inputSchema'] {
         type: 'object',
         description: 'The FlowSpec object (see the tool description for the format).',
       },
+      keepPills: {
+        type: 'boolean',
+        description:
+          'When true, binding pills (${tool:server__name}) that resolve against the node\'s wired servers are preserved in the compiled output instead of being stripped. Pills that cannot be resolved are still stripped with a warning. Default: false (strip all pills — generator-safe behaviour).',
+      },
     },
     required: ['spec'],
   };
@@ -265,7 +270,8 @@ export async function authoringCallTool(
       if (!spec) {
         return textResult({ error: 'Provide a "spec" argument: a FlowSpec object (or a JSON string of one).' }, true);
       }
-      const result = await compileSpec(spec, { save: toolName === 'create_flow' });
+      const keepPills = args.keepPills === true;
+      const result = await compileSpec(spec, { save: toolName === 'create_flow', keepPills });
       if (!result.success) {
         return textResult({ error: result.error, issues: result.issues ?? [] }, true);
       }
