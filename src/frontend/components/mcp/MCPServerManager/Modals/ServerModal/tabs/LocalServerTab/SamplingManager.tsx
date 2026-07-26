@@ -54,6 +54,11 @@ const SamplingManager: React.FC<SamplingManagerProps> = ({ policy, onChange }) =
 
   return (
     <Box>
+      <Alert severity="warning" sx={{ mb: 2 }}>
+        MCP sampling is deprecated in the 2026-07-28 spec. FLUJO&apos;s implementation (routing
+        through your configured model) already matches the recommended replacement pattern —
+        no action is required until server support is removed (estimated mid-2027).
+      </Alert>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
         <SmartToyIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />
         <Typography variant="subtitle1">Let this tool use your AI</Typography>

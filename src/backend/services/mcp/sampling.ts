@@ -127,7 +127,9 @@ export function createSamplingHandler(
 
     log.info(`Sampling for ${config.name} via model ${model.name} (${messages.length} messages)`);
     const adapter = getCompletionAdapter(model);
-    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, maxTokens: normalizeMaxTokens(model.maxTokens) });
+    // Prefer the per-policy token cap; fall back to the model's own default.
+    const maxTokens = policy.maxTokens ?? normalizeMaxTokens(model.maxTokens);
+    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, maxTokens });
 
     const raw = completion.choices?.[0]?.message?.content;
     const text = typeof raw === 'string' ? raw : '';

@@ -3,16 +3,19 @@
 import React, { useState } from 'react';
 import { TabProps, MessageState } from '../../types';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { MCPSamplingPolicy } from '@/shared/types/mcp';
 import { mcpService } from '@/frontend/services/mcp';
 import {
   Alert,
   Box,
   Button,
+  Divider,
   Paper,
   Stack,
   TextField,
   Typography
 } from '@mui/material';
+import SamplingManager from '../LocalServerTab/SamplingManager';
 
 const RemoteTab: React.FC<TabProps> = ({
   onAdd,
@@ -27,6 +30,8 @@ const RemoteTab: React.FC<TabProps> = ({
   // so the user understands they'll sign in (rather than hand-enter a header) on the next
   // screen. A second click ("Continue to setup") then proceeds.
   const [oauthDetected, setOauthDetected] = useState<boolean>(false);
+  // Sampling policy configured here is forwarded to LocalServerTab via the remoteConfig.
+  const [samplingPolicy, setSamplingPolicy] = useState<MCPSamplingPolicy | undefined>(undefined);
 
   // URL validation
   const isValidHttpUrl = (url: string): boolean => {
@@ -71,7 +76,9 @@ const RemoteTab: React.FC<TabProps> = ({
       _buildCommand: '',
       _installCommand: '',
       // Install-origin (#193): a hosted endpoint — serverUrl is the reference.
-      source: { type: 'remote' }
+      source: { type: 'remote' },
+      // Forward any sampling policy configured on this tab.
+      ...(samplingPolicy ? { sampling: samplingPolicy } : {}),
     };
 
     // Pass the config to the parent component before switching tabs
@@ -189,6 +196,18 @@ const RemoteTab: React.FC<TabProps> = ({
             </Alert>
           </Box>
         )}
+
+        <Divider />
+
+        <Box>
+          <Typography variant="subtitle2" gutterBottom>
+            Sampling (optional)
+          </Typography>
+          <SamplingManager
+            policy={samplingPolicy}
+            onChange={setSamplingPolicy}
+          />
+        </Box>
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
           <Button
