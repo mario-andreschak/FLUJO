@@ -1,7 +1,8 @@
 import { createLogger } from '@/utils/logger';
 import { writeRunResource, readRunResource, parseRunResourceUri } from '@/backend/services/runResources';
-import { ToolDefinition, ResourceNodeReference } from '../types';
+import { ToolDefinition, ResourceNodeReference, MCPNodeReference } from '../types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { executeNativeReadResource } from './mcpResourceTools';
 
 /**
  * Run-resource tools (Tier 3, issue #161).
@@ -52,15 +53,21 @@ export function buildReadResourceTool(): ToolDefinition {
   return {
     name: READ_RESOURCE_TOOL_NAME,
     description:
-      'Read the FULL content of a run resource by its flujo://run/... URI. When a prior tool result or ' +
-      'tool-call argument was too large to include inline, the conversation shows a head excerpt plus a ' +
-      'flujo://run/... marker; call this tool with that exact URI to retrieve the complete content.',
+      'Read the FULL content of a resource by its URI. ' +
+      'Accepts two kinds of URI: ' +
+      '(1) flujo://run/<conversationId>/<id> — a run-resource marker left when a prior tool result was too ' +
+      'large to include inline; use this to retrieve its complete content. ' +
+      '(2) A native MCP resource URI from a bound server (e.g. file://, asana://, or any other scheme) — ' +
+      'fetched live from the server; large or binary content is auto-captured as a run resource and ' +
+      'returned as a flujo://run/... stub.',
     inputSchema: {
       type: 'object',
       properties: {
         uri: {
           type: 'string',
-          description: 'The flujo://run/<conversationId>/<id> URI of the run resource to read.',
+          description:
+            'The URI to read. Either a flujo://run/... run-resource marker, or a native MCP resource URI ' +
+            'from a bound server (use list_mcp_resources to discover available URIs).',
         },
       },
       required: ['uri'],
@@ -118,6 +125,9 @@ export interface RunResourceToolContext {
   /** Producing process node, recorded as lineage + carried on the emitted event. */
   node?: NodeRef;
   emit?: EmitFn;
+  /** Bound MCP nodes for native URI dispatch (issue #239). When provided,
+   *  read_resource will also resolve non-flujo://run/ URIs against bound servers. */
+  mcpNodes?: MCPNodeReference[];
 }
 
 export interface RunResourceToolOutcome {
@@ -204,6 +214,17 @@ async function executeReadResource(
   }
   const parsed = parseRunResourceUri(uri);
   if (!parsed) {
+    // Not a flujo://run/ URI — try native MCP server dispatch if mcpNodes are available.
+    if (ctx.mcpNodes && ctx.mcpNodes.length > 0) {
+      return executeNativeReadResource(uri, {
+        conversationId: ctx.conversationId,
+        nodeId: ctx.node?.nodeId,
+        ephemeral: ctx.ephemeral,
+        mcpNodes: ctx.mcpNodes,
+        emit: ctx.emit,
+        node: ctx.node,
+      });
+    }
     return { success: false, error: `Not a run-resource URI: ${uri}` };
   }
   if (ctx.conversationId && parsed.conversationId !== ctx.conversationId) {

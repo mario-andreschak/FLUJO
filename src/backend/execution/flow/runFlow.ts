@@ -950,6 +950,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
             node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
             shouldAbort: runCancelled,
+            mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
           });
           if (!toolProcessingResult.success) {
             log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
@@ -1152,6 +1153,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
+                  mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
                 });
 
                 if (!toolProcessingResult.success) {
@@ -1198,6 +1200,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
+                  mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
                 });
 
                 if (!toolProcessingResult.success) {

@@ -319,6 +319,9 @@ export class ProcessNode extends BaseNode {
       // Only process MCP nodes if tools are not available in shared state
       const mcpNodes = node_params?.properties?.mcpNodes || [];
 
+      // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
+      sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
+
       if (mcpNodes.length > 0) {
         log.info('No MCP tools found in shared state, processing MCP nodes', {
           mcpNodesCount: mcpNodes.length
@@ -479,8 +482,11 @@ export class ProcessNode extends BaseNode {
     const historyHasRunResourceUri = wireForScan.some(
       (m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME),
     );
+    // Also offer read_resource when native MCP resources are exposed (issue #239):
+    // the model needs to be able to fetch resources it discovers via list_mcp_resources.
+    const hasNativeResources = availableTools.some((t) => t.name === 'list_mcp_resources');
     if (
-      historyHasRunResourceUri &&
+      (historyHasRunResourceUri || hasNativeResources) &&
       !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
     ) {
       // prepResult.availableTools is the same array reference, so this is picked
@@ -617,7 +623,8 @@ export class ProcessNode extends BaseNode {
           nodeId: prepResult.nodeId, // Pass the node ID
           toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
           conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
-          requireToolApproval: prepResult.requireToolApproval // Gate tool calls on user approval
+          requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
+          mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
         });
 
         // --- Log successful model call result (check success first) ---

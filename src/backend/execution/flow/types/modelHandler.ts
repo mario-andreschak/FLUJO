@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
 import {
   ToolDefinition,
-  ToolCallInfo
+  ToolCallInfo,
+  MCPNodeReference,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
@@ -48,6 +49,10 @@ export interface ModelCallInput {
   conversationId?: string;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
   requireToolApproval?: boolean;
+  /** Issue #239: bound MCP node references for native resource tools. Forwarded to
+   *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
+   *  and native-URI read_resource in-loop. */
+  mcpNodes?: MCPNodeReference[];
 }
 
 // Result of model call
@@ -109,6 +114,10 @@ export interface ToolCallProcessingInput {
    * need not provide this.
    */
   signal?: AbortSignal;
+  /** Issue #239: bound MCP node references for native resource tools (list_mcp_resources,
+   *  native-URI read_resource). When present, synthetic resource tool calls are dispatched
+   *  via executeMCPResourceTool / executeNativeReadResource. */
+  mcpNodes?: MCPNodeReference[];
 }
 
 // Tool call processing result

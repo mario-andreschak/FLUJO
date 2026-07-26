@@ -25,6 +25,7 @@ import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
+import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -531,7 +532,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, requireToolApproval } = input; // Added nodeId
+    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, requireToolApproval, mcpNodes } = input; // Added nodeId
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
@@ -642,8 +643,10 @@ export class ModelHandler {
     // present + we have a conversation to scope the write to; the request/
     // response path handles the same tool in processToolCalls instead.
     const runResourceNode = nodeId ? { nodeId, nodeName: nodeDisplayName, nodeType: 'process' as const } : undefined;
+    const hasRunResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name));
+    const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const localToolExecutors =
-      conversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name))
+      (hasRunResourceTool || hasMCPResourceTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -656,13 +659,26 @@ export class ModelHandler {
             },
             // read_resource (issue #168): lets a self-orchestrating model
             // dereference a flujo://run/... marker back to full content in-loop.
+            // Also dispatches native MCP resource URIs (issue #239) when mcpNodes is available.
             [READ_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, args, {
                 conversationId,
                 node: runResourceNode,
                 emit,
+                mcpNodes: mcpNodes ?? [],
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
+              return outcome.data;
+            },
+            // list_mcp_resources (issue #239): list native MCP server resources in-loop.
+            [LIST_MCP_RESOURCES_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeMCPResourceTool(LIST_MCP_RESOURCES_TOOL_NAME, args, {
+                conversationId,
+                node: runResourceNode,
+                emit,
+                mcpNodes: mcpNodes ?? [],
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'list_mcp_resources failed');
               return outcome.data;
             },
           }
@@ -1188,7 +1204,7 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    const { toolCalls, toolNameMap, emit, conversationId, node, signal } = input;
+    const { toolCalls, toolNameMap, emit, conversationId, node, signal, mcpNodes } = input;
 
     // Add verbose logging of the input
     log.verbose('processToolCalls input', input);
@@ -1281,13 +1297,45 @@ export class ModelHandler {
             continue;
           }
 
+          // MCP resource tools (issue #239): synthetic FLUJO tools for native MCP
+          // server resources (list_mcp_resources). Dispatched before the standard
+          // MCP decode path so they are never routed to mcpService.
+          if (isMCPResourceToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeMCPResourceTool(name, args, {
+              conversationId,
+              node,
+              emit,
+              mcpNodes: mcpNodes ?? [],
+            });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            continue;
+          }
+
           // Run-resource tools (issue #161): synthetic FLUJO tools that write a
           // run artifact, dispatched here (not via mcpService) using the run's
           // conversationId already in scope. Only offered when a produce node is
           // wired (ProcessNode.prep), so this branch is inert for other flows.
           if (isRunResourceToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
-            const outcome = await executeRunResourceTool(name, args, { conversationId, node, emit });
+            const outcome = await executeRunResourceTool(name, args, { conversationId, node, emit, mcpNodes: mcpNodes ?? [] });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;

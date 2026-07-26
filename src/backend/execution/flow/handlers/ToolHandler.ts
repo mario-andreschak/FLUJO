@@ -10,6 +10,7 @@ import { createToolError, createMCPError } from '../errorFactory';
 import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
 import { encodeToolName } from './toolNamespace';
+import { buildMCPResourceTools } from './mcpResourceTools';
 import OpenAI from 'openai';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
@@ -290,6 +291,20 @@ export class ToolHandler {
         }
       }
       
+      // Build the list_mcp_resources synthetic tool (issue #239).
+      // This is additive (read-only); a listing failure logs a warning but does
+      // NOT abort the step — tool availability must not be blocked by resources.
+      try {
+        const resourceTools = await buildMCPResourceTools(mcpNodes);
+        for (const rt of resourceTools) {
+          if (!allTools.some((t) => t.name === rt.name)) {
+            allTools.push(rt);
+          }
+        }
+      } catch (resourceErr) {
+        log.warn('processMCPNodes: buildMCPResourceTools failed, skipping resource tool', { resourceErr });
+      }
+
       const result: Result<MCPNodeProcessingResult> = {
         success: true,
         value: { availableTools: allTools }

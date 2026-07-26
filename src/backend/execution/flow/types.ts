@@ -245,6 +245,14 @@ export interface MCPNodeProperties {
      *  set, the server's own rootPath is the default root. Advisory scoping, not a
      *  sandbox. Supports `${global:VAR}`. */
     roots?: string[];
+    /**
+     * Native MCP resource exposure (issue #239). Controls which of the bound
+     * server's MCP resources are visible to the model at runtime:
+     *   - `undefined` or `'all'` — expose all resources (default).
+     *   - `string[]` with entries — expose only resources whose URI is in the list.
+     *   - `string[]` empty (`[]`) — disable native resource exposure for this node.
+     */
+    enabledResources?: string[] | 'all';
 }
 
 // SubflowNode specific properties
@@ -505,6 +513,11 @@ export interface MCPNodeReference {
         /** Extra workspace folders (MCP roots) this node adds to the bound server — see
          *  MCPNodeProperties.roots (issue 46). */
         roots?: string[];
+        /**
+         * Native MCP resource exposure (issue #239). Mirrors MCPNodeProperties.enabledResources.
+         * `undefined` or `'all'` exposes all; `string[]` filters by URI; `[]` disables.
+         */
+        enabledResources?: string[] | 'all';
     };
 }
 
@@ -556,6 +569,11 @@ export interface SharedState {
     variables?: Record<string, string>;
     // MCP context for tool handling
     mcpContext?: MCPContext;
+    /** Issue #239: the MCP node references for the currently executing ProcessNode.
+     *  Set in ProcessNode.prep() and read by runFlow.ts when calling processToolCalls
+     *  so native resource tools (list_mcp_resources, native read_resource) receive
+     *  the correct server context. Cleared / overwritten on each node transition. */
+    currentMCPNodes?: MCPNodeReference[];
     // Current node ID for stateful execution
     currentNodeId?: string;
     // Flag to indicate if handoff was requested
