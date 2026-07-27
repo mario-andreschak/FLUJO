@@ -168,3 +168,7 @@ ISSUE_TRIAGE.md
 /short
 *.jpeg
 jest-output.txt
+
+# Claude Code local settings and worktrees
+.claude/settings.local.json
+.claude/worktrees/
