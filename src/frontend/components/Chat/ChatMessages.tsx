@@ -45,6 +45,7 @@ import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
 import WidgetsIcon from '@mui/icons-material/Widgets'; // #216: canvas-app launcher
 import { ChatMessage } from './index';
+import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
@@ -101,6 +102,13 @@ interface ChatMessagesProps {
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   /** #216: identities (`serverName::uri`) already open in the canvas. */
   canvasKeys?: Set<string>;
+  /**
+   * #221: messages the user submitted while a run was in flight (queued).
+   * Rendered as dimmed pending bubbles after the last real message so the user
+   * can see them immediately instead of them appearing only as tiny chips above
+   * the input.
+   */
+  queuedMessages?: QueuedMessage[];
 }
 
 /** #216: payload handed up when the user opens a tool's app in the canvas. */
@@ -1017,6 +1025,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onAppMessage, // #97: MCP App -> conversation return channel (stable)
   onOpenInCanvas, // #216: route a tool app to the docked canvas
   canvasKeys, // #216: identities already open in the canvas
+  queuedMessages = [], // #221: inline pending bubbles
 }) => {
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
@@ -1203,6 +1212,44 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           />
         );
       })}
+
+      {/* #221: Inline pending bubbles for queued (not-yet-sent) messages.
+          These are client-only synthetic rows — never persisted. They render
+          right-aligned and dimmed so the user can see them immediately in the
+          thread instead of only as tiny chips above the input. */}
+      {queuedMessages.map((q) => (
+        <Box
+          key={q.id}
+          data-testid="queued-bubble"
+          sx={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            opacity: 0.6,
+          }}
+        >
+          <Box
+            sx={{
+              maxWidth: '70%',
+              bgcolor: 'primary.light',
+              color: 'primary.contrastText',
+              borderRadius: 2,
+              px: 2,
+              py: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0.5,
+            }}
+          >
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {q.content || (q.attachments.length > 0 ? `${q.attachments.length} attachment(s)` : '')}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'flex-end' }}>
+              <CircularProgress size={10} color="inherit" />
+              <Typography variant="caption" sx={{ opacity: 0.85 }}>Queued</Typography>
+            </Box>
+          </Box>
+        </Box>
+      ))}
 
       {/* Menu for message actions */}
       <Menu

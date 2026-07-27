@@ -37,6 +37,7 @@ import {
   dequeue as dequeueMsg,
   clearQueue as clearMsgQueue,
   removeQueued as removeQueuedMsg,
+  requeueFront as requeueFrontMsg,
   getQueue as getMsgQueue,
   peekQueue as peekMsgQueue,
   canDrain as canDrainQueue,
@@ -705,7 +706,10 @@ const Chat: React.FC = () => {
     log.debug('Fetching detailed conversation', { conversationId: id });
     setIsLoadingDetails(true);
     setDetailsError(null);
-    setDetailedConversation(null); // Clear previous details
+    // Do NOT eagerly null out detailedConversation here (#221): clearing it
+    // before the fetch resolves creates a gap where any optimistic user bubble
+    // pushed by the drain effect is lost. We replace it atomically below once
+    // the server response arrives.
     try {
       // Use the endpoint that returns the full state
       const conversation = await chatService.getConversation(id);
@@ -1569,7 +1573,7 @@ const Chat: React.FC = () => {
   const handleSendMessage = async (
     content: string,
     attachments: Attachment[] = [],
-    opts?: { fromQueue?: boolean; nodeOverride?: string | null },
+    opts?: { fromQueue?: boolean; nodeOverride?: string | null; queuedId?: string },
   ) => {
     if (!content.trim() && attachments.length === 0) return;
     if (!detailedConversation) {
@@ -2766,15 +2770,27 @@ const Chat: React.FC = () => {
     });
     if (!eligible) return;
     drainingRef.current = true;
-    // Remove the head now; defer the actual send so the state update settles
-    // and re-entrancy is impossible within this tick.
-    setQueuedMessages(prev => dequeueMsg(prev, convId).queues);
-    const timer = setTimeout(() => {
-      drainingRef.current = false;
-      void handleSendMessage(head.content, head.attachments, {
-        fromQueue: true,
-        nodeOverride: head.nodeOverride,
-      });
+    // Non-lossy drain (#221): peek the head first; only remove it from the queue
+    // AFTER the send has committed the optimistic bubble. On failure, re-enqueue
+    // at the front so the message is retried and never silently dropped.
+    const capturedHead = head; // close over the identity
+    const timer = setTimeout(async () => {
+      try {
+        // Dequeue by id (not position) just before we send, so the pending
+        // bubble disappears from the "synthetic" layer and gets promoted to a
+        // real optimistic bubble inside handleSendMessage.
+        setQueuedMessages(prev => removeQueuedMsg(prev, convId, capturedHead.id));
+        await handleSendMessage(capturedHead.content, capturedHead.attachments, {
+          fromQueue: true,
+          nodeOverride: capturedHead.nodeOverride,
+          queuedId: capturedHead.id,
+        });
+      } catch {
+        // Send failed — put it back at the front so it is the next to drain.
+        setQueuedMessages(prev => requeueFrontMsg(prev, convId, capturedHead));
+      } finally {
+        drainingRef.current = false;
+      }
     }, 0);
     return () => clearTimeout(timer);
     // handleSendMessage is intentionally omitted (stable behavior; including it
@@ -3004,6 +3020,7 @@ const Chat: React.FC = () => {
                 onAppMessage={handleAppMessage}
                 onOpenInCanvas={handleOpenInCanvas}
                 canvasKeys={canvasKeys}
+                queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
               />
 
               {/* Completion banner: shown once the run has reached a Finish node

@@ -13,6 +13,7 @@ import {
   dequeue,
   clearQueue,
   removeQueued,
+  requeueFront,
   getQueue,
   peekQueue,
   canDrain,
@@ -171,6 +172,39 @@ describe('chatQueue', () => {
 
     it('halts after the user stopped the conversation', () => {
       expect(canDrain({ ...idle, stopped: true })).toBe(false);
+    });
+  });
+
+  describe('requeueFront', () => {
+    it('inserts at the head, preserving order of the rest', () => {
+      let q: QueueMap = {};
+      q = enqueue(q, 'c1', msg('a'));
+      q = enqueue(q, 'c1', msg('b'));
+      // 'x' failed to send, put it back at the front
+      q = requeueFront(q, 'c1', msg('x'));
+      expect(getQueue(q, 'c1').map(m => m.id)).toEqual(['x', 'a', 'b']);
+    });
+
+    it('is idempotent by id — existing entry is removed before re-inserting', () => {
+      let q: QueueMap = {};
+      q = enqueue(q, 'c1', msg('a'));
+      q = enqueue(q, 'c1', msg('b'));
+      // 'a' was already peeked/dequeued by the drain and failed; simulate double-requeue
+      q = requeueFront(q, 'c1', msg('a'));
+      q = requeueFront(q, 'c1', msg('a'));
+      expect(getQueue(q, 'c1').map(m => m.id)).toEqual(['a', 'b']);
+    });
+
+    it('works on an empty queue', () => {
+      const q = requeueFront({}, 'c1', msg('x'));
+      expect(getQueue(q, 'c1').map(m => m.id)).toEqual(['x']);
+    });
+
+    it('does not mutate the input map', () => {
+      const q = enqueue({}, 'c1', msg('a'));
+      const snapshot = JSON.stringify(q);
+      requeueFront(q, 'c1', msg('z'));
+      expect(JSON.stringify(q)).toBe(snapshot);
     });
   });
 

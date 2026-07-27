@@ -65,6 +65,21 @@ export function dequeue(
   return { queues: next, head };
 }
 
+/**
+ * Re-insert a message at the FRONT of a conversation's queue (immutably).
+ * Used by the drain error path to restore a message that failed to send so it
+ * is retried before any later items (preserving FIFO order for the rest).
+ * If a message with the same id is already in the queue it is removed first
+ * so the call is idempotent.
+ */
+export function requeueFront(queues: QueueMap, conversationId: string, message: QueuedMessage): QueueMap {
+  const current = getQueue(queues, conversationId).filter(m => m.id !== message.id);
+  return {
+    ...queues,
+    [conversationId]: [message, ...current],
+  };
+}
+
 /** Drop a conversation's entire queue (e.g. on delete). Immutable. */
 export function clearQueue(queues: QueueMap, conversationId: string): QueueMap {
   if (!(conversationId in queues)) return queues;
