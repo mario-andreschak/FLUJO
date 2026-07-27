@@ -19,6 +19,8 @@ export type ExecutionEventType =
   | 'run:done'
   | 'node:enter'
   | 'node:exit'
+  | 'node:snapshot'
+  | 'node:changed-files'
   | 'model:start'
   | 'model:delta'
   | 'model:end'
@@ -126,6 +128,38 @@ export interface NodeExitEvent extends ExecutionEventBase {
   type: 'node:exit';
   node: NodeRef;
   action: string;
+}
+/** One changed path in a filesystem snapshot diff (issue #250). */
+export interface SnapshotChangedFile {
+  /** Repo-relative POSIX path. */
+  path: string;
+  /** git name-status code: A/M/D/R… */
+  status: string;
+}
+/**
+ * A filesystem snapshot of a confinement root was taken before/after a Process
+ * node that had the built-in `filesystem`/`bash` servers armed (issue #250).
+ * `snapshotId` is the shadow-repo commit SHA; `root` is the captured root.
+ */
+export interface NodeSnapshotEvent extends ExecutionEventBase {
+  type: 'node:snapshot';
+  node?: NodeRef;
+  phase: 'before' | 'after';
+  root: string;
+  snapshotId: string;
+}
+/**
+ * The set of files a Process node changed within a confinement root, computed
+ * from the diff between its before/after snapshots (issue #250). Powers the
+ * per-node changed-file view and the "Revert to here" action.
+ */
+export interface NodeChangedFilesEvent extends ExecutionEventBase {
+  type: 'node:changed-files';
+  node?: NodeRef;
+  root: string;
+  startSnapshot: string;
+  endSnapshot: string;
+  changedFiles: SnapshotChangedFile[];
 }
 export interface ModelStartEvent extends ExecutionEventBase {
   type: 'model:start';
@@ -285,6 +319,8 @@ export type ExecutionEvent =
   | RunDoneEvent
   | NodeEnterEvent
   | NodeExitEvent
+  | NodeSnapshotEvent
+  | NodeChangedFilesEvent
   | ModelStartEvent
   | ModelDeltaEvent
   | ModelEndEvent

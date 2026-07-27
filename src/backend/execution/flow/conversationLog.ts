@@ -46,6 +46,8 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
   'run:done',
   'node:enter',
   'node:exit',
+  'node:snapshot',
+  'node:changed-files',
   'handoff',
   'message',
   'message:removed',

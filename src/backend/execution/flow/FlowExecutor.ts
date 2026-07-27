@@ -5,6 +5,7 @@ import { FEATURES } from '@/config/features'; // Import feature flags
 import { FlowEngine } from './engine/FlowEngine';
 import { PocketflowEngine } from './engine/PocketflowEngine';
 import { EmitFn } from '@/shared/types/execution/events';
+import { captureBefore, captureAfterAndEmit, SnapshotContext } from '@/backend/services/snapshot/snapshotHook';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -185,11 +186,20 @@ export class FlowExecutor {
 
       emit?.({ type: 'node:enter', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type } });
 
+      // --- Filesystem snapshot: START capture (issue #250) ---
+      // Best-effort, never throws: takes a shadow-repo snapshot of the
+      // confinement roots before an armed (filesystem/bash) Process node runs.
+      let snapshotCtx: SnapshotContext | null = null;
+      snapshotCtx = await captureBefore(node, sharedState, emit);
+
       // --- Execute the node via the engine (mutates sharedState in place) ---
       const runResult = await this.engine.runNode(node, sharedState, emit);
       const action = runResult.action;
       prepResult = runResult.prepResult;
       execResult = runResult.execResult;
+
+      // --- Filesystem snapshot: END capture + changed-files emit (issue #250) ---
+      await captureAfterAndEmit(node, snapshotCtx, emit);
 
       emit?.({ type: 'node:exit', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type }, action });
 
