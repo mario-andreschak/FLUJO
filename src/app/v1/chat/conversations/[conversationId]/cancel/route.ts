@@ -9,6 +9,7 @@ import { persistConversationState } from '@/backend/execution/flow/persistConver
 import { StorageKey } from '@/shared/types/storage';
 import { listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
@@ -89,6 +90,20 @@ export async function POST(
       sharedState.status = 'error';
       sharedState.pendingToolCalls = undefined;
       sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+      // Issue #256: clearing pendingToolCalls leaves the paused assistant
+      // tool_calls turn unanswered in the transcript, which every provider 400s
+      // on when the conversation is later continued. Synthesize a cancellation
+      // result for each dangling call and fold it into the append-only log so
+      // the conversation is left well-formed and the repair is auditable.
+      try {
+        const repaired = repairDanglingToolCalls(sharedState, 'Tool execution cancelled by user before it finished.');
+        if (repaired.length) {
+          log.info(`Synthesized ${repaired.length} tool result(s) for cancelled parked run`, { requestId, conversationId });
+          await appendRawForState(sharedState, repaired.map(m => ({ type: 'message', message: m })));
+        }
+      } catch (repairError) {
+        log.warn(`Failed to synthesize tool results on cancel; continuing`, { requestId, conversationId, repairError });
+      }
     }
 
     // 4. Save updated state (both memory and storage)

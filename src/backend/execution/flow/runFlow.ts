@@ -1,7 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
-import { reconcileConversationLog, recoverMessagesFromLog } from '@/backend/execution/flow/conversationLog';
+import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
@@ -694,6 +694,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // legacy SharedState persistence below still covers the conversation.
   try {
     await reconcileConversationLog(sharedState, messagesBeforeTurn);
+    // Issue #256: heal any assistant tool_calls turn left unanswered by a
+    // crash/restart mid-tool before the run loop builds a provider request.
+    // Persist each synthetic result via the log-only path so the projection is
+    // self-healing and the repair is auditable in the transcript.
+    const repaired = repairDanglingToolCalls(sharedState);
+    if (repaired.length) {
+      log.info(`Repaired ${repaired.length} dangling tool call(s) for ${effectiveConvId} at run start (issue #256).`);
+      await appendRawForState(sharedState, repaired.map(m => ({ type: 'message', message: m })));
+    }
   } catch (error) {
     log.warn(`Conversation-log reconcile failed for ${effectiveConvId}; continuing`, error);
   }

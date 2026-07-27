@@ -2,7 +2,8 @@ import { FlowExecutor } from './FlowExecutor';
 import { loadItem as loadItemBackend, assertSafeCollectionId } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
-import { recoverMessagesFromLog } from './conversationLog';
+import { recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from './conversationLog';
+import { persistConversationState } from './persistConversationState';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
@@ -40,6 +41,22 @@ export async function loadConversationState(conversationId: string): Promise<Sha
       // Per-step durability lives in the append-only log; the snapshot is only
       // written at run boundaries. Fold in anything the snapshot missed.
       await recoverMessagesFromLog(state);
+      // Issue #256: a crash mid-tool leaves an assistant tool_calls turn with no
+      // matching role:'tool' result, which every provider 400s on. Heal it on
+      // first load (covers /respond, /approvals, /debug/*, /edit-state) so the
+      // conversation is well-formed before any request is built. Persist the
+      // synthetic results to the append-only log AND back to the snapshot so the
+      // repair survives even if no runFlow follows.
+      try {
+        const repaired = repairDanglingToolCalls(state);
+        if (repaired.length) {
+          log.info('Repaired dangling tool call(s) on load', { conversationId, count: repaired.length });
+          await appendRawForState(state, repaired.map(m => ({ type: 'message', message: m })));
+          await persistConversationState(storageKey, state);
+        }
+      } catch (repairError) {
+        log.warn('Failed to repair dangling tool calls on load; continuing', { conversationId, repairError });
+      }
       FlowExecutor.conversationStates.set(conversationId, state);
       return state;
     }

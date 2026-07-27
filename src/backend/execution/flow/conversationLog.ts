@@ -419,6 +419,91 @@ export async function reconcileConversationLog(
 }
 
 /**
+ * Default synthetic result wording for a tool call that was emitted but never
+ * answered because FLUJO died mid-tool (crash, dev-server restart, deploy).
+ * Kept as one exported const so the run-start, load, cancel and resume paths
+ * plus the tests all reuse the exact string; callers may pass a cause-specific
+ * variant (e.g. the cancellation path) without touching call sites (issue #256).
+ */
+export const INTERRUPTED_TOOL_RESULT_CONTENT =
+  'Tool execution interrupted (FLUJO restarted before this tool finished)';
+
+/**
+ * Reconcile dangling tool calls (issue #256). If a crash/restart lands between
+ * "the assistant emitted tool_calls" and "the tool results were appended", the
+ * persisted history keeps an assistant `tool_calls` turn whose calls are
+ * unanswered — a shape every provider rejects with a 400 on the next request.
+ *
+ * This is a pure, in-place repair: it derives GROUND TRUTH strictly from the
+ * message history (which tool_call_ids already have a matching role:'tool'
+ * result) — never from `pendingToolCalls`, which can be out of sync after a
+ * crash — synthesizes a role:'tool' "interrupted" result for each unanswered
+ * call, and inserts it immediately after the owning assistant turn's existing
+ * result block (or right after the assistant turn if it has none) so ordering
+ * stays valid for providers. `processNodeId`/`depth` are carried over from the
+ * owning assistant message so subflow projection tagging stays correct.
+ *
+ * Mutates `state.messages` and RETURNS the synthesized messages (empty array =
+ * nothing to do). It does NOT persist them itself — callers decide persistence
+ * (via appendRawForState), mirroring applyApprovalDecision's contract.
+ */
+export function repairDanglingToolCalls(
+  state: SharedState,
+  content: string = INTERRUPTED_TOOL_RESULT_CONTENT,
+): FlujoChatMessage[] {
+  const messages = state.messages ?? [];
+  if (messages.length === 0) return [];
+
+  // Ground truth: every tool_call_id that already has a role:'tool' result.
+  const answered = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      const id = (m as { tool_call_id?: string }).tool_call_id;
+      if (id) answered.add(id);
+    }
+  }
+
+  const synthesized: FlujoChatMessage[] = [];
+  // Rebuild so each synthetic result lands right after the owning assistant
+  // turn's existing (contiguous) tool-result block, not blindly at the end.
+  const rebuilt: FlujoChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    rebuilt.push(m);
+    const toolCalls = (m as { tool_calls?: Array<{ id?: string }> }).tool_calls;
+    if (m.role !== 'assistant' || !Array.isArray(toolCalls) || toolCalls.length === 0) continue;
+    const unanswered = toolCalls.filter((tc) => !!tc.id && !answered.has(tc.id));
+    if (unanswered.length === 0) continue;
+    // Copy this turn's existing contiguous tool-result block first so the
+    // synthetic results are appended AFTER them.
+    let j = i + 1;
+    while (j < messages.length && messages[j].role === 'tool') {
+      rebuilt.push(messages[j]);
+      j++;
+    }
+    for (const tc of unanswered) {
+      const synthetic: FlujoChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'tool',
+        tool_call_id: tc.id!,
+        content,
+        timestamp: Date.now(),
+        ...(m.processNodeId !== undefined ? { processNodeId: m.processNodeId } : {}),
+        ...(m.depth !== undefined ? { depth: m.depth } : {}),
+      };
+      rebuilt.push(synthetic);
+      synthesized.push(synthetic);
+      answered.add(tc.id!);
+    }
+    i = j - 1; // skip the tool block already copied
+  }
+
+  if (synthesized.length === 0) return [];
+  state.messages = rebuilt;
+  return synthesized;
+}
+
+/**
  * Crash recovery: fold log messages missing from a storage-loaded snapshot
  * back into the state. Per-step durability is the LOG (appends); the full
  * SharedState snapshot is only written at run boundaries, so a crash mid-run

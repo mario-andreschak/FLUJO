@@ -21,6 +21,8 @@ import {
   flushConversationLog,
   projectMessages,
   recoverMessagesFromLog,
+  repairDanglingToolCalls,
+  INTERRUPTED_TOOL_RESULT_CONTENT,
   repairTruncatedConversationLog,
   allocateSeq,
   latestSequence,
@@ -473,5 +475,113 @@ describe('authoritative monotonic seq (issue #261)', () => {
     const seqs = events!.map((e) => e.seq);
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b)); // file order === seq order
     expect(seqs).toEqual([0, 1, 2]);
+  });
+});
+
+// Issue #256 — reconcile dangling tool calls at run start / load / cancel.
+const asstToolCall = (
+  id: string,
+  toolCallIds: string[],
+  overrides: Partial<FlujoChatMessage> = {}
+): FlujoChatMessage =>
+  ({
+    role: 'assistant',
+    content: null,
+    tool_calls: toolCallIds.map((tid) => ({
+      id: tid,
+      type: 'function',
+      function: { name: 'do_thing', arguments: '{}' },
+    })),
+    id,
+    timestamp: 1,
+    ...overrides,
+  } as FlujoChatMessage);
+
+const toolResult = (id: string, toolCallId: string): FlujoChatMessage =>
+  ({ role: 'tool', tool_call_id: toolCallId, content: 'ok', id, timestamp: 1 } as FlujoChatMessage);
+
+describe('repairDanglingToolCalls (issue #256)', () => {
+  it('synthesizes one result per unanswered tool_call_id at the end of a turn', () => {
+    const convId = 'conv-repair-basic';
+    const state = makeState(convId);
+    state.messages = [
+      msg('u1', 'user'),
+      asstToolCall('a1', ['call_1', 'call_2'], { processNodeId: 'node-x' }),
+    ];
+
+    const synthesized = repairDanglingToolCalls(state);
+
+    expect(synthesized).toHaveLength(2);
+    expect(synthesized.map((m) => (m as any).tool_call_id).sort()).toEqual(['call_1', 'call_2']);
+    for (const m of synthesized) {
+      expect(m.role).toBe('tool');
+      expect(m.content).toBe(INTERRUPTED_TOOL_RESULT_CONTENT);
+      expect(m.id).toBeTruthy();
+      expect((m as any).processNodeId).toBe('node-x'); // carried over from the assistant turn
+    }
+    // Inserted right after the owning assistant turn.
+    expect(state.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool']);
+  });
+
+  it('only answers the calls that lack a result (mixed case), preserving existing results', () => {
+    const convId = 'conv-repair-mixed';
+    const state = makeState(convId);
+    state.messages = [
+      asstToolCall('a1', ['call_1', 'call_2']),
+      toolResult('t1', 'call_1'),
+    ];
+
+    const synthesized = repairDanglingToolCalls(state);
+
+    expect(synthesized).toHaveLength(1);
+    expect((synthesized[0] as any).tool_call_id).toBe('call_2');
+    // Existing result kept; synthetic appended after the existing result block.
+    expect(state.messages.map((m) => m.role)).toEqual(['assistant', 'tool', 'tool']);
+    expect((state.messages[1] as any).tool_call_id).toBe('call_1'); // original untouched
+    expect((state.messages[2] as any).tool_call_id).toBe('call_2'); // synthetic
+  });
+
+  it('is a no-op when every tool call is already answered', () => {
+    const convId = 'conv-repair-noop';
+    const state = makeState(convId);
+    const before: FlujoChatMessage[] = [
+      asstToolCall('a1', ['call_1']),
+      toolResult('t1', 'call_1'),
+    ];
+    state.messages = [...before];
+
+    const synthesized = repairDanglingToolCalls(state);
+
+    expect(synthesized).toEqual([]);
+    expect(state.messages).toEqual(before); // untouched
+  });
+
+  it('accepts a cause-specific message (cancellation path)', () => {
+    const convId = 'conv-repair-cancel';
+    const state = makeState(convId);
+    state.messages = [asstToolCall('a1', ['call_1'])];
+
+    const synthesized = repairDanglingToolCalls(state, 'Tool execution cancelled by user before it finished.');
+
+    expect(synthesized).toHaveLength(1);
+    expect(synthesized[0].content).toBe('Tool execution cancelled by user before it finished.');
+  });
+
+  it('folds synthesized results into the projection via appendRawForState', async () => {
+    const convId = 'conv-repair-projection';
+    const state = makeState(convId);
+    FlowExecutor.conversationStates.set(convId, state);
+    state.messages = [msg('u1', 'user'), asstToolCall('a1', ['call_1'])];
+
+    const synthesized = repairDanglingToolCalls(state);
+    await appendRawForState(state, synthesized.map((m) => ({ type: 'message', message: m })));
+    await flushConversationLog(convId);
+
+    const events = await readConversationLog(convId);
+    const projected = projectMessages(events!);
+    const toolMsg = projected.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect((toolMsg as any).tool_call_id).toBe('call_1');
+    expect(toolMsg!.content).toBe(INTERRUPTED_TOOL_RESULT_CONTENT);
   });
 });
