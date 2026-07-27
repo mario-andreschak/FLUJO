@@ -9,7 +9,7 @@ import { ToolCallInfo } from '../types'; // Import ToolCallInfo
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path for FlujoChatMessage
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
-import { decodeToolName } from './toolNamespace';
+import { decodeToolName, assertToolIdentityFresh } from './toolNamespace';
 import { toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import OpenAI from 'openai';
@@ -1799,6 +1799,28 @@ export class ModelHandler {
 
           const serverName = decoded.server;
           const toolName = decoded.tool;
+
+          // Issue #255: staleness guard. If the MCP client for this server was
+          // (re)registered, or the tool's schema changed, after this call was
+          // planned/advertised, do NOT dispatch it against the re-created
+          // instance. Return a tool ERROR telling the model to re-check its
+          // tools. Skipped for legacy/synthetic tools (no identity token). This
+          // also covers the approval-resume path, which funnels through here.
+          const freshness = assertToolIdentityFresh(name, decoded, mcpService);
+          if (!freshness.ok) {
+            log.warn(`Rejecting stale/invalid tool call ${name}: ${freshness.reason}`);
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            emit?.({ type: 'tool:result', toolCallId: id, name, result: freshness.reason, isError: true });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: freshness.reason,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: freshness.reason });
+            return;
+          }
 
           // Phase 3 (issue #246): per-call permission gate.
           // Evaluate configured + saved rules before dispatching to mcpService.

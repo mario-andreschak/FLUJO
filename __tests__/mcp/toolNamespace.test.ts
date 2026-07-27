@@ -3,6 +3,9 @@ import {
   buildToolNameMap,
   decodeToolName,
   isInternalToolName,
+  hashSchema,
+  assertToolIdentityFresh,
+  type ToolIdentityService,
 } from '@/backend/execution/flow/handlers/toolNamespace';
 import { displayToolName } from '@/utils/shared/common';
 
@@ -63,5 +66,89 @@ describe('tool namespacing (#16)', () => {
     expect(displayToolName('_-_-_server_-_-_read_file')).toBe('read_file');
     expect(displayToolName(encodeToolName('server', 'read_file'))).toBe('read_file');
     expect(displayToolName('handoff_to_finish')).toBe('handoff_to_finish');
+  });
+});
+
+describe('tool identity / staleness guard (#255)', () => {
+  it('hashSchema is stable regardless of key order and sensitive to changes', () => {
+    const a = { type: 'object', properties: { x: { type: 'string' }, y: { type: 'number' } } };
+    const b = { properties: { y: { type: 'number' }, x: { type: 'string' } }, type: 'object' };
+    expect(hashSchema(a)).toBe(hashSchema(b));
+    const c = { type: 'object', properties: { x: { type: 'number' } } };
+    expect(hashSchema(a)).not.toBe(hashSchema(c));
+    // undefined/null hash to a stable sentinel (not throwing).
+    expect(hashSchema(undefined)).toBe(hashSchema(null));
+  });
+
+  // A stub MCP service implementing only what the guard reads.
+  function makeSvc(opts: {
+    hasClient?: boolean;
+    generation?: number;
+    schemaHash?: string;
+  }): ToolIdentityService {
+    return {
+      getClient: () => (opts.hasClient === false ? undefined : {}),
+      getClientGeneration: () => opts.generation ?? 0,
+      getToolSchemaHash: () => opts.schemaHash,
+    };
+  }
+
+  it('skips the check for legacy/synthetic tools carrying no identity', () => {
+    const svc = makeSvc({ hasClient: false }); // even with no client, absent identity => ok
+    const res = assertToolIdentityFresh('mcp_x_abc', { server: 's', tool: 't' }, svc);
+    expect(res.ok).toBe(true);
+  });
+
+  it('passes when generation and schema hash match', () => {
+    const svc = makeSvc({ generation: 3, schemaHash: 'HASH' });
+    const res = assertToolIdentityFresh(
+      'mcp_t_abc',
+      { server: 's', tool: 't', clientGeneration: 3, schemaHash: 'HASH' },
+      svc,
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it('fails when the server client is gone', () => {
+    const svc = makeSvc({ hasClient: false, generation: 1 });
+    const res = assertToolIdentityFresh(
+      'mcp_t_abc',
+      { server: 's', tool: 't', clientGeneration: 1 },
+      svc,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/no longer available/i);
+  });
+
+  it('fails on a client-generation mismatch (server reconnected)', () => {
+    const svc = makeSvc({ generation: 4, schemaHash: 'HASH' });
+    const res = assertToolIdentityFresh(
+      'mcp_t_abc',
+      { server: 's', tool: 't', clientGeneration: 3, schemaHash: 'HASH' },
+      svc,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/re-registered|reconnected/i);
+  });
+
+  it('fails on a schema-hash mismatch (same generation)', () => {
+    const svc = makeSvc({ generation: 3, schemaHash: 'NEWHASH' });
+    const res = assertToolIdentityFresh(
+      'mcp_t_abc',
+      { server: 's', tool: 't', clientGeneration: 3, schemaHash: 'OLDHASH' },
+      svc,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/schema/i);
+  });
+
+  it('does not fail on schema when the current hash is unknown', () => {
+    const svc = makeSvc({ generation: 3, schemaHash: undefined });
+    const res = assertToolIdentityFresh(
+      'mcp_t_abc',
+      { server: 's', tool: 't', clientGeneration: 3, schemaHash: 'OLDHASH' },
+      svc,
+    );
+    expect(res.ok).toBe(true);
   });
 });

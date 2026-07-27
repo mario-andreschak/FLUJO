@@ -9,7 +9,7 @@ import { Result } from '../errors';
 import { createToolError, createMCPError } from '../errorFactory';
 import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
-import { encodeToolName } from './toolNamespace';
+import { encodeToolName, hashSchema } from './toolNamespace';
 import { buildMCPResourceTools } from './mcpResourceTools';
 import { isWhollyDenied } from '../permissionEngine';
 import OpenAI from 'openai';
@@ -278,14 +278,24 @@ export class ToolHandler {
             // Phase 2 (issue #246): drop wholly-denied tools before advertising
             // them to the model — saves tokens and keeps context clean.
             .filter(tool => !permissionRules || !isWhollyDenied(permissionRules, tool.name))
-            .map(tool => ({
-              originalName: tool.name,
-              server: boundServer,
-              name: encodeToolName(boundServer, tool.name),
-              timeout: toolTimeout,
-              description: tool.description,
-              inputSchema: tool.inputSchema
-            }));
+            .map(tool => {
+              // Issue #255: capture the tool's identity at advertise time so a
+              // later dispatch can detect that the server reconnected or the
+              // schema changed. Record the current schema hash as the advertised
+              // one so the dispatch-time comparison has a baseline.
+              const schemaHash = hashSchema(tool.inputSchema);
+              mcpService.setToolSchemaHash(boundServer, tool.name, schemaHash);
+              return {
+                originalName: tool.name,
+                server: boundServer,
+                name: encodeToolName(boundServer, tool.name),
+                timeout: toolTimeout,
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                clientGeneration: mcpService.getClientGeneration(boundServer),
+                schemaHash,
+              };
+            });
 
           // Add unique tools
           for (const tool of serverTools) {

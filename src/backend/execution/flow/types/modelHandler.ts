@@ -44,7 +44,7 @@ export interface ModelCallInput {
    * can dispatch tool calls to mcpService. Built from SharedState.toolNameMap.
    * `timeout` is the source MCP node's per-call timeout in seconds.
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string }>;
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
@@ -86,7 +86,7 @@ export interface ToolCallProcessingInput {
    * falls back to the legacy `_-_-_SERVER_-_-_TOOL` scheme. `timeout` is the
    * source MCP node's per-call timeout in seconds (-1 = none; unset = default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string }>;
   /**
    * Live-event emitter for the run. When present, each MCP call is bracketed by
    * tool:call / tool:result events and server progress notifications become

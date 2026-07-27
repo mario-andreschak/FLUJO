@@ -45,6 +45,19 @@ declare global {
   // __mcp_clients.
   // eslint-disable-next-line no-var
   var __mcp_active_transports: Map<string, Transport> | undefined;
+  // Issue #255: monotonic per-server "generation" counter, bumped every time a
+  // client is (re)registered in __mcp_clients. A tool advertised to the model
+  // records the generation in force at advertise time; at dispatch time a
+  // mismatch means the client was re-created (reconnect / config change) and the
+  // call is rejected as stale instead of being run against a different instance.
+  // A numeric counter (not the Client reference) survives SharedState persistence.
+  // eslint-disable-next-line no-var
+  var __mcp_client_generation: Map<string, number> | undefined;
+  // Issue #255: the CURRENT advertised input-schema hash per (server\0tool). Set
+  // whenever a tool set is advertised; compared at dispatch time against the hash
+  // frozen in the call's toolNameMap entry to detect a schema change.
+  // eslint-disable-next-line no-var
+  var __mcp_tool_schema_hash: Map<string, string> | undefined;
 }
 
 // Initialize the global client map if it doesn't exist
@@ -59,6 +72,12 @@ if (typeof global.__mcp_starting_up === 'undefined') {
 }
 if (typeof global.__mcp_active_transports === 'undefined') {
   global.__mcp_active_transports = new Map<string, Transport>();
+}
+if (typeof global.__mcp_client_generation === 'undefined') {
+  global.__mcp_client_generation = new Map<string, number>();
+}
+if (typeof global.__mcp_tool_schema_hash === 'undefined') {
+  global.__mcp_tool_schema_hash = new Map<string, string>();
 }
 
 // Import from backend modules
@@ -172,6 +191,17 @@ export class MCPService {
   // the onclose/onerror handlers that were registered by another.
   private get activeTransports(): Map<string, Transport> {
     return global.__mcp_active_transports!;
+  }
+
+  // Issue #255: per-server client-(re)registration generation. Global-backed for
+  // the same cross-module-instance reason as __mcp_clients.
+  private get clientGenerations(): Map<string, number> {
+    return global.__mcp_client_generation!;
+  }
+
+  // Issue #255: current advertised input-schema hash per (server\0tool).
+  private get toolSchemaHashes(): Map<string, string> {
+    return global.__mcp_tool_schema_hash!;
   }
 
   // Cap per-server stderr retention: a chatty or crash-looping server would otherwise
@@ -371,6 +401,30 @@ export class MCPService {
   private setStartingUp(value: boolean): void {
     global.__mcp_starting_up = value;
     log.info(`Backend startup state set to: ${value ? 'starting' : 'complete'}`);
+  }
+
+  /**
+   * Issue #255: current client-(re)registration generation for a server. Returns
+   * 0 when the server has never registered a client. Advertise-time code records
+   * this on each tool's identity token; the dispatch-time staleness guard
+   * (assertToolIdentityFresh) compares against it.
+   */
+  getClientGeneration(serverName: string): number {
+    return this.clientGenerations.get(serverName) ?? 0;
+  }
+
+  /**
+   * Issue #255: record the input-schema hash currently advertised for a tool, so
+   * a later dispatch can detect a schema change against the hash frozen in the
+   * call's toolNameMap entry.
+   */
+  setToolSchemaHash(serverName: string, toolName: string, hash: string): void {
+    this.toolSchemaHashes.set(`${serverName} ${toolName}`, hash);
+  }
+
+  /** Issue #255: current advertised input-schema hash for (server, tool), if known. */
+  getToolSchemaHash(serverName: string, toolName: string): string | undefined {
+    return this.toolSchemaHashes.get(`${serverName} ${toolName}`);
   }
 
   /**
@@ -838,6 +892,9 @@ export class MCPService {
       // onclose/onerror stale guards compare against.
       this.clients.set(config.name, client);
       this.activeTransports.set(config.name, transport);
+      // Issue #255: advance the generation on every (re)registration. Tool calls
+      // planned against the previous instance now read as stale at dispatch time.
+      this.clientGenerations.set(config.name, this.getClientGeneration(config.name) + 1);
 
       // Connected successfully - clear any persisted failure from previous attempts,
       // and cancel any pending retry so an old timer can't fire against the fresh

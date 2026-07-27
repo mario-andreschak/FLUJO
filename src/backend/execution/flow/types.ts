@@ -721,7 +721,7 @@ export interface SharedState {
      * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
      * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string }>;
 
     /**
      * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
@@ -851,6 +851,10 @@ export interface ToolDefinition {
     timeout?: number;
     description?: string;
     inputSchema: Record<string, unknown>;
+    /** Issue #255 — identity captured at advertise time; copied into
+     *  SharedState.toolNameMap so a stale dispatch can be detected. */
+    clientGeneration?: number;
+    schemaHash?: string;
 }
 
 // MCP Context
