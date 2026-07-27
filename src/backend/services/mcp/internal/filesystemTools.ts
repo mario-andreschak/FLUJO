@@ -21,12 +21,14 @@
  * clients); errors are returned as `isError: true` results rather than thrown.
  */
 import path from 'path';
-import { promises as fs } from 'fs';
+import { promises as fs, createReadStream } from 'fs';
+import readline from 'readline';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { FILESYSTEM_SERVER_NAME } from './registry';
 import { isInside, loadEffectiveRoots } from './confinement';
+import { recordTouchedFile } from './filesystemResources';
 
 const log = createLogger('backend/services/mcp/internal/filesystemTools');
 
@@ -36,6 +38,21 @@ const MAX_SEARCH_RESULTS = 1_000;
 const DEFAULT_TREE_DEPTH = 3;
 const MAX_TREE_DEPTH = 10;
 const MAX_TREE_ENTRIES = 5_000;
+
+/**
+ * #287: files at/above this size may not be read whole without an explicit
+ * `pattern` (grep first, then targeted line reads) — or a `*` opt-in. Keeps a
+ * large file from silently flooding the model's context on a bare read.
+ */
+const LARGE_FILE_BYTES = 100_000;
+/** #287: skip files bigger than this during content search (perf/binary guard). */
+const SEARCH_MAX_FILE_BYTES = 5_000_000;
+/** #287: how many files to scan concurrently during a content search. */
+const SEARCH_CONCURRENCY = 16;
+/** #287: context lines shown around each `read_file` pattern match. */
+const READ_PATTERN_CONTEXT = 2;
+/** #287: cap on matches returned by a single `read_file` pattern grep. */
+const MAX_READ_PATTERN_MATCHES = 200;
 
 /** SDK 1.29's exported CallToolResult predates `structuredContent`; widen locally. */
 type StructuredResult = CallToolResult & { structuredContent?: Record<string, unknown> };
@@ -87,13 +104,16 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'read_file',
       description:
-        'Read a text file and return its content. Optionally read only a line range with "from"/"to" (1-based, inclusive). Returns { path, from, to, totalLines, content, truncated }.',
+        'Read a text file and return its content. Optionally read only a line range with "from"/"to" (1-based, inclusive). ' +
+        `For large files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
+        'Returns { path, from, to, totalLines, content, truncated, matches? }.',
       inputSchema: {
         type: 'object',
         properties: {
           path: pathProp,
           from: { type: 'number', description: 'Optional 1-based first line to return (inclusive).' },
           to: { type: 'number', description: 'Optional 1-based last line to return (inclusive).' },
+          pattern: { type: 'string', description: 'Case-insensitive substring to grep for. Required to read a large file whole without a "from"/"to" range; matching lines (plus context) are returned instead of the full body. Use "*" to read the whole large file anyway.' },
         },
         required: ['path'],
       },
@@ -106,6 +126,14 @@ export function filesystemToolDefinitions(): Tool[] {
           totalLines: { type: 'number' },
           truncated: { type: 'boolean' },
           content: { type: 'string' },
+          matches: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { line: { type: 'number' }, text: { type: 'string' } },
+              required: ['line', 'text'],
+            },
+          },
         },
         required: ['path', 'from', 'to', 'totalLines', 'truncated', 'content'],
       },
@@ -252,7 +280,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'search',
       description:
-        'Search a directory tree. Match file/dir NAMES against "namePattern" (substring, case-insensitive) and/or file CONTENT against "content" (substring). Returns { matches: [{ path, line?, text? }], truncated }.',
+        'Search a directory tree. Match file/dir NAMES against "namePattern" (substring, case-insensitive) and/or file CONTENT against "content" (substring, case-insensitive). Content search DOES look inside every text file, returning each matching line with its 1-based line number; likely-binary and very large files are skipped for speed. Returns { matches: [{ path, line?, text? }], truncated }.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -387,13 +415,121 @@ function detectEol(content: string): string {
   return content.includes('\r\n') ? '\r\n' : '\n';
 }
 
+/** Heuristic binary sniff: a NUL byte in the first chunk means "not text". */
+function looksBinary(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 8000);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
+}
+
+/**
+ * Stream a file line-by-line and collect the lines that contain `needle`
+ * (case-insensitive substring). Streaming means a match can be found without
+ * buffering the whole file. Stops early once `max` matches are collected.
+ */
+async function grepFileLines(
+  filePath: string,
+  needle: string,
+  max: number
+): Promise<{ matches: Array<{ line: number; text: string }>; truncated: boolean }> {
+  const lower = needle.toLowerCase();
+  const matches: Array<{ line: number; text: string }> = [];
+  let truncated = false;
+  const stream = createReadStream(filePath, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lineNo = 0;
+  try {
+    for await (const line of rl) {
+      lineNo++;
+      if (line.toLowerCase().includes(lower)) {
+        matches.push({ line: lineNo, text: line.slice(0, 400) });
+        if (matches.length >= max) { truncated = true; break; }
+      }
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+  return { matches, truncated };
+}
+
 async function readFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const filePath = resolvePath(args.path, roots);
+
+  const hasRange = typeof args.from === 'number' || typeof args.to === 'number';
+  const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : '';
+
+  // #287: guard whole-file reads of large files. Stat first so we never buffer a
+  // huge file just to reject it. An explicit line range or a `pattern` opts out.
+  let size = 0;
+  try {
+    size = (await fs.stat(filePath)).size;
+  } catch {
+    // fall through: fs.readFile below surfaces the real ENOENT/EACCES error.
+  }
+
+  if (size > LARGE_FILE_BYTES && !hasRange && !pattern) {
+    return errorResult(
+      `File is large (${size} bytes > ${LARGE_FILE_BYTES} threshold). Reading it whole would flood the context. ` +
+      `Provide a "pattern" to grep for (matching lines + context are returned, then read targeted ranges with "from"/"to"), ` +
+      `or pass pattern "*" to read the whole file anyway.`
+    );
+  }
+
+  // #287: pattern grep path (only when no explicit range was given). `*` is the
+  // escape hatch that means "read the whole file regardless".
+  if (pattern && pattern !== '*' && !hasRange) {
+    const buf = await fs.readFile(filePath);
+    if (looksBinary(buf)) {
+      return errorResult(`File appears to be binary; cannot grep for a pattern: ${filePath}`);
+    }
+    const content = buf.toString('utf8');
+    const lines = splitLines(content);
+    const totalLines = lines.length;
+    const lower = pattern.toLowerCase();
+    const matches: Array<{ line: number; text: string }> = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].toLowerCase().includes(lower)) {
+        matches.push({ line: i + 1, text: lines[i].slice(0, 400) });
+        if (matches.length >= MAX_READ_PATTERN_MATCHES) break;
+      }
+    }
+    const truncated = matches.length >= MAX_READ_PATTERN_MATCHES;
+    // Build a readable excerpt: matching lines with a small context window,
+    // line-numbered, with `…` separators between non-adjacent regions.
+    const show = new Set<number>();
+    for (const m of matches) {
+      for (let l = m.line - READ_PATTERN_CONTEXT; l <= m.line + READ_PATTERN_CONTEXT; l++) {
+        if (l >= 1 && l <= totalLines) show.add(l);
+      }
+    }
+    const ordered = [...show].sort((a, b) => a - b);
+    const parts: string[] = [];
+    let prev = 0;
+    for (const l of ordered) {
+      if (prev && l > prev + 1) parts.push('…');
+      parts.push(`${l}: ${lines[l - 1]}`);
+      prev = l;
+    }
+    let out = parts.join('\n');
+    if (out.length > MAX_READ_CHARS) out = out.slice(0, MAX_READ_CHARS) + '\n…[truncated]';
+    recordTouchedFile(filePath, 'read', size);
+    return dualResult({
+      path: filePath,
+      from: 1,
+      to: totalLines,
+      totalLines,
+      truncated,
+      content: matches.length ? out : `(no lines matched pattern ${JSON.stringify(pattern)})`,
+      matches,
+    });
+  }
+
+  // Whole-file / explicit-range read (pattern '*' lands here too).
   const content = await fs.readFile(filePath, 'utf8');
   const lines = splitLines(content);
   const totalLines = lines.length;
 
-  const hasRange = typeof args.from === 'number' || typeof args.to === 'number';
   let from = typeof args.from === 'number' ? Math.max(1, Math.floor(args.from)) : 1;
   let to = typeof args.to === 'number' ? Math.floor(args.to) : totalLines;
   if (to < from) [from, to] = [to, from];
@@ -405,6 +541,7 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
     out = out.slice(0, MAX_READ_CHARS) + '\n…[truncated]';
     truncated = true;
   }
+  recordTouchedFile(filePath, 'read', size);
   return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out });
 }
 
@@ -415,6 +552,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
   const hasRange = typeof args.startLine === 'number' || typeof args.endLine === 'number';
 
   await fs.mkdir(path.dirname(filePath), { recursive: true });
+  recordTouchedFile(filePath, 'write');
 
   // Whole-file overwrite (default, backward-compatible).
   if (mode === 'overwrite' && !hasRange) {
@@ -509,6 +647,7 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
     }
     const finalContent = diffEol === '\r\n' ? out.result.replace(/\n/g, '\r\n') : out.result;
     await fs.writeFile(filePath, finalContent, 'utf8');
+    recordTouchedFile(filePath, 'write');
     return dualResult({ path: filePath, applied: true, mode: 'diff', diff: { added: out.added, removed: out.removed } });
   }
 
@@ -574,6 +713,7 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
   // bytes and we don't rewrite the whole file just because EOLs differ (#187).
   const finalContent = eol === '\r\n' ? working.replace(/\n/g, '\r\n') : working;
   await fs.writeFile(filePath, finalContent, 'utf8');
+  recordTouchedFile(filePath, 'write');
   return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff });
 }
 
@@ -780,16 +920,53 @@ async function dirTreeTool(args: Record<string, unknown>, roots: string[]): Prom
   return dualResult({ path: rootPath, depth, truncated, tree });
 }
 
+/**
+ * #287: content-scan one file for `needle`. Skips oversized and likely-binary
+ * files up front (a huge perf/robustness win over reading every file whole),
+ * then streams it line-by-line so a match is found without buffering the file.
+ */
+async function scanFileContent(
+  full: string,
+  needle: string,
+  remaining: number
+): Promise<Array<{ path: string; line: number; text: string }>> {
+  let st: import('fs').Stats;
+  try {
+    st = await fs.stat(full);
+  } catch {
+    return [];
+  }
+  if (!st.isFile() || st.size > SEARCH_MAX_FILE_BYTES) return [];
+  // Binary sniff on the first chunk without loading the whole file.
+  try {
+    const fh = await fs.open(full, 'r');
+    try {
+      const probe = Buffer.alloc(Math.min(8000, st.size));
+      if (probe.length) await fh.read(probe, 0, probe.length, 0);
+      if (looksBinary(probe)) return [];
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return [];
+  }
+  const { matches } = await grepFileLines(full, needle, Math.max(1, remaining));
+  return matches.map((m) => ({ path: full, line: m.line, text: m.text }));
+}
+
 async function searchTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const rootPath = resolvePath(args.path, roots);
   const namePattern = typeof args.namePattern === 'string' ? args.namePattern.toLowerCase() : '';
-  const contentPattern = typeof args.content === 'string' ? args.content.toLowerCase() : '';
+  const contentPattern = typeof args.content === 'string' ? args.content : '';
   if (!namePattern && !contentPattern) {
     return errorResult('Provide "namePattern" and/or "content" to search for.');
   }
   const matches: Array<{ path: string; line?: number; text?: string }> = [];
   let truncated = false;
 
+  // First pass: walk the tree collecting NAME matches immediately and gathering
+  // the list of candidate files for a (possibly parallel) content scan.
+  const files: string[] = [];
   async function walk(dir: string): Promise<void> {
     if (truncated) return;
     let names: string[];
@@ -809,24 +986,29 @@ async function searchTool(args: Record<string, unknown>, roots: string[]): Promi
       if (type === 'directory') {
         await walk(full);
       } else if (type === 'file' && contentPattern) {
-        let text = '';
-        try {
-          text = await fs.readFile(full, 'utf8');
-        } catch {
-          continue; // binary/unreadable
+        files.push(full);
+      }
+    }
+  }
+  await walk(rootPath);
+
+  // Second pass: scan file contents with bounded concurrency and early stop.
+  if (contentPattern && !truncated) {
+    for (let i = 0; i < files.length && !truncated; i += SEARCH_CONCURRENCY) {
+      const batch = files.slice(i, i + SEARCH_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map((full) => scanFileContent(full, contentPattern, MAX_SEARCH_RESULTS))
+      );
+      for (const fileMatches of results) {
+        for (const m of fileMatches) {
+          matches.push(m);
+          if (matches.length >= MAX_SEARCH_RESULTS) { truncated = true; break; }
         }
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].toLowerCase().includes(contentPattern)) {
-            matches.push({ path: full, line: i + 1, text: lines[i].slice(0, 400) });
-            if (matches.length >= MAX_SEARCH_RESULTS) { truncated = true; return; }
-          }
-        }
+        if (truncated) break;
       }
     }
   }
 
-  await walk(rootPath);
   return dualResult({ matches, truncated });
 }
 

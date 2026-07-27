@@ -13,8 +13,15 @@
  * and brokers its tool calls back through the filesystem server (confined to
  * the configured roots), it is exactly as constrained as the tools themselves.
  */
+import path from 'path';
+import { promises as fs } from 'fs';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/ext-apps';
 import type { MCPResource, MCPReadResourceResult, MCPServiceResponse } from '@/shared/types/mcp';
+import { createLogger } from '@/utils/logger';
+import { FILESYSTEM_SERVER_NAME } from './registry';
+import { isInside, loadEffectiveRoots } from './confinement';
+
+const resLog = createLogger('backend/services/mcp/internal/filesystemResources');
 
 export const FILESYSTEM_APP_URI = 'ui://filesystem/browser';
 /**
@@ -26,7 +33,111 @@ export const FILESYSTEM_APP_URI = 'ui://filesystem/browser';
 export const DEVCANVAS_DIFF_URI = 'ui://devcanvas/diff';
 const APP_MIME_TYPE = 'text/html;profile=mcp-app';
 
-/** resources/list for the filesystem server: the browser app + the diff canvas. */
+/**
+ * #287: expose files the filesystem tools have read/written as MCP resources so
+ * a client can track which files a session touched. We keep a lightweight,
+ * bounded, newest-first in-memory registry of DESCRIPTORS (path, op, size,
+ * timestamp) — NOT copies of file bodies — and read the current content live
+ * (re-enforcing path confinement) only when a resource is actually read. That
+ * avoids duplicating potentially large/sensitive file contents into any store.
+ */
+export type TouchedFileOp = 'read' | 'write';
+interface TouchedFileEntry {
+  uri: string;
+  filePath: string;
+  op: TouchedFileOp;
+  size?: number;
+  at: number;
+}
+
+/** Cap the registry so long sessions can't grow it without bound. */
+const MAX_TOUCHED_FILES = 200;
+/** Output cap when serving a tracked file's content as a resource. */
+const MAX_RESOURCE_CHARS = 200_000;
+/** Keyed by URI; insertion order is oldest→newest (Map preserves it). */
+const touchedFiles = new Map<string, TouchedFileEntry>();
+
+/** Build a `file://` URI for an absolute host path (Windows/POSIX safe). */
+function pathToFileUri(absPath: string): string {
+  const norm = absPath.replace(/\\/g, '/');
+  return norm.startsWith('/') ? `file://${norm}` : `file:///${norm}`;
+}
+
+/**
+ * Record that a filesystem tool touched `filePath`. Never throws — resource
+ * tracking must not be able to break a tool call.
+ */
+export function recordTouchedFile(filePath: string, op: TouchedFileOp, size?: number): void {
+  try {
+    if (typeof filePath !== 'string' || !filePath) return;
+    const uri = pathToFileUri(filePath);
+    // Refresh position (delete+set moves the key to newest) and merge size.
+    const prev = touchedFiles.get(uri);
+    touchedFiles.delete(uri);
+    touchedFiles.set(uri, { uri, filePath, op, size: size ?? prev?.size, at: Date.now() });
+    while (touchedFiles.size > MAX_TOUCHED_FILES) {
+      const oldest = touchedFiles.keys().next().value;
+      if (oldest === undefined) break;
+      touchedFiles.delete(oldest);
+    }
+  } catch (err) {
+    resLog.debug('recordTouchedFile ignored error', err);
+  }
+}
+
+/** Test seam: clear the touched-file registry. */
+export function _clearTouchedFilesForTests(): void {
+  touchedFiles.clear();
+}
+
+/** MCP resource descriptors for the tracked files, newest-first. */
+function touchedFileResources(): MCPResource[] {
+  return [...touchedFiles.values()].reverse().map((e) => ({
+    uri: e.uri,
+    name: path.basename(e.filePath),
+    mimeType: 'text/plain',
+    description: `${e.op === 'write' ? 'Written' : 'Read'} by the filesystem server: ${e.filePath}`,
+    ...(typeof e.size === 'number' ? { size: e.size } : {}),
+  }));
+}
+
+/** True when a URI refers to a tracked (read/written) file resource. */
+export function isTouchedFileUri(uri: string): boolean {
+  return touchedFiles.has(uri);
+}
+
+/**
+ * resources/read for a tracked file: read the current content LIVE, re-enforcing
+ * the filesystem server's confinement roots (a file recorded earlier could now
+ * be outside a narrowed root). Content is capped like `read_file`.
+ */
+export async function readTouchedFileResource(uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+  const entry = touchedFiles.get(uri);
+  if (!entry) {
+    return { success: false, error: `Not a tracked filesystem resource: ${uri}`, statusCode: 404 };
+  }
+  let roots: string[] = [];
+  try {
+    roots = await loadEffectiveRoots(FILESYSTEM_SERVER_NAME, 'FLUJO_FS_ROOTS');
+  } catch (err) {
+    resLog.warn('readTouchedFileResource: could not load roots', err);
+  }
+  if (roots.length === 0 || !roots.some((root) => isInside(root, entry.filePath))) {
+    return { success: false, error: `Path "${entry.filePath}" is outside the configured filesystem roots.`, statusCode: 403 };
+  }
+  try {
+    let text = await fs.readFile(entry.filePath, 'utf8');
+    if (text.length > MAX_RESOURCE_CHARS) text = text.slice(0, MAX_RESOURCE_CHARS) + '\n…[truncated]';
+    return {
+      success: true,
+      data: { contents: [{ uri, mimeType: 'text/plain', text } as MCPReadResourceResult['contents'][number]] },
+    };
+  } catch (err) {
+    return { success: false, error: `Could not read tracked file: ${err instanceof Error ? err.message : String(err)}`, statusCode: 500 };
+  }
+}
+
+/** resources/list for the filesystem server: the browser app + diff canvas + tracked files. */
 export function filesystemListResources(): { resources: MCPResource[]; error?: string } {
   return {
     resources: [
@@ -42,6 +153,7 @@ export function filesystemListResources(): { resources: MCPResource[]; error?: s
         mimeType: APP_MIME_TYPE,
         description: 'Docked diff canvas that shows file writes/edits live as they happen (pip display mode).',
       },
+      ...touchedFileResources(),
     ],
   };
 }

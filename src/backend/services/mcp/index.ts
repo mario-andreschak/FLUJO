@@ -1400,8 +1400,9 @@ export class MCPService {
   async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
     log.debug(`listServerResources: Entering method for server ${serverName}`);
     // The built-in `flujo` server publishes RUN-SCOPED resources in-process
-    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern. Other
-    // built-ins (filesystem/bash) publish no resources.
+    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern. The
+    // built-in `filesystem` server publishes its MCP App UI plus the files it has
+    // read/written (#287); `bash` still publishes none.
     if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
       const { internalListResources } = await import('./internalResources');
       return internalListResources();
@@ -1437,10 +1438,13 @@ export class MCPService {
       const { internalReadResource } = await import('./internalResources');
       return internalReadResource(uri);
     }
-    // The built-in `filesystem` server serves its MCP App UI HTML in-process (#97).
+    // The built-in `filesystem` server serves its MCP App UI HTML in-process (#97)
+    // and its tracked read/written files as resources (#287), both in-process.
     if (serverName === FILESYSTEM_SERVER_NAME) {
-      const { filesystemReadResource, isFilesystemAppUri } = await import('./internal/filesystemResources');
+      const { filesystemReadResource, isFilesystemAppUri, isTouchedFileUri, readTouchedFileResource } =
+        await import('./internal/filesystemResources');
       if (isFilesystemAppUri(uri)) return filesystemReadResource(uri);
+      if (isTouchedFileUri(uri)) return readTouchedFileResource(uri);
     }
     const client = this.getClient(serverName);
     if (!client) {

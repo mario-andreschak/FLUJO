@@ -13,8 +13,21 @@ jest.mock('@/backend/services/mcp/internal/registry', () => ({
   getInternalServerRoots: jest.fn(),
 }));
 
+// `filesystemResources.ts` imports the ESM-only `@modelcontextprotocol/ext-apps`
+// package, which Jest cannot transpile. Mock the single constant it needs (same
+// approach as filesystemApp.test.ts).
+jest.mock('@modelcontextprotocol/ext-apps', () => ({
+  LATEST_PROTOCOL_VERSION: '2026-01-26',
+}));
+
 import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
 import { filesystemToolDefinitions, filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
+import {
+  filesystemListResources,
+  isTouchedFileUri,
+  readTouchedFileResource,
+  _clearTouchedFilesForTests,
+} from '@/backend/services/mcp/internal/filesystemResources';
 
 const mockedRoots = getInternalServerRoots as jest.Mock;
 
@@ -275,6 +288,129 @@ describe('filesystem operations', () => {
     } finally {
       if (prev === undefined) delete process.env.FLUJO_FS_ROOTS;
       else process.env.FLUJO_FS_ROOTS = prev;
+    }
+  });
+});
+
+// --- #287: large-file read guard, in-file search, resource exposure ---
+describe('filesystem #287 enhancements', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-fs287-'));
+    mockedRoots.mockResolvedValue([dir]);
+    _clearTouchedFilesForTests();
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+    mockedRoots.mockReset();
+    _clearTouchedFilesForTests();
+  });
+
+  it('read_file: large whole-file read without a pattern is rejected with guidance', async () => {
+    const p = path.join(dir, 'big.txt');
+    // > 100 KB of content across many lines.
+    const big = Array.from({ length: 4000 }, (_, i) => `line ${i} some filler text here`).join('\n');
+    await fsp.writeFile(p, big);
+    const r = await filesystemCallTool('read_file', { path: p });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/large/i);
+    expect(text(r)).toMatch(/pattern/i);
+  });
+
+  it('read_file: pattern "*" force-reads a large file whole', async () => {
+    const p = path.join(dir, 'big2.txt');
+    const big = Array.from({ length: 4000 }, (_, i) => `row ${i} ${'x'.repeat(40)}`).join('\n');
+    await fsp.writeFile(p, big);
+    expect((await fsp.stat(p)).size).toBeGreaterThan(100_000);
+    const out = parse(await filesystemCallTool('read_file', { path: p, pattern: '*' }));
+    expect(out.content as string).toContain('row 0');
+    expect(out.totalLines as number).toBeGreaterThanOrEqual(4000);
+  });
+
+  it('read_file: a real pattern greps a large file and returns matching lines only', async () => {
+    const p = path.join(dir, 'big3.txt');
+    const lines = Array.from({ length: 4000 }, (_, i) => (i === 1234 ? 'THE_NEEDLE_HERE' : `pad ${i} ${'y'.repeat(40)}`));
+    await fsp.writeFile(p, lines.join('\n'));
+    expect((await fsp.stat(p)).size).toBeGreaterThan(100_000);
+    const out = parse(await filesystemCallTool('read_file', { path: p, pattern: 'THE_NEEDLE_HERE' }));
+    const matches = out.matches as Array<{ line: number; text: string }>;
+    expect(matches.length).toBe(1);
+    expect(matches[0].line).toBe(1235); // 1-based
+    // The excerpt is line-numbered and does not include the whole file.
+    expect(out.content as string).toContain('1235: THE_NEEDLE_HERE');
+    // The excerpt is a small window, not the ~28 KB whole file.
+    expect((out.content as string).length).toBeLessThan(5000);
+  });
+
+  it('read_file: small files and explicit ranges are unaffected by the guard', async () => {
+    const p = path.join(dir, 'small.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'a\nb\nc\n' });
+    // whole-read of a small file: no pattern needed.
+    expect((await filesystemCallTool('read_file', { path: p })).isError).toBeUndefined();
+    // explicit range even on a (hypothetically) large file bypasses the guard.
+    const out = parse(await filesystemCallTool('read_file', { path: p, from: 1, to: 2 }));
+    expect(out.content).toBe('a\nb');
+  });
+
+  it('search: matches inside file contents with correct path and 1-based line', async () => {
+    await fsp.mkdir(path.join(dir, 'nested'));
+    await fsp.writeFile(path.join(dir, 'nested', 'doc.txt'), 'first\nSECOND has the token\nthird');
+    const out = parse(await filesystemCallTool('search', { path: dir, content: 'token' }));
+    const matches = out.matches as Array<{ path: string; line: number; text: string }>;
+    expect(matches.length).toBe(1);
+    expect(matches[0].line).toBe(2);
+    expect(matches[0].path).toContain('doc.txt');
+  });
+
+  it('search: skips likely-binary files during content scan', async () => {
+    // A file with a NUL byte should be treated as binary and skipped.
+    await fsp.writeFile(path.join(dir, 'bin.dat'), Buffer.from([0x41, 0x00, 0x42, 0x74, 0x6f, 0x6b])); // contains "tok" but a NUL
+    await fsp.writeFile(path.join(dir, 'text.txt'), 'plain tok here');
+    const out = parse(await filesystemCallTool('search', { path: dir, content: 'tok' }));
+    const matches = out.matches as Array<{ path: string }>;
+    expect(matches.some((m) => m.path.endsWith('text.txt'))).toBe(true);
+    expect(matches.some((m) => m.path.endsWith('bin.dat'))).toBe(false);
+  });
+
+  it('resources: a written and a read file are tracked and retrievable', async () => {
+    const wp = path.join(dir, 'written.txt');
+    await filesystemCallTool('write_file', { path: wp, content: 'hello resource' });
+    const rp = path.join(dir, 'toread.txt');
+    await fsp.writeFile(rp, 'read me back');
+    await filesystemCallTool('read_file', { path: rp });
+
+    const list = filesystemListResources();
+    const uris = list.resources.map((r) => r.uri);
+    // Both tracked files show up as file:// resources.
+    const written = list.resources.find((r) => r.uri.includes('written.txt'));
+    const readEntry = list.resources.find((r) => r.uri.includes('toread.txt'));
+    expect(written).toBeDefined();
+    expect(readEntry).toBeDefined();
+    expect(uris).toEqual(expect.arrayContaining(['ui://filesystem/browser']));
+
+    // The tracked URI reads back the current content live.
+    expect(isTouchedFileUri(written!.uri)).toBe(true);
+    const readback = await readTouchedFileResource(written!.uri);
+    expect(readback.success).toBe(true);
+    const content0 = readback.data?.contents[0];
+    expect(content0 && 'text' in content0 ? content0.text : undefined).toBe('hello resource');
+  });
+
+  it('resources: reading a file outside the roots is refused', async () => {
+    const rp = path.join(dir, 'inside.txt');
+    await fsp.writeFile(rp, 'x');
+    await filesystemCallTool('read_file', { path: rp });
+    const list = filesystemListResources();
+    const entry = list.resources.find((r) => r.uri.includes('inside.txt'))!;
+    // Narrow the roots to a different directory: the earlier-tracked file is now out of bounds.
+    const other = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-other-'));
+    mockedRoots.mockResolvedValue([other]);
+    try {
+      const res = await readTouchedFileResource(entry.uri);
+      expect(res.success).toBe(false);
+      expect(res.statusCode).toBe(403);
+    } finally {
+      await fsp.rm(other, { recursive: true, force: true });
     }
   });
 });
