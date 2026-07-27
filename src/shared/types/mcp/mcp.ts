@@ -129,6 +129,15 @@ export type MCPManagerConfig = {
    * requests rather than blocking. URL-mode elicitation is deferred to a follow-up.
    */
   elicitation?: MCPElicitationPolicy;
+  /**
+   * Issue #252: optional cap on how many of this server's tool calls FLUJO runs
+   * concurrently within a single model turn. A turn's tool calls are dispatched
+   * in parallel (bounded), but each server is limited to this many in flight at
+   * once so a server that tolerates little parallelism is never overwhelmed.
+   * Absent / non-positive ⇒ the conservative module default
+   * (DEFAULT_TOOL_CALL_CONCURRENCY). Config-only for now (no dedicated UI).
+   */
+  maxConcurrency?: number;
 }
 
 export type MCPElicitationPolicy = {

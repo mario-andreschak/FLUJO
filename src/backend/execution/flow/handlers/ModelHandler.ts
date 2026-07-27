@@ -22,6 +22,7 @@ import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapte
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
 import { trimTools } from './trimToolBlock';
 import { mcpService } from '@/backend/services/mcp';
+import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
@@ -45,6 +46,14 @@ import { v4 as uuidv4 } from 'uuid'; // Import uuid
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
 );
+
+/**
+ * Issue #252: default per-server cap on concurrent tool calls within a single
+ * model turn, used when a server declares no `maxConcurrency`. Deliberately
+ * conservative — the old serial loop implicitly capped every server at 1, so we
+ * stay low to avoid overwhelming servers that were protected by serialization.
+ */
+const DEFAULT_TOOL_CALL_CONCURRENCY = 4;
 
 /**
  * Returns true for adapters/providers that require the wire to end with a
@@ -1365,40 +1374,79 @@ export class ModelHandler {
     }
 
     try {
-      // Array to collect new messages with tool results (using FlujoChatMessage)
-      const toolCallMessages: FlujoChatMessage[] = [];
-      const processedToolCalls: Array<{
-        name: string;
-        args: Record<string, unknown>;
-        id: string;
-        result: string;
-      }> = [];
+      // Issue #252: run this turn's tool calls CONCURRENTLY (bounded, per-server
+      // configurable cap) instead of one-at-a-time. Each call's outcome is written
+      // into pre-allocated, index-keyed slots so the emitted/appended order is
+      // always the model's original tool_calls order — independent of completion
+      // order. This keeps the prefix-cache fingerprint stable and a single-call
+      // turn byte-identical to the old sequential path.
+      type ProcessedToolCall = { name: string; args: Record<string, unknown>; id: string; result: string };
+      const results: Array<FlujoChatMessage | null> = new Array(toolCalls.length).fill(null);
+      const processed: Array<ProcessedToolCall | null> = new Array(toolCalls.length).fill(null);
 
-      // Process each tool call
-      for (let callIndex = 0; callIndex < toolCalls.length; callIndex++) {
+      // Per-server concurrency caps (MCPManagerConfig.maxConcurrency). Loaded once
+      // up front; a server that declares none (or a non-positive value) uses the
+      // conservative module default. Failure to load caps is non-fatal.
+      const concurrencyByServer = new Map<string, number>();
+      try {
+        const serverConfigs = await mcpService.loadServerConfigs();
+        if (Array.isArray(serverConfigs)) {
+          for (const cfg of serverConfigs) {
+            if (typeof cfg.maxConcurrency === 'number' && cfg.maxConcurrency > 0) {
+              concurrencyByServer.set(cfg.name, cfg.maxConcurrency);
+            }
+          }
+        }
+      } catch (error) {
+        log.warn('Failed to load server configs for concurrency caps; using default', error);
+      }
+
+      // Group key for a call: MCP calls are capped per resolved server; local
+      // synthetic tools (handoff / MCP-resource / run-resource) share one cheap
+      // unbounded group. Mirrors the dispatch routing inside executeOneToolCall.
+      const LOCAL_GROUP = '__local__';
+      const groupKeyForCall = (tc: OpenAI.ChatCompletionMessageToolCall): string => {
+        const toolName = tc.function.name;
+        if (toolName.startsWith('handoff_to_') || toolName === 'handoff') return LOCAL_GROUP;
+        if (isMCPResourceToolName(toolName)) return LOCAL_GROUP;
+        if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
+        const decoded = decodeToolName(toolName, toolNameMap);
+        return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
+      };
+      const limitForGroup = (key: string): number => {
+        if (key === LOCAL_GROUP) return Math.max(1, toolCalls.length);
+        const server = key.slice('srv:'.length);
+        return concurrencyByServer.get(server) ?? DEFAULT_TOOL_CALL_CONCURRENCY;
+      };
+
+      // Per-call worker. Runs the EXACT same dispatch logic as the old loop body,
+      // but into local single-slot collectors (each path emits exactly one tool
+      // message + at most one processed entry), then copies them into the
+      // index-keyed slots in a finally so every branch — including the early
+      // returns (formerly `continue`) — records its outcome.
+      const executeOneToolCall = async (callIndex: number): Promise<void> => {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
 
-        // Cancellation check between tool calls (issue #109): a Stop pressed
-        // while an earlier tool in this batch ran must not start the next one.
-        // Every remaining call still gets a tool-result message so the
-        // transcript stays well-formed (each tool_call id answered) — the run
-        // loop terminates on its own cancellation guard right after.
-        if (input.shouldAbort?.()) {
-          log.info(`Cancellation detected before tool call ${name}; skipping the remaining ${toolCalls.length - callIndex} call(s).`);
-          for (const remaining of toolCalls.slice(callIndex)) {
+        const toolCallMessages: FlujoChatMessage[] = [];
+        const processedToolCalls: ProcessedToolCall[] = [];
+
+        try {
+          // Cancellation check BEFORE starting this call (issue #109/#252): once
+          // Stop is pressed, a not-yet-started call is answered with a synthetic
+          // "cancelled" tool message so every tool_call id stays answered and the
+          // transcript well-formed. In-flight calls are killed via the signal.
+          if (input.shouldAbort?.()) {
+            log.info(`Cancellation detected before tool call ${name}; answering it with a synthetic cancelled result.`);
             toolCallMessages.push({
               id: uuidv4(),
               role: "tool",
-              tool_call_id: remaining.id,
+              tool_call_id: id,
               content: 'Execution cancelled by user before this tool call ran.',
               timestamp: Date.now()
             });
+            return;
           }
-          break;
-        }
-
-        try {
           // Parse the arguments
           const args = JSON.parse(argsString);
           log.info("trying to call tool", name)
@@ -1433,8 +1481,8 @@ export class ModelHandler {
               result: resultContent
             });
 
-            // Skip to the next tool call
-            continue;
+            // This call is done — record its outcome (see finally).
+            return;
           }
 
           // MCP resource tools (issue #239): synthetic FLUJO tools for native MCP
@@ -1466,7 +1514,7 @@ export class ModelHandler {
               timestamp: Date.now(),
             });
             processedToolCalls.push({ name, args, id, result: resultContent });
-            continue;
+            return;
           }
 
           // Run-resource tools (issue #161): synthetic FLUJO tools that write a
@@ -1494,7 +1542,7 @@ export class ModelHandler {
               timestamp: Date.now(),
             });
             processedToolCalls.push({ name, args, id, result: resultContent });
-            continue;
+            return;
           }
 
           // Decode the model-facing name back to (server, tool). New names use the
@@ -1537,7 +1585,7 @@ export class ModelHandler {
                 timestamp: Date.now(),
               });
               processedToolCalls.push({ name, args: callArgs, id, result: deniedContent });
-              continue;
+              return;
             }
             // 'allow' or 'ask' → fall through to normal dispatch.
           }
@@ -1761,14 +1809,50 @@ export class ModelHandler {
             id,
             result: errorMessage
           });
+        } finally {
+          // Copy this call's single outcome into its index-keyed slots. Every
+          // dispatch path pushes exactly one message (+ at most one processed
+          // entry), so [0] is authoritative; ordering is by callIndex, never by
+          // completion time.
+          results[callIndex] = toolCallMessages[0] ?? null;
+          processed[callIndex] = processedToolCalls[0] ?? null;
+        }
+      };
+
+      // Drive the batch: group calls by server, run each group under its own cap,
+      // and run the groups concurrently. Local synthetic tools share one group.
+      const groups = new Map<string, number[]>();
+      for (let i = 0; i < toolCalls.length; i++) {
+        const key = groupKeyForCall(toolCalls[i]);
+        const bucket = groups.get(key);
+        if (bucket) bucket.push(i);
+        else groups.set(key, [i]);
+      }
+      await Promise.all(
+        Array.from(groups.entries()).map(([key, indices]) =>
+          runWithConcurrency(indices, limitForGroup(key), executeOneToolCall)
+        )
+      );
+
+      // Defensive: any still-empty slot (a call that never ran) is answered with
+      // a synthetic cancelled message so every tool_call id stays answered.
+      for (let i = 0; i < toolCalls.length; i++) {
+        if (results[i] === null) {
+          results[i] = {
+            id: uuidv4(),
+            role: "tool",
+            tool_call_id: toolCalls[i].id,
+            content: 'Execution cancelled by user before this tool call ran.',
+            timestamp: Date.now()
+          };
         }
       }
 
       const result: Result<ToolCallProcessingResult> = {
         success: true,
         value: {
-          toolCallMessages,
-          processedToolCalls
+          toolCallMessages: results.filter((m): m is FlujoChatMessage => m !== null),
+          processedToolCalls: processed.filter((p): p is ProcessedToolCall => p !== null)
         }
       };
 
