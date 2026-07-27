@@ -6,11 +6,14 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
-import { saveCollectionItem, assertSafeCollectionId } from '@/utils/storage/backend';
+import { saveCollectionItem, assertSafeCollectionId, deleteCollectionItem } from '@/utils/storage/backend';
 import { getDataDir } from '@/utils/paths';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
+import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { deleteRunResources } from '@/backend/services/runResources';
+import { quickChatFlowId } from '@/utils/shared/quickChat';
+import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -397,4 +400,63 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ error: 'Failed to create conversation state' }, { status: 500 });
   }
+}
+
+
+// --- DELETE Handler (bulk) ---
+// DELETE /v1/chat/conversations — bulk-delete a list of conversations by id.
+// Mirrors the per-item sibling route ([conversationId]/route.ts) for each id:
+// tombstone first, cancel/evict in-memory state, then remove the state file,
+// conversation log, run-resources, and quick-chat compiled-flow cache. Bad
+// ids are counted as errors (not fatal) so one malformed id can't abort the
+// whole batch. Returns { deleted, errors }.
+export async function DELETE(req: NextRequest) {
+  const _lock = await assertUnlocked({ openai: true });
+  if (_lock) return _lock;
+  const notLocal = assertLocalRequest(req);
+  if (notLocal) return notLocal;
+
+  const requestId = `conv-bulk-delete-${Date.now()}`;
+  log.info('Handling bulk DELETE request', { requestId });
+
+  let body: { ids?: unknown };
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+
+  if (!Array.isArray(body?.ids) || body.ids.length === 0) {
+    return NextResponse.json({ error: 'Body must be { ids: string[] } with at least one id' }, { status: 400 });
+  }
+
+  const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+  let deleted = 0, errors = 0;
+  await Promise.all((body.ids as unknown[]).map(async (rawId) => {
+    if (typeof rawId !== 'string' || !SAFE_ID.test(rawId)) { errors++; return; }
+    const id = rawId;
+    try {
+      // Tombstone first so an in-flight run can't resurrect the files (matches
+      // the per-item DELETE ordering in [conversationId]/route.ts).
+      markConversationDeleted(id);
+      const mem = FlowExecutor.conversationStates.get(id);
+      if (mem) {
+        mem.isCancelled = true;
+        // A 'running' entry must stay in the map for descendant cancellation;
+        // runFlow's final cleanup drops it (tombstoned ids never re-register).
+        if (mem.status !== 'running') FlowExecutor.conversationStates.delete(id);
+      }
+      await deleteCollectionItem('conversations', id);
+      await deleteConversationLog(id);
+      await deleteRunResources(id);
+      FlowExecutor.clearFlowCache(quickChatFlowId(id));
+      deleted++;
+    } catch (err) {
+      // Delete failed — clear the tombstone so the surviving conversation is
+      // still persistable/loggable.
+      unmarkConversationDeleted(id);
+      log.error('Failed to delete conversation in bulk', { requestId, id, err });
+      errors++;
+    }
+  }));
+
+  log.info('Bulk DELETE complete', { requestId, deleted, errors });
+  return NextResponse.json({ deleted, errors }, { status: 200 });
 }

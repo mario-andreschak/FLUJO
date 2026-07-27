@@ -1442,6 +1442,53 @@ const Chat: React.FC = () => {
     }
   };
 
+  // Bulk-delete a set of conversations (Delete All / Delete Visible from the
+  // sidebar). Optimistically drops the rows locally; the polling loop reconciles
+  // with the server. Mirrors deleteConversation's shielding so an in-flight LIST
+  // response can't re-add rows for one poll cycle.
+  const bulkDeleteConversations = async (ids: string[]) => {
+    if (!ids.length) return;
+    setError(null);
+    const idSet = new Set(ids);
+    const previousList = conversationList;
+    const previousSelectionId = currentConversationId;
+
+    ids.forEach((id) => pendingDeleteIdsRef.current.add(id));
+
+    // If the currently viewed conversation is among the deleted set, drop this
+    // client's live tracking of it (stream, loading indicator).
+    const viewed = currentConversationIdRef.current;
+    if (viewed && idSet.has(viewed) && loadingConversationIdRef.current === viewed) {
+      closeEventStream();
+      setIsLoading(false);
+      setLoadingConversationId(null);
+      setLiveStats(null);
+      setLiveLanes(EMPTY_LIVE_LANES);
+    }
+    ids.forEach((id) => {
+      markConvRunning(id, false);
+      setQueuedMessages((prev) => clearMsgQueue(prev, id));
+    });
+
+    // Optimistic list update + deselect if the current conversation was deleted.
+    setConversationList((prev) => prev.filter((c) => !idSet.has(c.id)));
+    if (viewed && idSet.has(viewed)) {
+      setCurrentConversationId(null);
+    }
+
+    try {
+      const result = await chatService.deleteConversations(ids);
+      log.info('Bulk delete succeeded', { requested: ids.length, ...result });
+    } catch (err) {
+      log.error('Bulk delete failed', { err });
+      setError('Failed to delete conversations. Please try again.');
+      // Revert the optimistic update and shields, then re-sync from the server.
+      ids.forEach((id) => pendingDeleteIdsRef.current.delete(id));
+      setConversationList(previousList);
+      setCurrentConversationId(previousSelectionId);
+    }
+  };
+
   // Handle flow selection from the selector. If the conversation has already
   // been executed, switching flows means execution will restart on the new
   // flow's Start node — ask for confirmation first (Cancel keeps the current
@@ -2875,6 +2922,7 @@ const Chat: React.FC = () => {
               currentConversationId={currentConversationId}
               onSelectConversation={setCurrentConversationId}
               onDeleteConversation={deleteConversation}
+              onBulkDelete={bulkDeleteConversations}
               onStopConversation={handleStopConversation}
               onNewConversation={createNewConversation}
               onQuickChat={() => setQuickChatOpen(true)}

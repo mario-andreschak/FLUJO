@@ -93,6 +93,16 @@ describe('chatService REST methods', () => {
     }));
   });
 
+  it('deleteConversations: DELETE collection route with ids body', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { deleted: 2, errors: 0 }));
+    await chatService.deleteConversations(['a', 'b']);
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations', expect.objectContaining({
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['a', 'b'] }),
+    }));
+  });
+
   it('respondToToolCall: POST action + toolCallId, returns parsed data', async () => {
     fetchMock.mockResolvedValueOnce(makeResponse(200, { status: 'running' }));
 

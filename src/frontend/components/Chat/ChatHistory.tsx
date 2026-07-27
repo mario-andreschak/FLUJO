@@ -19,6 +19,11 @@ import {
   FormControl,
   Chip,
   Collapse,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -29,6 +34,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
@@ -48,6 +55,8 @@ interface ChatHistoryProps {
   currentConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
+  /** Bulk-delete a set of conversations by id (Delete All / Delete Visible). */
+  onBulkDelete: (ids: string[]) => Promise<void>;
   /** Stop the run of a conversation that is running or awaiting tool approval.
    *  Rendered as a stop button on those list items — including background
    *  conversations, which otherwise have no reachable Stop at all. */
@@ -109,6 +118,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   currentConversationId,
   onSelectConversation,
   onDeleteConversation,
+  onBulkDelete,
   onStopConversation,
   onNewConversation,
   onQuickChat,
@@ -118,6 +128,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // Search text is intentionally ephemeral (not persisted): a stale filter
   // silently hiding conversations after a reload would be surprising.
   const [search, setSearch] = React.useState('');
+  // Confirmation dialog state for bulk delete (Delete All / Delete Visible).
+  const [bulkDeleteDialog, setBulkDeleteDialog] = React.useState<{
+    open: boolean; ids: string[]; label: string;
+  }>({ open: false, ids: [], label: '' });
   // Search dimension (issue #182): 'title' filters client-side over titles+flow
   // (Phase 1); 'content' resolves matches server-side against message bodies
   // (which aren't all resident on the client). Persisted so the choice sticks.
@@ -461,6 +475,42 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Tooltip>
         )}
         <Typography variant="h6" sx={{ flex: 1 }} noWrap>Conversations</Typography>
+        {conversations.length > 0 && (
+          <Tooltip title="Delete all conversations">
+            <span>{/* span wrapper needed for Tooltip on (potentially) disabled buttons */}
+              <IconButton
+                size="small"
+                color="error"
+                aria-label="Delete all conversations"
+                onClick={() => setBulkDeleteDialog({
+                  open: true,
+                  ids: conversations.map(c => c.id),
+                  label: `Delete all ${conversations.length} conversation(s)?`,
+                })}
+              >
+                <DeleteForeverIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {filtered.length > 0 && filtered.length < conversations.length && (
+          <Tooltip title="Delete visible conversations (matching current filter)">
+            <span>
+              <IconButton
+                size="small"
+                color="error"
+                aria-label="Delete visible conversations"
+                onClick={() => setBulkDeleteDialog({
+                  open: true,
+                  ids: filtered.map(c => c.id),
+                  label: `Delete ${filtered.length} visible conversation(s)?`,
+                })}
+              >
+                <DeleteSweepIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         {onQuickChat && (
           <Tooltip title="Quick Chat: a model + optional MCP servers, no saved flow">
             <Button
@@ -660,6 +710,34 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           })
         )}
       </List>
+
+      <Dialog
+        open={bulkDeleteDialog.open}
+        onClose={() => setBulkDeleteDialog(prev => ({ ...prev, open: false }))}
+        aria-labelledby="bulk-delete-dialog-title"
+      >
+        <DialogTitle id="bulk-delete-dialog-title">Confirm deletion</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {bulkDeleteDialog.label} This cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDeleteDialog(prev => ({ ...prev, open: false }))}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            onClick={async () => {
+              setBulkDeleteDialog(prev => ({ ...prev, open: false }));
+              await onBulkDelete(bulkDeleteDialog.ids);
+            }}
+            autoFocus
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

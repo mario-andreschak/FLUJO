@@ -159,6 +159,17 @@ class ChatService {
     await parse<void>(response);
   }
 
+  /** DELETE /v1/chat/conversations — bulk delete by id list. */
+  async deleteConversations(ids: string[]): Promise<{ deleted: number; errors: number }> {
+    log.debug('deleteConversations: Entering method', { count: ids.length });
+    const response = await fetch(BASE, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    return parse<{ deleted: number; errors: number }>(response);
+  }
+
   /**
    * POST /v1/chat/conversations/{id}/respond — approve/reject a pending tool
    * call; the backend resumes execution and returns the next stop point.
