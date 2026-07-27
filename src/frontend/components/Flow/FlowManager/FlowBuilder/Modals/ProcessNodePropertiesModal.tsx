@@ -8,7 +8,6 @@ import {
     Box,
     IconButton,
     Divider,
-    Grid,
     Typography,
     Tabs,
     Tab
@@ -30,6 +29,7 @@ import ServerResources from './ProcessNodePropertiesModal/ServerTools/ServerReso
 import WiredResources, { WiredResource } from './ProcessNodePropertiesModal/ServerTools/WiredResources';
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
+import PromptIOControls from './ProcessNodePropertiesModal/PromptIOControls';
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
 import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
@@ -37,6 +37,18 @@ import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjus
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
+
+// Issue #300: the 5 top-level sections. The modal renders all of them stacked
+// in a single scroll container; the tab bar both scrolls a section into view
+// (on click) and reflects the section currently in view (via IntersectionObserver).
+type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'advanced';
+const SECTIONS: { key: SectionKey; label: string }[] = [
+  { key: 'basic', label: 'Basic' },
+  { key: 'model', label: 'Model' },
+  { key: 'io', label: 'Input/Output' },
+  { key: 'task', label: 'Task' },
+  { key: 'advanced', label: 'Advanced' },
+];
 
 export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEdges = [], flowNodes = [], flowId, onConnectMcpServer }: ProcessNodePropertiesModalProps) => {
   log.debug('ProcessNodePropertiesModal rendered with:', { node: node, flowId: flowId });
@@ -58,7 +70,29 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [captureResource, setCaptureResource] = useState('');
   const [captureKvScope, setCaptureKvScope] = useState<KvRefScope>('folder');
   const [captureKvKey, setCaptureKvKey] = useState('');
+  // Inner Server Tools | Resources | Agent Tools sub-tabs (inside the Task tab).
   const [activeTab, setActiveTab] = useState<string>('server');
+  // Issue #300: the currently active top-level section tab.
+  const [activeSection, setActiveSection] = useState<SectionKey>('basic');
+
+  // Refs for each section, used both for tab-click scroll-into-view and for the
+  // IntersectionObserver that keeps the tab bar in sync while the user scrolls.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const basicRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<HTMLDivElement>(null);
+  const ioRef = useRef<HTMLDivElement>(null);
+  const taskRef = useRef<HTMLDivElement>(null);
+  const advancedRef = useRef<HTMLDivElement>(null);
+  const sectionRefs: Record<SectionKey, React.RefObject<HTMLDivElement | null>> = {
+    basic: basicRef,
+    model: modelRef,
+    io: ioRef,
+    task: taskRef,
+    advanced: advancedRef,
+  };
+  // While a programmatic (tab-click) smooth scroll is in flight, ignore the
+  // IntersectionObserver so it doesn't flicker the active tab through sections.
+  const isProgrammaticScroll = useRef(false);
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
     open,
@@ -159,8 +193,40 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       const kvParsed = parseKvRef(node.data.properties?.captureKv || '');
       setCaptureKvScope(kvParsed.scope);
       setCaptureKvKey(kvParsed.key || '');
+
+      // Reset section navigation each time the modal opens on a node.
+      setActiveSection('basic');
     }
   }, [node, open]);
+
+  // Issue #300: keep the active tab in sync with the section scrolled into view.
+  useEffect(() => {
+    if (!open) return;
+    const root = scrollContainerRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (isProgrammaticScroll.current) return;
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        const key = (visible[0]?.target as HTMLElement | undefined)?.dataset.section as SectionKey | undefined;
+        if (key) setActiveSection(key);
+      },
+      { root, threshold: [0.15, 0.4, 0.75], rootMargin: '0px 0px -45% 0px' }
+    );
+    Object.values(sectionRefs).forEach((r) => { if (r.current) observer.observe(r.current); });
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, node]);
+
+  const handleSectionClick = (key: SectionKey) => {
+    setActiveSection(key);
+    isProgrammaticScroll.current = true;
+    sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Re-enable observer once the smooth scroll has settled.
+    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
+  };
 
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
 
@@ -281,6 +347,87 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const properties = getNodeProperties();
   const selectedModelId = nodeData.properties?.boundModel || '';
 
+  // Issue #300 (feedback): each section fills the scroll-port and snaps "as a
+  // whole" so a scroll gesture jumps to the next section instead of drifting
+  // line-by-line. Sections taller than the viewport (Task/Advanced) still
+  // scroll internally; only their top is a snap point.
+  const sectionSx = {
+    minHeight: '100%',
+    scrollSnapAlign: 'start' as const,
+    scrollSnapStop: 'always' as const,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    pb: 4,
+  };
+
+  // The inner Server Tools | Resources | Agent Tools panels, rendered inside the
+  // Task tab beside the editor. Kept as a local element so the editor and its
+  // tool bindings share the one mounted promptBuilderRef.
+  const toolPanels = (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+        <Tabs
+          value={activeTab}
+          onChange={(_, newValue: string) => setActiveTab(newValue)}
+          variant="scrollable"
+          scrollButtons="auto"
+        >
+          <Tab label="Server Tools" value="server" />
+          <Tab label="Resources" value="resources" />
+          <Tab label="Agent Tools" value="agent" />
+        </Tabs>
+      </Box>
+
+      <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+        {/* Show Server Tools tab content */}
+        {activeTab === 'server' && (
+          <ServerTools
+            isLoadingServers={isLoadingServers}
+            connectedMcpNodes={connectedMcpNodes}
+            availableServers={allServers}
+            onConnectMcpServer={onConnectMcpServer}
+            serverStatuses={serverStatuses}
+            serverToolsMap={serverToolsMap}
+            isLoadingTools={isLoadingTools}
+            handleInsertToolBinding={handleInsertToolBinding}
+            selectedToolServerNodeId={selectedToolServerNodeId}
+            selectedNodeId={node?.id || null}
+            handleSelectToolServer={handleSelectToolServer}
+            isLoadingSelectedServerTools={isLoadingSelectedServerTools}
+            promptBuilderRef={promptBuilderRef}
+            handleRetryServer={handleRetryServer}
+            handleRestartServer={handleRestartServer}
+          />
+        )}
+
+        {/* Show Resources tab content */}
+        {activeTab === 'resources' && (
+          <>
+            <WiredResources
+              wiredResources={wiredResources}
+              promptBuilderRef={promptBuilderRef}
+            />
+            <ServerResources
+              connectedMcpNodes={connectedMcpNodes}
+              handleInsertResourceBinding={handleInsertResourceBinding}
+              promptBuilderRef={promptBuilderRef}
+            />
+          </>
+        )}
+
+        {/* Show Agent Tools tab content */}
+        {activeTab === 'agent' && (
+          <AgentTools
+            handoffTools={handoffTools}
+            isLoadingHandoffTools={isLoadingHandoffTools}
+            handleInsertToolBinding={(toolType: string, toolName: string) => handleInsertToolBinding(toolType, toolName, 'handoff')}
+            promptBuilderRef={promptBuilderRef}
+          />
+        )}
+      </Box>
+    </Box>
+  );
+
   return (
     <Dialog
       open={open}
@@ -311,101 +458,48 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
 
       <Divider />
 
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 3, overflow: 'auto', height: 'calc(90vh - 130px)' }}>
-        <Grid container spacing={2} sx={{ flexGrow: 1, height: '100%' }}>
-          <Grid item xs={6} sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
-            <Box sx={{ mb: 3 }}>
-              <NodeConfiguration nodeData={nodeData} setNodeData={setNodeData} />
-            </Box>
-            <Box sx={{ mb: 3 }}>
-              <ModelBinding
-                isLoadingModels={isLoadingModels}
-                loadError={loadError}
-                models={models}
-                selectedModelId={selectedModelId}
-                handleModelSelect={handleModelSelect}
-                isModelBound={isModelBound}
-                handleUnbindModel={handleUnbindModel}
-              />
-            </Box>
-            <Box sx={{ mb: 3 }}>
-              {/* Tabs for Server Tools and Agent Tools */}
-              <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
-                <Tabs value={activeTab} onChange={(_, newValue: string) => setActiveTab(newValue)}>
-                  <Tab label="Server Tools" value="server" />
-                  <Tab label="Resources" value="resources" />
-                  <Tab label="Agent Tools" value="agent" />
-                </Tabs>
-              </Box>
-              
-              {/* Show Server Tools tab content */}
-              {activeTab === 'server' && (
-                <ServerTools
-                  isLoadingServers={isLoadingServers}
-                  connectedMcpNodes={connectedMcpNodes}
-                  availableServers={allServers}
-                  onConnectMcpServer={onConnectMcpServer}
-                  serverStatuses={serverStatuses}
-                  serverToolsMap={serverToolsMap}
-                  isLoadingTools={isLoadingTools}
-                  handleInsertToolBinding={handleInsertToolBinding}
-                  selectedToolServerNodeId={selectedToolServerNodeId}
-                  selectedNodeId={node?.id || null}
-                  handleSelectToolServer={handleSelectToolServer}
-                  isLoadingSelectedServerTools={isLoadingSelectedServerTools}
-                  promptBuilderRef={promptBuilderRef}
-                  handleRetryServer={handleRetryServer}
-                  handleRestartServer={handleRestartServer}
-                />
-              )}
-              
-              {/* Show Resources tab content */}
-              {activeTab === 'resources' && (
-                <>
-                  <WiredResources
-                    wiredResources={wiredResources}
-                    promptBuilderRef={promptBuilderRef}
-                  />
-                  <ServerResources
-                    connectedMcpNodes={connectedMcpNodes}
-                    handleInsertResourceBinding={handleInsertResourceBinding}
-                    promptBuilderRef={promptBuilderRef}
-                  />
-                </>
-              )}
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', height: 'calc(90vh - 130px)' }}>
+        {/* Section tab bar — click to scroll a section into view (issue #300). */}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2, flexShrink: 0 }}>
+          <Tabs
+            value={activeSection}
+            onChange={(_, newValue: SectionKey) => handleSectionClick(newValue)}
+            variant="scrollable"
+            scrollButtons="auto"
+          >
+            {SECTIONS.map((s) => (
+              <Tab key={s.key} label={s.label} value={s.key} />
+            ))}
+          </Tabs>
+        </Box>
 
-              {/* Show Agent Tools tab content */}
-              {activeTab === 'agent' && (
-                <AgentTools
-                  handoffTools={handoffTools}
-                  isLoadingHandoffTools={isLoadingHandoffTools}
-                  handleInsertToolBinding={(toolType: string, toolName: string) => handleInsertToolBinding(toolType, toolName, 'handoff')}
-                  promptBuilderRef={promptBuilderRef}
-                />
-              )}
-            </Box>
-            <Box>
-              <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
-            </Box>
-            <Box sx={{ mt: 3 }}>
-              <CaptureFields
-                value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}
-                onChange={(patch) => {
-                  if (patch.captureVariable !== undefined) setCaptureVariable(patch.captureVariable);
-                  if (patch.captureResource !== undefined) setCaptureResource(patch.captureResource);
-                  if (patch.captureKvScope !== undefined) setCaptureKvScope(patch.captureKvScope);
-                  if (patch.captureKvKey !== undefined) setCaptureKvKey(patch.captureKvKey);
-                }}
-                onInsertRef={handleInsertCaptureRef}
-              />
-            </Box>
-          </Grid>
+        {/* Single scroll surface: all five sections stacked, with per-page
+            scroll-snap so scrolling moves whole sections (issue #300). */}
+        <Box ref={scrollContainerRef} sx={{ flexGrow: 1, overflow: 'auto', p: 3, scrollSnapType: 'y mandatory', scrollPaddingTop: '24px' }}>
+          {/* Basic */}
+          <Box ref={basicRef} data-section="basic" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>Basic</Typography>
+            <NodeConfiguration nodeData={nodeData} setNodeData={setNodeData} />
+          </Box>
 
-          <Grid item xs={6} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <PromptTemplateEditor
-              ref={promptBuilderRef}
-              promptTemplate={promptTemplate}
-              handlePromptChange={handlePromptChange}
+          {/* Model */}
+          <Box ref={modelRef} data-section="model" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>Model</Typography>
+            <ModelBinding
+              isLoadingModels={isLoadingModels}
+              loadError={loadError}
+              models={models}
+              selectedModelId={selectedModelId}
+              handleModelSelect={handleModelSelect}
+              isModelBound={isModelBound}
+              handleUnbindModel={handleUnbindModel}
+            />
+          </Box>
+
+          {/* Input/Output */}
+          <Box ref={ioRef} data-section="io" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>Input / Output</Typography>
+            <PromptIOControls
               excludeModelPrompt={excludeModelPrompt}
               setExcludeModelPrompt={setExcludeModelPrompt}
               excludeStartNodePrompt={excludeStartNodePrompt}
@@ -423,10 +517,52 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               isModelBound={isModelBound}
               models={models}
               nodeData={nodeData}
-              flowId={flowId}
             />
-          </Grid>
-        </Grid>
+          </Box>
+
+          {/* Task — tool panels on the LEFT, editor on the RIGHT (as big as
+              possible), single mounted editor (issue #300 feedback). */}
+          <Box ref={taskRef} data-section="task" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>Task</Typography>
+            <Box sx={{ display: 'flex', gap: 2, flexGrow: 1, minHeight: 480 }}>
+              <Box sx={{ flex: '0 0 340px', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                {toolPanels}
+              </Box>
+              <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <PromptTemplateEditor
+                  ref={promptBuilderRef}
+                  promptTemplate={promptTemplate}
+                  handlePromptChange={handlePromptChange}
+                  excludeModelPrompt={excludeModelPrompt}
+                  excludeStartNodePrompt={excludeStartNodePrompt}
+                  excludeSystemPrompt={excludeSystemPrompt}
+                  nodeData={nodeData}
+                  flowId={flowId}
+                />
+              </Box>
+            </Box>
+          </Box>
+
+          {/* Advanced */}
+          <Box ref={advancedRef} data-section="advanced" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>Advanced</Typography>
+            <Box sx={{ mb: 3 }}>
+              <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
+            </Box>
+            <Box>
+              <CaptureFields
+                value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}
+                onChange={(patch) => {
+                  if (patch.captureVariable !== undefined) setCaptureVariable(patch.captureVariable);
+                  if (patch.captureResource !== undefined) setCaptureResource(patch.captureResource);
+                  if (patch.captureKvScope !== undefined) setCaptureKvScope(patch.captureKvScope);
+                  if (patch.captureKvKey !== undefined) setCaptureKvKey(patch.captureKvKey);
+                }}
+                onInsertRef={handleInsertCaptureRef}
+              />
+            </Box>
+          </Box>
+        </Box>
       </DialogContent>
 
       <DialogActions>
