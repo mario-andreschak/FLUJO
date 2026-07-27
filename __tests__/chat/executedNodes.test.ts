@@ -49,6 +49,31 @@ describe('deriveExecutedNodeIds', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it('derives ids from the SSE-visited set (issue #243 — covers every node type)', () => {
+    // A Set is the shape the Chat SSE accumulator passes.
+    const fromSet = deriveExecutedNodeIds({
+      sseVisitedIds: new Set(['start', 'mcp1', 'signal1', 'finish']),
+    });
+    expect(fromSet).toEqual(expect.arrayContaining(['start', 'mcp1', 'signal1', 'finish']));
+    expect(fromSet).toHaveLength(4);
+
+    // A plain array is also accepted.
+    const fromArray = deriveExecutedNodeIds({ sseVisitedIds: ['start', 'A'] });
+    expect(fromArray).toEqual(['start', 'A']);
+  });
+
+  it('unions the SSE-visited set with the message source and de-dupes', () => {
+    const ids = deriveExecutedNodeIds({
+      messages: [{ processNodeId: 'start' }, { processNodeId: 'proc1' }],
+      sseVisitedIds: new Set(['proc1', 'mcp1', 'finish']),
+    });
+    // message-only source contributed start+proc1; SSE added mcp1+finish;
+    // proc1 overlaps and is not duplicated.
+    expect(ids).toEqual(expect.arrayContaining(['start', 'proc1', 'mcp1', 'finish']));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(4);
+  });
+
   it('only includes the branch actually taken (B-only, C stays absent)', () => {
     const bOnly = deriveExecutedNodeIds({
       messages: [{ processNodeId: 'start' }, { processNodeId: 'A' }, { processNodeId: 'B' }, { processNodeId: 'finish' }],

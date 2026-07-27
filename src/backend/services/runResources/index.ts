@@ -368,6 +368,59 @@ export async function deleteRunResources(conversationId: string): Promise<void> 
   });
 }
 
+/**
+ * Retention sweep (issue #251): delete spilled run resources whose `createdAt`
+ * is older than `retentionAgeDays` days across ALL conversations. Runs on an
+ * hourly background cron (armed in init.ts). Returns the number removed.
+ *
+ * `retentionAgeDays <= 0` disables the sweep (a no-op). Each conversation's
+ * index is rewritten through the same per-conversation write chain as every
+ * other mutation, so a concurrent write can never be clobbered; payload files
+ * are unlinked best-effort after the index no longer references them.
+ */
+export async function sweepOldRunResources(now: number = Date.now()): Promise<{ removed: number }> {
+  const settings = await getRunResourceSettings();
+  const ageDays = settings.retentionAgeDays ?? 0;
+  if (!ageDays || ageDays <= 0) return { removed: 0 };
+  const cutoff = now - ageDays * 86_400_000;
+
+  let conversationIds: string[] = [];
+  try {
+    const dirents = await fs.readdir(runResourcesDir, { withFileTypes: true });
+    conversationIds = dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name)).map(d => d.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { removed: 0 };
+    throw error;
+  }
+
+  let removed = 0;
+  for (const conversationId of conversationIds) {
+    const toUnlink: RunResourceEntry[] = [];
+    await mutateIndex<void>(conversationId, async (entries) => {
+      const keep = entries.filter((e) => {
+        const expired = e.createdAt < cutoff;
+        if (expired) toUnlink.push(e);
+        return !expired;
+      });
+      // No-op (same reference) when nothing expired — skips the index rewrite.
+      return keep.length === entries.length
+        ? { next: entries, result: undefined }
+        : { next: keep, result: undefined };
+    });
+    for (const e of toUnlink) {
+      if (e.size > 0) {
+        await fs.unlink(payloadPath(conversationId, e.id)).catch(() => { /* may not exist */ });
+      }
+      removed++;
+    }
+  }
+
+  if (removed > 0) {
+    log.debug(`Retention sweep removed ${removed} run resource(s) older than ${ageDays}d`);
+  }
+  return { removed };
+}
+
 /** Test seam: point the store at a temp directory. Returns the previous dir. */
 export function _setRunResourcesDirForTests(dir: string): string {
   const previous = runResourcesDir;

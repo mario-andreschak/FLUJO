@@ -104,6 +104,21 @@ export interface RunResourceSettings {
    * items are always stubbed regardless (base64 in a message helps nobody).
    */
   replaceLargeTextWithStub: boolean;
+  /**
+   * Tool-boundary bound (issue #251). Every tool result whose text form exceeds
+   * EITHER of these limits is truncated to a head+tail preview and the full
+   * content is spilled unconditionally to a run resource on the very turn it is
+   * produced — so a 5 MB result never reaches the wire in full, even on the
+   * first turn, and both ends of a long log survive. Set a limit to 0 to
+   * disable that dimension of the bound.
+   */
+  toolResultMaxLines?: number; // default 2000
+  toolResultMaxBytes?: number; // default 50 * 1024 (50 KB)
+  /**
+   * Retention sweep (issue #251): spilled run resources older than this many
+   * days are deleted on an hourly background sweep. 0 disables the sweep.
+   */
+  retentionAgeDays?: number; // default 7 (0 = disable)
 }
 
 export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
@@ -112,4 +127,7 @@ export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
   maxResourceBytes: 50 * 1024 * 1024,
   maxConversationBytes: 256 * 1024 * 1024,
   replaceLargeTextWithStub: false,
+  toolResultMaxLines: 2000,
+  toolResultMaxBytes: 50 * 1024,
+  retentionAgeDays: 7,
 };

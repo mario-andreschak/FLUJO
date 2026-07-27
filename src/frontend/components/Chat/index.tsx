@@ -448,6 +448,13 @@ const Chat: React.FC = () => {
   // Per-lane progress rows for parallel subflow fan-outs (issue #157). Pure
   // reducer state rebuilt from the SSE replay (from seq 0) on re-attach.
   const [liveLanes, setLiveLanes] = useState<LiveLanes>(EMPTY_LIVE_LANES);
+  // Node ids seen in the `node:enter` SSE stream, accumulated for the whole
+  // conversation (issue #243). The other executed-path sources only cover
+  // Process nodes; this stream covers EVERY node type, so it is what makes
+  // start/finish/mcp/signal nodes light up green in the Executed-Steps panel.
+  // Deliberately NOT cleared on run:done (it is the persistent post-run record)
+  // — only reset when the viewed conversation changes (see effect below).
+  const [sseVisitedNodeIds, setSseVisitedNodeIds] = useState<Set<string>>(new Set());
   // Breakpoint node IDs for the visual debugger (mirrors server state).
   const [breakpoints, setBreakpoints] = useState<string[]>([]);
   // Which conversation currently has an active run (so the live indicator only
@@ -860,7 +867,15 @@ const Chat: React.FC = () => {
     messages: detailedConversation?.messages,
     nodeExecutionTracker: debugState?.trackingInfo?.nodeExecutionTracker,
     executionTrace: debugState?.executionTrace,
-  }), [detailedConversation?.messages, debugState]);
+    sseVisitedIds: sseVisitedNodeIds,
+  }), [detailedConversation?.messages, debugState, sseVisitedNodeIds]);
+
+  // Reset the SSE-accumulated visited set when the viewed conversation changes
+  // so a previous conversation's executed nodes never bleed into another
+  // (issue #243). Same-conversation refetches keep the same id and don't clear.
+  useEffect(() => {
+    setSseVisitedNodeIds(new Set());
+  }, [detailedConversation?.id]);
 
   // The node the NEXT message will be processed on, for the chat input's node
   // pill: a manual pick wins, then the server's currentNodeId, then the most
@@ -1111,6 +1126,7 @@ const Chat: React.FC = () => {
           if (event.node?.nodeId) {
             const nodeId = event.node.nodeId;
             touchActivity(draft => { draft.byNode[nodeId] = { kind: 'active', ts: Date.now() }; });
+            setSseVisitedNodeIds(prev => prev.has(nodeId) ? prev : new Set(prev).add(nodeId));
           }
           touch({});
           return;
@@ -1167,6 +1183,7 @@ const Chat: React.FC = () => {
         if (event.node?.nodeId) {
           const nodeId = event.node.nodeId;
           touchActivity(draft => { draft.byNode[nodeId] = { kind: 'active', ts: Date.now() }; });
+          setSseVisitedNodeIds(prev => prev.has(nodeId) ? prev : new Set(prev).add(nodeId));
         }
         break;
       case 'resource:read':

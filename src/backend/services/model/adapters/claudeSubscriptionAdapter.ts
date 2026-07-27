@@ -7,6 +7,8 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { getRunResourceSettings } from '@/backend/services/runResources';
+import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
@@ -541,18 +543,48 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
           const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, undefined, callerNodeId);
+          // Stable lineage id, generated up front so a spilled run resource is
+          // keyed by the SAME toolCallId this pair is recorded under (#251).
+          const callId = `call_${uuidv4()}`;
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {
             callResult = result.data as CallToolResult;
             // Match the OpenAI path's tool-result encoding (JSON of the result data).
             resultContent = JSON.stringify(result.data);
+            // Tool-boundary bound (#251): this path bypasses ModelHandler's
+            // processToolCalls, so without bounding here the guarantee would
+            // silently not apply on Claude-subscription runs. Spill oversized
+            // results to a run resource and show a head+tail preview instead.
+            if (conversationId) {
+              try {
+                const settings = await getRunResourceSettings();
+                const bounded = await boundToolResult({
+                  conversationId,
+                  toolCallId: callId,
+                  server,
+                  toolName: originalTool,
+                  nodeId: callerNodeId,
+                  content: resultContent,
+                  settings,
+                });
+                if (bounded.spilled) {
+                  resultContent = bounded.content;
+                  // callResult is what the SDK feeds the MODEL, so it must be
+                  // bounded too (not just the recorded transcript) or the model
+                  // still sees the full result on this path.
+                  callResult = { content: [{ type: 'text', text: bounded.content }] };
+                }
+              } catch (err) {
+                log.warn('boundToolResult failed on subscription path; keeping full result', err);
+              }
+            }
           } else {
             resultContent = `Error: ${result.error ?? 'Unknown error'}`;
             callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
           }
           recordToolPair({
-            id: `call_${uuidv4()}`,
+            id: callId,
             name: readableName,
             argsJson: JSON.stringify(args ?? {}),
             resultContent,

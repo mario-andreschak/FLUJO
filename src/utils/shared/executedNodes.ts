@@ -22,6 +22,11 @@ export interface ExecutedNodesSources {
   nodeExecutionTracker?: ReadonlyArray<{ nodeId?: string }> | null;
   /** Debug execution trace steps (each with an optional `nodeId`). */
   executionTrace?: ReadonlyArray<{ nodeId?: string }> | null;
+  /** Node ids accumulated live from the `node:enter` SSE stream (issue #243).
+   *  Unlike the other sources this covers EVERY node type (start/finish/mcp/
+   *  signal/...), not just Process nodes, so the executed-path highlight is no
+   *  longer Process-only. May be a Set or a plain array. */
+  sseVisitedIds?: ReadonlySet<string> | ReadonlyArray<string> | null;
 }
 
 export function deriveExecutedNodeIds(sources: ExecutedNodesSources): string[] {
@@ -29,5 +34,6 @@ export function deriveExecutedNodeIds(sources: ExecutedNodesSources): string[] {
   sources.messages?.forEach(m => { if (m?.processNodeId) ids.add(m.processNodeId); });
   sources.nodeExecutionTracker?.forEach(e => { if (e?.nodeId) ids.add(e.nodeId); });
   sources.executionTrace?.forEach(s => { if (s?.nodeId) ids.add(s.nodeId); });
+  sources.sseVisitedIds?.forEach(id => { if (id) ids.add(id); });
   return Array.from(ids);
 }

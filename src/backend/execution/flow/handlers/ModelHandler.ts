@@ -26,6 +26,7 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
+import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
@@ -1666,9 +1667,46 @@ export class ModelHandler {
           }
 
           // Format the result
-          const resultContent = result.success
+          let resultContent = result.success
             ? JSON.stringify(effectiveData)
             : `Error: ${result.error}`;
+
+          // Tier-boundary bound (#251): every oversized tool result is truncated
+          // to a head+tail preview and the full content spilled UNCONDITIONALLY
+          // to a run resource on THIS turn — so a 5 MB result never reaches the
+          // wire in full (not even on the first turn) and both ends of a long
+          // log survive. Runs AFTER auto-capture (binaries already stubbed) so
+          // only the remaining text form is bounded. Never breaks the run.
+          if (result.success && conversationId && runResourceSettings) {
+            try {
+              const bounded = await boundToolResult({
+                conversationId,
+                toolCallId: id,
+                server: serverName,
+                toolName,
+                nodeId: node?.nodeId,
+                content: resultContent,
+                settings: runResourceSettings,
+              });
+              if (bounded.spilled) {
+                resultContent = bounded.content;
+                if (bounded.uri) {
+                  emit?.({
+                    type: 'resource:write',
+                    node,
+                    server: 'flujo',
+                    uri: bounded.uri,
+                    mimeType: 'text/plain',
+                    size: bounded.bytes,
+                    source: 'tool-result',
+                    toolCallId: id,
+                  });
+                }
+              }
+            } catch (error) {
+              log.error('boundToolResult failed; keeping full tool result', error);
+            }
+          }
 
           // The full result reaches the conversation as the tool message below;
           // the event carries a preview so the log stays light.

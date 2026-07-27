@@ -22,7 +22,7 @@ import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider 
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
 import { createLogger } from '@/utils/logger';
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
+import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { LiveActivity, LIVE_HIGHLIGHT_TTL_MS } from '@/utils/shared/liveActivity';
 
@@ -38,6 +38,7 @@ const nodeTypes = {
   mcp: MCPNode,
   subflow: SubflowNode,
   resource: ResourceNode,
+  signal: SignalNode,
 };
 
 const edgeTypes = {

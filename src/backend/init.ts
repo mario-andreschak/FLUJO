@@ -1,5 +1,7 @@
+import { Cron } from 'croner';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
+import { sweepOldRunResources } from '@/backend/services/runResources';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
@@ -21,6 +23,28 @@ declare global {
   // locked this work is skipped at boot and only runs later, at unlock.
   // eslint-disable-next-line no-var
   var __flujo_secret_services_promise: Promise<void> | undefined;
+  // The hourly run-resource retention sweep cron (issue #251). Global-guarded so
+  // Next.js hot-reload / duplicate module instantiation can't arm it twice
+  // (mirrors __flujo_run_resources / the scheduler singletons).
+  // eslint-disable-next-line no-var
+  var __flujo_retention_cron: Cron | undefined;
+}
+
+/**
+ * Arm the run-resource retention sweep (issue #251) once per process: an hourly
+ * croner job that deletes spilled run resources older than the configured
+ * retention age. `unref: true` keeps it from holding the Node process alive; the
+ * global guard survives hot-reload. The sweep itself is a no-op when
+ * retentionAgeDays <= 0, so this is safe to arm unconditionally.
+ */
+function armRetentionSweep(): void {
+  if (global.__flujo_retention_cron) return;
+  global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+    sweepOldRunResources().catch(error =>
+      log.warn('Run-resource retention sweep failed:', error)
+    );
+  });
+  log.info('Armed run-resource retention sweep (hourly)');
 }
 
 /**
@@ -100,6 +124,14 @@ function startSecretDependentServices(): Promise<void> {
       await getSchedulerService()
         .start()
         .catch(error => log.error('Failed to start scheduler:', error));
+
+      // Arm the run-resource retention sweep (#251). Independent of secrets, but
+      // armed here so it shares the once-per-process startup path.
+      try {
+        armRetentionSweep();
+      } catch (error) {
+        log.error('Failed to arm run-resource retention sweep:', error);
+      }
     })();
   }
   return global.__flujo_secret_services_promise;
