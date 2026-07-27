@@ -28,6 +28,8 @@ import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
+import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
+import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -1113,9 +1115,71 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 break;
               }
               if (requireApproval) {
+                // Issue #246: Before pausing, filter tool calls through the permission
+                // rules. Calls with effect 'deny' or 'allow' are handled immediately;
+                // only 'ask' calls are queued for the approval gate.
+                const toolCallsForApproval: OpenAI.ChatCompletionMessageToolCall[] = [];
+                const toolCallsToProcessNow: OpenAI.ChatCompletionMessageToolCall[] = [];
+                const permRules = sharedState.permissionRules ?? [];
+                const savedRules = sharedState.savedPermissionRules ?? [];
+
+                if (permRules.length > 0 || savedRules.length > 0) {
+                  for (const tc of lastAssistantMsg.tool_calls) {
+                    const decoded = decodeToolName(tc.function.name, sharedState.toolNameMap);
+                    if (!decoded) {
+                      // Undecodable (handoff, synthetic) — pass through to approval
+                      toolCallsForApproval.push(tc);
+                      continue;
+                    }
+                    let callArgs: Record<string, unknown> = {};
+                    try { callArgs = JSON.parse(tc.function.arguments); } catch { /* best effort */ }
+                    const resource = extractResource(callArgs);
+                    const effect = evaluatePermission(permRules, savedRules, decoded.server, decoded.tool, resource);
+                    if (effect === 'deny' || effect === 'allow') {
+                      toolCallsToProcessNow.push(tc);
+                    } else {
+                      toolCallsForApproval.push(tc);
+                    }
+                  }
+                } else {
+                  // No rules — all go to approval gate
+                  toolCallsForApproval.push(...lastAssistantMsg.tool_calls);
+                }
+
+                // Process immediately-resolved (allow/deny) calls
+                if (toolCallsToProcessNow.length > 0) {
+                  const immediateResult = await ModelHandler.processToolCalls({
+                    toolCalls: toolCallsToProcessNow,
+                    toolNameMap: sharedState.toolNameMap,
+                    emit,
+                    conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                    node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+                    shouldAbort: runCancelled,
+                    mcpNodes: sharedState.currentMCPNodes,
+                    permissionRules: permRules,
+                    savedPermissionRules: savedRules,
+                  });
+                  if (immediateResult.success) {
+                    const immediateMessages = immediateResult.value.toolCallMessages.map(msg => ({
+                      ...msg,
+                      id: crypto.randomUUID(),
+                      timestamp: Date.now(),
+                      processNodeId: sharedState.currentNodeId,
+                    }));
+                    sharedState.messages.push(...immediateMessages);
+                    emitNewMessages();
+                  }
+                }
+
+                // If no calls need approval, continue the loop
+                if (toolCallsForApproval.length === 0) {
+                  FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                  continue;
+                }
+
                 log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
                 sharedState.status = 'awaiting_tool_approval';
-                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
+                sharedState.pendingToolCalls = toolCallsForApproval;
                 sharedState.lastResponse = undefined;
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
@@ -1154,6 +1218,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
                   mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
+                  permissionRules: sharedState.permissionRules, // Issue #246
+                  savedPermissionRules: sharedState.savedPermissionRules, // Issue #246
                 });
 
                 if (!toolProcessingResult.success) {

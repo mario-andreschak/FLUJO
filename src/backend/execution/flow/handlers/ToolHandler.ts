@@ -11,6 +11,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
 import { encodeToolName } from './toolNamespace';
 import { buildMCPResourceTools } from './mcpResourceTools';
+import { isWhollyDenied } from '../permissionEngine';
 import OpenAI from 'openai';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
@@ -271,8 +272,12 @@ export class ToolHandler {
 
           // An empty list with no error is valid (server exposes none / none are enabled).
           // Filter and format tools
+          const { permissionRules } = input;
           const serverTools = (toolsResult.tools || [])
             .filter(tool => enabledTools.includes(tool.name))
+            // Phase 2 (issue #246): drop wholly-denied tools before advertising
+            // them to the model — saves tokens and keeps context clean.
+            .filter(tool => !permissionRules || !isWhollyDenied(permissionRules, tool.name))
             .map(tool => ({
               originalName: tool.name,
               server: boundServer,

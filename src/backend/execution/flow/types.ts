@@ -3,6 +3,7 @@ import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
+import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import OpenAI from 'openai';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
@@ -649,6 +650,20 @@ export interface SharedState {
      *  Read by the chat loop (OpenAI path) and by self-orchestrating adapters
      *  (Claude subscription) to gate tool calls. */
     requireApproval?: boolean;
+    /**
+     * Tool permission rules (issue #246): merged at ProcessNode.prep() from the
+     * flow's `permissionRules` + per-server `autoApprove` desugaring. Evaluated
+     * per-call in ModelHandler.processToolCalls() to allow/deny/ask before
+     * dispatching. Reset on each node transition (re-merged from the flow).
+     */
+    permissionRules?: PermissionRule[];
+    /**
+     * Saved "always" permission rules (issue #246): user choices from "Always
+     * Allow" / "Always Deny" approval prompts. Scoped to this conversation;
+     * persisted with the conversation state. Evaluated after `permissionRules`
+     * but cannot override a flow-level deny.
+     */
+    savedPermissionRules?: SavedPermissionRule[];
     /** Unattended execution (issue #218), resolved once per run from the flow's
      *  `unattended` flag (falling back to a source default: headless/scheduled
      *  ON, interactive chat OFF). When true, a Process node that ends its turn

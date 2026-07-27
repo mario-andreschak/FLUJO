@@ -12,8 +12,10 @@ import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveMod
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
 import { flowService } from '@/backend/services/flow/index';
+import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
+import { PermissionRule } from '@/shared/types/permissions';
 import {
   SharedState,
   ProcessNodeParams,
@@ -320,6 +322,47 @@ export class ProcessNode extends BaseNode {
     // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
     sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
 
+    // Issue #246: Build merged permission rules from flow-level rules + autoApprove
+    // desugaring. Stored in SharedState so ModelHandler can evaluate them per-call.
+    // Done once per node visit (prep re-runs on tool loop iterations, which is fine
+    // since the rules are idempotent).
+    {
+      let flowLevelRules: PermissionRule[] = [];
+      try {
+        const flowForPermissions = await flowService.getFlow(flowId);
+        flowLevelRules = flowForPermissions?.permissionRules ?? [];
+      } catch (err) {
+        log.warn('Could not load flow for permission rules', { err });
+      }
+
+      // Desugar autoApprove from each bound MCP server's config:
+      // autoApprove: ['tool1', 'tool2'] → [{action:'tool1',resource:'*',effect:'allow'}, ...]
+      const autoApproveRules: PermissionRule[] = [];
+      if (mcpNodes.length > 0) {
+        try {
+          const allConfigs = await loadServerConfigs();
+          if (Array.isArray(allConfigs)) {
+            for (const mcpNode of mcpNodes) {
+              const serverName = mcpNode.properties.boundServer;
+              if (!serverName) continue;
+              const serverConfig = allConfigs.find(c => c.name === serverName);
+              if (serverConfig?.autoApprove?.length) {
+                for (const toolName of serverConfig.autoApprove) {
+                  autoApproveRules.push({ action: toolName, resource: '*', effect: 'allow' });
+                }
+              }
+            }
+          }
+        } catch (err) {
+          log.warn('Could not load MCP server configs for autoApprove desugaring', { err });
+        }
+      }
+
+      // Merge: autoApprove first (lower priority), flow-level rules after (higher priority).
+      // Flow-level deny rules beat any autoApprove allows (last-match-wins semantics).
+      sharedState.permissionRules = [...autoApproveRules, ...flowLevelRules];
+    }
+
     if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
       // Use tools already processed by MCPNode
       log.info('Using MCP tools from shared state', {
@@ -332,8 +375,12 @@ export class ProcessNode extends BaseNode {
           mcpNodesCount: mcpNodes.length
         });
 
-        // Process MCP nodes using the ToolHandler
-        const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
+        // Phase 2 (issue #246): build merged permission rules before fetching tools
+        // so wholly-denied tools are dropped from the advertised list.
+        const mcpResult = await ToolHandler.processMCPNodes({
+          mcpNodes,
+          permissionRules: sharedState.permissionRules,
+        });
 
         if (!mcpResult.success) {
           log.error('Failed to process MCP nodes', { error: mcpResult.error });

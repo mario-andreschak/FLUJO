@@ -6,6 +6,7 @@ import {
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 
 // Input for model call
 export interface ModelCallInput {
@@ -118,6 +119,19 @@ export interface ToolCallProcessingInput {
    *  native-URI read_resource). When present, synthetic resource tool calls are dispatched
    *  via executeMCPResourceTool / executeNativeReadResource. */
   mcpNodes?: MCPNodeReference[];
+  /**
+   * Flow-level + autoApprove permission rules (issue #246). When provided, each
+   * tool call is evaluated against these rules BEFORE dispatch:
+   *   'deny'  → synthetic "Permission denied" tool result (no MCP call).
+   *   'allow' → execute immediately, bypassing the requireApproval gate.
+   *   'ask'   → existing approval-gate behaviour.
+   */
+  permissionRules?: PermissionRule[];
+  /**
+   * User "always" saved rules for this conversation (issue #246). Evaluated
+   * after permissionRules but cannot override a flow-level deny.
+   */
+  savedPermissionRules?: SavedPermissionRule[];
 }
 
 // Tool call processing result
