@@ -295,9 +295,16 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'Codex SDK',
     baseUrl: '',
     showBaseUrl: false,
-    // Hints only — the field stays free-text. Leaving the technical name to the
-    // CLI's own default also works (the SDK falls back to it when unset).
-    defaultModels: ['gpt-5.5', 'gpt-5.3-codex'],
+    // Hints only — the field stays free-text. Keep this aligned with the
+    // user-facing catalog bundled by the supported Codex CLI.
+    defaultModels: [
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+    ],
   },
 ];
 

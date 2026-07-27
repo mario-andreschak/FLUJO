@@ -58,6 +58,9 @@ jest.mock('@/backend/services/runResources', () => ({
 jest.mock('@/backend/services/runResources/boundToolResult', () => ({
   boundToolResult: jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content })),
 }));
+jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({
+  resolveCodexModelCatalogPath: jest.fn(async () => 'C:\\Users\\test\\.codex\\models_cache.json'),
+}));
 
 import { CodexAdapter } from '@/backend/services/model/adapters/codexAdapter';
 
@@ -120,10 +123,12 @@ describe('CodexAdapter — thread setup', () => {
     expect('apiKey' in (codexCtorMock.mock.calls[0][0] as Record<string, unknown>)).toBe(false);
   });
 
-  it('starts no bridge and configures no MCP server for a tools-less node', async () => {
+  it('uses Codex local model catalog to avoid a failing online refresh', async () => {
     await new CodexAdapter().createCompletion(baseInput());
     const opts = codexCtorMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(opts.config).toBeUndefined();
+    expect(opts.config).toEqual({
+      model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
+    });
     expect(capturedBridgeTools).toEqual([]);
   });
 
@@ -207,7 +212,10 @@ describe('CodexAdapter — tool bridging', () => {
       }),
     );
     const cfg = (codexCtorMock.mock.calls[0][0] as { config: Record<string, unknown> }).config;
-    expect(cfg).toEqual({ mcp_servers: { flujo: { url: 'http://127.0.0.1:1234/mcp/testtoken' } } });
+    expect(cfg).toEqual({
+      model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
+      mcp_servers: { flujo: { url: 'http://127.0.0.1:1234/mcp/testtoken' } },
+    });
     expect(capturedBridgeTools.map(t => t.name)).toEqual(['my-server__list_things']);
     // Raw JSON Schema passes through untouched (no Zod translation on this path).
     expect(capturedBridgeTools[0].inputSchema).toEqual(mcpTool.function.parameters);

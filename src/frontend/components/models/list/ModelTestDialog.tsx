@@ -94,6 +94,10 @@ export const ModelTestDialog = ({
   onClose,
   onRetry,
 }: ModelTestDialogProps) => {
+  const sdkTitle = result?.provider === 'codex'
+    ? 'Codex SDK (used by flows)'
+    : 'OpenAI SDK (used by flows)';
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>Test model: {modelLabel}</DialogTitle>
@@ -118,7 +122,7 @@ export const ModelTestDialog = ({
               {result.provider ? ` · ${result.provider}` : ''}
             </Typography>
             <Divider sx={{ mb: 2 }} />
-            <AttemptBlock title="OpenAI SDK (used by flows)" attempt={result.sdk} />
+            <AttemptBlock title={sdkTitle} attempt={result.sdk} />
             <AttemptBlock title="axios (independent cross-check)" attempt={result.axios} />
           </>
         ) : null}

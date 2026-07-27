@@ -13,6 +13,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { buildUserMessage } from './claudeSubscriptionAdapter';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
+import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -338,11 +339,14 @@ export class CodexAdapter implements CompletionAdapter {
         bridge = await startCodexToolBridge(bridgeTools);
       }
 
+      const modelCatalogPath = await resolveCodexModelCatalogPath();
+      const config = {
+        ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
+        ...(bridge ? { mcp_servers: { flujo: { url: bridge.url } } } : {}),
+      };
       const codex = new Codex({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
-        ...(bridge
-          ? { config: { mcp_servers: { flujo: { url: bridge.url } } } }
-          : {}),
+        ...(Object.keys(config).length > 0 ? { config } : {}),
       });
 
       const thread = codex.startThread({
@@ -358,6 +362,7 @@ export class CodexAdapter implements CompletionAdapter {
         toolCount: bridgeTools.length,
         hasSystem: Boolean(systemPrompt),
         bridged: Boolean(bridge),
+        usingLocalModelCatalog: Boolean(modelCatalogPath),
       });
 
       const { events } = await thread.runStreamed(
