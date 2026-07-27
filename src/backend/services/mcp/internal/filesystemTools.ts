@@ -22,6 +22,7 @@
  */
 import path from 'path';
 import { promises as fs, createReadStream } from 'fs';
+import { createHash } from 'crypto';
 import readline from 'readline';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
@@ -106,7 +107,7 @@ export function filesystemToolDefinitions(): Tool[] {
       description:
         'Read a text file and return its content. Optionally read only a line range with "from"/"to" (1-based, inclusive). ' +
         `For large files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
-        'Returns { path, from, to, totalLines, content, truncated, matches? }.',
+        'Returns { path, from, to, totalLines, content, truncated, contentHash, matches? }. Pass the returned contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -126,6 +127,7 @@ export function filesystemToolDefinitions(): Tool[] {
           totalLines: { type: 'number' },
           truncated: { type: 'boolean' },
           content: { type: 'string' },
+          contentHash: { type: 'string', description: 'SHA-256 (hex) of the raw file content. Pass this back as "expectedHash" to edit_file/write_file to guard against the file changing between read and write (TOCTOU).' },
           matches: {
             type: 'array',
             items: {
@@ -141,7 +143,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'write_file',
       description:
-        'Create or write a text file (parent directories are created). "mode": "overwrite" (default) replaces the whole file, or a line range when "startLine"/"endLine" (1-based inclusive) are given; "append" adds content at the end; "insert" inserts content before "startLine". Returns { path, bytesWritten, mode, ... }.',
+        'Create or write a text file (parent directories are created). "mode": "overwrite" (default) replaces the whole file, or a line range when "startLine"/"endLine" (1-based inclusive) are given; "append" adds content at the end; "insert" inserts content before "startLine". Optionally pass "expectedHash" (the contentHash from a prior read_file) to reject the write if the file changed on disk since it was read (TOCTOU guard); ignored for a whole-file overwrite. Returns { path, bytesWritten, mode, ... }.',
       // #216: feed the docked diff canvas (ui://devcanvas/diff) so successive
       // writes update one persistent tab. See internal/filesystemResources.ts.
       _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
@@ -153,6 +155,7 @@ export function filesystemToolDefinitions(): Tool[] {
           mode: { type: 'string', enum: ['overwrite', 'append', 'insert'], description: 'Write mode (default "overwrite").' },
           startLine: { type: 'number', description: 'For "insert": line to insert before. For "overwrite": first line of the range to replace (1-based).' },
           endLine: { type: 'number', description: 'For "overwrite": last line (inclusive, 1-based) of the range to replace.' },
+          expectedHash: { type: 'string', description: 'Optional SHA-256 (contentHash from read_file). For append/insert/range-overwrite modes, the write is rejected if the file no longer hashes to this value (TOCTOU guard).' },
         },
         required: ['path', 'content'],
       },
@@ -173,7 +176,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'edit_file',
       description:
-        'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the unique occurrence of oldText. startLine/endLine are an optional disambiguation HINT (if exactly one match starts in that range it wins); a wrong/missing range still works as long as oldText is unique in the file. Include enough surrounding context to make oldText unique. Or (2) "diff": a unified diff string ("@@ -a,b +c,d @@" hunks) applied atomically — hunks are relocated to where their context actually matches, so slightly-off @@ line numbers still apply, and CRLF files are handled. Fails with no partial write only when text is missing/ambiguous or a hunk context is not found. Returns { path, editsApplied|applied, diff:{added,removed} }.',
+        'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the unique occurrence of oldText. startLine/endLine are an optional disambiguation HINT (if exactly one match starts in that range it wins); a wrong/missing range still works as long as oldText is unique in the file. Include enough surrounding context to make oldText unique. Or (2) "diff": a unified diff string ("@@ -a,b +c,d @@" hunks) applied atomically — hunks are relocated to where their context actually matches, so slightly-off @@ line numbers still apply, and CRLF files are handled. Fails with no partial write only when text is missing/ambiguous or a hunk context is not found. Optionally pass "expectedHash" (the contentHash from a prior read_file) to reject the edit if the file changed on disk since it was read (TOCTOU guard). Returns { path, editsApplied|applied, diff:{added,removed} }.',
       // #216: also feed the docked diff canvas so edits show live in the canvas.
       _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
       inputSchema: {
@@ -197,6 +200,7 @@ export function filesystemToolDefinitions(): Tool[] {
           diff: { type: 'string', description: 'A unified diff to apply atomically. Mutually exclusive with "edits".' },
           startLine: { type: 'number', description: 'Optional default 1-based first line to scope all literal edits to.' },
           endLine: { type: 'number', description: 'Optional default 1-based last line (inclusive) to scope all literal edits to.' },
+          expectedHash: { type: 'string', description: 'Optional SHA-256 (contentHash from read_file). If provided and the freshly-read file no longer hashes to it, the edit is rejected with no changes written (TOCTOU guard).' },
         },
         required: ['path'],
       },
@@ -415,6 +419,31 @@ function detectEol(content: string): string {
   return content.includes('\r\n') ? '\r\n' : '\n';
 }
 
+/** UTF-8 byte-order-mark character (U+FEFF) as it decodes into a JS string. */
+const UTF8_BOM = '﻿';
+
+/**
+ * #254 (TOCTOU guard): SHA-256 (hex) of the RAW string as read from disk
+ * (before any CRLF/BOM normalization). `read_file` returns this as `contentHash`;
+ * the mutating tools accept it back as an optional `expectedHash` and refuse to
+ * write when the freshly-read file no longer hashes to it — catching the case
+ * where the file changed on disk during the (arbitrarily long) approval window.
+ */
+function contentHash(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+/** Split a leading UTF-8 BOM off `content` so it can be re-attached after edit. */
+function splitBom(content: string): { bom: string; body: string } {
+  return content.startsWith(UTF8_BOM)
+    ? { bom: UTF8_BOM, body: content.slice(UTF8_BOM.length) }
+    : { bom: '', body: content };
+}
+
+/** Standard actionable message when the on-disk file changed after approval. */
+const STALE_CONTENT_MESSAGE =
+  'File changed after permission approval. Read it again before editing. No changes written.';
+
 /** Heuristic binary sniff: a NUL byte in the first chunk means "not text". */
 function looksBinary(buf: Buffer): boolean {
   const n = Math.min(buf.length, 8000);
@@ -522,6 +551,7 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
       truncated,
       content: matches.length ? out : `(no lines matched pattern ${JSON.stringify(pattern)})`,
       matches,
+      contentHash: contentHash(content),
     });
   }
 
@@ -542,7 +572,7 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
     truncated = true;
   }
   recordTouchedFile(filePath, 'read', size);
-  return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out });
+  return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out, contentHash: contentHash(content) });
 }
 
 async function writeFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
@@ -568,15 +598,27 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
     existing = '';
   }
 
+  // #254 TOCTOU guard: for the read-modify-write modes (append/insert/range-
+  // overwrite) honor an optional expectedHash (the contentHash from read_file)
+  // and refuse to write when the file changed on disk since it was read.
+  const expectedHash = typeof args.expectedHash === 'string' ? args.expectedHash : undefined;
+  if (expectedHash && contentHash(existing) !== expectedHash) {
+    return errorResult(STALE_CONTENT_MESSAGE);
+  }
+
+  // #254 BOM preservation: operate on the body and re-attach a leading UTF-8 BOM
+  // (if the file had one) on write so the read-modify-write modes never drop it.
+  const { bom, body: existingBody } = splitBom(existing);
+
   if (mode === 'append') {
-    const sep = existing.length && !existing.endsWith('\n') && !existing.endsWith('\r\n') ? detectEol(existing) : '';
-    const next = existing + sep + content;
+    const sep = existingBody.length && !existingBody.endsWith('\n') && !existingBody.endsWith('\r\n') ? detectEol(existingBody) : '';
+    const next = bom + existingBody + sep + content;
     await fs.writeFile(filePath, next, 'utf8');
     return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'append' });
   }
 
-  const eol = detectEol(existing);
-  const lines = existing.length ? existing.split(/\r?\n/) : [];
+  const eol = detectEol(existingBody);
+  const lines = existingBody.length ? existingBody.split(/\r?\n/) : [];
   const insertLines = content.split(/\r?\n/);
   const total = lines.length;
 
@@ -584,7 +626,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
     const at = typeof args.startLine === 'number' ? Math.max(1, Math.floor(args.startLine)) : total + 1;
     const idx = Math.min(at - 1, total);
     lines.splice(idx, 0, ...insertLines);
-    const next = lines.join(eol);
+    const next = bom + lines.join(eol);
     await fs.writeFile(filePath, next, 'utf8');
     return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'insert', startLine: at, linesInserted: insertLines.length });
   }
@@ -596,7 +638,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
   end = Math.min(end, total);
   const linesReplaced = Math.max(0, end - start + 1);
   lines.splice(start - 1, linesReplaced, ...insertLines);
-  const next = lines.join(eol);
+  const next = bom + lines.join(eol);
   await fs.writeFile(filePath, next, 'utf8');
   return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'overwrite', startLine: start, endLine: end, linesReplaced });
 }
@@ -631,21 +673,33 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
 
   const original = await fs.readFile(filePath, 'utf8');
 
+  // #254 TOCTOU guard: if the caller passed the contentHash it saw at read time
+  // and the file has since changed on disk (e.g. during the approval window),
+  // refuse to write against the new content rather than silently clobber it.
+  const expectedHash = typeof args.expectedHash === 'string' ? args.expectedHash : undefined;
+  if (expectedHash && contentHash(original) !== expectedHash) {
+    return errorResult(STALE_CONTENT_MESSAGE);
+  }
+
+  // #254 BOM preservation: strip a leading UTF-8 BOM before matching/normalizing
+  // (so oldText/diff context matches the real body) and re-attach it on write.
+  const { bom, body } = splitBom(original);
+
   // (2) Unified-diff apply — atomic.
   if (hasDiff) {
     // Match in LF space so a CRLF file's trailing \r doesn't make every context
     // line mismatch the (\r-stripped) diff body; restore the original EOL on
     // write. The literal-edits path already did this (#187); the diff path did
     // not, which meant diff apply could never succeed on a CRLF file.
-    const diffEol = detectEol(original);
-    const normalized = original.replace(/\r\n?/g, '\n');
+    const diffEol = detectEol(body);
+    const normalized = body.replace(/\r\n?/g, '\n');
     let out: { result: string; added: number; removed: number };
     try {
       out = applyUnifiedDiff(normalized, args.diff as string);
     } catch (err) {
       return errorResult(`Diff apply failed: ${err instanceof Error ? err.message : String(err)}. No changes written.`);
     }
-    const finalContent = diffEol === '\r\n' ? out.result.replace(/\n/g, '\r\n') : out.result;
+    const finalContent = bom + (diffEol === '\r\n' ? out.result.replace(/\n/g, '\r\n') : out.result);
     await fs.writeFile(filePath, finalContent, 'utf8');
     recordTouchedFile(filePath, 'write');
     return dualResult({ path: filePath, applied: true, mode: 'diff', diff: { added: out.added, removed: out.removed } });
@@ -663,8 +717,8 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
   // Match/apply in LF space so CR/CRLF differences between the file on disk and
   // the model-supplied oldText don't produce spurious "not found" errors (#187).
   // The file's original EOL is detected here and restored on write below.
-  const eol = detectEol(original);
-  let working = original.replace(/\r\n?/g, '\n');
+  const eol = detectEol(body);
+  let working = body.replace(/\r\n?/g, '\n');
   let applied = 0;
   for (const raw of edits) {
     const edit = raw as { oldText?: unknown; newText?: unknown; startLine?: unknown; endLine?: unknown };
@@ -708,10 +762,11 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
     working = working.slice(0, idx) + newText + working.slice(idx + oldText.length);
     applied += 1;
   }
-  const diff = buildLineDiff(original, working);
+  const diff = buildLineDiff(body, working);
   // Restore the file's original line-ending style so unchanged lines keep their
   // bytes and we don't rewrite the whole file just because EOLs differ (#187).
-  const finalContent = eol === '\r\n' ? working.replace(/\n/g, '\r\n') : working;
+  // Re-attach any leading UTF-8 BOM that was stripped before matching (#254).
+  const finalContent = bom + (eol === '\r\n' ? working.replace(/\n/g, '\r\n') : working);
   await fs.writeFile(filePath, finalContent, 'utf8');
   recordTouchedFile(filePath, 'write');
   return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff });

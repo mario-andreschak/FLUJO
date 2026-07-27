@@ -292,6 +292,132 @@ describe('filesystem operations', () => {
   });
 });
 
+// --- #254: TOCTOU compare-and-swap guard + BOM preservation ---
+describe('filesystem #254 TOCTOU guard + BOM', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-fs254-'));
+    mockedRoots.mockResolvedValue([dir]);
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+    mockedRoots.mockReset();
+  });
+
+  it('read_file returns a stable contentHash', async () => {
+    const p = path.join(dir, 'h.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'hello\nworld\n' });
+    const a = parse(await filesystemCallTool('read_file', { path: p }));
+    const b = parse(await filesystemCallTool('read_file', { path: p }));
+    expect(typeof a.contentHash).toBe('string');
+    expect((a.contentHash as string).length).toBe(64);
+    expect(a.contentHash).toBe(b.contentHash);
+  });
+
+  it('edit_file rejects a stale expectedHash and leaves the file unchanged', async () => {
+    const p = path.join(dir, 'toctou.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'alpha\nbeta\ngamma\n' });
+    const read = parse(await filesystemCallTool('read_file', { path: p }));
+    const staleHash = read.contentHash as string;
+
+    // Simulate a concurrent change on disk during the approval window.
+    await fsp.writeFile(p, 'alpha\nBETA-CHANGED\ngamma\n', 'utf8');
+
+    const r = await filesystemCallTool('edit_file', {
+      path: p,
+      expectedHash: staleHash,
+      edits: [{ oldText: 'beta', newText: 'BETA' }],
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/changed after permission approval/i);
+    expect(text(r)).toMatch(/no changes written/i);
+    // The concurrent content must remain untouched.
+    expect(await fsp.readFile(p, 'utf8')).toBe('alpha\nBETA-CHANGED\ngamma\n');
+  });
+
+  it('edit_file applies when expectedHash matches the current file', async () => {
+    const p = path.join(dir, 'match.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'alpha\nbeta\ngamma\n' });
+    const read = parse(await filesystemCallTool('read_file', { path: p }));
+    const r = await filesystemCallTool('edit_file', {
+      path: p,
+      expectedHash: read.contentHash as string,
+      edits: [{ oldText: 'beta', newText: 'BETA' }],
+    });
+    expect(r.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe('alpha\nBETA\ngamma\n');
+  });
+
+  it('edit_file is unchanged (backward-compatible) when expectedHash is omitted', async () => {
+    const p = path.join(dir, 'compat.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'alpha\nbeta\ngamma\n' });
+    const r = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'beta', newText: 'BETA' }] });
+    expect(r.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe('alpha\nBETA\ngamma\n');
+  });
+
+  it('write_file range-overwrite honors a stale expectedHash', async () => {
+    const p = path.join(dir, 'wf-toctou.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'a\nb\nc\n' });
+    const read = parse(await filesystemCallTool('read_file', { path: p }));
+    await fsp.writeFile(p, 'a\nCHANGED\nc\n', 'utf8');
+    const r = await filesystemCallTool('write_file', {
+      path: p,
+      content: 'MID',
+      startLine: 2,
+      endLine: 2,
+      expectedHash: read.contentHash as string,
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/changed after permission approval/i);
+    expect(await fsp.readFile(p, 'utf8')).toBe('a\nCHANGED\nc\n');
+  });
+
+  it('write_file append honors a matching expectedHash', async () => {
+    const p = path.join(dir, 'wf-append.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'a\nb\n' });
+    const read = parse(await filesystemCallTool('read_file', { path: p }));
+    const r = await filesystemCallTool('write_file', {
+      path: p,
+      content: 'c',
+      mode: 'append',
+      expectedHash: read.contentHash as string,
+    });
+    expect(r.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe('a\nb\nc');
+  });
+
+  it('edit_file preserves a leading UTF-8 BOM and matches the body', async () => {
+    const p = path.join(dir, 'bom.txt');
+    // Write a genuine BOM file via overwrite (verbatim bytes).
+    await filesystemCallTool('write_file', { path: p, content: '﻿alpha\nbeta\ngamma\n' });
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'beta', newText: 'BETA' }] });
+    expect(ok.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw.startsWith('﻿')).toBe(true);
+    expect(raw).toBe('﻿alpha\nBETA\ngamma\n');
+  });
+
+  it('edit_file preserves a BOM on a CRLF file too', async () => {
+    const p = path.join(dir, 'bom-crlf.txt');
+    await filesystemCallTool('write_file', { path: p, content: '﻿alpha\r\nbeta\r\ngamma\r\n' });
+    const ok = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'beta', newText: 'BETA' }] });
+    expect(ok.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw).toBe('﻿alpha\r\nBETA\r\ngamma\r\n');
+  });
+
+  it('write_file append preserves a leading BOM', async () => {
+    const p = path.join(dir, 'bom-append.txt');
+    await filesystemCallTool('write_file', { path: p, content: '﻿a\nb\n' });
+    const r = await filesystemCallTool('write_file', { path: p, content: 'c', mode: 'append' });
+    expect(r.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw.startsWith('﻿')).toBe(true);
+    expect(raw).toBe('﻿a\nb\nc');
+  });
+});
+
 // --- #287: large-file read guard, in-file search, resource exposure ---
 describe('filesystem #287 enhancements', () => {
   let dir: string;
@@ -412,5 +538,116 @@ describe('filesystem #287 enhancements', () => {
     } finally {
       await fsp.rm(other, { recursive: true, force: true });
     }
+  });
+});
+
+// --- #254: TOCTOU compare-and-swap guard + BOM preservation ---
+describe('filesystem #254 TOCTOU guard + BOM', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-fs254-'));
+    mockedRoots.mockResolvedValue([dir]);
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+    mockedRoots.mockReset();
+  });
+
+  it('read_file returns a contentHash', async () => {
+    const p = path.join(dir, 'h.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'hello world\n' });
+    const out = parse(await filesystemCallTool('read_file', { path: p }));
+    expect(typeof out.contentHash).toBe('string');
+    expect((out.contentHash as string).length).toBe(64); // sha256 hex
+  });
+
+  it('edit_file rejects a stale expectedHash and leaves the file unchanged', async () => {
+    const p = path.join(dir, 'toctou.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'original one\ntwo\n' });
+    const read = parse(await filesystemCallTool('read_file', { path: p }));
+    const staleHash = read.contentHash as string;
+    // Simulate a concurrent change during the approval window.
+    await fsp.writeFile(p, 'CHANGED on disk\ntwo\n', 'utf8');
+    const r = await filesystemCallTool('edit_file', {
+      path: p,
+      expectedHash: staleHash,
+      edits: [{ oldText: 'two', newText: 'TWO' }],
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/changed after permission approval/i);
+    // On-disk file must be untouched (no clobber).
+    expect(await fsp.readFile(p, 'utf8')).toBe('CHANGED on disk\ntwo\n');
+  });
+
+  it('edit_file applies normally when expectedHash matches', async () => {
+    const p = path.join(dir, 'match.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'alpha\nbeta\n' });
+    const read = parse(await filesystemCallTool('read_file', { path: p }));
+    const r = await filesystemCallTool('edit_file', {
+      path: p,
+      expectedHash: read.contentHash as string,
+      edits: [{ oldText: 'beta', newText: 'BETA' }],
+    });
+    expect(r.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe('alpha\nBETA\n');
+  });
+
+  it('edit_file is backward-compatible when expectedHash is omitted', async () => {
+    const p = path.join(dir, 'nohash.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'x\ny\n' });
+    const r = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'y', newText: 'Y' }] });
+    expect(r.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe('x\nY\n');
+  });
+
+  it('edit_file preserves a leading UTF-8 BOM across an edit', async () => {
+    const p = path.join(dir, 'bom.txt');
+    const BOM = '﻿';
+    // Write a genuine BOM file via overwrite (verbatim bytes).
+    await filesystemCallTool('write_file', { path: p, content: `${BOM}first\nsecond\n` });
+    const r = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'second', newText: 'SECOND' }] });
+    expect(r.isError).toBeUndefined();
+    const raw = await fsp.readFile(p, 'utf8');
+    expect(raw.startsWith(BOM)).toBe(true);
+    expect(raw).toBe(`${BOM}first\nSECOND\n`);
+  });
+
+  it('edit_file matches oldText at the very start of a BOM file (BOM stripped before match)', async () => {
+    const p = path.join(dir, 'bom-start.txt');
+    const BOM = '﻿';
+    await filesystemCallTool('write_file', { path: p, content: `${BOM}first\nsecond\n` });
+    // oldText "first" would fail to match if the BOM were glued to it.
+    const r = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'first', newText: 'FIRST' }] });
+    expect(r.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe(`${BOM}FIRST\nsecond\n`);
+  });
+
+  it('write_file read-modify-write modes honor expectedHash', async () => {
+    const p = path.join(dir, 'wf.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'a\nb\nc\n' });
+    const staleHash = parse(await filesystemCallTool('read_file', { path: p })).contentHash as string;
+    // Concurrent change.
+    await fsp.writeFile(p, 'a\nb\nCHANGED\n', 'utf8');
+    // append with the stale hash is rejected.
+    const rej = await filesystemCallTool('write_file', { path: p, content: 'z', mode: 'append', expectedHash: staleHash });
+    expect(rej.isError).toBe(true);
+    expect(text(rej)).toMatch(/changed after permission approval/i);
+    expect(await fsp.readFile(p, 'utf8')).toBe('a\nb\nCHANGED\n');
+    // With the fresh hash it applies.
+    const freshHash = parse(await filesystemCallTool('read_file', { path: p })).contentHash as string;
+    const ok = await filesystemCallTool('write_file', { path: p, content: 'z', mode: 'append', expectedHash: freshHash });
+    expect(ok.isError).toBeUndefined();
+    expect(await fsp.readFile(p, 'utf8')).toBe('a\nb\nCHANGED\nz');
+  });
+
+  it('edit_file produces distinct actionable errors for not-found vs ambiguous', async () => {
+    const p = path.join(dir, 'errs.txt');
+    await filesystemCallTool('write_file', { path: p, content: 'foo\nfoo\nbar\n' });
+    const notFound = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'nope', newText: 'x' }] });
+    expect(notFound.isError).toBe(true);
+    expect(text(notFound)).toMatch(/not found/i);
+    const ambiguous = await filesystemCallTool('edit_file', { path: p, edits: [{ oldText: 'foo', newText: 'x' }] });
+    expect(ambiguous.isError).toBe(true);
+    expect(text(ambiguous)).toMatch(/ambiguous/i);
   });
 });
