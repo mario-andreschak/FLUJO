@@ -134,7 +134,9 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
       // Backfill label/link for a late-joining client that missed start.
       label: row.label && row.status !== 'pending' ? row.label : event.laneTitle || row.label,
       laneConversationId: row.laneConversationId ?? event.laneConversationId,
-      status: event.status,
+      // A capped lane (issue #253) landed successfully with a summary; show it as
+      // completed in the lane row (which has no dedicated 'capped' state).
+      status: event.status === 'capped' ? 'completed' : event.status,
       activity: undefined,
       lastEventAt: now,
     };

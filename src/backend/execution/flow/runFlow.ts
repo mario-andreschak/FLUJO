@@ -35,6 +35,8 @@ import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
+import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -234,7 +236,7 @@ async function publishRunFlowEvent(
   }
 }
 
-export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | 'paused_debug' | 'running';
+export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | 'paused_debug' | 'running' | 'capped';
 
 /**
  * The "flow-as-callable" keystone input. One operation — run a flow with a
@@ -781,6 +783,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // Unattended drive-forward (issue #218): per-node nudge counter, run-scoped
   // (a resume starts fresh). Keyed by the Process node id that stalled.
   const unattendedNudges = new Map<string, number>();
+  // Graceful landing (issue #253): per-node agentic-turn counter for the
+  // request/response tool loop. Incremented each time the loop re-enters with a
+  // tool-call action for the same Process node; once it reaches that node's
+  // resolved turn budget we force a final text-only summary instead of running
+  // more tools. Run-scoped (a resume starts fresh).
+  const nodeTurnCounts = new Map<string, number>();
 
   // --- Execution event emission (live progress + debugger) ---
   const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
@@ -1150,6 +1158,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
           log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
 
+          // Graceful landing (issue #253): this FINAL_RESPONSE is the forced
+          // text-only summary we requested when the turn budget was spent. Mark
+          // the run `capped` (a success-like terminal state distinct from error,
+          // so captureVariable/lastOutput chaining still fires on the summary)
+          // and finish — do NOT drive forward or drain steering; the plane has
+          // landed on purpose.
+          if (sharedState.forceSummaryTurn) {
+            sharedState.forceSummaryTurn = false;
+            sharedState.capped = true;
+            sharedState.status = 'capped';
+            log.info(`[#253] Graceful landing complete for conv ${effectiveConvId}; status=capped.`);
+            break;
+          }
+
           // Unattended safety net (issue #218): a Process node that ended its
           // turn on plain text (no tool call / handoff) would silently complete
           // the run here. In unattended mode, drive it forward along its single
@@ -1192,6 +1214,55 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
           if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
             if (flujo) {
+              // --- Graceful landing at the agentic-turn cap (issue #253) ---
+              // The R/R tool loop is where per-node maxTurns is actually enforced
+              // (adapters ignore it — FLUJO drives the loop here). Count this
+              // node's tool turns; once the budget is spent, DO NOT run more
+              // tools — answer the pending calls synthetically and force one
+              // final text-only summary turn so the run "lands the plane".
+              const capNodeId = sharedState.currentNodeId;
+              if (capNodeId && !sharedState.forceSummaryTurn) {
+                const turns = (nodeTurnCounts.get(capNodeId) ?? 0) + 1;
+                nodeTurnCounts.set(capNodeId, turns);
+                const cap = sharedState.turnBudgets?.[capNodeId] ?? DEFAULT_AGENTIC_MAX_TURNS;
+                if (turns >= cap) {
+                  log.info(`[#253] Turn budget (${cap}) reached for node ${capNodeId} on conv ${effectiveConvId}; forcing a graceful summary turn instead of executing tools.`);
+                  const nowTs = Date.now();
+                  // Answer every still-pending tool call synthetically so the
+                  // transcript stays well-formed (unanswered tool_calls 400).
+                  const cappedToolResults: FlujoChatMessage[] = lastAssistantMsg.tool_calls.map((tc) => ({
+                    id: crypto.randomUUID(),
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    content: GRACEFUL_CAP_TOOL_RESULT,
+                    timestamp: nowTs,
+                    processNodeId: capNodeId,
+                  } as FlujoChatMessage));
+                  const summaryInstruction: FlujoChatMessage = {
+                    id: crypto.randomUUID(),
+                    role: 'user',
+                    content: GRACEFUL_CAP_SUMMARY_INSTRUCTION,
+                    timestamp: nowTs + 1,
+                    processNodeId: capNodeId,
+                  } as FlujoChatMessage;
+                  sharedState.messages.push(...cappedToolResults, summaryInstruction);
+                  sharedState.forceSummaryTurn = true;
+                  sharedState.cappedReason = 'maxTurns';
+                  FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                  emitNewMessages();
+                  if (!sharedState.ephemeral) {
+                    try {
+                      await appendRawForState(
+                        sharedState,
+                        [...cappedToolResults, summaryInstruction].map((m) => ({ type: 'message', message: m })),
+                      );
+                    } catch (err) {
+                      log.warn(`Failed to append graceful-cap messages to log for ${effectiveConvId}`, err);
+                    }
+                  }
+                  continue;
+                }
+              }
               // --- Flujo=true: Handle optional approval ---
               if (requireApproval && sharedState.onApprovalRequired === 'fail') {
                 // Headless fail-fast (#115): a tool needs approval but this run
@@ -1701,7 +1772,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // Flush any trailing messages and signal terminal completion to live consumers.
   emitNewMessages();
-  if (finalStatus === 'completed' || finalStatus === 'error') {
+  if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
     emit({ type: 'run:done', status: finalStatus });
     // Flow-run event bus (issue #116): announce terminal runs so `flow-event`
     // triggers can react to chat/API/manual runs. Scheduler-fired runs are
@@ -1713,7 +1784,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         lastMsg && lastMsg.role === 'assistant' && typeof lastMsg.content === 'string'
           ? lastMsg.content
           : undefined;
-      void publishRunFlowEvent(sharedState, finalStatus, outputText);
+      // A capped run is a successful terminal run for flow-event/chaining
+      // purposes (issue #253): the summary IS the output, so report it as
+      // 'completed' to the flow-run bus.
+      void publishRunFlowEvent(sharedState, finalStatus === 'capped' ? 'completed' : finalStatus, outputText);
     }
   }
 

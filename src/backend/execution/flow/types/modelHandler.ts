@@ -67,6 +67,12 @@ export interface ModelCallResult {
   toolCalls?: ToolCallInfo[];
   fullResponse?: OpenAI.ChatCompletion;
   /**
+   * The effective agentic-turn cap resolved for this call (per-node override →
+   * bound-model setting → system default). Surfaced so the request/response tool
+   * loop in runFlow can enforce the cap and land gracefully at it (issue #253).
+   */
+  effectiveMaxTurns?: number;
+  /**
    * For self-orchestrating adapters (Claude subscription): the ordered
    * assistant/tool messages produced during the internal agentic loop, in OpenAI
    * wire format. callModel materializes these into the conversation so the tool

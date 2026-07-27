@@ -1077,7 +1077,8 @@ export class ModelHandler {
         content, // Final assistant text (from the model response / adapter)
         messages: finalMessages, // Include the new assistant message (now FlujoChatMessage[])
         fullResponse: modelResponse.fullResponse,
-        toolCalls // Pass the structured tool calls info
+        toolCalls, // Pass the structured tool calls info
+        effectiveMaxTurns, // #253: surface the resolved turn cap for runFlow's per-node counter
       }
     };
 

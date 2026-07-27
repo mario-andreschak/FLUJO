@@ -692,6 +692,17 @@ export class ProcessNode extends BaseNode {
       }
     }
 
+    // Graceful landing (issue #253): when runFlow has flagged this as the forced
+    // final summary turn (the agentic-turn budget was exhausted), strip EVERY
+    // tool so the model can only produce a text-only summary. The forced summary
+    // instruction + synthetic tool-results were already appended to the history
+    // by runFlow, so prepResult.messages already carries them.
+    if (sharedState.forceSummaryTurn) {
+      log.info(`[ProcessNode ${prepResult.nodeId}] Forced summary turn: stripping all tools for graceful landing (#253).`);
+      prepResult.availableTools = [];
+      prepResult.forceSummaryTurn = true;
+    }
+
     log.info('prep() completed', {
       completePromptLength: completePrompt.length,
       boundModel,
@@ -852,7 +863,10 @@ export class ProcessNode extends BaseNode {
         content: result.content || '',
         messages: result.messages, // Messages updated during tool calls
         fullResponse: result.fullResponse,
-        toolCalls: result.toolCalls
+        toolCalls: result.toolCalls,
+        // #253: carry the resolved turn cap out so post() can record it on
+        // SharedState.turnBudgets for runFlow's per-node turn counter.
+        effectiveMaxTurns: result.effectiveMaxTurns,
       };
 
       // Log tool calls if present
@@ -1034,6 +1048,14 @@ export class ProcessNode extends BaseNode {
     } else {
        // Use the content from execResult which might include prefixes
        sharedState.lastResponse = execResult.content || '';
+    }
+
+    // Graceful landing (issue #253): record the effective agentic-turn cap this
+    // node resolved so runFlow's request/response tool loop can enforce it and
+    // land with a forced text summary once the budget is spent.
+    if (execResult.success && typeof execResult.effectiveMaxTurns === 'number' && node_params?.id) {
+      sharedState.turnBudgets = sharedState.turnBudgets ?? {};
+      sharedState.turnBudgets[node_params.id] = execResult.effectiveMaxTurns;
     }
 
     // Tier 2c (named variables): capture this node's final output into the

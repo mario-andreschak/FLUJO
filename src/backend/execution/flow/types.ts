@@ -653,8 +653,25 @@ export interface SharedState {
     };
     // Conversation ID for tracking multiple conversations
     conversationId?: string;
-    // Current status of the conversation execution
-    status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
+    // Current status of the conversation execution.
+    // 'capped' (issue #253): the run hit a Process node's agentic-turn budget and
+    // landed gracefully with a forced text-only summary. It is a SUCCESS-like
+    // terminal state (distinct from 'error'), so captureVariable/lastOutput
+    // chaining still fires on the summary content.
+    status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped';
+    // Graceful-landing bookkeeping (issue #253).
+    // `forceSummaryTurn` is a one-shot directive set by runFlow when the turn cap
+    // fires: the next ProcessNode.prep strips all tools so the model can only
+    // produce a text summary. Cleared once the summary turn completes.
+    forceSummaryTurn?: boolean;
+    // True once the run landed at the turn cap; carried onto the run result.
+    capped?: boolean;
+    // Why the run was capped (currently only 'maxTurns').
+    cappedReason?: 'maxTurns';
+    // Per-Process-node effective agentic-turn cap, resolved by ModelHandler and
+    // written back in ProcessNode.post, keyed by node id. runFlow reads it to
+    // drive the per-node turn counter on the request/response tool loop.
+    turnBudgets?: Record<string, number>;
     // Tool calls awaiting user approval
     pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
     // Flag to indicate if cancellation was requested
@@ -918,6 +935,10 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Unattended run (issue #258): forwarded so the synthetic `question` tool
      *  degrades to a tool-error instead of blocking for an answer. */
     unattended?: boolean;
+    /** Graceful landing (issue #253): set from SharedState.forceSummaryTurn when
+     *  the turn cap fired. When true, execCore sends NO tools so the model can
+     *  only produce a final text summary. */
+    forceSummaryTurn?: boolean;
     /** Debugger model-input visualization (issue #153). Computed in prep (where
     *  the threaded/folded/scoped views are all in scope) and promoted onto the
     *  DebugStep by FlowExecutor. Populated only when the run is in debug mode /
@@ -1037,6 +1058,10 @@ export interface ProcessNodeExecResult extends BaseExecResult {
     fullResponse?: OpenAI.ChatCompletion;
     toolCalls?: ToolCallInfo[];
     messages?: FlujoChatMessage[]; // Use timestamped type
+    /** The effective agentic-turn cap ModelHandler resolved for this call
+     *  (issue #253). post() writes it onto SharedState.turnBudgets so runFlow
+     *  can enforce the cap on the request/response tool loop. */
+    effectiveMaxTurns?: number;
 }
 
 // FinishNode exec result

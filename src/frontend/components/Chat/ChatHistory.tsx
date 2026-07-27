@@ -211,6 +211,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       case 'awaiting_tool_approval': return 'warning.main';
       case 'paused_debug': return 'secondary.main';
       case 'completed': return 'success.main';
+      case 'capped': return 'info.main';
       case 'error': return 'error.main';
       default: return 'transparent';
     }
@@ -223,6 +224,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       case 'awaiting_tool_approval': return 'Waiting for tool approval';
       case 'paused_debug': return 'Paused in debug mode';
       case 'completed': return 'Completed';
+      case 'capped': return 'Landed at turn limit (summary produced)';
       case 'error': return 'Error';
       default: return '';
     }

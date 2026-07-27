@@ -228,7 +228,10 @@ export interface PlannedExecutionsFile {
   executions: PlannedExecution[];
 }
 
-export type RunRecordStatus = 'completed' | 'error' | 'skipped' | 'needs_approval';
+// 'capped' (issue #253): the run landed gracefully at a Process node's
+// agentic-turn budget with a forced text-only summary — a success-like terminal
+// state, distinct from 'error', so run history shows it apart from a failure.
+export type RunRecordStatus = 'completed' | 'error' | 'skipped' | 'needs_approval' | 'capped';
 
 /** One entry in an execution's run history (ring buffer, newest last). */
 export interface RunRecord {

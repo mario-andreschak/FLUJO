@@ -1453,12 +1453,14 @@ export class SchedulerService {
       conversationId,
       firedAt,
       finishedAt,
-      status: result.status === 'completed' ? 'completed' : 'error',
+      // A capped run (issue #253) is success-like: it produced a forced summary,
+      // so record it distinctly ('capped') rather than collapsing it into 'error'.
+      status: result.status === 'completed' ? 'completed' : result.status === 'capped' ? 'capped' : 'error',
       triggerSummary: payload.summary,
       outputText: this.truncateOutput(result.outputText),
       usage: result.usage,
       error:
-        result.status === 'completed'
+        result.status === 'completed' || result.status === 'capped'
           ? undefined
           : result.error?.message ?? `Run ended with status "${result.status}"`,
     };

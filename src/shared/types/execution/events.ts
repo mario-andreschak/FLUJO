@@ -118,7 +118,10 @@ export interface RunAwaitingQuestionEvent extends ExecutionEventBase {
 }
 export interface RunDoneEvent extends ExecutionEventBase {
   type: 'run:done';
-  status: 'completed' | 'error';
+  // 'capped' (issue #253): the run landed gracefully at a Process node's
+  // agentic-turn budget with a forced text-only summary — a success-like
+  // terminal state, distinct from 'error', so the UI can show it differently.
+  status: 'completed' | 'error' | 'capped';
 }
 export interface NodeEnterEvent extends ExecutionEventBase {
   type: 'node:enter';
@@ -259,7 +262,7 @@ export interface SubflowDoneEvent extends ExecutionEventBase {
   type: 'subflow:done';
   node?: NodeRef;
   subflowId: string;
-  status: 'completed' | 'error';
+  status: 'completed' | 'error' | 'capped';
   /** See SubflowStartEvent — duplicated here for late-joining clients. */
   laneTitle?: string;
   laneConversationId?: string;

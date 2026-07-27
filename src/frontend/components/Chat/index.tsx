@@ -163,7 +163,7 @@ export interface ConversationListItem {
   /** Timestamp of the most recent user-role message; used for sidebar sort.
    *  Optional/null for legacy conversations (falls back to updatedAt). */
   lastUserMessageAt?: number | null;
-  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error'; // Added 'paused_debug'
+  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped'; // 'capped' = graceful landing at turn cap (#253)
   /** Id of the scheduler planned-execution that originated this conversation
    *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
    *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
