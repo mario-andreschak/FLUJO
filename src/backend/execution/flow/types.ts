@@ -178,6 +178,19 @@ export interface ProcessNodeProperties {
      * numeric system default). Not enforced by the Claude subscription adapter.
      */
     maxTokens?: number;
+    /**
+     * Per-node summarizing-compaction control (issue #248). `'off'` opts this
+     * node OUT of compaction even when the global experimental flag is on;
+     * `'auto'` (or unset) inherits the global setting. A node cannot turn
+     * compaction ON by itself — it stays gated behind `compactionEnabled`.
+     */
+    compactionMode?: 'auto' | 'off';
+    /**
+     * Per-node override of how many tokens of the recent conversation tail are
+     * kept verbatim when compacting (everything older is summarized). Unset =
+     * inherit the global `compactionKeepTokens`, then the default (8000).
+     */
+    compactionKeepTokens?: number;
 
     /** Tier 2c (named variables): when set, this node writes its final output
      *  (the model's assistant text) into `SharedState.variables[captureVariable]`

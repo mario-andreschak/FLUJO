@@ -16,6 +16,8 @@ import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
+import { resolveEffectiveCompaction } from './resolveEffectiveCompaction';
+import { compactHistory, estimateTokens } from './summarizingCompaction';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
@@ -238,6 +240,156 @@ export class ModelHandler {
     } catch (err) {
       log.warn('Failed to read claudeSessionResume setting; defaulting to disabled', { err });
       return false;
+    }
+  }
+
+  /**
+   * Read the experimental summarizing-compaction settings (issue #248) from the
+   * persisted Settings blob. Best-effort: any failure reads as disabled, so the
+   * completion path keeps its existing (wire-only) behaviour.
+   */
+  private static async getCompactionGlobalSettings(): Promise<{
+    compactionEnabled?: boolean;
+    compactionBufferTokens?: number;
+    compactionKeepTokens?: number;
+  }> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      const exp = settings?.experimental;
+      return {
+        compactionEnabled: exp?.compactionEnabled,
+        compactionBufferTokens: exp?.compactionBufferTokens,
+        compactionKeepTokens: exp?.compactionKeepTokens,
+      };
+    } catch (err) {
+      log.warn('Failed to read compaction settings; defaulting to disabled', { err });
+      return {};
+    }
+  }
+
+  /**
+   * Summarizing compaction pre-flight (issue #248). When the experimental
+   * `compactionEnabled` setting is on and the persisted history is estimated to
+   * be about to overflow the model's context window, summarize the OLD part of
+   * the conversation into an anchored-summary head and persist it (the summary
+   * becomes the new conversation head; the pre-summary slice is captured as a
+   * recoverable run resource). Returns `{ summaryMessage, removedIds }` so the
+   * caller can also apply the same head-swap to THIS turn's wire, or `null` when
+   * compaction did not run (disabled, no context-window info, under threshold,
+   * nothing old enough, or the summary model call failed — all safe no-ops that
+   * fall through to the existing wire-only path).
+   *
+   * Strictly gated: OFF by default and a pure no-op when disabled, so existing
+   * behaviour is unchanged for every user who hasn't opted in. Best-effort: any
+   * failure is swallowed and treated as "did not compact".
+   */
+  private static async maybeCompactPersistedHistory(
+    conversationId: string,
+    nodeId: string | undefined,
+    model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
+    effectiveMaxTokens: number | undefined,
+  ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
+    try {
+      // Self-orchestrating adapter manages its own session/wire; excluded.
+      if (model.adapter === 'claude-cli') return null;
+
+      const global = await ModelHandler.getCompactionGlobalSettings();
+      const eff = resolveEffectiveCompaction(undefined, model, global);
+      if (!eff.enabled) return null;
+
+      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const state = FlowExecutor.conversationStates.get(conversationId);
+      if (!state || !Array.isArray(state.messages) || state.messages.length < 4) return null;
+
+      // Estimate the current request size. Prefer the last provider-reported
+      // prompt-token figure (authoritative), else the char/4 heuristic.
+      let lastPromptTokens: number | undefined;
+      for (let i = state.messages.length - 1; i >= 0; i--) {
+        const u = (state.messages[i] as FlujoChatMessage).usage;
+        if (u && typeof u.promptTokens === 'number' && u.promptTokens > 0) {
+          lastPromptTokens = u.promptTokens;
+          break;
+        }
+      }
+      const estimate = lastPromptTokens ?? estimateTokens(state.messages);
+
+      // The trigger threshold: explicit per-model override, else derived from the
+      // context window minus head-room for the reply + a safety buffer. Without
+      // any context-window info we cannot pre-flight safely — no-op.
+      const threshold =
+        eff.threshold ??
+        (model.contextWindow
+          ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
+          : undefined);
+      if (threshold === undefined || threshold <= 0 || estimate < threshold) return null;
+
+      log.info('Summarizing-compaction pre-flight triggered', {
+        conversationId,
+        nodeId,
+        estimate,
+        threshold,
+        messages: state.messages.length,
+      });
+
+      const summarize = async (
+        msgs: FlujoChatMessage[],
+        prompt: { system: string; user: string },
+      ): Promise<string> => {
+        const callMessages: FlujoChatMessage[] = [
+          { id: uuidv4(), role: 'system', content: prompt.system, timestamp: Date.now() } as FlujoChatMessage,
+          ...msgs,
+          { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
+        ];
+        // A bounded, tool-free completion. Reuses the same provider path but must
+        // NOT recurse into compaction (no conversationId keyed state to compact,
+        // and the summary history is a throwaway slice).
+        const res = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
+          maxTokens: Math.min(effectiveMaxTokens ?? 4000, 4000),
+        });
+        return res.success ? (res.value.content ?? '') : '';
+      };
+
+      const writeAnchor = async (text: string): Promise<string | undefined> => {
+        try {
+          const written = await writeRunResource({
+            conversationId,
+            name: 'compaction-anchor',
+            mimeType: 'application/json',
+            kind: 'text',
+            data: { text },
+            producedBy: { source: 'tool-result', nodeId },
+          });
+          return 'skipped' in written ? undefined : written.uri;
+        } catch {
+          return undefined;
+        }
+      };
+
+      const before = [...state.messages];
+      const result = await compactHistory(
+        state.messages,
+        { keepTokens: eff.keepTokens, nodeId },
+        { summarize, writeAnchor },
+      );
+      if (!result) return null;
+
+      // Persist: swap the history head in SharedState and reconcile the log so the
+      // summary head + removals are durable and auditable, then snapshot.
+      state.messages = result.newMessages;
+      state.updatedAt = Date.now();
+      try {
+        const { reconcileConversationLog } = require('@/backend/execution/flow/conversationLog');
+        await reconcileConversationLog(state, before);
+        const { persistConversationState } = require('@/backend/execution/flow/persistConversationState');
+        await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
+      } catch (persistError) {
+        log.warn('Compaction persisted-history reconcile/persist failed; continuing', { conversationId, persistError });
+      }
+
+      return { summaryMessage: result.summaryMessage, removedIds: result.removedIds };
+    } catch (error) {
+      log.warn('Summarizing-compaction pre-flight failed; falling back to existing behaviour', { conversationId, error });
+      return null;
     }
   }
 
@@ -596,6 +748,8 @@ export class ModelHandler {
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
     let modelAdapter: string | undefined;
+    let modelContextWindow: number | undefined;
+    let modelCompactionThreshold: number | undefined;
     const nodeDisplayName = nodeName;
     try {
       const model = await modelService.getModel(modelId);
@@ -605,6 +759,8 @@ export class ModelHandler {
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
         modelAdapter = model.adapter;
+        modelContextWindow = model.contextWindow;
+        modelCompactionThreshold = model.compactionThreshold;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
@@ -766,11 +922,41 @@ export class ModelHandler {
       ? await ModelHandler.buildRunResourceMarkers(conversationId)
       : undefined;
 
+    // Summarizing-compaction pre-flight (issue #248). Only for FULL-HISTORY
+    // nodes (a scoped `wireMessages` view can't be reconciled against the
+    // persisted history) and only when the experimental `compactionEnabled`
+    // setting is on — a pure no-op otherwise, so existing behaviour is unchanged
+    // for everyone who hasn't opted in. When it runs, it persists an anchored
+    // summary head into SharedState; we apply the SAME head-swap (by id) to this
+    // turn's send view so the request the provider sees matches the compacted
+    // history.
+    let effectiveMessages = messages;
+    if (conversationId && !wireMessages) {
+      const compaction = await ModelHandler.maybeCompactPersistedHistory(
+        conversationId,
+        nodeId,
+        { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
+        effectiveMaxTokens,
+      );
+      if (compaction) {
+        const removed = new Set(compaction.removedIds);
+        const firstRemovedIdx = effectiveMessages.findIndex((m) => removed.has(m.id));
+        const kept = effectiveMessages.filter((m) => !removed.has(m.id));
+        const insertAt = firstRemovedIdx < 0 ? 0 : Math.min(firstRemovedIdx, kept.length);
+        effectiveMessages = [
+          ...kept.slice(0, insertAt),
+          compaction.summaryMessage,
+          ...kept.slice(insertAt),
+        ];
+      }
+    }
+
     // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
     // scoped its input (latest-message / isolated); otherwise it sees the full
-    // `messages`. `finalMessages` below is always built from `messages`, so the
-    // persisted/returned transcript keeps the complete history regardless.
-    const response = await this.generateCompletion(modelId, prompt, wireMessages ?? messages, tools, {
+    // (possibly compacted) `effectiveMessages`. `finalMessages` below is always
+    // built from `messages`, so the persisted/returned transcript keeps the
+    // complete history regardless.
+    const response = await this.generateCompletion(modelId, prompt, wireMessages ?? effectiveMessages, tools, {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -797,7 +983,13 @@ export class ModelHandler {
 
     const modelResponse = response.value;
     const content = modelResponse.content || '';
-    const finalMessages: FlujoChatMessage[] = [...messages]; // Start with input messages (already FlujoChatMessage)
+    // Start from the (possibly compacted) send view, not the raw input: when
+    // summarizing compaction (issue #248) ran pre-flight, `effectiveMessages`
+    // carries the anchored summary head in place of the summarized older turns,
+    // so the transcript written back to SharedState by post() stays consistent
+    // with the compacted history that was persisted+logged. When compaction did
+    // NOT run, `effectiveMessages === messages`, so this is unchanged.
+    const finalMessages: FlujoChatMessage[] = [...effectiveMessages];
 
     // // Check if content already starts with a heading pattern like "## ... says:"
     // const hasHeadingPattern = /^## .+says:\s*\n\n/i.test(content);

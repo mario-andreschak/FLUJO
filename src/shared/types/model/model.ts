@@ -63,6 +63,13 @@ export interface Model {
      */
     maxTokens?: number;
     /**
+     * Optional per-model override of the prompt-token figure at/above which
+     * SUMMARIZING COMPACTION triggers pre-flight (issue #248). When unset the
+     * trigger is derived from `contextWindow` minus the configured buffer.
+     * Only consulted when the experimental `compactionEnabled` setting is on.
+     */
+    compactionThreshold?: number;
+    /**
      * Optional, user-assigned folder for organizing model cards (#71). Absent/empty
      * means "Ungrouped". Frontend-only organization — has no effect on the model.
      */

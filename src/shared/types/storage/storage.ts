@@ -142,6 +142,29 @@ export interface ExperimentalSettings {
    * point; a missing value keeps every description intact.
    */
   toolDescriptionMaxChars?: number;
+  /**
+   * When true, FLUJO applies SUMMARIZING COMPACTION to long conversations
+   * (issue #248): before a request that would overflow the model's context
+   * window — and after a context-length error — it summarizes the older part of
+   * the persisted history into an anchored summary head and continues, instead
+   * of only shrinking the wire copy. Off by default: it MUTATES persisted
+   * conversation history (behind a recoverable run-resource anchor), so it stays
+   * opt-in until verified. A missing value is treated as disabled.
+   */
+  compactionEnabled?: boolean;
+  /**
+   * Head-room, in tokens, kept free below the model's context window when
+   * deciding whether to compact pre-flight (compact when the estimated request
+   * size exceeds contextWindow − max(maxTokens, this)). Only meaningful when
+   * `compactionEnabled`. Missing ⇒ 20000.
+   */
+  compactionBufferTokens?: number;
+  /**
+   * How many tokens of the most-recent conversation tail are kept VERBATIM when
+   * compacting (everything older is summarized). Only meaningful when
+   * `compactionEnabled`. Missing ⇒ 8000.
+   */
+  compactionKeepTokens?: number;
 }
 
 /**
