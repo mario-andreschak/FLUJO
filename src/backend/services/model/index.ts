@@ -10,7 +10,7 @@ import {
   CompletionResponse,
   NormalizedModel
 } from '@/shared/types/model/response';
-import { ModelProvider, ModelAdapter } from '@/shared/types/model/provider';
+import { ModelProvider, ModelAdapter, isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import {
   encryptApiKey,
@@ -503,7 +503,12 @@ class ModelService {
       throw new Error('Model name is required to run a test');
     }
     if (!resolvedApiKey) {
-      throw new Error('Could not resolve an API key for this model');
+      // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
+      if (adapter === 'codex-cli') {
+        resolvedApiKey = '';
+      } else {
+        throw new Error('Could not resolve an API key for this model');
+      }
     }
 
     return testModelConnection({
@@ -597,11 +602,11 @@ class ModelService {
       }
       const model = candidates[0];
 
-      // The Claude-subscription adapter self-orchestrates an agentic loop when
-      // given tools, which diverges from standard OpenAI tool semantics (the
-      // CLIENT is supposed to execute its own tools). Reject rather than
-      // silently diverge.
-      if (model.adapter === 'claude-cli' && tools && tools.length > 0) {
+      // The self-orchestrating adapters (Claude subscription / Codex) run an
+      // agentic loop when given tools, which diverges from standard OpenAI tool
+      // semantics (the CLIENT is supposed to execute its own tools). Reject
+      // rather than silently diverge.
+      if (isSelfOrchestratingAdapter(model.adapter) && tools && tools.length > 0) {
         return {
           success: false,
           error: {
@@ -615,8 +620,12 @@ class ModelService {
       }
 
       // --- Resolve + decrypt the API key (never logged, never returned) ---
-      const decryptedApiKey = await resolveAndDecryptApiKey(model.ApiKey);
-      if (!decryptedApiKey) {
+      // Codex may run keyless: an empty key means "use the machine's ChatGPT
+      // plan login from `codex login`" (the adapter then omits the apiKey).
+      const resolvedKey = await resolveAndDecryptApiKey(model.ApiKey);
+      const decryptedApiKey =
+        resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+      if (decryptedApiKey === null) {
         return {
           success: false,
           error: {

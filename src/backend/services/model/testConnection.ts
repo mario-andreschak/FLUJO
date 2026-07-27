@@ -318,7 +318,13 @@ export async function testModelConnection(params: {
     const diagnosis = sdk.ok
       ? `Connected successfully via the ${adapter} adapter${isNativeSdk ? ' (native SDK)' : ''}. The model and credentials are working.`
       : `The ${adapter} adapter failed: ${sdk.error?.message ?? 'unknown error'}. ` +
-        `Check the model name and the ${adapter === 'claude-cli' ? 'OAuth token (claude setup-token) and that the `claude` CLI is installed' : 'API key'}.`;
+        `Check the model name and the ${
+        adapter === 'claude-cli'
+          ? 'OAuth token (claude setup-token) and that the `claude` CLI is installed'
+          : adapter === 'codex-cli'
+            ? 'OpenAI API key (or run `codex login` for a ChatGPT plan and leave the key empty)'
+            : 'API key'
+      }.`;
     return { ok: sdk.ok, model: modelName, baseUrl, provider, sdk, axios: naAxios, diagnosis };
   }
 

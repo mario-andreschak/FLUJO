@@ -20,6 +20,7 @@ describe('provider profiles', () => {
       'anthropic-openai',
       'anthropic-native',
       'claude-subscription',
+      'codex',
     ]);
     // Mistral must not be selectable in the modal.
     expect(PROVIDER_PROFILES.some(p => p.provider === 'mistral')).toBe(false);
@@ -31,6 +32,7 @@ describe('provider profiles', () => {
     expect(getProviderProfile('anthropic', 'anthropic').id).toBe('anthropic-native');
     expect(getProviderProfile('anthropic', 'openai').id).toBe('anthropic-openai');
     expect(getProviderProfile('claude-subscription', 'claude-cli').id).toBe('claude-subscription');
+    expect(getProviderProfile('codex', 'codex-cli').id).toBe('codex');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
     expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
     expect(getProviderProfile('openai', 'openai-responses').id).toBe('openai-responses');
@@ -59,5 +61,7 @@ describe('provider profiles', () => {
     expect(getProviderProfileById('claude-subscription')?.showBaseUrl).toBe(false);
     expect(getProviderProfileById('claude-subscription')?.sdkLabel).toBe('Claude CLI');
     expect(getProviderProfileById('gemini-native')?.sdkLabel).toBe('GenAI SDK');
+    expect(getProviderProfileById('codex')?.showBaseUrl).toBe(false);
+    expect(getProviderProfileById('codex')?.sdkLabel).toBe('Codex SDK');
   });
 });

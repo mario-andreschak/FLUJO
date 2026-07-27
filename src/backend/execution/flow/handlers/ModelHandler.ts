@@ -19,6 +19,7 @@ import { resolveEffectiveMaxTokens } from './maxTokens';
 import { resolveEffectiveCompaction } from './resolveEffectiveCompaction';
 import { compactHistory, estimateTokens } from './summarizingCompaction';
 import { normalizeMaxTokens } from '@/shared/types/model';
+import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
@@ -290,8 +291,8 @@ export class ModelHandler {
     effectiveMaxTokens: number | undefined,
   ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
     try {
-      // Self-orchestrating adapter manages its own session/wire; excluded.
-      if (model.adapter === 'claude-cli') return null;
+      // Self-orchestrating adapters manage their own session/wire; excluded.
+      if (isSelfOrchestratingAdapter(model.adapter)) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
       const eff = resolveEffectiveCompaction(undefined, model, global);
@@ -1163,9 +1164,13 @@ export class ModelHandler {
       // Extract model settings
       const temperature = model.temperature ? parseFloat(model.temperature) : 0.0;
 
-      // Resolve and decrypt the API key
-      const decryptedApiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-      if (!decryptedApiKey) {
+      // Resolve and decrypt the API key. Codex may run keyless: an empty key
+      // means "use the machine's ChatGPT plan login from `codex login`" (the
+      // adapter then omits the apiKey and the CLI falls back to its own auth).
+      const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+      const decryptedApiKey =
+        resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+      if (decryptedApiKey === null) {
         return {
           success: false,
           error: createModelError(
@@ -1212,7 +1217,7 @@ export class ModelHandler {
       // dropping a message (tool-pair integrity + prefix-cache stability). The
       // self-orchestrating Claude path ('claude-cli') is skipped: it flattens the
       // wire itself and has its own resource-aware truncation markers (issue #168).
-      if (model.adapter !== 'claude-cli' && couldCompact(apiMessages)) {
+      if (!isSelfOrchestratingAdapter(model.adapter) && couldCompact(apiMessages)) {
         apiMessages = compactForWire(apiMessages, {
           resourceMarkers: opts?.runResourceMarkers,
         });
@@ -1512,7 +1517,7 @@ export class ModelHandler {
       // claude-cli path (it manages its own wire + truncation markers).
       if (
         !result.success &&
-        model.adapter !== 'claude-cli' &&
+        !isSelfOrchestratingAdapter(model.adapter) &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
         const beforeChars = JSON.stringify(apiMessages).length;

@@ -261,7 +261,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     if (!formState.displayName?.trim()) {
       newErrors.displayName = 'Display Name is required';
     }
-    if (!isApiKeyBound && !formState.ApiKey?.trim()) {
+    // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
+    if (!isApiKeyBound && !formState.ApiKey?.trim() && currentProfile.adapter !== 'codex-cli') {
       newErrors.ApiKey = 'API key is required';
     }
 
@@ -377,7 +378,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   Uses the <strong>{currentProfile.sdkLabel}</strong>
                   {currentProfile.adapter === 'claude-cli'
                     ? '. Paste an OAuth token from `claude setup-token` into the API Key field.'
-                    : ''}
+                    : currentProfile.adapter === 'codex-cli'
+                      ? '. Paste an OpenAI API key — or leave it empty to use your ChatGPT plan via `codex login`.'
+                      : ''}
                 </Typography>
 
                 {currentProfile.showBaseUrl && (
@@ -396,12 +399,14 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     margin="dense"
                     label="API Key"
                     fullWidth
-                    required={!isApiKeyBound}
+                    required={!isApiKeyBound && currentProfile.adapter !== 'codex-cli'}
                     type={isApiKeyBound ? "text" : "password"}
                     value={formState.ApiKey || ''}
                     onChange={(e) => handleChange('ApiKey', e.target.value)}
                     error={!!errors.ApiKey}
-                    helperText={errors.ApiKey || "API key is required for this provider"}
+                    helperText={errors.ApiKey || (currentProfile.adapter === 'codex-cli'
+                      ? "Optional — leave empty to use your ChatGPT plan (codex login)"
+                      : "API key is required for this provider")}
                     InputProps={{
                       readOnly: isApiKeyBound,
                       endAdornment: (

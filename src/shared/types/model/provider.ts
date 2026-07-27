@@ -11,7 +11,8 @@ export type ModelProvider =
   | 'xai'
   | 'ollama'
   | 'litellm'
-  | 'claude-subscription';
+  | 'claude-subscription'
+  | 'codex';
 
 /**
  * Which backend completion adapter (and SDK) drives a model.
@@ -30,13 +31,27 @@ export type ModelProvider =
  * - 'anthropic'  -> AnthropicAdapter, native Anthropic SDK.
  * - 'claude-cli' -> ClaudeSubscriptionAdapter, drives the `claude` CLI against a
  *                   Claude Pro/Max subscription (OAuth token in the API Key field).
+ * - 'codex-cli'  -> CodexAdapter, drives the `codex` CLI through the Codex SDK
+ *                   against a ChatGPT plan (`codex login`) or an OpenAI API key.
  */
 export type ModelAdapter =
   | 'openai'
   | 'openai-responses'
   | 'gemini'
   | 'anthropic'
-  | 'claude-cli';
+  | 'claude-cli'
+  | 'codex-cli';
+
+/**
+ * Adapters that run their OWN agentic tool loop inside a single
+ * `createCompletion` call (Claude subscription / Codex), instead of the
+ * request/response contract where FLUJO drives the loop. These adapters flatten
+ * the wire themselves, manage their own truncation markers, and return a
+ * `transcript` — so ModelHandler skips its wire-side compaction/refit for them.
+ */
+export function isSelfOrchestratingAdapter(adapter?: string): boolean {
+  return adapter === 'claude-cli' || adapter === 'codex-cli';
+}
 
 /**
  * Provider information mapping
@@ -89,6 +104,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
   },
   'claude-subscription': {
     label: 'Claude Subscription',
+    baseUrl: ''
+  },
+  codex: {
+    label: 'Codex (OpenAI)',
     baseUrl: ''
   }
 };
@@ -267,6 +286,18 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     showBaseUrl: false,
     // The Agent SDK accepts model aliases as well as full ids.
     defaultModels: ['opus', 'sonnet', 'haiku', 'fable'],
+  },
+  {
+    id: 'codex',
+    label: 'Codex (OpenAI)',
+    provider: 'codex',
+    adapter: 'codex-cli',
+    sdkLabel: 'Codex SDK',
+    baseUrl: '',
+    showBaseUrl: false,
+    // Hints only — the field stays free-text. Leaving the technical name to the
+    // CLI's own default also works (the SDK falls back to it when unset).
+    defaultModels: ['gpt-5.5', 'gpt-5.3-codex'],
   },
 ];
 
