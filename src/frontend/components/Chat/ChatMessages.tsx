@@ -132,6 +132,12 @@ interface ChatMessagesProps {
    * the input.
    */
   queuedMessages?: QueuedMessage[];
+  /**
+   * Why the queue is held (chatQueue.drainHoldReason) — shown on the pending
+   * bubbles instead of the "Queued" spinner, so a message parked behind an
+   * errored/stopped/paused run doesn't keep pretending it is about to send.
+   */
+  queueHoldReason?: string | null;
 }
 
 /** #216: payload handed up when the user opens a tool's app in the canvas. */
@@ -1176,6 +1182,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onOpenInCanvas, // #216: route a tool app to the docked canvas
   canvasKeys, // #216: identities already open in the canvas
   queuedMessages = [], // #221: inline pending bubbles
+  queueHoldReason = null,
 }) => {
   // Issue #247: per-tool-call rejection feedback text (keyed by tool-call id),
   // so the user can tell the model *why* a call was rejected / what to do instead.
@@ -1398,8 +1405,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               {q.content || (q.attachments.length > 0 ? `${q.attachments.length} attachment(s)` : '')}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'flex-end' }}>
-              <CircularProgress size={10} color="inherit" />
-              <Typography variant="caption" sx={{ opacity: 0.85 }}>Queued</Typography>
+              {!queueHoldReason && <CircularProgress size={10} color="inherit" />}
+              <Typography variant="caption" sx={{ opacity: 0.85 }}>
+                {queueHoldReason ?? 'Queued'}
+              </Typography>
             </Box>
           </Box>
         </Box>

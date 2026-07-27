@@ -622,3 +622,79 @@ describe('deriveModelInputView (debugger model-input explanation — issue #153)
     expect(serialized).not.toMatch(/apiKey|api_key|Authorization/i);
   });
 });
+
+// --- Mid-run steering ---------------------------------------------------------
+// A user message injected into a run that is already in flight must reach the
+// model that is currently working, whatever that node's inputMode is: dropping a
+// correction because the node happens to be `isolated` would make steering
+// silently do nothing. It must also not disturb the node's in-flight tool loop —
+// the injected message lands at the END of the history, which is exactly where
+// currentToolTail looks for the unresolved exchange.
+const injected = (content: string, id = content): FlujoChatMessage =>
+  ({ role: 'user', content, id, timestamp: 1, injected: true } as FlujoChatMessage);
+
+describe('scopeMessagesForInput (mid-run steering injections)', () => {
+  it('appends the injection under `isolated`, where the prior conversation is dropped', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('S', 's'),
+      user('original task', 'u1'),
+      assistant('working on it', 'a1'),
+      injected('stop, do X instead', 'i1'),
+    ];
+
+    const out = scopeMessagesForInput(messages, 'isolated', 'the isolated prompt');
+
+    expect(out.map((m) => m.id)).toEqual(['s', 'isolated-input', 'i1']);
+  });
+
+  it('appends the injection under `latest-message`', () => {
+    const messages: FlujoChatMessage[] = [
+      sys('S', 's'),
+      user('u', 'u1'),
+      assistant('a', 'a1'),
+      injected('correction', 'i1'),
+    ];
+
+    const out = scopeMessagesForInput(messages, 'latest-message');
+
+    expect(out.map((m) => m.id)).toEqual(['s', 'u1', 'a1', 'i1']);
+  });
+
+  it('does not let a trailing injection hide an in-flight tool exchange', () => {
+    // Mid tool loop: the node has called a tool and has its result, and a
+    // steering message arrives. The node must still see its own loop — without
+    // peeling the injection first, currentToolTail reads the trailing user
+    // message as "settled" and the exchange disappears from the wire.
+    const messages: FlujoChatMessage[] = [
+      sys('S', 's'),
+      user('u', 'u1'),
+      toolCallAssistant('a-call', 'call-1'),
+      toolResult('t-1', 'call-1'),
+      injected('actually search for Y', 'i1'),
+    ];
+
+    const out = scopeMessagesForInput(messages, 'latest-message');
+
+    expect(out.map((m) => m.id)).toEqual(['s', 'u1', 'a-call', 't-1', 'i1']);
+  });
+
+  it('keeps a collapsed node from folding away a live exchange under an injection', () => {
+    const messages: FlujoChatMessage[] = [
+      user('u', 'u1'),
+      { ...toolCallAssistant('a-call', 'call-1'), processNodeId: 'node-A' } as FlujoChatMessage,
+      { ...toolResult('t-1', 'call-1'), processNodeId: 'node-A' } as FlujoChatMessage,
+      injected('correction', 'i1'),
+    ];
+
+    // node-A's exchange is still in flight, so it must survive the fold.
+    const out = collapseNodeOutputs(messages, new Set(['node-A']));
+
+    expect(out.map((m) => m.id)).toEqual(['u1', 'a-call', 't-1', 'i1']);
+  });
+
+  it('strips the internal `injected` flag at the provider boundary', () => {
+    const out = toApiMessages([injected('correction', 'i1')]);
+
+    expect(out).toEqual([{ role: 'user', content: 'correction' }]);
+  });
+});

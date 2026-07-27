@@ -33,6 +33,26 @@ function currentToolTail(messages: FlujoChatMessage[]): FlujoChatMessage[] {
 }
 
 /**
+ * Split off the run of MID-RUN STEERING messages at the very end of the history
+ * (see FlujoChatMessage.injected). The run loop appends them after whatever the
+ * node was doing, which would otherwise confuse two tail-sensitive computations:
+ * `currentToolTail` walks back from the end and would see a plain user message,
+ * concluding the node's in-flight tool exchange had settled — so a
+ * `latest-message`/`isolated` node would lose its own tool loop from the wire
+ * mid-loop, and `collapseNodeOutputs` would become free to fold that live
+ * exchange away. Peeling the injected run first keeps both looking at the same
+ * tail they saw before the injection; callers re-append the run at the end.
+ */
+function splitTrailingInjected(
+  messages: FlujoChatMessage[],
+): { base: FlujoChatMessage[]; injectedTail: FlujoChatMessage[] } {
+  let i = messages.length;
+  while (i > 0 && messages[i - 1].injected) i--;
+  if (i === messages.length) return { base: messages, injectedTail: [] };
+  return { base: messages.slice(0, i), injectedTail: messages.slice(i) };
+}
+
+/**
  * Narrow a node's assembled context (a leading system message + threaded
  * history, as produced by buildNodeContext) to just what the MODEL should see
  * for the given inputMode. This shapes only the WIRE view — the caller keeps the
@@ -49,6 +69,12 @@ function currentToolTail(messages: FlujoChatMessage[]): FlujoChatMessage[] {
  *     single synthetic user message, then the current in-flight tool tail (so a
  *     tool-using isolated node can continue its loop across re-entries). The
  *     prior conversation is dropped. The synthetic user message is wire-only.
+ *
+ * MID-RUN STEERING: user messages flagged `injected` that trail the history are
+ * ALWAYS appended to the wire, in every mode. A correction the user typed at the
+ * running agent has to reach that agent — dropping it because the node happens
+ * to be `isolated` would make steering silently do nothing, which is the exact
+ * failure the feature exists to prevent.
  *
  * ADAPTER CAVEAT (issue #160): this narrowing is provider-agnostic, but what a
  * given provider does with the scoped wire differs. Request/response adapters
@@ -69,7 +95,9 @@ export function scopeMessagesForInput(
 ): FlujoChatMessage[] {
   if (!inputMode || inputMode === 'full-history') return messages;
 
-  const system = messages.filter((m) => m.role === 'system');
+  // Steering messages are re-appended verbatim at the end of every branch below.
+  const { base: messages_, injectedTail } = splitTrailingInjected(messages);
+  const system = messages_.filter((m) => m.role === 'system');
 
   if (inputMode === 'isolated') {
     const userMsg: FlujoChatMessage = {
@@ -80,7 +108,7 @@ export function scopeMessagesForInput(
       id: 'isolated-input',
       timestamp: 0,
     };
-    return [...system, userMsg, ...currentToolTail(messages)];
+    return [...system, userMsg, ...currentToolTail(messages_), ...injectedTail];
   }
 
   // 'latest-message': the most recent EXCHANGE — the last user message and the
@@ -94,23 +122,24 @@ export function scopeMessagesForInput(
   // tool_calls survive without their results — a settled region always ends on a
   // plain/handoff turn, and a trailing handoff turn's prose still reaches the
   // model via the tail + stripHandoffPlumbing.
-  const tail = currentToolTail(messages);
-  const settledEnd = messages.length - tail.length;
+  const tail = currentToolTail(messages_);
+  const settledEnd = messages_.length - tail.length;
   let lastUserIdx = -1;
   for (let i = settledEnd - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') { lastUserIdx = i; break; }
+    if (messages_[i].role === 'user') { lastUserIdx = i; break; }
   }
   if (lastUserIdx === -1) return messages; // no user turn — keep everything
   let lastAssistant: FlujoChatMessage | undefined;
   for (let i = settledEnd - 1; i > lastUserIdx; i--) {
-    const m = messages[i];
+    const m = messages_[i];
     if (m.role === 'assistant' && !isToolCallTurn(m)) { lastAssistant = m; break; }
   }
   return [
     ...system,
-    messages[lastUserIdx],
+    messages_[lastUserIdx],
     ...(lastAssistant ? [lastAssistant] : []),
     ...tail,
+    ...injectedTail,
   ];
 }
 
@@ -159,7 +188,12 @@ export function collapseNodeOutputs(
 ): FlujoChatMessage[] {
   if (collapsedNodeIds.size === 0) return messages;
 
-  const settledEnd = messages.length - currentToolTail(messages).length;
+  // Peel trailing steering injections before locating the in-flight exchange,
+  // so injecting a message can't make the live tool tail look settled (and thus
+  // collapsible) while the node is still looping. Injected messages sit at
+  // index >= settledEnd and pass through the copy loop untouched.
+  const { base } = splitTrailingInjected(messages);
+  const settledEnd = base.length - currentToolTail(base).length;
 
   // Segment the settled region into node "visits" — contiguous runs of
   // messages stamped with the same processNodeId (ModelHandler stamps every
@@ -330,7 +364,7 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
  */
 export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
   return stripHandoffPlumbing(messages).map(
-    ({ id, timestamp, disabled, processNodeId, depth, usage, ...rest }) =>
+    ({ id, timestamp, disabled, processNodeId, depth, usage, injected, ...rest }) =>
       rest as OpenAI.ChatCompletionMessageParam
   );
 }

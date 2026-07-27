@@ -125,3 +125,21 @@ export interface DrainGate {
 export function canDrain(gate: DrainGate): boolean {
   return !gate.running && !gate.pendingApproval && !gate.debugPaused && !gate.hasError && !gate.stopped;
 }
+
+/**
+ * Why the queue is HELD rather than merely waiting for the current run, or null
+ * when nothing is holding it back. `running` is not a hold — it is the normal
+ * case and resolves on its own.
+ *
+ * A held queue used to be invisible: the pending bubbles kept showing a
+ * "Queued" spinner that would never resolve, so a message parked behind an
+ * errored or stopped run looked like it was still on its way. These strings let
+ * the UI say what is actually happening and what will release it.
+ */
+export function drainHoldReason(gate: DrainGate): string | null {
+  if (gate.stopped) return 'Held — you stopped this run. Send again to continue.';
+  if (gate.hasError) return 'Held — the last run failed. Retry or send again to continue.';
+  if (gate.pendingApproval) return 'Held — waiting for tool approval.';
+  if (gate.debugPaused) return 'Held — paused in the debugger.';
+  return null;
+}

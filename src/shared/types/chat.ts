@@ -75,6 +75,17 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     serverName: string;
   };
 
+  /**
+   * Mid-run steering: this user message was injected into a run that was
+   * ALREADY in flight (POST /v1/chat/conversations/:id/inject) rather than
+   * starting a turn of its own. It is ordinary conversation content — persisted,
+   * displayed and sent to the model like any user turn — but the flag makes it
+   * survive a node's `inputMode` narrowing: the whole point of a correction is
+   * that the node currently working sees it, even when that node is `isolated`
+   * or `latest-message` scoped. See buildNodeContext.scopeMessagesForInput.
+   */
+  injected?: boolean;
+
   /** Token usage reported by the provider for the call that produced this message (assistant messages only). */
   usage?: {
     promptTokens: number;

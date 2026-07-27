@@ -41,6 +41,7 @@ import {
   getQueue as getMsgQueue,
   peekQueue as peekMsgQueue,
   canDrain as canDrainQueue,
+  drainHoldReason,
 } from './chatQueue';
 import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
 import ConversationStats from './ConversationStats';
@@ -1658,25 +1659,69 @@ const Chat: React.FC = () => {
        return;
     }
 
-    // Message queueing (issue #177): if a run is already in flight for this
-    // conversation, park the message in the per-conversation queue instead of
-    // POSTing a concurrent run. The drain effect auto-sends it once the
-    // conversation is idle. Messages arriving from the drain (fromQueue) skip
-    // this gate so they actually send. The approval / debug-pause gates keep the
-    // input disabled, so we never reach here while blocked.
+    // A run is already in flight for this conversation. Two ways to handle the
+    // message, in order of preference:
+    //
+    //  1. MID-RUN STEERING — hand it straight to the live run (POST /inject) so
+    //     the model sees it on its next turn. This is the point of typing while
+    //     the agent works: it is usually a correction, and a correction that
+    //     arrives after the run has finished going the wrong way is worthless.
+    //  2. QUEUE (issue #177) — park it and auto-send once the conversation is
+    //     idle. Still the right behaviour when the message can't be steering:
+    //     it carries attachments (the inject endpoint takes text only) or the
+    //     user picked a specific node for it (that's a new turn, not a nudge),
+    //     or the run turned out to have already ended.
+    //
+    // Messages arriving from the drain (fromQueue) skip this gate entirely so
+    // they actually send. The approval / debug-pause gates keep the input
+    // disabled, so we never reach here while blocked.
     if (!opts?.fromQueue && runningConvs.has(detailedConversation.id)) {
-      const queued: QueuedMessage = {
-        id: uuidv4(),
-        content,
-        attachments,
-        // Capture the one-shot node pick now so it applies only to THIS message.
-        nodeOverride: nodeOverride ?? null,
-        timestamp: Date.now(),
-      };
-      setQueuedMessages(prev => enqueueMsg(prev, detailedConversation.id, queued));
-      setNodeOverride(null);
-      log.debug('Run in progress — queued message', { conversationId: detailedConversation.id, queuedId: queued.id });
-      return;
+      const convId = detailedConversation.id;
+      const canSteer = attachments.length === 0 && !nodeOverride;
+      if (canSteer) {
+        const messageId = uuidv4();
+        const { delivered } = await chatService.injectMessage(convId, content, messageId);
+        if (delivered) {
+          // Optimistic bubble under the SAME id the backend will use, so the
+          // canonical copy merges into it when the run folds the message in
+          // (dedupe in the live view is by message id) instead of duplicating.
+          const steeringMessage: ChatMessage = {
+            id: messageId,
+            role: 'user',
+            content,
+            timestamp: Date.now(),
+          };
+          updateDetailedConversationState({
+            ...detailedConversation,
+            messages: [...detailedConversation.messages, steeringMessage],
+          });
+          log.debug('Run in progress — injected steering message into the live run', {
+            conversationId: convId,
+            messageId,
+          });
+          return;
+        }
+        // The run ended between the last render and this POST. Fall through and
+        // send it as a normal turn rather than queueing it behind nothing.
+        log.debug('Steering rejected (run no longer live) — sending as a normal turn', { conversationId: convId });
+      } else {
+        const queued: QueuedMessage = {
+          id: uuidv4(),
+          content,
+          attachments,
+          // Capture the one-shot node pick now so it applies only to THIS message.
+          nodeOverride: nodeOverride ?? null,
+          timestamp: Date.now(),
+        };
+        setQueuedMessages(prev => enqueueMsg(prev, convId, queued));
+        setNodeOverride(null);
+        log.debug('Run in progress — queued message (not steerable)', {
+          conversationId: convId,
+          queuedId: queued.id,
+          reason: attachments.length > 0 ? 'attachments' : 'node-override',
+        });
+        return;
+      }
     }
 
     log.debug('Sending message', { conversationId: detailedConversation.id, contentLength: content.length, attachmentsCount: attachments.length });
@@ -3131,6 +3176,13 @@ const Chat: React.FC = () => {
                 onOpenInCanvas={handleOpenInCanvas}
                 canvasKeys={canvasKeys}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
+                queueHoldReason={drainHoldReason({
+                  running: runningConvs.has(detailedConversation.id),
+                  pendingApproval: !!pendingToolCalls,
+                  debugPaused: isDebugPaused,
+                  hasError: currentConversationSummary?.status === 'error',
+                  stopped: viewedConversationStopped,
+                })}
               />
 
               {/* Completion banner: shown once the run has reached a Finish node

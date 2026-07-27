@@ -10,6 +10,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
+import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
@@ -66,6 +67,11 @@ export async function POST(
     // 3. Set the cancellation flag
     log.info(`Setting cancellation flag for conversation`, { requestId, conversationId });
     sharedState.isCancelled = true;
+
+    // Stopping the run also discards any mid-run steering message that has not
+    // been folded in yet: the user stopped this run, so a correction aimed at it
+    // must not silently resurface at the start of the next one.
+    clearSteeringInbox(conversationId);
 
     // 3a. In-request agentic approvals (Claude subscription): the run is live,
     // blocked inside canUseTool. Reject every pending call so the adapter

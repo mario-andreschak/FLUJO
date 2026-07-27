@@ -17,6 +17,7 @@ import {
   getQueue,
   peekQueue,
   canDrain,
+  drainHoldReason,
 } from '@/frontend/components/Chat/chatQueue';
 
 const msg = (id: string, content = id, nodeOverride: string | null = null): QueuedMessage => ({
@@ -228,5 +229,36 @@ describe('chatQueue', () => {
       expect(sent).toEqual(['a', 'b', 'c']);
       expect(getQueue(q, 'c1')).toEqual([]);
     });
+  });
+});
+
+// A held queue used to be indistinguishable from a waiting one: the pending
+// bubbles kept spinning "Queued" behind an errored or stopped run that would
+// never release them. drainHoldReason is what lets the UI say so.
+describe('drainHoldReason', () => {
+  const idle = { running: false, pendingApproval: false, debugPaused: false, hasError: false, stopped: false };
+
+  it('is null when nothing holds the queue', () => {
+    expect(drainHoldReason(idle)).toBeNull();
+  });
+
+  it('is null while a run is merely in flight (that resolves on its own)', () => {
+    expect(drainHoldReason({ ...idle, running: true })).toBeNull();
+  });
+
+  it.each([
+    ['stopped', { ...idle, stopped: true }],
+    ['hasError', { ...idle, hasError: true }],
+    ['pendingApproval', { ...idle, pendingApproval: true }],
+    ['debugPaused', { ...idle, debugPaused: true }],
+  ])('explains the hold for %s', (_label, gate) => {
+    const reason = drainHoldReason(gate);
+    expect(reason).toEqual(expect.stringContaining('Held'));
+    // Whatever holds the queue, canDrain must agree it is held.
+    expect(canDrain(gate)).toBe(false);
+  });
+
+  it('reports the user-actionable cause first when several apply', () => {
+    expect(drainHoldReason({ ...idle, stopped: true, hasError: true })).toMatch(/you stopped/i);
   });
 });

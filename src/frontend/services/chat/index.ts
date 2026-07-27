@@ -250,6 +250,45 @@ class ChatService {
   }
 
   /**
+   * POST /v1/chat/conversations/{id}/inject — hand a user message to a run that
+   * is already in flight so the model sees it on its next turn (mid-run
+   * steering) instead of after the whole run finishes.
+   *
+   * Returns `{ delivered: true }` once the message is queued for the live run,
+   * or `{ delivered: false }` when the backend reports the conversation is not
+   * running — the caller must then send the message as a normal turn. Network
+   * failures also report `delivered: false` for the same reason: a steering
+   * message that goes nowhere is worse than one that starts a new turn.
+   */
+  async injectMessage(
+    id: string,
+    content: string,
+    messageId?: string
+  ): Promise<{ delivered: boolean }> {
+    log.debug('injectMessage: Entering method', { conversationId: id, messageId });
+    try {
+      const response = await fetch(`${BASE}/${encodeURIComponent(id)}/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, id: messageId }),
+      });
+      if (response.ok) return { delivered: true };
+      if (response.status === 409) {
+        log.debug('injectMessage: run is not live; caller should send normally', { conversationId: id });
+        return { delivered: false };
+      }
+      log.warn('injectMessage: unexpected response; falling back to a normal send', {
+        conversationId: id,
+        status: response.status,
+      });
+      return { delivered: false };
+    } catch (err) {
+      log.warn('injectMessage: request failed; falling back to a normal send', { conversationId: id, err });
+      return { delivered: false };
+    }
+  }
+
+  /**
    * Subscribe to the live execution event stream (SSE) for a conversation.
    * Returns the EventSource so the caller can close it. Pass `fromSeq` to
    * replay buffered events from a known position (used when re-attaching to a

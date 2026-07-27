@@ -2,6 +2,11 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
+import {
+  steeringCount,
+  takeSteeringMessages,
+  requeueSteeringMessages,
+} from '@/backend/execution/flow/steeringInbox';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
@@ -920,6 +925,75 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     return false;
   };
 
+  // --- Mid-run steering (user intervention while the run is in flight) --------
+  // A correction is only useful if it reaches the model that is going the wrong
+  // way, so messages posted to /inject are folded into THIS run at the next safe
+  // boundary rather than queued for a run of their own.
+  //
+  // "Safe" means the transcript is well-formed: an assistant `tool_calls` turn
+  // whose results have not been appended yet must never be split by a user
+  // message (every provider 400s on that shape — the same invariant issue #256
+  // repairs after a crash). When the tail is mid-exchange we simply leave the
+  // messages in the inbox and try again on the next iteration, which is at most
+  // one tool batch away. This is also what defers a drain past the debug
+  // pending-tool-calls step below.
+  const hasUnansweredToolCalls = (): boolean => {
+    const answered = new Set<string>();
+    for (const m of sharedState.messages) {
+      if (m.role === 'tool') {
+        const id = (m as { tool_call_id?: string }).tool_call_id;
+        if (id) answered.add(id);
+      }
+    }
+    return sharedState.messages.some(
+      (m) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.tool_calls) &&
+        m.tool_calls.some((tc) => tc.id && !answered.has(tc.id)),
+    );
+  };
+
+  /**
+   * Fold any waiting steering messages into the live transcript. Returns true
+   * when at least one was folded in (the caller keeps executing so the model
+   * sees it on its very next call). Ephemeral subflow child runs are keyed by
+   * their own id and never receive injections — a message steers the root
+   * conversation, and arrives when the subflow returns to it.
+   */
+  const drainSteering = async (): Promise<boolean> => {
+    if (steeringCount(effectiveConvId) === 0) return false;
+    if (hasUnansweredToolCalls()) {
+      log.debug(`Steering message(s) waiting for ${effectiveConvId} but a tool exchange is in flight; deferring.`);
+      return false;
+    }
+    const injected = takeSteeringMessages(effectiveConvId);
+    if (injected.length === 0) return false;
+    try {
+      // Stamp the current node so the message is attributed to the step it is
+      // steering (live-view lane placement + subflow projection tagging).
+      for (const m of injected) {
+        if (!m.processNodeId && sharedState.currentNodeId) m.processNodeId = sharedState.currentNodeId;
+      }
+      sharedState.messages.push(...injected);
+      sharedState.lastUserMessageAt = injected[injected.length - 1].timestamp ?? Date.now();
+      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      emitNewMessages();
+      // Per-step durability is the append-only log, exactly as for tool results
+      // (the log refuses ephemeral runs, which have no durable transcript).
+      if (!sharedState.ephemeral) {
+        await appendRawForState(sharedState, injected.map(m => ({ type: 'message', message: m })));
+      }
+      log.info(`Folded ${injected.length} steering message(s) into the live run for ${effectiveConvId}.`);
+      return true;
+    } catch (error) {
+      // Never lose a message the user has already sent: put it back so the next
+      // iteration (or the next run) delivers it.
+      requeueSteeringMessages(effectiveConvId, injected);
+      log.warn(`Failed to fold steering message(s) for ${effectiveConvId}; re-queued`, error);
+      return false;
+    }
+  };
+
   const singleStep = !!sharedState.debugMode && !continueDebug;
   const pauseForDebug = () => {
     sharedState.status = 'paused_debug';
@@ -948,6 +1022,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           currentAction = ERROR_ACTION;
           break;
         }
+
+        // Mid-run steering: deliver anything the user sent while this run has
+        // been working, BEFORE the next model call, so the correction lands on
+        // the very next turn instead of after the run finishes. Deferred
+        // automatically while a tool exchange is unresolved (see drainSteering).
+        // The first iteration also picks up anything left over from a previous
+        // run that ended before its inbox was drained.
+        await drainSteering();
 
         // Debug step granularity: execute tool calls a previous step paused before.
         if (sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
@@ -1083,6 +1165,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           }
           if (driven === 'nudged') {
             emitNewMessages();
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            continue;
+          }
+
+          // Mid-run steering, last call: a message posted while the model was
+          // producing this final response would otherwise be stranded in the
+          // inbox with the run already over. Fold it in and keep going — the
+          // user asked the running agent something, so the running agent
+          // answers it rather than making them re-send into a fresh turn.
+          if (await drainSteering()) {
+            log.info(`Steering message arrived as ${effectiveConvId} was completing; continuing the run to answer it.`);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
             continue;
           }
