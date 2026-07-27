@@ -288,9 +288,24 @@ describe('claude subscription buildUserMessage', () => {
     // Plain turns still render as before.
     expect(text).toContain('Human: Weather in Berlin?');
     expect(text).toContain('Assistant: Let me check.');
-    // The tool CALL and its RESULT are now rendered (previously dropped).
-    expect(text).toContain('Assistant [tool call] mcp_get_weather_abc({"city":"Berlin"})');
-    expect(text).toContain('Tool result [mcp_get_weather_abc]: {"tempC":18}');
+    // The tool CALL and its RESULT are now rendered (previously dropped), in the
+    // non-invocable `[prior action]` form (#296).
+    expect(text).toContain('[prior action] mcp_get_weather_abc\narguments: {"city":"Berlin"}');
+    expect(text).toContain('[prior action result] mcp_get_weather_abc\n{"tempC":18}');
+    // The old call-expression form is gone — it was what models imitated.
+    expect(text).not.toContain('[tool call]');
+  });
+
+  it('wraps a tool-bearing history in the inert-record envelope with === separators (#296)', () => {
+    const { content } = buildUserMessage(CONVERSATION);
+    const text = content as string;
+    expect(text.startsWith('<conversation_history>\n')).toBe(true);
+    expect(text.endsWith('\n</conversation_history>')).toBe(true);
+    // The preamble tells the model this is a record, not a script to continue.
+    expect(text).toContain('This is a RECORD of the conversation so far');
+    expect(text).toContain('call the tool through your normal tool interface');
+    // Entries are separated by an explicit rule.
+    expect(text).toContain('\n===\n');
   });
 
   it('renders an assistant tool-call turn that carries no text (content: \'\')', () => {
@@ -307,8 +322,8 @@ describe('claude subscription buildUserMessage', () => {
     ];
     const { content } = buildUserMessage(convo);
     const text = content as string;
-    expect(text).toContain('Assistant [tool call] list_files({})');
-    expect(text).toContain('Tool result [list_files]: a.txt\nb.txt');
+    expect(text).toContain('[prior action] list_files\narguments: {}');
+    expect(text).toContain('[prior action result] list_files\na.txt\nb.txt');
   });
 
   it('truncates oversized tool results and args with a marker', () => {
@@ -331,7 +346,7 @@ describe('claude subscription buildUserMessage', () => {
     // (bigResult is exactly 9000 chars → 9000-4000 = 5000 truncated.)
     expect(text).toMatch(/\[truncated 5000 chars\]/);
     // The args payload is truncated too (its exact count depends on JSON overhead).
-    expect(text).toMatch(/write_file\(\{"content":"A+…\[truncated \d+ chars\]/);
+    expect(text).toMatch(/\[prior action\] write_file\narguments: \{"content":"A+…\[truncated \d+ chars\]/);
     // The whole oversized payloads are not present verbatim.
     expect(text).not.toContain('R'.repeat(9000));
     expect(text).not.toContain('A'.repeat(5000));
@@ -346,6 +361,17 @@ describe('claude subscription buildUserMessage', () => {
     expect(systemPrompt).toBe('sys');
     // No `Human:` prefix for the single-turn tool-free case (prefix-cache stability).
     expect(content).toBe('just a question');
+  });
+
+  it('leaves a tool-free MULTI-turn history unwrapped and blank-line joined (#296)', () => {
+    const convo: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+      { role: 'user', content: 'third' },
+    ];
+    const { content } = buildUserMessage(convo);
+    // Byte-identical to the pre-#296 rendering: no envelope, no `===`.
+    expect(content).toBe('Human: first\n\nAssistant: second\n\nHuman: third');
   });
 
   it('emits text + image content blocks for a multimodal turn', () => {

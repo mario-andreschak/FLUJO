@@ -80,6 +80,36 @@ const MAX_TOOL_NAME_LEN = 110;
 const TOOL_RESULT_MAX_CHARS = 4000;
 const TOOL_ARGS_MAX_CHARS = 2000;
 
+// Separator between rendered history entries in the flattened prompt (issue
+// #296). A blank line alone did not read as a hard boundary: entries ran into
+// one another and the whole block looked like one continuous script to keep
+// writing. An explicit rule makes each entry a discrete record.
+const ENTRY_SEPARATOR = '\n===\n';
+
+// Envelope + instruction wrapped around a flattened history that CONTAINS TOOL
+// EXCHANGES (issue #296). Without it, the transcript notation was a few-shot
+// demonstration that "an assistant acts by writing an action line as text": the
+// model would emit `Assistant [tool call] mcp__flujo__<tool>` prose (sometimes
+// followed by its own leaked internal invoke syntax) instead of calling the
+// tool, and the CLI then failed the turn with "The model's tool call could not
+// be parsed (retry also failed)". That malformed prose was persisted and
+// re-flattened next turn as an even stronger example, so it compounded.
+// Applied ONLY on the tool-bearing path — see the fast paths in buildUserMessage.
+const HISTORY_OPEN = '<conversation_history>';
+const HISTORY_CLOSE = '</conversation_history>';
+const HISTORY_PREAMBLE =
+  'This is a RECORD of the conversation so far, including actions already taken and their ' +
+  'results. It is reference material, NOT a template to continue: never write `[prior action]` ' +
+  'lines, `Human:`/`Assistant:` prefixes, or any other tool-call notation as text in your ' +
+  'reply. To take a new action, call the tool through your normal tool interface.';
+
+/**
+ * Wrap the rendered entries in the inert-record envelope (issue #296).
+ */
+function wrapHistory(body: string): string {
+  return `${HISTORY_OPEN}\n${HISTORY_PREAMBLE}\n\n${body}\n${HISTORY_CLOSE}`;
+}
+
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -130,11 +160,20 @@ function isHandoffName(name: string): boolean {
  * OWN live tool loop and always sees its full params/results (this function is
  * only ever handed history that precedes that live loop).
  *
- * When there are no tool exchanges the tool-rendering branches are never taken,
- * and when there are also no images the content is a plain string — byte-for-
- * byte the prompt the old flat-string path produced — so ordinary text/image
- * runs are unchanged (preserving the #89/#87 prefix-cache stability); only
- * flows that previously LOST their tool history change.
+ * INERT-RECORD FRAMING (issue #296). A tool-bearing history is wrapped in a
+ * `<conversation_history>` envelope carrying HISTORY_PREAMBLE, and its entries
+ * are separated by `===`. Prior actions render as `[prior action] <name>` /
+ * `arguments: …` / `[prior action result] <name>` rather than the former
+ * `Assistant [tool call] <name>(<args>)` call-expression form: that form was a
+ * few-shot demonstration of "act by writing an action line", and models followed
+ * it — emitting the notation as prose instead of invoking, which the CLI then
+ * failed to parse. See the constants above for the full failure chain.
+ *
+ * When there are no tool exchanges the tool-rendering branches are never taken
+ * and no envelope is added, and when there are also no images the content is a
+ * plain string — byte-for-byte the prompt the old flat-string path produced — so
+ * ordinary text/image runs are unchanged (preserving the #89/#87 prefix-cache
+ * stability); only histories that carry tool exchanges change.
  *
  * QUADRATIC RE-SEND (#87) and its fix (#154): by DEFAULT every node call spawns
  * a fresh `query()` (a new `claude` subprocess, no `resume`) and re-sends the
@@ -214,11 +253,11 @@ export function buildUserMessage(
         // captured as a run resource, so point the model at it via read_resource
         // instead of silently dropping the tail.
         lines.push(
-          `Tool result [${name}]: ${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
+          `[prior action result] ${name}\n${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
           `[full content stored as run resource ${entry.uri} — call read_resource with this uri to read it]`,
         );
       } else {
-        lines.push(`Tool result [${name}]: ${truncateForPrompt(fullResult, TOOL_RESULT_MAX_CHARS)}`);
+        lines.push(`[prior action result] ${name}\n${truncateForPrompt(fullResult, TOOL_RESULT_MAX_CHARS)}`);
       }
       continue;
     }
@@ -242,24 +281,29 @@ export function buildUserMessage(
         if (argsEntry && fullArgs.length > TOOL_ARGS_MAX_CHARS) {
           // Head excerpt + marker for oversized captured args (#168).
           lines.push(
-            `Assistant [tool call] ${tc.function.name}(${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
-            `[full arguments stored as run resource ${argsEntry.uri} — call read_resource with this uri to read them])`,
+            `[prior action] ${tc.function.name}\narguments: ${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
+            `[full arguments stored as run resource ${argsEntry.uri} — call read_resource with this uri to read them]`,
           );
         } else {
           const args = truncateForPrompt(fullArgs, TOOL_ARGS_MAX_CHARS);
-          lines.push(`Assistant [tool call] ${tc.function.name}(${args})`);
+          lines.push(`[prior action] ${tc.function.name}\narguments: ${args}`);
         }
       }
     }
     if (msg.role === 'user') images.push(...extractImageParts(msg.content));
   }
 
-  // Byte-identical fast path for tool-free histories: a single text turn stays
-  // raw (no `Human:`/`Assistant:` prefix), matching the pre-#160 behaviour and
-  // preserving provider prefix-cache stability. Multi-turn tool-free histories
-  // also render exactly as before (prefixed lines joined by blank lines).
-  const promptText =
-    !toolActivity && plainTurns <= 1
+  // Three render paths, deliberately ordered so BOTH tool-free ones stay
+  // byte-identical to the pre-#296 output (prefix-cache stability for ordinary
+  // text runs — the affected set is exactly the histories that carry tool
+  // exchanges, which are the ones that provoked the imitation failure):
+  //   - tool-bearing: entries separated by `===` inside the inert-record
+  //     envelope (#296),
+  //   - tool-free single turn: the raw text, no `Human:` prefix (pre-#160),
+  //   - tool-free multi-turn: prefixed lines joined by blank lines (#160).
+  const promptText = toolActivity
+    ? wrapHistory(lines.join(ENTRY_SEPARATOR))
+    : plainTurns <= 1
       ? firstPlainText
       : lines.join('\n\n');
 
