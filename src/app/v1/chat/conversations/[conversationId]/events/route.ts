@@ -2,6 +2,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/events/route');
@@ -14,8 +15,11 @@ export const dynamic = 'force-dynamic';
  *
  * Replaces the old polling-based streaming. Clients fetch the full conversation
  * once (GET /v1/chat/conversations/{id}) then attach here to receive live
- * events. Pass ?fromSeq=N to replay buffered events from a known position
- * after a reconnect (events carry a monotonic `seq`).
+ * events. Pass ?fromSeq=N to resume from a known position after a reconnect:
+ * events carry an authoritative, durable, monotonic per-conversation `seq`
+ * (issue #261). Recent positions are served from the in-memory ring buffer;
+ * positions older than the buffer (evicted, channel GC'd, or after a process
+ * restart) are replayed from the durable JSONL log.
  */
 export async function GET(
   request: NextRequest,
@@ -51,7 +55,7 @@ export async function GET(
   let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
+    async start(controller) {
       const cleanup = () => {
         if (closed) return;
         closed = true;
@@ -95,22 +99,42 @@ export async function GET(
       // Initial frame: reconnection hint + comment so proxies flush headers.
       controller.enqueue(encoder.encode(`retry: 3000\n\n: connected ${conversationId}\n\n`));
 
-      // Replay buffered events first (ascending seq), then go live.
+      // Replay from the cursor (ascending seq), then go live. Recent positions
+      // are served from the in-memory ring buffer; when the requested position
+      // is older than the buffer holds (evicted, channel GC'd, or after a
+      // process restart) we fall back to the durable JSONL log for the gap.
+      // seq is authoritative and monotonic (issue #261), so the two sources
+      // share one sequence space and `send`'s strictly-newer guard dedups any
+      // overlap. readConversationLog is awaited BEFORE the buffer snapshot so
+      // events emitted during the read land in the buffer and are still caught;
+      // there is no await between the buffer snapshot and subscribe, so no live
+      // event can slip through the gap.
       if (fromSeq !== null && !Number.isNaN(fromSeq)) {
+        const logged = await readConversationLog(conversationId);
         const buffered = executionEventBus.getBufferedSince(conversationId, fromSeq);
-        // The buffer spans runs on the same conversation (the channel — and its
-        // monotonic seq — survives a run:done as long as the conversation is
-        // continued). Replaying a FINISHED earlier run would feed the client
-        // stale start/terminal transitions: its run:done tears down the live
-        // view of the CURRENT run and (pre-guard) closed this stream before
-        // the current run's events were ever delivered. So clamp the replay to
-        // the latest run boundary; older history is served by the conversation
-        // GET, not the live stream.
+        const earliestBuffered = buffered.length ? buffered[0].seq : Number.POSITIVE_INFINITY;
+
+        const replay: ExecutionEvent[] = [];
+        // JSONL fills only the [fromSeq, earliestBuffered) gap the buffer can't
+        // cover. Only persisted event types live in the log; transient liveness
+        // events (model deltas, tool progress) are intentionally not replayed.
+        if (logged && (buffered.length === 0 || earliestBuffered > fromSeq)) {
+          for (const event of logged) {
+            if (event.seq >= fromSeq && event.seq < earliestBuffered) replay.push(event);
+          }
+        }
+        for (const event of buffered) replay.push(event);
+
+        // Clamp to the latest run boundary. Replaying a FINISHED earlier run
+        // would feed the client stale start/terminal transitions: its run:done
+        // tears down the live view of the CURRENT run and (pre-guard) closed
+        // this stream before the current run's events were delivered. Older
+        // history is served by the conversation GET, not the live stream.
         let replayFrom = fromSeq;
-        for (const event of buffered) {
+        for (const event of replay) {
           if (event.type === 'run:start') replayFrom = Math.max(replayFrom, event.seq);
         }
-        for (const event of buffered) {
+        for (const event of replay) {
           if (event.seq < replayFrom) continue;
           send(event);
           if (closed) break;

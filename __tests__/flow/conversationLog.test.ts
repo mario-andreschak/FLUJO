@@ -22,8 +22,11 @@ import {
   projectMessages,
   recoverMessagesFromLog,
   repairTruncatedConversationLog,
+  allocateSeq,
+  latestSequence,
   _setConversationLogDirForTests,
 } from '@/backend/execution/flow/conversationLog';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { ExecutionEvent, MessageEvent } from '@/shared/types/execution/events';
@@ -148,8 +151,8 @@ describe('conversation log store', () => {
 
     const events = await readConversationLog(convId);
     expect(events?.map((e) => [e.type, e.seq])).toEqual([
-      ['message', -1],
-      ['message:removed', -1],
+      ['message', 0],
+      ['message:removed', 1],
     ]);
 
     const ephemeralState = makeState('conv-store-raw-eph', true);
@@ -396,5 +399,79 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
     eph.messages = [msg('u1', 'user'), msg('a1', 'assistant')];
     expect(await repairTruncatedConversationLog(eph)).toBeUndefined();
     expect(await hasConversationLog(convId)).toBe(false);
+  });
+});
+
+describe('authoritative monotonic seq (issue #261)', () => {
+  it('keeps seq strictly monotonic across a channel GC cycle (never resets to 0)', () => {
+    const convId = 'conv-seq-gc';
+    const e0 = executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any);
+    const e1 = executionEventBus.emit(convId, { type: 'usage', totalTokens: 1 } as any);
+    // Simulate the channel (and its ring buffer) being garbage-collected 5 min
+    // after run:done — historically this reset the bus seq to 0.
+    (executionEventBus as unknown as { channels: Map<string, unknown> }).channels.delete(convId);
+    const e2 = executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any);
+    const e3 = executionEventBus.emit(convId, { type: 'usage', totalTokens: 2 } as any);
+    expect([e0.seq, e1.seq, e2.seq, e3.seq]).toEqual([0, 1, 2, 3]);
+  });
+
+  it('stamps appendRawForState (log-only) events with real monotonic seqs, never -1', async () => {
+    const convId = 'conv-seq-raw';
+    const state = makeState(convId);
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant') },
+    ]);
+    await flushConversationLog(convId);
+    const events = await readConversationLog(convId);
+    expect(events?.map((e) => e.seq)).toEqual([0, 1]);
+    expect(events?.every((e) => e.seq >= 0)).toBe(true);
+  });
+
+  it('latestSequence matches the last appended event after flush', async () => {
+    const convId = 'conv-seq-latest';
+    const state = makeState(convId);
+    expect(await latestSequence(convId)).toBe(-1); // nothing persisted yet
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant') },
+      { type: 'message', message: msg('a2', 'assistant') },
+    ]);
+    await flushConversationLog(convId);
+    expect(await latestSequence(convId)).toBe(2);
+  });
+
+  it('cold-start seeds the counter at max(seq)+1 from an existing file (legacy -1 and non-monotonic tolerated)', async () => {
+    const convId = 'conv-seq-coldstart';
+    const legacy = [
+      { type: 'message', conversationId: convId, seq: -1, timestamp: 1, message: msg('u1', 'user') },
+      { type: 'message', conversationId: convId, seq: 7, timestamp: 1, message: msg('a1', 'assistant') },
+      { type: 'message', conversationId: convId, seq: 3, timestamp: 1, message: msg('a2', 'assistant') },
+    ]
+      .map((e) => `${JSON.stringify(e)}\n`)
+      .join('');
+    await fs.writeFile(path.join(tmpDir, `${convId}.jsonl`), legacy);
+    // First allocation resumes just past the highest authoritative seq (7), it
+    // does NOT reset to 0 or trip over the legacy -1.
+    expect(allocateSeq(convId)).toBe(8);
+    expect(allocateSeq(convId)).toBe(9);
+    expect(await latestSequence(convId)).toBe(9);
+  });
+
+  it('append order equals seq order (interleaved bus + log-only appends)', async () => {
+    const convId = 'conv-seq-order';
+    const state = makeState(convId);
+    FlowExecutor.conversationStates.set(convId, state);
+    executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any); // seq 0
+    await appendRawForState(state, [{ type: 'message', message: msg('u1', 'user') }]); // seq 1
+    executionEventBus.emit(convId, {
+      type: 'message',
+      message: msg('a1', 'assistant'),
+    } as any); // seq 2
+    await flushConversationLog(convId);
+    const events = await readConversationLog(convId);
+    const seqs = events!.map((e) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b)); // file order === seq order
+    expect(seqs).toEqual([0, 1, 2]);
   });
 });

@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs';
+import { promises as fs, readFileSync } from 'fs';
 import path from 'path';
 import {
   ExecutionEvent,
@@ -24,10 +24,13 @@ const log = createLogger('backend/execution/flow/conversationLog');
  * ExecutionEventBus taps every emit into appendFromBus, so "the live stream is
  * the log being appended".
  *
- * Ordering is FILE ORDER. Event `seq` is advisory here: the bus resets seq when
- * a channel is garbage-collected between runs, and log-only events (turn-start
- * reconcile, see appendRawForState) carry seq -1 because they were never on the
- * bus. Consumers must not sort by seq.
+ * Ordering is FILE ORDER, and (since issue #261) `seq` is AUTHORITATIVE and
+ * MONOTONIC: the log allocates the per-conversation sequence number itself (see
+ * allocateSeq), so it is durable, never reset between runs, survives channel
+ * garbage-collection and process restarts, and is stamped on log-only events
+ * too (no more seq -1). Append order equals seq order, so a persisted `seq` is
+ * a valid resume cursor for the SSE stream. Readers may still project by file
+ * order (the two agree); consumers MAY now sort by / resume from seq.
  */
 
 // Event types worth persisting. Excluded on purpose:
@@ -66,6 +69,9 @@ let logDir = path.join(getDataDir(), 'db', 'conversation-logs');
 export function _setConversationLogDirForTests(dir: string): string {
   const previous = logDir;
   logDir = dir;
+  // Counters are seeded from the store on cold start; switching stores must
+  // re-seed from the new directory rather than reuse a stale counter.
+  nextSeq.clear();
   return previous;
 }
 
@@ -77,6 +83,70 @@ function logFilePath(conversationId: string): string {
 // interleave (mirrors saveItem's writeChains). Different conversations still
 // append concurrently.
 const appendChains = new Map<string, Promise<unknown>>();
+
+// --- Authoritative per-conversation sequence (issue #261) --------------------
+// The JSONL file is the source of truth for ordering, so the LOG allocates the
+// event `seq`: a durable, per-conversation, never-reset monotonic counter. Both
+// the bus (ExecutionEventBus.emit) and the log-only append paths draw the seq
+// they persist from here (allocateSeq), so the number written to disk — and
+// used as an SSE resume cursor — is authoritative and strictly increasing
+// across runs, channel garbage-collection, and process restarts.
+//
+// In-memory: Map<conversationId, nextSeq>. Cold-start (first allocation for a
+// conversation this process has not seen, e.g. after restart) seeds the counter
+// by tail-reading the existing .jsonl and resuming at max(seq)+1, ignoring
+// legacy sentinel/non-numeric values — so pre-#261 logs are tolerated, never
+// rewritten. The counter then stays in memory for the process lifetime.
+const nextSeq = new Map<string, number>();
+
+/** Cold-start init of the durable counter from the persisted log tail. Runs at
+ *  most once per conversation per process; a one-time synchronous read keeps
+ *  allocateSeq usable from the bus's synchronous emit path. */
+function initSeqIfNeeded(conversationId: string): void {
+  if (nextSeq.has(conversationId)) return;
+  let max = -1;
+  try {
+    const content = readFileSync(logFilePath(conversationId), 'utf-8');
+    for (const line of content.split('\n')) {
+      if (line.trim().length === 0) continue;
+      try {
+        const seq = (JSON.parse(line) as { seq?: unknown }).seq;
+        if (typeof seq === 'number' && Number.isFinite(seq) && seq > max) max = seq;
+      } catch {
+        /* skip a truncated/garbled tail line */
+      }
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn(`Could not read conversation log ${conversationId} to seed seq; starting at 0.`, { err });
+    }
+  }
+  nextSeq.set(conversationId, max + 1);
+}
+
+/**
+ * Allocate the next authoritative monotonic seq for a conversation. Synchronous
+ * (safe from the bus's emit path); the returned value is strictly greater than
+ * every previously allocated/persisted seq for this conversation this process
+ * lifetime, seeded from disk on cold start.
+ */
+export function allocateSeq(conversationId: string): number {
+  initSeqIfNeeded(conversationId);
+  const seq = nextSeq.get(conversationId)!;
+  nextSeq.set(conversationId, seq + 1);
+  return seq;
+}
+
+/**
+ * Highest authoritative seq allocated/persisted for a conversation, or -1 when
+ * nothing exists yet. Seeds from disk on cold start. Callers that must observe
+ * in-flight bus-tap appends should flushConversationLog() first.
+ */
+export async function latestSequence(conversationId: string): Promise<number> {
+  if (!SAFE_ID.test(conversationId)) return -1;
+  initSeqIfNeeded(conversationId);
+  return nextSeq.get(conversationId)! - 1;
+}
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
   const previous = appendChains.get(conversationId) ?? Promise.resolve();
@@ -166,9 +236,11 @@ export function appendFromBus(event: ExecutionEvent): void {
 /**
  * Direct append of log-only events for a run whose state we hold (turn-start
  * reconcile, incremental streamed-message persistence). These never touch the
- * live bus, so they are stamped here with seq -1. The ephemeral policy is
- * checked on the state itself. Awaitable so callers that need durability
- * (reconcile before a run) can wait; errors are logged, not thrown.
+ * live bus, so they are stamped here with a freshly allocated authoritative
+ * seq (issue #261 — no more seq -1), drawn from the same durable per-conversation
+ * counter as bus events. The ephemeral policy is checked on the state itself.
+ * Awaitable so callers that need durability (reconcile before a run) can wait;
+ * errors are logged, not thrown.
  */
 export async function appendRawForState(state: SharedState, raws: RawExecutionEvent[]): Promise<void> {
   if (raws.length === 0) return;
@@ -177,7 +249,7 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
   if (!conversationId || !SAFE_ID.test(conversationId)) return;
   if (isConversationDeleted(conversationId)) return;
   const lines = raws
-    .map((raw) => serialize({ ...raw, conversationId, seq: -1, timestamp: Date.now() } as ExecutionEvent))
+    .map((raw) => serialize({ ...raw, conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() } as ExecutionEvent))
     .join('');
   try {
     await chainAppend(conversationId, lines);
@@ -419,9 +491,13 @@ export async function repairTruncatedConversationLog(
   // Diverged (not a truncated prefix) — don't clobber a legitimately edited log.
   if (!projectedParent.every((m) => snapshotIds.has(m.id))) return undefined;
 
+  // The log is fully replaced, so re-number from 0 with fresh monotonic seqs
+  // and continue the durable counter past the rebuilt file.
+  let rebuiltSeq = 0;
   const content = snapshot
-    .map((m) => serialize({ type: 'message', message: m, conversationId, seq: -1, timestamp: Date.now() } as ExecutionEvent))
+    .map((m) => serialize({ type: 'message', message: m, conversationId, seq: rebuiltSeq++, timestamp: Date.now() } as ExecutionEvent))
     .join('');
+  nextSeq.set(conversationId, rebuiltSeq);
   try {
     await chainWrite(conversationId, content);
     log.info(

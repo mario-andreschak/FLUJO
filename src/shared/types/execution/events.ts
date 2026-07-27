@@ -6,8 +6,9 @@ import { FlujoChatMessage } from '@/shared/types/chat';
  *
  * These are a *live projection* of what the executor is doing. The persisted
  * SharedState remains the source of truth for resume/reconnect; events carry
- * a monotonic `seq` per conversation so consumers can order, dedupe, and
- * replay from a known position (see ExecutionEventBus).
+ * an authoritative, durable, monotonic `seq` per conversation (allocated by the
+ * conversation log, issue #261) so consumers can order, dedupe, and resume from
+ * a known position across runs and restarts (see conversationLog.allocateSeq).
  */
 export type ExecutionEventType =
   | 'run:start'
@@ -42,7 +43,8 @@ export interface NodeRef {
 
 export interface ExecutionEventBase {
   conversationId: string;
-  seq: number;       // monotonic per conversation, assigned by the bus
+  seq: number;       // authoritative durable monotonic per conversation; the
+                     // log allocates it (issue #261), the bus stamps it at emit
   timestamp: number; // ms since epoch, assigned by the bus
   type: ExecutionEventType;
   /**
@@ -170,8 +172,8 @@ export interface MessageEvent extends ExecutionEventBase {
 /**
  * A message was removed from the conversation (the chat client sends the full,
  * possibly pruned, history each turn — see runFlow's turn-start reconcile).
- * Log-only: written straight to the conversation log (seq -1), never emitted on
- * the live bus.
+ * Log-only: written straight to the conversation log (with a freshly allocated
+ * authoritative seq, issue #261), never emitted on the live bus.
  */
 export interface MessageRemovedEvent extends ExecutionEventBase {
   type: 'message:removed';

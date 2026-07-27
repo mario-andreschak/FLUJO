@@ -25,6 +25,14 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 
 import { GET } from '@/app/v1/chat/conversations/[conversationId]/events/route';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import {
+  _setConversationLogDirForTests,
+  flushConversationLog,
+} from '@/backend/execution/flow/conversationLog';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 
 const makeRequest = (
   conversationId: string,
@@ -185,6 +193,123 @@ describe('events route SSE replay across runs', () => {
       const replay = await readEvents(reader, 2);
       expect(replay.events.map((e) => e.seq)).toEqual([2, 3]);
       expect(replay.closed).toBe(false);
+    } finally {
+      abort.abort();
+    }
+  });
+});
+
+/**
+ * Durable JSONL fallback (issue #261): once the in-memory ring buffer is
+ * evicted (channel GC 5 min after run:done, or a process restart), a reconnect
+ * with a ?fromSeq cursor must still replay the persisted events from the
+ * conversation log — seq is now authoritative and monotonic, so the cursor is
+ * meaningful across runs/restarts and each event is delivered exactly once.
+ */
+describe('events route SSE replay from durable JSONL after buffer eviction', () => {
+  let tmpDir: string;
+  let prevDir: string;
+
+  const registerPersistable = (conversationId: string) => {
+    FlowExecutor.conversationStates.set(conversationId, {
+      conversationId,
+      messages: [],
+      trackingInfo: { executionId: 'x', startTime: 1, nodeExecutionTracker: [] },
+      flowId: 'f',
+      title: 't',
+      createdAt: 1,
+      updatedAt: 1,
+    } as never);
+  };
+
+  // Drop the in-memory channel + ring buffer for a conversation (simulates the
+  // post-run:done channel GC / a process restart).
+  const evictBuffer = (conversationId: string) => {
+    (executionEventBus as unknown as { channels: Map<string, unknown> }).channels.delete(conversationId);
+  };
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-events-replay-'));
+    prevDir = _setConversationLogDirForTests(tmpDir);
+  });
+
+  afterAll(async () => {
+    _setConversationLogDirForTests(prevDir);
+    FlowExecutor.conversationStates.clear();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('replays a finished run from JSONL and closes on the terminal run:done', async () => {
+    const conv = 'conv-events-jsonl-fallback';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'hi' } }); // seq 1
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+    await flushConversationLog(conv);
+
+    evictBuffer(conv);
+
+    const { reader, abort } = await openStream(conv, 0);
+    try {
+      const replay = await readEvents(reader, 3);
+      expect(replay.events.map((e) => e.seq)).toEqual([0, 1, 2]);
+      expect(replay.events.map((e) => e.type)).toEqual(['run:start', 'message', 'run:done']);
+      // run:done is the latest persisted event → the stream terminates.
+      expect(await readUntilClosed(reader)).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('resumes from a mid-run cursor via JSONL, skipping already-seen events', async () => {
+    const conv = 'conv-events-jsonl-midcursor';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'a' } }); // seq 1
+    emit(conv, { type: 'message', message: { id: 'm2', role: 'assistant', content: 'b' } }); // seq 2
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 3
+    await flushConversationLog(conv);
+
+    evictBuffer(conv);
+
+    // Client already applied seq 0-1; resume at 2.
+    const { reader, abort } = await openStream(conv, 2);
+    try {
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map((e) => e.seq)).toEqual([2, 3]);
+      expect(await readUntilClosed(reader)).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('serves a live run from JSONL replay + live tail with no duplicates', async () => {
+    const conv = 'conv-events-jsonl-continue';
+    registerPersistable(conv);
+    // Run 1 finished and persisted.
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'old' } }); // seq 1
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+    await flushConversationLog(conv);
+
+    // Buffer evicted, THEN the conversation is continued with a live run 2.
+    evictBuffer(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 3 (persisted + buffered live)
+    emit(conv, { type: 'node:enter', node: { nodeId: 'n1' } }); // seq 4
+    await flushConversationLog(conv);
+
+    const { reader, abort } = await openStream(conv, 0);
+    try {
+      // JSONL fills [0,3), the live buffer covers [3,..]; clamped to the latest
+      // run:start (seq 3) so the finished run 1 is not replayed.
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map((e) => e.seq)).toEqual([3, 4]);
+      expect(replay.closed).toBe(false);
+
+      // A live event on the current run arrives exactly once.
+      emit(conv, { type: 'usage', totalTokens: 7 }); // seq 5
+      const live = await readEvents(reader, 1);
+      expect(live.events.map((e) => e.seq)).toEqual([5]);
     } finally {
       abort.abort();
     }

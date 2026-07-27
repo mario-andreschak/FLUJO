@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
-import { appendFromBus } from '@/backend/execution/flow/conversationLog';
+import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
@@ -40,11 +40,13 @@ export interface GlobalEvent {
  * In-memory pub/sub for execution events, keyed by conversationId.
  *
  * Mirrors the existing in-memory model of FlowExecutor.conversationStates: a
- * single Node process holds the live channels. Each event gets a monotonic
- * `seq` so SSE subscribers can replay from a known position (?fromSeq=) after
- * a reconnect without missing or duplicating events. The persisted SharedState
- * remains the source of truth, so a process restart that drops the buffer is
- * recoverable via a full GET of the conversation.
+ * single Node process holds the live channels. Each event's `seq` is allocated
+ * by the conversation log (allocateSeq) — an authoritative, durable, never-reset
+ * per-conversation monotonic counter (issue #261) — so SSE subscribers can
+ * replay from a known position (?fromSeq=) after a reconnect, across runs,
+ * channel garbage-collection, and process restarts, without missing or
+ * duplicating events. `channel.seq` is kept only as an in-memory high-water
+ * mirror for currentSeq()/cleanup.
  */
 class ExecutionEventBus {
   private channels = new Map<string, ConversationChannel>();
@@ -70,6 +72,9 @@ class ExecutionEventBus {
     if (!channel) {
       const emitter = new EventEmitter();
       emitter.setMaxListeners(0); // allow arbitrarily many SSE subscribers
+      // seq:0 is a placeholder; the first emit overwrites it with the durable
+      // high-water mark (allocateSeq()+1), so a recreated channel never resets
+      // the sequence a subscriber sees.
       channel = { emitter, seq: 0, buffer: [] };
       this.channels.set(conversationId, channel);
     }
@@ -85,9 +90,10 @@ class ExecutionEventBus {
   }
 
   /** Drop the channel after the TTL unless the run resumed or someone is still
-   *  listening. Deleting resets seq to 0 on recreation — safe, because clients
-   *  subscribe fresh (fromSeq 0/absent) and the stale-'running' heuristic in the
-   *  conversations list only applies to states persisted as 'running'. */
+   *  listening. Safe even though the in-memory channel (and its ring buffer) is
+   *  gone: seq is now allocated by the durable log counter (issue #261), so a
+   *  recreated channel continues the monotonic sequence rather than resetting to
+   *  0, and a reconnect past the evicted buffer replays from the JSONL log. */
   private scheduleCleanup(conversationId: string, seqAtDone: number): void {
     this.cancelCleanup(conversationId);
     const timer = setTimeout(() => {
@@ -106,10 +112,13 @@ class ExecutionEventBus {
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
   emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
     const channel = this.getChannel(conversationId);
+    // Authoritative, durable, per-conversation monotonic seq from the log.
+    const seq = allocateSeq(conversationId);
+    channel.seq = seq + 1; // in-memory high-water mirror for currentSeq()/cleanup
     const event = {
       ...raw,
       conversationId,
-      seq: channel.seq++,
+      seq,
       timestamp: Date.now(),
     } as ExecutionEvent;
 
