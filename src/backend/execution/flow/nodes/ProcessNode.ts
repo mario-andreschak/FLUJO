@@ -6,6 +6,8 @@ import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
+import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
+import { isWhollyDenied } from '../permissionEngine';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
@@ -409,6 +411,21 @@ export class ProcessNode extends BaseNode {
       availableTools = [...availableTools, ...runResourceTools];
     }
 
+    // Question tool (issue #258): offer the synthetic `question` tool only when
+    // this Process node explicitly opts in (`allowQuestion`). Unlike
+    // read_resource it is NOT sticky-armed via armedSyntheticTools — it is
+    // offered iff enabled, so flows that don't use it keep a byte-identical tool
+    // set (preserving the #89 prefix-cache) and unattended flows can leave it
+    // off entirely.
+    // A flow-level `deny` rule for action `question` (isWhollyDenied) removes it
+    // even when the node opted in — satisfies AC#3 (disable for unattended /
+    // headless), mirroring how MCP tools are dropped in ToolHandler.
+    const questionDenied = isWhollyDenied(sharedState.permissionRules ?? [], QUESTION_TOOL_NAME);
+    if (node_params?.properties?.allowQuestion === true && !questionDenied &&
+        !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
+      availableTools = [...availableTools, buildQuestionTool()];
+    }
+
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
@@ -431,6 +448,9 @@ export class ProcessNode extends BaseNode {
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
     requireToolApproval: sharedState.requireApproval ?? false,
+    // Issue #258: carry the resolved unattended flag so execCore can pass it to
+    // the model call (the synthetic `question` tool degrades in unattended runs).
+    unattended: sharedState.unattended,
   };
 
     // Create our own system message with the current prompt as FlujoChatMessage
@@ -719,6 +739,7 @@ export class ProcessNode extends BaseNode {
           conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
           requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
           mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
+          unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
         });
 
         // --- Log successful model call result (check success first) ---

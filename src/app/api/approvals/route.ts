@@ -2,6 +2,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { listPendingApprovals, removePendingApproval } from '@/backend/services/scheduler/pendingApprovals';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { listAllPendingQuestions } from '@/backend/services/questionRegistry';
 
 const log = createLogger('app/api/approvals/route');
 
@@ -64,7 +65,19 @@ export async function GET() {
       });
     }
 
-    return json({ approvals }, 200);
+    // Model-initiated questions (issue #258) awaiting an answer. These use the
+    // in-request blocking-promise path (questionRegistry) rather than the
+    // disk-serialized approval pause, so they are surfaced from the in-memory
+    // registry directly. Answer/decline via POST /api/approvals/:id with
+    // action 'question-answer' / 'question-decline' (:id is the conversationId).
+    const questions = listAllPendingQuestions().map((q) => ({
+      conversationId: q.conversationId,
+      questionId: q.questionId,
+      questions: q.questions,
+      createdAt: q.createdAt,
+    }));
+
+    return json({ approvals, questions }, 200);
   } catch (error) {
     log.error('Error handling GET /api/approvals', error);
     return json({ error: 'Internal server error' }, 500);

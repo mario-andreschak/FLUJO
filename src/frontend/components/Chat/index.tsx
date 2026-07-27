@@ -18,7 +18,7 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
-import type { CanvasLaunchInfo, PendingElicitation } from './ChatMessages';
+import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
 import ChatInput from './ChatInput';
 import DevCanvasDock from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
@@ -271,6 +271,7 @@ const Chat: React.FC = () => {
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
   const [pendingElicitation, setPendingElicitation] = useState<PendingElicitation | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   // Flow the user asked to switch an already-executed conversation to; a
   // confirmation dialog is shown before the switch is applied (Cancel discards).
   const [pendingFlowSwitch, setPendingFlowSwitch] = useState<string | null>(null);
@@ -1248,6 +1249,16 @@ const Chat: React.FC = () => {
           });
         }
         break;
+      case 'run:awaiting_question':
+        // Same bleed-prevention rule as awaiting_approval/elicitation: only
+        // surface for the conversation currently being viewed (issue #258).
+        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+          setPendingQuestion({
+            questionId: event.questionId,
+            questions: event.questions,
+          });
+        }
+        break;
       case 'breakpoint:hit':
       case 'run:paused':
         // Flip the UI to paused; the awaited POST response carries the full
@@ -1264,9 +1275,10 @@ const Chat: React.FC = () => {
           markConvRunning(event.conversationId, false);
           patchConversationStatus(event.conversationId, event.status);
         }
-        // Clear any pending elicitation when the run completes.
+        // Clear any pending elicitation/question when the run completes.
         if (event.conversationId === currentConversationIdRef.current) {
           setPendingElicitation(null);
+          setPendingQuestion(null);
         }
         // The live-view teardown (indicator, stream, input gate) belongs to
         // the run this client is tracking. Events normally only arrive from
@@ -2581,6 +2593,36 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleAnswerQuestion = async (questionId: string, answers: string[][]) => {
+    if (!currentConversationId) return;
+    log.info('Answering question', { conversationId: currentConversationId, questionId });
+    setPendingQuestion(null);
+    try {
+      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'question-answer', questionId, answers }),
+      });
+    } catch (err) {
+      log.error('Failed to answer question', { conversationId: currentConversationId, questionId, err });
+    }
+  };
+
+  const handleDeclineQuestion = async (questionId: string) => {
+    if (!currentConversationId) return;
+    log.info('Declining question', { conversationId: currentConversationId, questionId });
+    setPendingQuestion(null);
+    try {
+      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'question-decline', questionId }),
+      });
+    } catch (err) {
+      log.error('Failed to decline question', { conversationId: currentConversationId, questionId, err });
+    }
+  };
+
   // --- Debugger Control Handlers ---
   const handleDebugStep = async () => {
     if (!currentConversationId || !isDebugPaused) return;
@@ -3082,6 +3124,9 @@ const Chat: React.FC = () => {
                 onRejectToolCall={handleRejectToolCall}
                 onSubmitElicitation={handleSubmitElicitation}
                 onCancelElicitation={handleCancelElicitation}
+                pendingQuestion={pendingQuestion}
+                onAnswerQuestion={handleAnswerQuestion}
+                onDeclineQuestion={handleDeclineQuestion}
                 onAppMessage={handleAppMessage}
                 onOpenInCanvas={handleOpenInCanvas}
                 canvasKeys={canvasKeys}

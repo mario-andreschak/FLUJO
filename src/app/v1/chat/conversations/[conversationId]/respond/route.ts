@@ -10,6 +10,7 @@ import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { resolveElicitation } from '@/backend/services/mcp/elicitationRegistry';
+import { resolvePendingQuestion, declinePendingQuestion } from '@/backend/services/questionRegistry';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
@@ -22,7 +23,9 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/rou
 type RespondRequestBody =
   | { action: 'approve' | 'reject'; toolCallId: string; always?: boolean; feedback?: string }
   | { action: 'elicitation-submit'; elicitationId: string; content: Record<string, string | number | boolean | string[]> }
-  | { action: 'elicitation-cancel'; elicitationId: string };
+  | { action: 'elicitation-cancel'; elicitationId: string }
+  | { action: 'question-answer'; questionId: string; answers: string[][] }
+  | { action: 'question-decline'; questionId: string };
 
 export async function POST(
   request: NextRequest,
@@ -48,7 +51,7 @@ export async function POST(
   let requestBody: RespondRequestBody;
   try {
     requestBody = await request.json();
-    const validActions = ['approve', 'reject', 'elicitation-submit', 'elicitation-cancel'];
+    const validActions = ['approve', 'reject', 'elicitation-submit', 'elicitation-cancel', 'question-answer', 'question-decline'];
     if (!requestBody.action || !validActions.includes(requestBody.action)) {
       throw new Error(`Invalid request body. action must be one of: ${validActions.join(', ')}`);
     }
@@ -57,6 +60,9 @@ export async function POST(
     }
     if ((requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel') && !requestBody.elicitationId) {
       throw new Error('elicitationId is required for elicitation actions');
+    }
+    if ((requestBody.action === 'question-answer' || requestBody.action === 'question-decline') && !requestBody.questionId) {
+      throw new Error('questionId is required for question actions');
     }
   } catch (error) {
     log.warn('Invalid request body', { requestId, error: error instanceof Error ? error.message : error });
@@ -74,6 +80,20 @@ export async function POST(
       return NextResponse.json({ error: `No pending elicitation with ID ${elicitationId}` }, { status: 404 });
     }
     log.info('Resolved elicitation', { requestId, conversationId, action, elicitationId });
+    return NextResponse.json({ status: 'running', conversation_id: conversationId });
+  }
+
+  // --- Question answer/decline (issue #258; in-request blocking-promise path) ---
+  if (requestBody.action === 'question-answer' || requestBody.action === 'question-decline') {
+    const { action, questionId } = requestBody;
+    const resolved = action === 'question-answer'
+      ? resolvePendingQuestion(conversationId, questionId, requestBody.answers ?? [])
+      : declinePendingQuestion(conversationId, questionId);
+    if (!resolved) {
+      log.warn('No pending question found', { requestId, conversationId, questionId });
+      return NextResponse.json({ error: `No pending question with ID ${questionId}` }, { status: 404 });
+    }
+    log.info('Resolved question', { requestId, conversationId, action, questionId });
     return NextResponse.json({ status: 'running', conversation_id: conversationId });
   }
 

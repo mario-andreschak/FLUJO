@@ -17,6 +17,7 @@ import {
   removePendingApproval,
 } from '@/backend/services/scheduler/pendingApprovals';
 import { updateRunRecord } from '@/backend/services/scheduler/runHistory';
+import { resolvePendingQuestion, declinePendingQuestion } from '@/backend/services/questionRegistry';
 import type { SharedState } from '@/backend/execution/flow/types';
 
 const log = createLogger('app/api/approvals/[id]/route');
@@ -32,7 +33,11 @@ function json(body: unknown, status = 200): Response {
 }
 
 interface ApprovalActionBody {
-  action: 'approve' | 'deny';
+  action: 'approve' | 'deny' | 'question-answer' | 'question-decline';
+  /** Issue #258: the pending question to answer/decline (question-* actions). */
+  questionId?: string;
+  /** Issue #258: one array of selected labels per question, in order. */
+  answers?: string[][];
   /** Optional: resolve one specific pending tool call. Omit to resolve all. */
   toolCallId?: string;
   /** Issue #246: when true, save an "always" rule so future calls to the same
@@ -94,14 +99,34 @@ export async function POST(
   let body: ApprovalActionBody;
   try {
     body = await request.json();
-    if (!body || (body.action !== 'approve' && body.action !== 'deny')) {
-      throw new Error('Invalid request body. Required: action ("approve" or "deny").');
+    const valid = ['approve', 'deny', 'question-answer', 'question-decline'];
+    if (!body || !valid.includes(body.action)) {
+      throw new Error('Invalid request body. Required: action ("approve", "deny", "question-answer" or "question-decline").');
     }
   } catch (error) {
     return json(
       { error: 'Invalid request body', details: error instanceof Error ? error.message : 'Unknown error' },
       400
     );
+  }
+
+  // Model-initiated question (issue #258). `:id` is the conversationId. The run
+  // is still live and BLOCKED inside the question tool executor via the
+  // in-request blocking-promise (questionRegistry) — resolving/declining it
+  // unblocks the turn so the tool result flows back into the same tool loop.
+  // No disk-serialized approval entry or processChatCompletion re-entry needed.
+  if (body.action === 'question-answer' || body.action === 'question-decline') {
+    if (!body.questionId) {
+      return json({ error: 'questionId is required for question actions' }, 400);
+    }
+    const resolved = body.action === 'question-answer'
+      ? resolvePendingQuestion(id, body.questionId, body.answers ?? [])
+      : declinePendingQuestion(id, body.questionId);
+    if (!resolved) {
+      return json({ error: `No pending question "${body.questionId}" for conversation "${id}"` }, 404);
+    }
+    log.info('Resolved headless question', { requestId, conversationId: id, questionId: body.questionId, action: body.action });
+    return json({ status: 'running', conversationId: id, questionId: body.questionId }, 200);
   }
 
   const mappedAction: 'approve' | 'reject' = body.action === 'approve' ? 'approve' : 'reject';

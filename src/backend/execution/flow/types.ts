@@ -152,6 +152,11 @@ export interface ProcessNodeProperties {
      *  Like inputMode, this shapes the WIRE view only — the persisted
      *  conversation/log keeps every message (see collapseNodeOutputs). */
     outputMode?: 'full-conversation' | 'latest-message';
+    /** Issue #258: opt in to the synthetic `question` tool so this node's model
+     *  can ask the user a structured multiple-choice question mid-run and keep
+     *  working with the answer. Off by default; leave off for unattended flows
+     *  (or deny action `question` via permissionRules). */
+    allowQuestion?: boolean;
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -882,6 +887,9 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
+    /** Unattended run (issue #258): forwarded so the synthetic `question` tool
+     *  degrades to a tool-error instead of blocking for an answer. */
+    unattended?: boolean;
     /** Debugger model-input visualization (issue #153). Computed in prep (where
     *  the threaded/folded/scoped views are all in scope) and promoted onto the
     *  DebugStep by FlowExecutor. Populated only when the run is in debug mode /

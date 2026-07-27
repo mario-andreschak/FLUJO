@@ -15,6 +15,7 @@ export type ExecutionEventType =
   | 'run:paused'
   | 'run:awaiting_approval'
   | 'run:awaiting_elicitation'
+  | 'run:awaiting_question'
   | 'run:done'
   | 'node:enter'
   | 'node:exit'
@@ -87,6 +88,31 @@ export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
   message: string;
   /** JSON Schema object subset describing the fields to collect. */
   requestedSchema: Record<string, unknown>;
+}
+/** One prompt of a model-initiated `question` tool call (issue #258). */
+export interface QuestionPrompt {
+  /** The question text shown to the user. */
+  prompt: string;
+  /** The offered options (already including any auto-appended free-text option). */
+  options: string[];
+  /** Whether more than one option may be selected. */
+  multiple?: boolean;
+  /** Whether a free-text "Type your own answer" option is offered. */
+  custom?: boolean;
+}
+/**
+ * A model asked the user a structured multiple-choice question mid-run via the
+ * synthetic `question` tool and the turn is BLOCKED awaiting the answer
+ * (issue #258). The frontend renders a QuestionCard and answers/declines via
+ * the `/respond` route; the headless approvals API can answer too.
+ */
+export interface RunAwaitingQuestionEvent extends ExecutionEventBase {
+  type: 'run:awaiting_question';
+  node?: NodeRef;
+  /** Stable ID for correlating the SSE event to the /respond route call. */
+  questionId: string;
+  /** The questions to ask, in order. */
+  questions: QuestionPrompt[];
 }
 export interface RunDoneEvent extends ExecutionEventBase {
   type: 'run:done';
@@ -255,6 +281,7 @@ export type ExecutionEvent =
   | RunPausedEvent
   | RunAwaitingApprovalEvent
   | RunAwaitingElicitationEvent
+  | RunAwaitingQuestionEvent
   | RunDoneEvent
   | NodeEnterEvent
   | NodeExitEvent

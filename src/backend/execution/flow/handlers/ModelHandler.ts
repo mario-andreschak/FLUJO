@@ -29,6 +29,7 @@ import { getRunResourceSettings, writeRunResource, listRunResources } from '@/ba
 import { captureToolResult } from '@/backend/services/runResources/capture';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
+import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
@@ -702,8 +703,9 @@ export class ModelHandler {
     const runResourceNode = nodeId ? { nodeId, nodeName: nodeDisplayName, nodeType: 'process' as const } : undefined;
     const hasRunResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name));
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
+    const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
     const localToolExecutors =
-      (hasRunResourceTool || hasMCPResourceTool)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -736,6 +738,19 @@ export class ModelHandler {
                 mcpNodes: mcpNodes ?? [],
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'list_mcp_resources failed');
+              return outcome.data;
+            },
+            // question (issue #258): lets a self-orchestrating model ask the user
+            // a structured multiple-choice question in-loop and block on the
+            // answer, same as the request/response path's processToolCalls branch.
+            [QUESTION_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeQuestionTool(args, {
+                conversationId,
+                node: runResourceNode,
+                emit,
+                unattended: input.unattended,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'question failed');
               return outcome.data;
             },
           }
@@ -1410,6 +1425,7 @@ export class ModelHandler {
         if (toolName.startsWith('handoff_to_') || toolName === 'handoff') return LOCAL_GROUP;
         if (isMCPResourceToolName(toolName)) return LOCAL_GROUP;
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
+        if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
       };
@@ -1526,6 +1542,41 @@ export class ModelHandler {
             const outcome = await executeRunResourceTool(name, args, { conversationId, node, emit, mcpNodes: mcpNodes ?? [] });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // Question tool (issue #258): synthetic FLUJO tool that asks the user a
+          // structured multiple-choice question and BLOCKS this turn until they
+          // answer/decline (in-request blocking-promise via questionRegistry).
+          // Only offered when the node opted in (ProcessNode.prep allowQuestion),
+          // so this branch is inert otherwise. Unattended runs degrade to a clear
+          // tool-error rather than blocking (executeQuestionTool honours it).
+          if (isQuestionToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeQuestionTool(args, {
+              conversationId,
+              node,
+              emit,
+              unattended: input.unattended,
+            });
+            const resultContent = outcome.success
+              ? (typeof outcome.data === 'string' ? outcome.data : JSON.stringify(outcome.data))
               : `Error: ${outcome.error}`;
             emit?.({
               type: 'tool:result',

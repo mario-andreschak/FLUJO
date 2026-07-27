@@ -1158,6 +1158,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                     mcpNodes: sharedState.currentMCPNodes,
                     permissionRules: permRules,
                     savedPermissionRules: savedRules,
+                    unattended: sharedState.unattended, // Issue #258
                   });
                   if (immediateResult.success) {
                     const immediateMessages = immediateResult.value.toolCallMessages.map(msg => ({
@@ -1220,6 +1221,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
                   permissionRules: sharedState.permissionRules, // Issue #246
                   savedPermissionRules: sharedState.savedPermissionRules, // Issue #246
+                  unattended: sharedState.unattended, // Issue #258
                 });
 
                 if (!toolProcessingResult.success) {

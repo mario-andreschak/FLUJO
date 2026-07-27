@@ -54,6 +54,10 @@ export interface ModelCallInput {
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */
   mcpNodes?: MCPNodeReference[];
+  /** Unattended run (issue #218/#258): forwarded to the synthetic `question`
+   *  localToolExecutor so a self-orchestrating adapter degrades it to a
+   *  tool-error instead of blocking for an answer that will never come. */
+  unattended?: boolean;
 }
 
 // Result of model call
@@ -132,6 +136,12 @@ export interface ToolCallProcessingInput {
    * after permissionRules but cannot override a flow-level deny.
    */
   savedPermissionRules?: SavedPermissionRule[];
+  /**
+   * Unattended run (issue #218/#258). When true, the synthetic `question` tool
+   * degrades to a clear tool-error instead of blocking the turn for a user
+   * answer that will never come.
+   */
+  unattended?: boolean;
 }
 
 // Tool call processing result

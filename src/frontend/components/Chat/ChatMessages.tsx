@@ -23,7 +23,10 @@ import {
   TextField,
   Select,
   Checkbox,
+  Radio,
+  RadioGroup,
   FormControl,
+  FormLabel,
   InputLabel,
   FormHelperText,
 } from '@mui/material';
@@ -68,6 +71,20 @@ export interface PendingElicitation {
   requestedSchema: Record<string, unknown>;
 }
 
+/** One prompt of a model-initiated `question` tool call (issue #258). */
+export interface PendingQuestionPrompt {
+  prompt: string;
+  options: string[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+/** Shape of a pending question surfaced from the `run:awaiting_question` SSE event. */
+export interface PendingQuestion {
+  questionId: string;
+  questions: PendingQuestionPrompt[];
+}
+
 interface ChatMessagesProps {
   messages: ChatMessage[];
   pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[] | null; // Add pending calls prop
@@ -88,6 +105,12 @@ interface ChatMessagesProps {
   onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
   /** Cancel the pending elicitation request. */
   onCancelElicitation?: (elicitationId: string) => void;
+  /** Active model-initiated question (issue #258), if any. */
+  pendingQuestion?: PendingQuestion | null;
+  /** Answer a pending question — one array of selected labels per question, in order. */
+  onAnswerQuestion?: (questionId: string, answers: string[][]) => void;
+  /** Decline a pending question (the user chose not to answer). */
+  onDeclineQuestion?: (questionId: string) => void;
   /**
    * #97: an MCP App handed a message/selection back to the model (ui/message /
    * ui/update-model-context). Wired to submit a follow-up user message. MUST be
@@ -1007,6 +1030,130 @@ const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, 
 };
 
 // ---------------------------------------------------------------------------
+// QuestionCard — renders a model-initiated multiple-choice question (issue #258)
+// ---------------------------------------------------------------------------
+
+interface QuestionCardProps {
+  question: PendingQuestion;
+  onAnswer?: (questionId: string, answers: string[][]) => void;
+  onDecline?: (questionId: string) => void;
+}
+
+const CUSTOM_OPTION_LABEL = 'Type your own answer';
+
+const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecline }) => {
+  const { questionId, questions } = question;
+  // Per-question selected option labels + free-text value for the custom option.
+  const [selected, setSelected] = useState<string[][]>(() => questions.map(() => []));
+  const [customText, setCustomText] = useState<string[]>(() => questions.map(() => ''));
+
+  const isCustom = (opt: string) => opt === CUSTOM_OPTION_LABEL;
+
+  const toggleMulti = (qi: number, opt: string) => {
+    setSelected((prev) => {
+      const next = prev.map((a) => [...a]);
+      const arr = next[qi];
+      const idx = arr.indexOf(opt);
+      if (idx >= 0) arr.splice(idx, 1);
+      else arr.push(opt);
+      return next;
+    });
+  };
+
+  const setSingle = (qi: number, opt: string) => {
+    setSelected((prev) => {
+      const next = prev.map((a) => [...a]);
+      next[qi] = [opt];
+      return next;
+    });
+  };
+
+  // Resolve each question's selection into final labels: the custom option's
+  // label is replaced by the typed free text (when provided).
+  const resolveAnswers = (): string[][] =>
+    questions.map((q, qi) => {
+      const picks = selected[qi] ?? [];
+      return picks
+        .map((opt) => (isCustom(opt) ? customText[qi].trim() : opt))
+        .filter((v) => v.length > 0);
+    });
+
+  const canSubmit = questions.every((_, qi) => (resolveAnswers()[qi] ?? []).length > 0);
+
+  const handleSubmit = () => {
+    if (onAnswer) onAnswer(questionId, resolveAnswers());
+  };
+  const handleDecline = () => {
+    if (onDecline) onDecline(questionId);
+  };
+
+  return (
+    <Paper
+      elevation={2}
+      sx={{ p: 2, mt: 2, bgcolor: 'info.light', border: '1px solid', borderColor: 'info.main', borderRadius: 2 }}
+    >
+      <Typography variant="h6" sx={{ mb: 1 }}>The assistant is asking</Typography>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {questions.map((q, qi) => (
+          <FormControl key={qi} component="fieldset" sx={{ display: 'flex' }}>
+            <FormLabel sx={{ mb: 0.5 }}>{q.prompt}</FormLabel>
+            {q.multiple ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                {q.options.map((opt) => (
+                  <FormControlLabel
+                    key={opt}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={(selected[qi] ?? []).includes(opt)}
+                        onChange={() => toggleMulti(qi, opt)}
+                      />
+                    }
+                    label={opt}
+                  />
+                ))}
+              </Box>
+            ) : (
+              <RadioGroup
+                value={(selected[qi] ?? [])[0] ?? ''}
+                onChange={(e) => setSingle(qi, e.target.value)}
+              >
+                {q.options.map((opt) => (
+                  <FormControlLabel key={opt} value={opt} control={<Radio size="small" />} label={opt} />
+                ))}
+              </RadioGroup>
+            )}
+            {(selected[qi] ?? []).includes(CUSTOM_OPTION_LABEL) && (
+              <TextField
+                size="small"
+                sx={{ mt: 1 }}
+                placeholder="Your answer…"
+                value={customText[qi]}
+                onChange={(e) =>
+                  setCustomText((prev) => {
+                    const next = [...prev];
+                    next[qi] = e.target.value;
+                    return next;
+                  })
+                }
+              />
+            )}
+          </FormControl>
+        ))}
+      </Box>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 2 }}>
+        <Button variant="outlined" color="inherit" size="small" onClick={handleDecline} disabled={!onDecline}>
+          Decline
+        </Button>
+        <Button variant="contained" color="primary" size="small" onClick={handleSubmit} disabled={!onAnswer || !canSubmit}>
+          Answer
+        </Button>
+      </Box>
+    </Paper>
+  );
+};
+
+// ---------------------------------------------------------------------------
 
 const ChatMessages: React.FC<ChatMessagesProps> = ({
   messages,
@@ -1022,6 +1169,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onRejectToolCall, // Destructure new prop
   onSubmitElicitation,
   onCancelElicitation,
+  pendingQuestion,
+  onAnswerQuestion,
+  onDeclineQuestion,
   onAppMessage, // #97: MCP App -> conversation return channel (stable)
   onOpenInCanvas, // #216: route a tool app to the docked canvas
   canvasKeys, // #216: identities already open in the canvas
@@ -1309,6 +1459,15 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           elicitation={pendingElicitation}
           onSubmit={onSubmitElicitation}
           onCancel={onCancelElicitation}
+        />
+      )}
+
+      {/* Display Pending Question (issue #258) */}
+      {pendingQuestion && (
+        <QuestionCard
+          question={pendingQuestion}
+          onAnswer={onAnswerQuestion}
+          onDecline={onDeclineQuestion}
         />
       )}
 
