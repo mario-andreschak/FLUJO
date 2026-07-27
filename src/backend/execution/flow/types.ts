@@ -597,6 +597,17 @@ export interface SharedState {
      * a run. Plain string[] so it persists with the conversation.
      */
     armedSyntheticTools?: string[];
+    /**
+     * Frozen system-prompt string per process node, captured on first render of
+     * a conversation and re-sent byte-identically thereafter (#249). Keyed by
+     * nodeId because one run can visit multiple process nodes via handoffs.
+     * Persisted with the conversation state (plain serializable field, like
+     * armedSyntheticTools); only replaced at a compaction boundary. Freezing the
+     * system prompt makes it a stable provider cache prefix; drift in
+     * `${resource:}` / `${kv:}` pills is surfaced as a synthetic `[System
+     * update]` tail message instead of mutating the frozen prefix.
+     */
+    frozenSystemPrompts?: Record<string, string>;
     // Current node ID for stateful execution
     currentNodeId?: string;
     // Flag to indicate if handoff was requested

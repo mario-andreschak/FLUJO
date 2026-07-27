@@ -11,6 +11,7 @@ import { isWhollyDenied } from '../permissionEngine';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
+import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
 import { flowService } from '@/backend/services/flow/index';
@@ -453,18 +454,58 @@ export class ProcessNode extends BaseNode {
     unattended: sharedState.unattended,
   };
 
-    // Create our own system message with the current prompt as FlujoChatMessage
+    // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
+    // per (conversation, node) on first render and re-send it byte-identically
+    // thereafter, so it forms a stable provider cache prefix (mirrors the #89
+    // tool-block freeze). Drift in `${resource:}` / `${kv:}` pills (or a future
+    // date injection) must NOT mutate the frozen prefix — that would invalidate
+    // the provider's prefix cache — so it is surfaced to the model as a synthetic
+    // `[System update]` tail message instead. Re-frozen only at a compaction
+    // boundary (where the prefix is rebuilt anyway).
+    const freeze = resolveFrozenSystemPrompt(
+      nodeId,
+      completePrompt,
+      sharedState.frozenSystemPrompts,
+      sharedState.messages
+    );
+    sharedState.frozenSystemPrompts = freeze.frozenSystemPrompts;
+    const systemPromptContent = freeze.content;
+    if (freeze.frozeNow) {
+      log.info('Froze system prompt for node (first render)', {
+        nodeId,
+        length: completePrompt.length,
+      });
+    }
+    if (freeze.driftUpdate !== undefined) {
+      // Surface the drift to the model as a synthetic `[System update]` tail
+      // message instead of mutating the frozen prefix (which would bust the
+      // provider prefix cache). Dedupe is handled inside resolveFrozenSystemPrompt.
+      sharedState.messages.push({
+        id: uuidv4(),
+        role: 'user',
+        content: freeze.driftUpdate,
+        timestamp: Date.now(),
+      });
+      log.info('System prompt drifted from frozen prefix; appended [System update]', {
+        nodeId,
+      });
+    }
+    // Keep prepResult.currentPrompt consistent with the (possibly frozen) content
+    // actually sent on the wire.
+    prepResult.currentPrompt = systemPromptContent;
+
+    // Create our own system message with the (frozen) prompt as FlujoChatMessage
     const systemMessage: FlujoChatMessage = {
       id: uuidv4(), // Generate unique ID
       role: 'system',
-      content: completePrompt,
+      content: systemPromptContent,
       timestamp: Date.now() // Add timestamp
     };
 
     log.info('Added system message from prompt template', {
-      contentLength: completePrompt.length,
-      contentPreview: completePrompt.length > 100 ?
-        completePrompt.substring(0, 100) + '...' : completePrompt
+      contentLength: systemPromptContent.length,
+      contentPreview: systemPromptContent.length > 100 ?
+        systemPromptContent.substring(0, 100) + '...' : systemPromptContent
     });
 
     // Assemble the node's threaded history (lossless — this is written back to
