@@ -13,7 +13,7 @@ import type OpenAI from 'openai';
  */
 interface PendingApproval {
   toolCall: OpenAI.ChatCompletionMessageToolCall;
-  resolve: (approved: boolean) => void;
+  resolve: (approved: boolean, feedback?: string) => void;
 }
 
 const globalForRegistry = globalThis as unknown as {
@@ -26,7 +26,7 @@ const registry: Map<string, Map<string, PendingApproval>> =
 export function registerPendingApproval(
   conversationId: string,
   toolCall: OpenAI.ChatCompletionMessageToolCall,
-  resolve: (approved: boolean) => void
+  resolve: (approved: boolean, feedback?: string) => void
 ): void {
   let perConv = registry.get(conversationId);
   if (!perConv) {
@@ -44,14 +44,15 @@ export function registerPendingApproval(
 export function resolvePendingApproval(
   conversationId: string,
   toolCallId: string,
-  approved: boolean
+  approved: boolean,
+  feedback?: string   // Issue #247: optional rejection feedback for the model
 ): boolean {
   const perConv = registry.get(conversationId);
   const pending = perConv?.get(toolCallId);
   if (!perConv || !pending) return false;
   perConv.delete(toolCallId);
   if (perConv.size === 0) registry.delete(conversationId);
-  pending.resolve(approved);
+  pending.resolve(approved, feedback);
   return true;
 }
 

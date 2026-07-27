@@ -98,7 +98,7 @@ export interface CompletionInput {
     id: string;
     name: string;
     args: Record<string, unknown>;
-  }) => Promise<boolean>;
+  }) => Promise<{ approved: boolean; feedback?: string }>;
   /**
    * Cancellation signal for the in-flight provider call. Wired by ModelHandler
    * to the conversation's isCancelled flag (own or ancestor), so pressing Stop

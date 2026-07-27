@@ -166,13 +166,15 @@ class ChatService {
   async respondToToolCall(
     id: string,
     action: 'approve' | 'reject',
-    toolCallId: string
+    toolCallId: string,
+    always?: boolean,
+    feedback?: string   // Issue #247: optional rejection reason for the model
   ): Promise<any> {
-    log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId });
+    log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId, always });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, toolCallId }),
+      body: JSON.stringify({ action, toolCallId, ...(always ? { always: true } : {}), ...(feedback ? { feedback } : {}) }),
     });
     return parse<any>(response);
   }

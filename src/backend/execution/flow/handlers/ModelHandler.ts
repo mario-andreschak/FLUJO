@@ -38,6 +38,7 @@ import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } from '@/backend/services/ollama/modelRegistry';
 import { unloadModel } from '@/backend/services/ollama';
+import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
@@ -641,14 +642,16 @@ export class ModelHandler {
 
     const requestToolApproval =
       requireToolApproval && emit && conversationId
-        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
+        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<{ approved: boolean; feedback?: string }> => {
             const toolCall: OpenAI.ChatCompletionMessageToolCall = {
               id: call.id,
               type: 'function',
               function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
             };
-            return new Promise<boolean>((resolve) => {
-              registerPendingApproval(conversationId, toolCall, resolve);
+            // Issue #247: surface the optional rejection feedback the /respond
+            // route may pass so the adapter can carry it back to the model.
+            return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
+              registerPendingApproval(conversationId, toolCall, (approved, feedback) => resolve({ approved, feedback }));
               emit({ type: 'run:awaiting_approval', pendingToolCalls: listPendingToolCalls(conversationId) });
             });
           }
@@ -884,7 +887,7 @@ export class ModelHandler {
         id: string;
         name: string;
         args: Record<string, unknown>;
-      }) => Promise<boolean>;
+      }) => Promise<{ approved: boolean; feedback?: string }>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
       shouldAbort?: () => boolean;
@@ -1504,6 +1507,39 @@ export class ModelHandler {
 
           const serverName = decoded.server;
           const toolName = decoded.tool;
+
+          // Phase 3 (issue #246): per-call permission gate.
+          // Evaluate configured + saved rules before dispatching to mcpService.
+          const permRules = input.permissionRules ?? [];
+          const savedRules = input.savedPermissionRules ?? [];
+          if (permRules.length > 0 || savedRules.length > 0) {
+            let callArgs: Record<string, unknown> = {};
+            try { callArgs = JSON.parse(argsString); } catch { /* best effort */ }
+            const resource = extractResource(callArgs);
+            const permEffect = evaluatePermission(permRules, savedRules, serverName, toolName, resource);
+            if (permEffect === 'deny') {
+              log.info(`Permission denied by rule for tool ${toolName} on ${serverName} (resource: ${resource})`);
+              const deniedContent = `Permission denied: the active ruleset does not allow calling ${toolName} on ${serverName} (resource: ${resource}).`;
+              emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+              emit?.({
+                type: 'tool:result',
+                toolCallId: id,
+                name,
+                result: deniedContent,
+                isError: true,
+              });
+              toolCallMessages.push({
+                id: uuidv4(),
+                role: 'tool',
+                tool_call_id: id,
+                content: deniedContent,
+                timestamp: Date.now(),
+              });
+              processedToolCalls.push({ name, args: callArgs, id, result: deniedContent });
+              continue;
+            }
+            // 'allow' or 'ask' → fall through to normal dispatch.
+          }
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
 

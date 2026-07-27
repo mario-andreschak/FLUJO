@@ -20,7 +20,7 @@ import OpenAI from 'openai';
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
 
 type RespondRequestBody =
-  | { action: 'approve' | 'reject'; toolCallId: string }
+  | { action: 'approve' | 'reject'; toolCallId: string; always?: boolean; feedback?: string }
   | { action: 'elicitation-submit'; elicitationId: string; content: Record<string, string | number | boolean | string[]> }
   | { action: 'elicitation-cancel'; elicitationId: string };
 
@@ -77,7 +77,7 @@ export async function POST(
     return NextResponse.json({ status: 'running', conversation_id: conversationId });
   }
 
-  const { action, toolCallId } = requestBody as { action: 'approve' | 'reject'; toolCallId: string };
+  const { action, toolCallId, feedback } = requestBody as { action: 'approve' | 'reject'; toolCallId: string; feedback?: string };
   log.info(`Processing response action`, { requestId, conversationId, action, toolCallId });
 
   // In-request agentic approval (Claude subscription): the run is still live and
@@ -86,7 +86,7 @@ export async function POST(
   // the original (still-open) request. We must NOT execute the tool or resume
   // here (that's the normal pause/resume path below). The live SSE stream carries
   // ongoing events; we just report the remaining approval state.
-  if (resolvePendingApproval(conversationId, toolCallId, action === 'approve')) {
+  if (resolvePendingApproval(conversationId, toolCallId, action === 'approve', feedback)) {
     const remaining = listPendingToolCalls(conversationId);
     log.info('Resolved in-request tool approval', { requestId, conversationId, action, toolCallId, remaining: remaining.length });
     return NextResponse.json(
@@ -117,7 +117,8 @@ export async function POST(
     // flip back to 'running' when done). Shared with the headless approval
     // inbox (POST /api/approvals/:id) via applyApprovalDecision so both paths
     // behave identically (issue #115).
-    const decision = await applyApprovalDecision(sharedState, toolCallId, action);
+    const always = (requestBody as { action: 'approve' | 'reject'; toolCallId: string; always?: boolean }).always;
+    const decision = await applyApprovalDecision(sharedState, toolCallId, action, always, feedback);
     if (decision.outcome === 'tool_not_found') {
       log.warn(`Pending tool call not found`, { requestId, conversationId, toolCallId });
       return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });

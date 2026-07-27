@@ -82,8 +82,8 @@ interface ChatMessagesProps {
   onSplitConversation: (messageId: string) => void;
   /** Start editing a message — opens the editor in the ChatInput, not inline. */
   onBeginEditMessage?: (messageId: string) => void;
-  onApproveToolCall?: (toolCallId: string) => void; // Add approve handler prop
-  onRejectToolCall?: (toolCallId: string) => void; // Add reject handler prop
+  onApproveToolCall?: (toolCallId: string, always?: boolean) => void; // Add approve handler prop
+  onRejectToolCall?: (toolCallId: string, always?: boolean, feedback?: string) => void; // Add reject handler prop (feedback: issue #247)
   /** Submit elicitation form — called with the collected field values. */
   onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
   /** Cancel the pending elicitation request. */
@@ -1027,6 +1027,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   canvasKeys, // #216: identities already open in the canvas
   queuedMessages = [], // #221: inline pending bubbles
 }) => {
+  // Issue #247: per-tool-call rejection feedback text (keyed by tool-call id),
+  // so the user can tell the model *why* a call was rejected / what to do instead.
+  const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
+
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
   useEffect(() => {
@@ -1356,13 +1360,38 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   }}>
                     {formattedArgs}
                   </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1 }}>
+                  {/* Issue #247: optional reason carried back to the model on reject. */}
+                  <TextField
+                    label="Rejection reason (optional)"
+                    placeholder="e.g. write to dist/ instead"
+                    value={rejectFeedback[toolCall.id] ?? ''}
+                    onChange={(e) => setRejectFeedback(prev => ({ ...prev, [toolCall.id]: e.target.value }))}
+                    multiline minRows={1} maxRows={4} fullWidth size="small"
+                    sx={{ mt: 1, mb: 1 }}
+                  />
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                     <Button
                       variant="outlined" color="error" size="small" startIcon={<ThumbDownIcon />}
-                      onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id)}
+                      onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id, false, rejectFeedback[toolCall.id]?.trim() || undefined)}
                       disabled={!onRejectToolCall}
                     >
                       Reject
+                    </Button>
+                    <Button
+                      variant="outlined" color="error" size="small"
+                      onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id, true)}
+                      disabled={!onRejectToolCall}
+                      title="Always deny this tool — saves a rule so future calls are auto-denied"
+                    >
+                      Always Deny
+                    </Button>
+                    <Button
+                      variant="outlined" color="success" size="small" startIcon={<ThumbUpIcon />}
+                      onClick={() => onApproveToolCall && onApproveToolCall(toolCall.id, true)}
+                      disabled={!onApproveToolCall}
+                      title="Always allow this tool — saves a rule so future calls are auto-approved"
+                    >
+                      Always Allow
                     </Button>
                     <Button
                       variant="contained" color="success" size="small" startIcon={<ThumbUpIcon />}

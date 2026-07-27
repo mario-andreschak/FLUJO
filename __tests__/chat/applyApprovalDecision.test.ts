@@ -67,6 +67,23 @@ describe('applyApprovalDecision (#115)', () => {
     expect(state.status).toBe('running');
   });
 
+  it('reject with feedback carries the feedback text into the tool result (issue #247)', async () => {
+    const state = makeState([{ id: 'call_1', name: 'write_file' }]);
+    const res = await applyApprovalDecision(state, 'call_1', 'reject', undefined, 'write to dist/ instead');
+
+    expect(res.outcome).toBe('ready');
+    expect(processToolCallsMock).not.toHaveBeenCalled();
+    const toolMsg = state.messages.find(m => m.role === 'tool');
+    expect(toolMsg?.content).toBe('User rejected this tool call: write to dist/ instead');
+  });
+
+  it('reject without feedback preserves the original fixed string (issue #247)', async () => {
+    const state = makeState([{ id: 'call_1', name: 'delete_everything' }]);
+    await applyApprovalDecision(state, 'call_1', 'reject');
+    const toolMsg = state.messages.find(m => m.role === 'tool');
+    expect(toolMsg?.content).toBe('User rejected tool call: delete_everything');
+  });
+
   it('returns tool_not_found for an unknown tool call id', async () => {
     const state = makeState([{ id: 'call_1', name: 'send_email' }]);
     const res = await applyApprovalDecision(state, 'nope', 'approve');

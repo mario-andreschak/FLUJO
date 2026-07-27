@@ -627,7 +627,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // user decides (surfaced to FLUJO's tool-approval UI). Otherwise auto-allow.
           if (requestToolApproval) {
             const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
-            const approved = await requestToolApproval({
+            const { approved, feedback } = await requestToolApproval({
               id: opts.toolUseID,
               name: readableName,
               args: (input ?? {}) as Record<string, unknown>,
@@ -635,6 +635,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (approved) {
               return { behavior: 'allow', updatedInput: input };
             }
+            // Issue #247: carry the optional rejection reason back to the model
+            // so it can adjust; otherwise keep the original fixed rejection text.
+            const rejectionText = feedback
+              ? `User rejected this tool call: ${feedback}`
+              : 'Tool call rejected by the user.';
             // On rejection the SDK never calls the tool handler, so record the
             // rejected call here — otherwise it (and the rejection) wouldn't show
             // up in the conversation transcript at all.
@@ -642,9 +647,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               id: opts.toolUseID,
               name: readableName,
               argsJson: JSON.stringify(input ?? {}),
-              resultContent: 'Tool call rejected by the user.',
+              resultContent: rejectionText,
             });
-            return { behavior: 'deny', message: 'Tool call rejected by the user.' };
+            return { behavior: 'deny', message: rejectionText };
           }
           return { behavior: 'allow', updatedInput: input };
         },
