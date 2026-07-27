@@ -30,9 +30,10 @@ import { spawn, type ChildProcess } from 'child_process';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { killProcessTree } from '@/utils/process/killProcessTree';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getDataDir, getHomeDir } from '@/utils/paths';
 import { BASH_SERVER_NAME } from './registry';
 import { isInside, loadEffectiveRoots } from './confinement';
+import { isProtected, ALLOW_PROTECTED_PATHS_ENV } from './protectedPaths';
 
 const log = createLogger('backend/services/mcp/internal/bashTools');
 
@@ -189,10 +190,64 @@ function resolveCwd(input: unknown, roots: string[]): string {
   const dataDir = getDataDir();
   const raw = typeof input === 'string' ? input.trim() : '';
   const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
+
+  // Deny layer (issue #260): a bash process may not be launched with its working
+  // directory inside a protected location, regardless of configured roots.
+  const prot = isProtected(resolved);
+  if (prot.denied) {
+    throw new Error(
+      `cwd "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
+        `Set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override (operator only).`
+    );
+  }
+
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
   }
   return resolved;
+}
+
+/**
+ * Best-effort advisory scan (issue #260, item 4) of a command string for
+ * absolute-looking paths that point OUTSIDE the configured roots or INTO a
+ * protected location. Returns human-readable warning strings; it NEVER blocks —
+ * a shell can reach anywhere regardless, so this is honest advice, not a
+ * boundary. Known limitation: shell variable expansions (e.g. `$HOME/AppData`)
+ * are not resolved.
+ */
+function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): string[] {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
+  // POSIX (/foo), and ~-prefixed home paths.
+  const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
+  const matches = command.match(tokenRe) ?? [];
+  const home = (() => {
+    try {
+      return getHomeDir();
+    } catch {
+      return '';
+    }
+  })();
+  for (const rawToken of matches) {
+    let token = rawToken;
+    if (token.startsWith('~/') && home) token = path.join(home, token.slice(2));
+    let resolved: string;
+    try {
+      resolved = path.isAbsolute(token) ? path.resolve(token) : path.resolve(cwd, token);
+    } catch {
+      continue;
+    }
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    const prot = isProtected(resolved);
+    if (prot.denied) {
+      warnings.push(`Command references "${rawToken}", which is inside a protected location (${prot.matchedRoot}).`);
+    } else if (roots.length > 0 && !roots.some((root) => isInside(root, resolved))) {
+      warnings.push(`Command references "${rawToken}", which is outside the configured working roots.`);
+    }
+  }
+  return warnings;
 }
 
 /**
@@ -419,6 +474,8 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
   const cwd = resolveCwd(args.cwd, roots);
+  const warnings = scanCommandForExternalPaths(command, cwd, roots);
+  const warn = warnings.length ? { warnings } : {};
   const requestedShell = coerceShell(args.shell);
   const normalize = args.normalizeNewlines === true;
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
@@ -465,10 +522,10 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
     child.on('close', (code: number | null) => {
       const finalOut = maybeNormalize(output, normalize);
       if (timedOut) {
-        finish(textResult({ timedOut: true, cwd, shell: effectiveShell, shellFallback, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]` }, true));
+        finish(textResult({ timedOut: true, cwd, shell: effectiveShell, shellFallback, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]`, ...warn }, true));
         return;
       }
-      finish(textResult({ exitCode: code, cwd, shell: effectiveShell, shellFallback, truncated, output: finalOut }, code !== 0));
+      finish(textResult({ exitCode: code, cwd, shell: effectiveShell, shellFallback, truncated, output: finalOut, ...warn }, code !== 0));
     });
   });
 }
@@ -500,6 +557,8 @@ function startTool(args: Record<string, unknown>, roots: string[]): CallToolResu
   registerExitCleanup();
 
   const cwd = resolveCwd(args.cwd, roots);
+  const warnings = scanCommandForExternalPaths(command, cwd, roots);
+  const warn = warnings.length ? { warnings } : {};
   const requestedShell = coerceShell(args.shell);
   const { child, startError, effectiveShell, fallbackFrom } = startChild(command, cwd, requestedShell);
   const shellFallback = fallbackFrom ? { requestedShell: fallbackFrom, usedShell: effectiveShell } : undefined;
@@ -537,7 +596,7 @@ function startTool(args: Record<string, unknown>, roots: string[]): CallToolResu
     scheduleReap(session);
   });
 
-  return textResult({ sessionId: id, cwd, shell: effectiveShell, shellFallback });
+  return textResult({ sessionId: id, cwd, shell: effectiveShell, shellFallback, ...warn });
 }
 
 function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Record<string, unknown> {

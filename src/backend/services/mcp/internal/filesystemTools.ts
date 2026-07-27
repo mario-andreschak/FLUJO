@@ -14,7 +14,10 @@
  *    as a HARD CEILING an operator sets — no path may ever escape it, and
  *  - user-configured roots persisted via the MCP manager UI (issue #170), which
  *    may only narrow WITHIN the env ceiling (never widen it).
- * When neither is set the server has full host access.
+ * When neither is set the server has full host access. A separate, always-applied
+ * deny layer (issue #260, see protectedPaths.ts) additionally blocks a hardcoded
+ * set of sensitive home locations regardless of the configured roots, unless the
+ * operator sets FLUJO_ALLOW_PROTECTED_PATHS=1.
  *
  * Every tool returns a machine-readable JSON envelope both as MCP
  * `structuredContent` and as a single text content block (for backward-compat
@@ -29,6 +32,7 @@ import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { FILESYSTEM_SERVER_NAME } from './registry';
 import { isInside, loadEffectiveRoots } from './confinement';
+import { isProtected, ALLOW_PROTECTED_PATHS_ENV } from './protectedPaths';
 import { recordTouchedFile } from './filesystemResources';
 
 const log = createLogger('backend/services/mcp/internal/filesystemTools');
@@ -92,6 +96,16 @@ function resolvePath(input: unknown, roots: string[]): string {
   if (!raw) throw new Error('Provide "path".');
   const dataDir = getDataDir();
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw);
+
+  // Deny layer (issue #260): always-applied, runs BEFORE the allow-list and
+  // cannot be widened by a configured root, flow, node, tool arg, or the model.
+  const prot = isProtected(resolved);
+  if (prot.denied) {
+    throw new Error(
+      `Path "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
+        `Set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override (operator only).`
+    );
+  }
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);
