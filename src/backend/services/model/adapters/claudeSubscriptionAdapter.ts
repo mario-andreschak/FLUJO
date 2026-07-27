@@ -13,7 +13,7 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType, truncateForPrompt } from './messageUtils';
-import { jsonSchemaToZodShape } from './jsonSchemaToZod';
+import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import {
   sessionKey,
@@ -472,8 +472,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         const localExec = localToolExecutors?.[fnName];
         if (!handoff && !decoded && !localExec) return null;
 
-        const description = t.function.description ?? '';
-        const schemaShape = jsonSchemaToZodShape(t.function.parameters);
+        // Build the Zod raw shape and, when a composed/ref schema couldn't be
+        // faithfully translated, surface the original JSON Schema in the
+        // description so the model still sees the real contract (issue #232).
+        const { shape: schemaShape, fallbackSchema } = buildToolInputShape(t.function.parameters);
+        const description = embedSchemaInDescription(t.function.description ?? '', fallbackSchema);
 
         if (handoff) {
           // A spawnable sub-agent's handoff tool carries a `task` param (issue
