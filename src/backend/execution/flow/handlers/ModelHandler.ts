@@ -427,6 +427,27 @@ export class ModelHandler {
   }
 
   /**
+   * Read the opt-in `historyKeepRecentMessages` compaction window from persisted
+   * Settings (issue #286). Missing/invalid reads as 12 (the historical
+   * `compactForWire` default), so behaviour is unchanged unless the user lowers
+   * it to let short-but-tool-heavy conversations be compacted. Clamped to >= 2 so
+   * a tail can never be too small to hold a tool_calls/tool pair verbatim.
+   */
+  private static async historyKeepRecentMessages(): Promise<number> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      const keep = settings?.experimental?.historyKeepRecentMessages;
+      if (typeof keep === 'number' && Number.isFinite(keep)) {
+        return Math.max(2, Math.floor(keep));
+      }
+      return 12;
+    } catch (err) {
+      log.warn('Failed to read historyKeepRecentMessages setting; using default 12', { err });
+      return 12;
+    }
+  }
+
+  /**
    * Fold a message streamed from a self-orchestrating adapter (Claude
    * subscription) into the conversation's live in-memory SharedState AS it is
    * produced (keyed by id, so it is idempotent w.r.t. the same message being
@@ -1231,8 +1252,10 @@ export class ModelHandler {
       // dropping a message (tool-pair integrity + prefix-cache stability). The
       // self-orchestrating Claude path ('claude-cli') is skipped: it flattens the
       // wire itself and has its own resource-aware truncation markers (issue #168).
-      if (!isSelfOrchestratingAdapter(model.adapter) && couldCompact(apiMessages)) {
+      const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
+      if (!isSelfOrchestratingAdapter(model.adapter) && couldCompact(apiMessages, { keepRecentMessages })) {
         apiMessages = compactForWire(apiMessages, {
+          keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
         });
         // Truncation embeds a `flujo://run/...` URI when the full result was

@@ -165,6 +165,19 @@ export interface ExperimentalSettings {
    * `compactionEnabled`. Missing ⇒ 8000.
    */
   compactionKeepTokens?: number;
+  /**
+   * How many of the most-recent wire messages `compactForWire` keeps VERBATIM
+   * (everything older is eligible for lossless wire-only shrinking of oversized
+   * old tool results / old assistant prose). Missing ⇒ 12 (the historical
+   * default). Issue #286: short-but-tool-heavy conversations (a single message
+   * that fans out into dozens of MCP tool-loop turns) never crossed the 12
+   * threshold, so they got NO compaction and re-sent every fat tool result on
+   * every turn. Lowering this (e.g. 6) lets those runs benefit from wire-only
+   * shrinking. Wire-only and lossless — the persisted transcript is untouched —
+   * but a lower value shifts the recent/old boundary, so the first turn after a
+   * change can cost one prompt-cache miss. Values below 2 are clamped to 2.
+   */
+  historyKeepRecentMessages?: number;
 }
 
 /**

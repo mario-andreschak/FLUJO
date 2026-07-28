@@ -276,4 +276,46 @@ describe('compactForWire', () => {
     expect(before - after).toBeGreaterThan(70_000); // ~ the two blobs minus heads
     expect(wireHasRunResourceUri(out)).toBe(true);
   });
+
+  // Issue #286: a short-but-tool-heavy conversation (a single user message that
+  // fans out into a few MCP tool turns) never crosses the historical 12-message
+  // window, so it got NO compaction and re-sent every fat tool result each turn.
+  // A lower configurable window lets those runs benefit from wire-only shrinking.
+  describe('configurable recent window (issue #286)', () => {
+    const uri = 'flujo://run/conv-286/dl';
+    // 8 messages: system + user + 3 tool turns (assistant+tool each). One fat.
+    const shortToolHeavy = (): Msg[] => [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'do the thing' },
+      ...toolTurn('dl', 50_000),   // messages 2..3 — fat, captured
+      ...toolTurn('c2', 300, 'a'), // messages 4..5
+      ...toolTurn('c3', 300, 'b'), // messages 6..7 — recent tail
+    ];
+
+    it('leaves the short history untouched at the default window of 12', () => {
+      const msgs = shortToolHeavy();
+      expect(couldCompact(msgs, { keepRecentMessages: 12 })).toBe(false);
+      expect(compactForWire(msgs, { keepRecentMessages: 12, resourceMarkers: markersFor('dl', uri) })).toBe(msgs);
+    });
+
+    it('compacts the same fat OLD tool result once the window is lowered to 4', () => {
+      // 8 messages (indices 0..7). window=4 keeps indices 4..7 verbatim; the fat
+      // tool result at index 3 is now OLD and eligible for wire-only shrinking.
+      const msgs = shortToolHeavy();
+      expect(couldCompact(msgs, { keepRecentMessages: 4 })).toBe(true);
+      const before = JSON.stringify(msgs).length;
+      const out = compactForWire(msgs, {
+        keepRecentMessages: 4,
+        toolResultHeadChars: 2000,
+        resourceMarkers: markersFor('dl', uri),
+      });
+      const after = JSON.stringify(out).length;
+      expect(after).toBeLessThan(before);
+      expect(before - after).toBeGreaterThan(40_000);
+      expect(wireHasRunResourceUri(out)).toBe(true);
+      // Same length/order/roles preserved (tool-pair integrity).
+      expect(out.length).toBe(msgs.length);
+      expect(out.map((m) => m.role)).toEqual(msgs.map((m) => m.role));
+    });
+  });
 });
