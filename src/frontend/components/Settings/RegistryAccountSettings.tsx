@@ -37,6 +37,7 @@ export default function RegistryAccountSettings() {
   const [tab, setTab] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [handle, setHandle] = useState('');
 
   const [baseUrl, setBaseUrl] = useState('');
   const [defaultUrl, setDefaultUrl] = useState('');
@@ -85,7 +86,7 @@ export default function RegistryAccountSettings() {
     setMessage(null);
     try {
       const result = tab === 'signup'
-        ? await registryService.signup(email.trim(), password)
+        ? await registryService.signup(email.trim(), password, handle.trim())
         : await registryService.login(email.trim(), password);
       if (result.status === 'authenticated') {
         setMessage({ type: 'success', text: 'Signed in to the package registry.' });
@@ -263,11 +264,21 @@ export default function RegistryAccountSettings() {
             fullWidth
             autoComplete={tab === 'signup' ? 'new-password' : 'current-password'}
           />
+          {tab === 'signup' && (
+            <TextField
+              label="Publisher handle"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              fullWidth
+              autoComplete="username"
+              helperText="A unique handle for publishing packages, e.g. your-name"
+            />
+          )}
           <Box>
             <Button
               variant="contained"
               onClick={handleAuth}
-              disabled={busy || !email.trim() || !password}
+              disabled={busy || !email.trim() || !password || (tab === 'signup' && !handle.trim())}
             >
               {tab === 'signup' ? 'Sign up' : 'Log in'}
             </Button>

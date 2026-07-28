@@ -2,7 +2,7 @@
  * Registry account auth (issue #197): sign up / log in / log out / status.
  *
  *   GET    -> masked account status
- *   POST   -> { action: 'signup' | 'login', email, password }
+ *   POST   -> { action: 'signup' | 'login', email, password, handle? } (handle required for signup)
  *   DELETE -> log out (clears stored tokens)
  *
  * Local-only + unlock-gated (secrets at rest). NOT on the middleware public
@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
   const action = raw.action;
   const email = typeof raw.email === 'string' ? raw.email.trim() : '';
   const password = typeof raw.password === 'string' ? raw.password : '';
+  const handle = typeof raw.handle === 'string' ? raw.handle.trim() : '';
 
   if (action !== 'signup' && action !== 'login') {
     return NextResponse.json({ error: "action must be 'signup' or 'login'" }, { status: 400 });
@@ -52,9 +53,12 @@ export async function POST(request: NextRequest) {
   if (!email || !password) {
     return NextResponse.json({ error: 'email and password are required' }, { status: 400 });
   }
+  if (action === 'signup' && !handle) {
+    return NextResponse.json({ error: 'handle is required for signup' }, { status: 400 });
+  }
 
   try {
-    const result = await authenticate(email, password, action as RegistryAuthAction);
+    const result = await authenticate(email, password, action as RegistryAuthAction, handle);
     const httpStatus = result.status === 'error' ? 400 : 200;
     return NextResponse.json(result, { status: httpStatus });
   } catch (err) {

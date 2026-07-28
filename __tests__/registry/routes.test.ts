@@ -60,7 +60,7 @@ describe('POST /api/registry/auth (#197)', () => {
     authenticateMock.mockResolvedValue({ status: 'authenticated', account: { signedIn: true } });
     const res = await authPost(req('http://localhost:4200/api/registry/auth', { action: 'login', email: 'a@b.c', password: 'pw' }));
     expect(res.status).toBe(200);
-    expect(authenticateMock).toHaveBeenCalledWith('a@b.c', 'pw', 'login');
+    expect(authenticateMock).toHaveBeenCalledWith('a@b.c', 'pw', 'login', '');
   });
 
   it('rejects a cross-origin (DNS-rebinding) request with 403 and never authenticates', async () => {
@@ -80,6 +80,21 @@ describe('POST /api/registry/auth (#197)', () => {
   it('returns 400 when email or password is missing', async () => {
     const res = await authPost(req('http://localhost:4200/api/registry/auth', { action: 'login', email: '' }));
     expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for signup without a handle, and never authenticates', async () => {
+    const res = await authPost(req('http://localhost:4200/api/registry/auth', { action: 'signup', email: 'a@b.c', password: 'pw' }));
+    expect(res.status).toBe(400);
+    expect(authenticateMock).not.toHaveBeenCalled();
+  });
+
+  it('authenticates a signup request with a handle', async () => {
+    authenticateMock.mockResolvedValue({ status: 'authenticated', account: { signedIn: true } });
+    const res = await authPost(
+      req('http://localhost:4200/api/registry/auth', { action: 'signup', email: 'a@b.c', password: 'pw', handle: 'my-handle' }),
+    );
+    expect(res.status).toBe(200);
+    expect(authenticateMock).toHaveBeenCalledWith('a@b.c', 'pw', 'signup', 'my-handle');
   });
 });
 

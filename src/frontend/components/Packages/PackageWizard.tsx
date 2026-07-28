@@ -271,12 +271,19 @@ export default function PackageWizard({ open, onClose }: Props) {
     [selection, scanEntropy, scanRepoSlug],
   );
 
-  const toggleProposal = (id: string) =>
-    setContentProposals((prev) => prev.map((p) => (p.id === id ? { ...p, accepted: !p.accepted } : p)));
+  const toggleProposalGroup = (ids: string[]) =>
+    setContentProposals((prev) => {
+      const idSet = new Set(ids);
+      const nextAccepted = !prev.find((p) => idSet.has(p.id))?.accepted;
+      return prev.map((p) => (idSet.has(p.id) ? { ...p, accepted: nextAccepted } : p));
+    });
   const setAllProposals = (accepted: boolean) =>
     setContentProposals((prev) => prev.map((p) => ({ ...p, accepted })));
-  const renameProposal = (id: string, name: string) =>
-    setContentProposals((prev) => prev.map((p) => (p.id === id ? { ...p, suggestedSecretName: name } : p)));
+  const renameProposalGroup = (ids: string[], name: string) =>
+    setContentProposals((prev) => {
+      const idSet = new Set(ids);
+      return prev.map((p) => (idSet.has(p.id) ? { ...p, suggestedSecretName: name } : p));
+    });
 
   /** Add a user-entered secret to the review list (issue #208). */
   const addManualProposal = () => {
@@ -330,19 +337,65 @@ export default function PackageWizard({ open, onClose }: Props) {
     );
   }, [pickerCandidates, pickerSearch]);
 
+  // Collapse proposals that share the same kind + excerpt (i.e. the same secret
+  // value detected at multiple locations) into a single review row — accepting
+  // one already redacts every occurrence via `SecretSubstitution.excerpt`, so
+  // showing a row per occurrence just bloats the list (#285 follow-up).
+  const groupedProposals = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        ids: string[];
+        locations: string[];
+        kind: SecretKind;
+        source: SecretProposal['source'];
+        confidence: SecretProposal['confidence'];
+        excerpt: string;
+        suggestedSecretName: string;
+        rationale?: string;
+        accepted?: boolean;
+      }
+    >();
+    for (const p of contentProposals) {
+      const key = `${p.kind}::${p.excerpt}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.ids.push(p.id);
+        existing.locations.push(p.location);
+      } else {
+        groups.set(key, {
+          key,
+          ids: [p.id],
+          locations: [p.location],
+          kind: p.kind,
+          source: p.source,
+          confidence: p.confidence,
+          excerpt: p.excerpt,
+          suggestedSecretName: p.suggestedSecretName,
+          rationale: p.rationale,
+          accepted: p.accepted,
+        });
+      }
+    }
+    return Array.from(groups.values());
+  }, [contentProposals]);
+
   const filteredProposals = useMemo(() => {
     const q = proposalFilter.trim().toLowerCase();
-    if (!q) return contentProposals;
-    return contentProposals.filter((p) =>
-      `${p.excerpt} ${p.location} ${p.kind} ${p.suggestedSecretName}`.toLowerCase().includes(q),
+    if (!q) return groupedProposals;
+    return groupedProposals.filter((g) =>
+      `${g.excerpt} ${g.locations.join(' ')} ${g.kind} ${g.suggestedSecretName}`
+        .toLowerCase()
+        .includes(q),
     );
-  }, [contentProposals, proposalFilter]);
+  }, [groupedProposals, proposalFilter]);
 
   const kindCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const p of contentProposals) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
+    for (const g of groupedProposals) counts.set(g.kind, (counts.get(g.kind) ?? 0) + 1);
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-  }, [contentProposals]);
+  }, [groupedProposals]);
 
   // Auto-run the offline heuristic derivation when the user reaches the step.
   useEffect(() => {
@@ -652,7 +705,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                     sx={{ minWidth: 200, flex: 1 }}
                   />
                   <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
-                    {contentProposals.filter((p) => p.accepted).length} of {contentProposals.length} accepted
+                    {groupedProposals.filter((g) => g.accepted).length} of {groupedProposals.length} accepted
                   </Typography>
                 </Stack>
                 <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 280, overflow: 'auto' }}>
@@ -667,13 +720,13 @@ export default function PackageWizard({ open, onClose }: Props) {
                       />
                     </ListItem>
                   )}
-                  {filteredProposals.map((p) => (
-                    <ListItem key={p.id} alignItems="flex-start" divider>
+                  {filteredProposals.map((g) => (
+                    <ListItem key={g.key} alignItems="flex-start" divider>
                       <ListItemIcon sx={{ minWidth: 36, mt: 1 }}>
                         <Checkbox
                           edge="start"
-                          checked={Boolean(p.accepted)}
-                          onChange={() => toggleProposal(p.id)}
+                          checked={Boolean(g.accepted)}
+                          onChange={() => toggleProposalGroup(g.ids)}
                           tabIndex={-1}
                           disableRipple
                         />
@@ -681,44 +734,49 @@ export default function PackageWizard({ open, onClose }: Props) {
                       <ListItemText
                         primary={
                           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                            <Chip label={p.kind} size="small" />
+                            <Chip label={g.kind} size="small" />
                             <Chip
-                              label={p.source}
+                              label={g.source}
                               size="small"
                               variant="outlined"
-                              color={p.source === 'model' ? 'secondary' : p.source === 'manual' ? 'primary' : 'default'}
+                              color={g.source === 'model' ? 'secondary' : g.source === 'manual' ? 'primary' : 'default'}
                             />
-                            {p.confidence && (
+                            {g.confidence && (
                               <Chip
-                                label={p.confidence}
+                                label={g.confidence}
                                 size="small"
                                 variant="outlined"
                                 color={
-                                  p.confidence === 'high'
+                                  g.confidence === 'high'
                                     ? 'success'
-                                    : p.confidence === 'low'
+                                    : g.confidence === 'low'
                                       ? 'warning'
                                       : 'default'
                                 }
                               />
                             )}
+                            {g.locations.length > 1 && (
+                              <Chip label={`${g.locations.length}×`} size="small" variant="outlined" />
+                            )}
                             <Box component="code" sx={{ wordBreak: 'break-all' }}>
-                              {p.excerpt.length > 80 ? `${p.excerpt.slice(0, 80)}…` : p.excerpt}
+                              {g.excerpt.length > 80 ? `${g.excerpt.slice(0, 80)}…` : g.excerpt}
                             </Box>
                           </Stack>
                         }
                         secondary={
                           <Stack spacing={0.5} sx={{ mt: 0.5 }}>
                             <Typography variant="caption" color="text.secondary">
-                              {p.location}
-                              {p.rationale ? ` — ${p.rationale}` : ''}
+                              {g.locations.length > 1
+                                ? `${g.locations.length} locations: ${g.locations.slice(0, 3).join(', ')}${g.locations.length > 3 ? ', …' : ''}`
+                                : g.locations[0]}
+                              {g.rationale ? ` — ${g.rationale}` : ''}
                             </Typography>
                             <TextField
                               size="small"
                               label="Secret name"
-                              value={p.suggestedSecretName}
-                              onChange={(e) => renameProposal(p.id, e.target.value)}
-                              disabled={!p.accepted}
+                              value={g.suggestedSecretName}
+                              onChange={(e) => renameProposalGroup(g.ids, e.target.value)}
+                              disabled={!g.accepted}
                               sx={{ maxWidth: 320 }}
                             />
                           </Stack>

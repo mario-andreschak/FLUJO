@@ -120,9 +120,10 @@ export async function authenticate(
   email: string,
   password: string,
   mode: RegistryAuthAction,
+  handle?: string,
 ): Promise<RegistryAuthResult> {
-  const call = mode === 'signup' ? client.signup : client.login;
-  const { status, body } = await call(email, password);
+  const { status, body } =
+    mode === 'signup' ? await client.signup(email, password, handle || '') : await client.login(email, password);
 
   if (status === 0) {
     return { status: 'error', message: 'Could not reach the package registry.' };

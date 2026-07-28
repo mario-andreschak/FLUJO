@@ -5,7 +5,7 @@
  * with JSON bodies + bearer auth rather than the MCP-registry's HTTP/2 quirk.
  *
  * API surface consumed (from #196):
- *   POST /v1/auth/signup              { email, password }
+ *   POST /v1/auth/signup              { email, password, handle }
  *   POST /v1/auth/login               { email, password }
  *   POST /v1/auth/refresh             { refresh_token }
  *   POST /v1/auth/resend-confirmation { email }
@@ -120,8 +120,8 @@ export interface RegistryPublishPayload {
   error?: string;
 }
 
-export function signup(email: string, password: string) {
-  return postJson<RegistryAuthPayload>('/v1/auth/signup', { email, password });
+export function signup(email: string, password: string, handle: string) {
+  return postJson<RegistryAuthPayload>('/v1/auth/signup', { email, password, handle });
 }
 
 export function login(email: string, password: string) {
