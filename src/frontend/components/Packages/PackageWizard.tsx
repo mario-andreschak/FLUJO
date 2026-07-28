@@ -61,6 +61,17 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
 
 const STEPS = ['Select contents', 'Resolve & validate', 'Secret review', 'Metadata', 'Export'];
 
+/** Keep the stable manifest identifier while hiding its redundant generated prefix in the wizard. */
+export function displaySecretName(name: string): string {
+  return name.replace(/^SECRET_/, '');
+}
+
+function updateDisplayedSecretName(currentName: string, displayedName: string): string {
+  return currentName.startsWith('SECRET_')
+    ? `SECRET_${displayedName.replace(/^SECRET_/, '')}`
+    : displayedName;
+}
+
 interface EntityOption {
   id: string; // flow/model/planned id, or MCP server name
   label: string;
@@ -789,7 +800,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                     <ListItemText
                       primary={
                         <>
-                          <code>{s.name}</code>{' '}
+                          <code>{displaySecretName(s.name)}</code>{' '}
                           {s.required && <Chip label="required" size="small" color="warning" />}
                         </>
                       }
@@ -912,8 +923,11 @@ export default function PackageWizard({ open, onClose }: Props) {
                             <TextField
                               size="small"
                               label="Secret name"
-                              value={g.suggestedSecretName}
-                              onChange={(e) => renameProposalGroup(g.ids, e.target.value)}
+                              value={displaySecretName(g.suggestedSecretName)}
+                              onChange={(e) => renameProposalGroup(
+                                g.ids,
+                                updateDisplayedSecretName(g.suggestedSecretName, e.target.value),
+                              )}
                               disabled={!g.accepted}
                               sx={{ maxWidth: 320 }}
                             />
@@ -933,7 +947,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                 <AlertTitle>Secrets from the imported manifest that need re-adding</AlertTitle>
                 A manifest never carries secret values, so these declarations could not be
                 matched to anything in the current content — re-add them below if they still
-                apply: {unrecoveredSecretNames.join(', ')}.
+                apply: {unrecoveredSecretNames.map(displaySecretName).join(', ')}.
               </Alert>
             )}
 
