@@ -84,7 +84,8 @@ export interface InstallServerResult {
 
 export interface InstallPreview {
   servers: Array<{ localName: string; source: string; requiredEnvMissing: string[] }>;
-  models: Array<{ displayName: string; apiKeyFrom?: string; missingRequiredSecret?: boolean }>;
+  models: Array<{ id: string; displayName: string; apiKeyFrom?: string; missingRequiredSecret?: boolean }>;
+  installedModels: Array<{ id: string; displayName: string; name: string }>;
   flows: Array<{ name: string }>;
   plannedExecutions: Array<{ name: string }>;
   secrets: Array<{ key: string; label?: string; required: boolean; provided: boolean }>;
@@ -120,6 +121,8 @@ export interface InstallPackageInput {
   version?: string;
   /** Secret values keyed by manifest secret name. Never logged / persisted. */
   secrets?: Record<string, string>;
+  /** Package-local model id -> id of an already installed model to substitute. */
+  modelMappings?: Record<string, string>;
   /**
    * When false (or omitted) the orchestrator performs a DRY RUN: it validates
    * the manifest and returns a consent preview WITHOUT mutating anything. The
@@ -311,7 +314,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       dryRun: true,
       package: { name: manifest.name, version: manifest.version, ...(manifest.publisher ? { publisher: manifest.publisher } : {}) },
       preview: {
-        ...buildPreview(manifest, secretProvided),
+        ...await buildPreview(manifest, secretProvided),
         missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
       },
       created: [],
@@ -322,6 +325,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       errors: [],
       missingGlobals: [],
     };
+  }
+
+  const installedModels = await modelService.loadModels();
+  const packageModelIds = new Set((manifest.models ?? []).map((model) => model.id));
+  const installedModelsById = new Map(installedModels.map((model) => [model.id, model]));
+  for (const [packageModelId, installedModelId] of Object.entries(input.modelMappings ?? {})) {
+    if (!packageModelIds.has(packageModelId) || !installedModelsById.has(installedModelId)) {
+      const s = empty();
+      s.errors.push(`Invalid model mapping: "${packageModelId}" -> "${installedModelId}"`);
+      return s;
+    }
   }
 
   const summary: InstallSummary = {
@@ -387,6 +401,18 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   //    model comes out "unbound" after install (the model gets a fresh id).
   const modelIdMap: Record<string, { id: string; name: string }> = {};
   for (const model of resolvedModels) {
+    const mappedModelId = input.modelMappings?.[model.id];
+    if (mappedModelId) {
+      const mappedModel = installedModelsById.get(mappedModelId)!;
+      modelIdMap[model.id] = { id: mappedModel.id, name: mappedModel.name };
+      summary.skipped.push({
+        type: 'model',
+        name: model.displayName || model.name,
+        id: mappedModel.id,
+        note: `substituted with installed model "${mappedModel.displayName || mappedModel.name}"`,
+      });
+      continue;
+    }
     const installed = await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
     if (installed) modelIdMap[model.id] = installed;
   }
@@ -594,7 +620,8 @@ function serverSecretRefs(server: PackagedMcpServer): string[] {
     .filter((v): v is string => typeof v === 'string' && v.length > 0);
 }
 
-function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => boolean): Omit<InstallPreview, 'missingGlobals'> {
+async function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => boolean): Promise<Omit<InstallPreview, 'missingGlobals'>> {
+  const installedModels = await modelService.loadModels();
   return {
     servers: (manifest.mcpServers ?? []).map((s) => ({
       localName: s.name,
@@ -604,6 +631,7 @@ function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => 
       ),
     })),
     models: (manifest.models ?? []).map((m) => ({
+      id: m.id,
       displayName: m.displayName || m.name,
       ...(m.apiKeyRef.kind === 'global'
         ? { apiKeyFrom: `\${global:${m.apiKeyRef.var}}` }
@@ -615,6 +643,11 @@ function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => 
         !secretProvided((m.apiKeyRef as { secret: string }).secret)
         ? { missingRequiredSecret: true }
         : {}),
+    })),
+    installedModels: installedModels.map((m) => ({
+      id: m.id,
+      displayName: m.displayName || m.name,
+      name: m.name,
     })),
     flows: (manifest.flows ?? []).map((f) => ({ name: f.flow.name })),
     plannedExecutions: (manifest.plannedExecutions ?? []).map((p) => ({ name: p.name })),

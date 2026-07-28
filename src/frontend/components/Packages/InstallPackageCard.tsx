@@ -17,6 +17,10 @@ import {
   Grid,
   IconButton,
   InputAdornment,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
   Stack,
   TextField,
   Typography,
@@ -54,6 +58,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<InstallSummary | null>(null);
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  const [modelMappings, setModelMappings] = useState<Record<string, string>>({});
   const [result, setResult] = useState<InstallSummary | null>(null);
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
 
@@ -84,6 +89,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setPreview(null);
     setResult(null);
     setSecretValues({});
+    setModelMappings({});
     setVisibleSecrets({});
     setError(null);
     setLoading(true);
@@ -115,6 +121,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         packageId: selected.id,
         version: selected.latestVersion,
         secrets: secretValues,
+        modelMappings: Object.fromEntries(Object.entries(modelMappings).filter(([, id]) => id !== '')),
         consentGranted: true,
       });
       setResult(summary);
@@ -126,13 +133,14 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     } finally {
       setLoading(false);
     }
-  }, [selected, preview, secretValues, onInstalled]);
+  }, [selected, preview, secretValues, modelMappings, onInstalled]);
 
   const closeDialog = useCallback(() => {
     setSelected(null);
     setPreview(null);
     setResult(null);
     setSecretValues({});
+    setModelMappings({});
     setVisibleSecrets({});
     setError(null);
   }, []);
@@ -255,6 +263,37 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
               )}
 
               <Divider sx={{ my: 2 }} />
+
+              {manifest.models.length > 0 && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                    Model substitutions
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Install each package model as new, or bind its flow nodes to a model already installed here.
+                  </Typography>
+                  <Stack spacing={1.5}>
+                    {manifest.models.map((model) => (
+                      <FormControl key={model.id} size="small" fullWidth>
+                        <InputLabel id={`model-mapping-${model.id}`}>{model.displayName}</InputLabel>
+                        <Select
+                          labelId={`model-mapping-${model.id}`}
+                          label={model.displayName}
+                          value={modelMappings[model.id] ?? ''}
+                          onChange={(e) => setModelMappings((prev) => ({ ...prev, [model.id]: e.target.value }))}
+                        >
+                          <MenuItem value="">Install as new</MenuItem>
+                          {manifest.installedModels.map((installed) => (
+                            <MenuItem key={installed.id} value={installed.id}>
+                              {installed.displayName}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
 
               {manifest.secrets.length > 0 ? (
                 <>

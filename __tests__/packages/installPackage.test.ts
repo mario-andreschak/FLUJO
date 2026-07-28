@@ -495,6 +495,42 @@ describe('installPackage — process-node model binding remap', () => {
     const savedFlow = saveFlowMock.mock.calls[0][0] as { nodes: Array<{ data: { properties: { boundModel: string } } }> };
     expect(savedFlow.nodes[0].data.properties.boundModel).toBe('existing-model-xyz');
   });
+
+  it('substitutes a selected installed model without updating or owning it', async () => {
+    const packageManifest = {
+      ...manifest(),
+      mcpServers: [],
+      flows: [{
+        flow: {
+          id: 'local-root',
+          name: 'Root',
+          nodes: [{ id: 'n1', data: { type: 'process', properties: { boundModel: 'model-1', modelName: 'My GPT' } } }],
+          edges: [],
+        },
+      }],
+      plannedExecutions: [],
+    };
+    fetchPackageManifestMock.mockResolvedValue(packageManifest);
+    loadModelsMock.mockResolvedValue([{ id: 'installed-claude', name: 'claude-3-7-sonnet', displayName: 'Claude' }]);
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      secrets: {},
+      modelMappings: { 'model-1': 'installed-claude' },
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(true);
+    expect(addModelMock).not.toHaveBeenCalled();
+    expect(updateModelMock).not.toHaveBeenCalled();
+    const savedFlow = saveFlowMock.mock.calls[0][0] as { nodes: Array<{ data: { properties: { boundModel: string; modelName: string } } }> };
+    expect(savedFlow.nodes[0].data.properties).toMatchObject({
+      boundModel: 'installed-claude',
+      modelName: 'claude-3-7-sonnet',
+    });
+    expect(summary.skipped).toContainEqual(expect.objectContaining({ type: 'model', id: 'installed-claude' }));
+  });
 });
 
 describe('installPackage — requiredGlobals / missingGlobals', () => {

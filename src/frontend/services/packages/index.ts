@@ -125,6 +125,7 @@ class PackageService {
     packageId: string;
     version?: string;
     secrets?: Record<string, string>;
+    modelMappings?: Record<string, string>;
     consentGranted?: boolean;
   }): Promise<InstallSummary> {
     const response = await fetch('/api/packages/install', {

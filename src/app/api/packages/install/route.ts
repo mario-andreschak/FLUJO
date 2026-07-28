@@ -16,7 +16,8 @@
  * `consentGranted: true` plus the collected secret values to actually install.
  *
  * Body: { source: 'registry', packageId: string, version?: string,
- *         secrets?: Record<string,string>, consentGranted?: boolean }
+ *         secrets?: Record<string,string>, modelMappings?: Record<string,string>,
+ *         consentGranted?: boolean }
  * Response: the install summary (created / updated / skipped / disabled / errors),
  * or `{ dryRun: true, preview }` when consentGranted is false.
  */
@@ -41,11 +42,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { source, packageId, version, secrets, consentGranted } = (body ?? {}) as {
+  const { source, packageId, version, secrets, modelMappings, consentGranted } = (body ?? {}) as {
     source?: unknown;
     packageId?: unknown;
     version?: unknown;
     secrets?: unknown;
+    modelMappings?: unknown;
     consentGranted?: unknown;
   };
 
@@ -60,6 +62,15 @@ export async function POST(request: NextRequest) {
   }
   if (secrets !== undefined && (typeof secrets !== 'object' || secrets === null || Array.isArray(secrets))) {
     return NextResponse.json({ error: 'secrets must be an object of string values' }, { status: 400 });
+  }
+  if (modelMappings !== undefined && (typeof modelMappings !== 'object' || modelMappings === null || Array.isArray(modelMappings))) {
+    return NextResponse.json({ error: 'modelMappings must be an object of string values' }, { status: 400 });
+  }
+  const modelMappingRecord = (modelMappings ?? {}) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(modelMappingRecord)) {
+    if (typeof v !== 'string') {
+      return NextResponse.json({ error: `model mapping "${k}" must be a string value` }, { status: 400 });
+    }
   }
   if (consentGranted !== undefined && typeof consentGranted !== 'boolean') {
     return NextResponse.json({ error: 'consentGranted must be a boolean' }, { status: 400 });
@@ -78,6 +89,7 @@ export async function POST(request: NextRequest) {
     packageId,
     ...(version ? { version } : {}),
     secrets: secretRecord as Record<string, string>,
+    modelMappings: modelMappingRecord as Record<string, string>,
     consentGranted: consentGranted === undefined ? true : (consentGranted as boolean),
   });
 
