@@ -82,10 +82,13 @@ interface CodexUsage {
  * The approval gate (`requestToolApproval`) is enforced INSIDE the bridge
  * handlers, before dispatch — the Codex SDK has no canUseTool equivalent.
  *
- * Codex's own built-in tooling (shell, apply_patch) cannot be disabled the way
- * the Claude path disables Claude Code's built-ins (#166). Mitigation: the
- * thread runs with `sandboxMode: 'read-only'` in a fresh empty scratch
- * directory, so built-in commands can't write or reach the network, and
+ * Disable Codex's default shell tool with `features.shell_tool = false`. A
+ * complete internal-tool allowlist is not available in the SDK, so the thread
+ * also runs with `sandboxMode: 'read-only'` in a fresh empty scratch
+ * directory; this prevents any remaining built-in edit capability from
+ * writing or reaching the network. The loopback MCP bridge is hosted by
+ * FLUJO's Node process, so its filesystem tools retain their own FLUJO
+ * authorization and are not constrained by the Codex subprocess sandbox.
  * `approvalPolicy: 'never'` keeps the CLI from blocking on interactive
  * shell approval prompts it has no way to deliver. The SDK subprocess also
  * receives a FLUJO-managed CODEX_HOME so personal MCP servers and plugins do
@@ -285,9 +288,10 @@ export class CodexAdapter implements CompletionAdapter {
       })
       .filter((t): t is BridgeTool => t !== null);
 
-    // Flattened history → Codex input. The flow's system prompt is supplied
-    // separately through Codex's native developer_instructions config below;
-    // base64 images from the history are written to scratch files so they can
+    // Flattened history → Codex stdin input. Keep the system prompt out of
+    // Codex SDK config: the SDK serializes config values into CLI arguments,
+    // which can exceed Windows' command-line limit for flow-generation prompts.
+    // Base64 images from the history are written to scratch files so they can
     // ride along as `local_image` entries (the CLI only takes paths).
     const tempFiles: string[] = [];
     let scratchDir: string | undefined;
@@ -298,6 +302,12 @@ export class CodexAdapter implements CompletionAdapter {
 
     type CodexInputItem = { type: 'text'; text: string } | { type: 'local_image'; path: string };
     const inputItems: CodexInputItem[] = [];
+    if (systemPrompt) {
+      inputItems.push({
+        type: 'text',
+        text: `<system_instructions>\n${systemPrompt}\n</system_instructions>`,
+      });
+    }
     if (typeof content === 'string') {
       inputItems.push({ type: 'text', text: content });
     } else {
@@ -344,7 +354,12 @@ export class CodexAdapter implements CompletionAdapter {
         // model (for example gpt-5.4-mini) does not advertise that tier: the CLI
         // completes the turn but exits non-zero after printing the warning.
         service_tier: 'default',
-        ...(systemPrompt ? { developer_instructions: systemPrompt } : {}),
+        // Do not expose Codex's built-in shell. FLUJO filesystem operations
+        // must go through the bridged MCP tools so they remain observable and
+        // subject to FLUJO's approval and protected-path policies.
+        features: {
+          shell_tool: false,
+        },
         ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
         ...(bridge
           ? {

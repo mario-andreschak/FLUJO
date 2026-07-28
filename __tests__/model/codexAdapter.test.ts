@@ -134,17 +134,18 @@ describe('CodexAdapter — thread setup', () => {
     expect('apiKey' in (codexCtorMock.mock.calls[0][0] as Record<string, unknown>)).toBe(false);
   });
 
-  it('uses Codex local model catalog to avoid a failing online refresh', async () => {
+  it('disables Codex shell and uses its local model catalog', async () => {
     await new CodexAdapter().createCompletion(baseInput());
     const opts = codexCtorMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.config).toEqual({
       service_tier: 'default',
+      features: { shell_tool: false },
       model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
     });
     expect(capturedBridgeTools).toEqual([]);
   });
 
-  it('passes the system prompt as native Codex developer instructions', async () => {
+  it('passes the system prompt through stdin instead of Codex CLI config', async () => {
     await new CodexAdapter().createCompletion(
       baseInput({
         messages: [
@@ -156,10 +157,12 @@ describe('CodexAdapter — thread setup', () => {
     const opts = codexCtorMock.mock.calls[0][0] as {
       config: Record<string, unknown>;
     };
-    expect(opts.config.developer_instructions).toBe('You are terse.');
-    const input = runStreamedMock.mock.calls[0][0] as string;
-    expect(input).toContain('hi');
-    expect(input).not.toContain('<system_instructions>');
+    expect(opts.config).not.toHaveProperty('developer_instructions');
+    const input = runStreamedMock.mock.calls[0][0] as Array<{ type: string; text?: string }>;
+    expect(input).toEqual([
+      { type: 'text', text: '<system_instructions>\nYou are terse.\n</system_instructions>' },
+      { type: 'text', text: expect.stringContaining('hi') },
+    ]);
   });
 });
 
@@ -249,6 +252,7 @@ describe('CodexAdapter — tool bridging', () => {
     const cfg = (codexCtorMock.mock.calls[0][0] as { config: Record<string, unknown> }).config;
     expect(cfg).toEqual({
       service_tier: 'default',
+      features: { shell_tool: false },
       model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
       mcp_servers: {
         flujo: {
