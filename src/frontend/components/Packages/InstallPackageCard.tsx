@@ -15,6 +15,7 @@ import {
   DialogTitle,
   Divider,
   Grid,
+  IconButton,
   InputAdornment,
   Stack,
   TextField,
@@ -23,6 +24,8 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { packageService, type InstallSummary, type RegistryPackageSearchResult } from '@/frontend/services/packages';
 import { createLogger } from '@/utils/logger';
 
@@ -52,6 +55,8 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const [preview, setPreview] = useState<InstallSummary | null>(null);
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [result, setResult] = useState<InstallSummary | null>(null);
+  const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
+
 
   const runSearch = useCallback(async (q: string) => {
     setSearching(true);
@@ -79,6 +84,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setPreview(null);
     setResult(null);
     setSecretValues({});
+    setVisibleSecrets({});
     setError(null);
     setLoading(true);
     try {
@@ -127,6 +133,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setPreview(null);
     setResult(null);
     setSecretValues({});
+    setVisibleSecrets({});
     setError(null);
   }, []);
 
@@ -259,6 +266,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                       <TextField
                         key={s.key}
                         size="small"
+                        type={visibleSecrets[s.key] ? 'text' : 'password'}
                         type="password"
                         label={s.label || s.key}
                         helperText={
@@ -269,6 +277,22 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         value={secretValues[s.key] ?? ''}
                         onChange={(e) => setSecretValues((prev) => ({ ...prev, [s.key]: e.target.value }))}
                         fullWidth
+                        InputProps={{
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              <IconButton
+                                size="small"
+                                tabIndex={-1}
+                                aria-label={visibleSecrets[s.key] ? 'Hide secret' : 'Show secret'}
+                                onClick={() =>
+                                  setVisibleSecrets((prev) => ({ ...prev, [s.key]: !prev[s.key] }))
+                                }
+                              >
+                                {visibleSecrets[s.key] ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                              </IconButton>
+                            </InputAdornment>
+                          ),
+                        }}
                       />
                     ))}
                   </Stack>
