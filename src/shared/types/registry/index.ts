@@ -12,8 +12,11 @@
  * plus a masked `token` field, never the value itself.
  */
 
-/** Hardcoded production default; overridable via env or Settings (#196 not yet deployed). */
-export const DEFAULT_REGISTRY_URL = 'https://registry.flujo.app';
+/** Hardcoded production default; overridable via env or Settings. Custom
+ * domain for the hosted registry (flujo-app/flujo-registry, Fly app
+ * `flujo-registry`), fronted via a Fly cert + DNS A/AAAA records on
+ * flujo.com.co. */
+export const DEFAULT_REGISTRY_URL = 'https://registry.flujo.com.co';
 
 /**
  * OAuth providers the hosted registry can broker sign-in through (issue #207).

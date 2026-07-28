@@ -1,20 +1,22 @@
 /**
- * Registry OAuth wire-format adapter (issue #207).
+ * Registry OAuth wire-format adapter (issue #207, wire contract landed in #224).
  *
- * Isolates the ONE part of the OAuth flow that is owned by the hosted registry's
- * #196 contract: how to build the provider-authorize URL and how to exchange the
- * returned code for tokens. Everything provider/contract-specific lives here so a
- * change to the #196 wire format never leaks into the service or route layers.
+ * Isolates the ONE part of the OAuth flow that is owned by the hosted registry
+ * (`flujo-app/flujo-registry`): how to build the provider-authorize URL and how
+ * to exchange the returned code for tokens. Everything provider/contract-specific
+ * lives here so a registry-side change never leaks into the service or route
+ * layers.
  *
  * Security posture (see the #207 plan): the registry is the OAuth *client* that
  * holds the GitHub/Google secrets — FLUJO is a public initiator that only ever
  * receives (and stores, encrypted) the registry's own token. No provider secret
  * is ever handled here.
  *
- * NOTE: the exact authorize path/params and token-exchange endpoint are "TBD per
- * #196 contract" (mirrors the password-reset seam in packageRegistryClient). The
- * best-guess shapes below follow the existing `/v1/auth/*` conventions and are
- * the only lines that must change once #196 is deployed.
+ * Contract (`GET /v1/auth/oauth/:provider/authorize`, `POST /v1/auth/oauth/token`):
+ * the registry brokers its own independent PKCE handshake with GoTrue/the
+ * provider, then hands back a short-lived, single-use code gated by OUR
+ * `code_challenge` — the registry's real GoTrue tokens never appear in a
+ * redirect URL.
  */
 import { resolveRegistryBaseUrl, oauthExchange } from '@/backend/utils/packageRegistryClient';
 import type { RegistryOAuthProvider } from '@/shared/types/registry';
