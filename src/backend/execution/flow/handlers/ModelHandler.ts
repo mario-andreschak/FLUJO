@@ -1518,6 +1518,27 @@ export class ModelHandler {
             };
           }
 
+          // A model that reports it is done (finish_reason 'stop') but produced
+          // neither text nor a tool call is not a valid completion — it's a
+          // provider-side malfunction (issue #288). Surfacing it as an error
+          // instead of a silent empty message keeps the flow from advancing on
+          // nothing.
+          const hasToolCalls = !!choice.message?.tool_calls?.length;
+          const isEmptyContent = !choice.message?.content || choice.message.content.trim().length === 0;
+          if (choice.finish_reason === 'stop' && !hasToolCalls && isEmptyContent) {
+            log.error('API reported finish_reason "stop" with an empty message and no tool calls.', { response: chatCompletion });
+            return {
+              success: false,
+              error: createModelError(
+                'api_error',
+                'Model reported completion (finish_reason "stop") but returned an empty message with no tool calls.',
+                modelId,
+                undefined,
+                { rawResponse: chatCompletion }
+              )
+            };
+          }
+
           const result: Result<ModelCallResult> = {
             success: true,
             // Use the validated choice object
