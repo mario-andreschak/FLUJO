@@ -15,6 +15,7 @@ import type {
 import type { PackageSecret } from '@/shared/types/package/secrets';
 import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import type { InstallSummary } from '@/backend/services/packages/installPackage';
+import type { RegistryPackageSearchResult } from '@/backend/utils/packageRegistryClient';
 
 const log = createLogger('frontend/services/packages');
 
@@ -99,6 +100,21 @@ class PackageService {
     return (body?.candidates ?? []) as SecretValueCandidate[];
   }
 
+  /** Search/browse published packages on the hosted registry (issue #198 follow-up). */
+  async searchRegistry(params: { q?: string; tag?: string; page?: number; pageSize?: number } = {}): Promise<RegistryPackageSearchResult> {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.tag) qs.set('tag', params.tag);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    const response = await fetch(`/api/packages/search${qs.toString() ? `?${qs.toString()}` : ''}`);
+    const body = await response.json();
+    if (!response.ok && !body?.items) {
+      throw new Error(body?.error || `HTTP ${response.status}`);
+    }
+    return body as RegistryPackageSearchResult;
+  }
+
   /**
    * Install a package from the online registry (issue #198). Two-phase: call
    * with `consentGranted: false` (or omitted) first for a dry-run preview of
@@ -163,4 +179,4 @@ export const packageService: PackageService = new Proxy({} as PackageService, {
   },
 });
 
-export type { PackageSelection, PackageMetadataInput, BuildManifestResult, ResolvedSelection, InstallSummary };
+export type { PackageSelection, PackageMetadataInput, BuildManifestResult, ResolvedSelection, InstallSummary, RegistryPackageSearchResult };
