@@ -13,6 +13,7 @@ import AddIcon from '@mui/icons-material/Add';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import PackageWizard from './PackageWizard';
 import InstalledPackagesList from './InstalledPackagesList';
+import InstallPackageCard from './InstallPackageCard';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages');
@@ -25,6 +26,7 @@ const log = createLogger('frontend/components/Packages');
  */
 export default function PackagesManager() {
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [installedRefreshKey, setInstalledRefreshKey] = useState(0);
 
   log.debug('Rendering PackagesManager', { wizardOpen });
 
@@ -81,7 +83,9 @@ export default function PackagesManager() {
           </Button>
         </Paper>
 
-        <InstalledPackagesList />
+        <InstallPackageCard onInstalled={() => setInstalledRefreshKey((k) => k + 1)} />
+
+        <InstalledPackagesList key={installedRefreshKey} />
       </Box>
 
       {wizardOpen && <PackageWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />}
