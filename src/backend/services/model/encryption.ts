@@ -120,9 +120,19 @@ export async function decryptApiKey(encryptedApiKey: string): Promise<string | n
       // Return the original value without the marker
       return encryptedApiKey.substring('encrypted_failed:'.length);
     }
-    
+
+    // Strip the `encrypted:` envelope that `encryptApiKey` adds. `decryptWithPassword`
+    // expects a bare `iv:ciphertext` pair and splits on ':', so leaving the prefix in
+    // place yields three parts and it bails out with "Invalid ciphertext format".
+    // Other call sites (resolveGlobalVars, /api/env) strip this themselves before
+    // decrypting; doing it here makes decryptApiKey the exact inverse of encryptApiKey
+    // for callers that hand over a stored value as-is.
+    const ciphertext = encryptedApiKey?.startsWith('encrypted:')
+      ? encryptedApiKey.substring('encrypted:'.length)
+      : encryptedApiKey;
+
     // Use the decryption utility from secure.ts
-    return await decryptWithPassword(encryptedApiKey);
+    return await decryptWithPassword(ciphertext);
   } catch (error) {
     log.warn('decryptApiKey: Failed to decrypt API key:', error);
     return null;
