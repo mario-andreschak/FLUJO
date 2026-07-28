@@ -5,7 +5,9 @@
  * model/flow/scheduler services, storage) so the orchestration logic —
  * consent dry-run, fail-soft on missing required secrets, fresh + deterministic
  * flow-id remapping, disabled planned executions, idempotent re-install — runs
- * for real without touching the network or disk.
+ * for real without touching the network or disk. Manifests are validated
+ * against the real #192 `flujoPackageSchema` (NOT mocked) so fixtures below
+ * must be well-formed `FlujoPackage` documents.
  */
 
 const fetchPackageManifestMock = jest.fn();
@@ -68,28 +70,38 @@ jest.mock('@/utils/storage/backend', () => ({
 import { installPackage } from '@/backend/services/packages/installPackage';
 
 const manifest = () => ({
-  schemaVersion: '1',
+  schemaVersion: 1,
+  id: 'pkg-my-pkg-id',
   name: 'my-pkg',
   version: '1.0.0',
   publisher: 'acme',
   secrets: [
-    { key: 'API_KEY', required: true },
-    { key: 'OPT', required: false },
+    { name: 'API_KEY', required: true },
+    { name: 'OPT', required: false },
   ],
   mcpServers: [
-    { localName: 'web', ref: { kind: 'registry', registryName: 'ai.keenable/web-search' }, envFromSecret: { WEB_KEY: 'API_KEY' } },
+    {
+      name: 'web',
+      transport: 'stdio',
+      installOrigin: { sourceType: 'registry', ref: 'ai.keenable/web-search' },
+      envDeclarations: [{ name: 'WEB_KEY', isSecret: true, secretRef: 'API_KEY' }],
+    },
   ],
-  models: [{ name: 'gpt-4o', displayName: 'My GPT', provider: 'openai', apiKeySecret: 'API_KEY' }],
+  models: [{ id: 'model-1', name: 'gpt-4o', displayName: 'My GPT', provider: 'openai', apiKeyRef: { kind: 'secret', secret: 'API_KEY' } }],
   flows: [
     {
-      id: 'local-root',
-      name: 'Root',
-      nodes: [{ id: 'n1', data: { type: 'subflow', label: 'child', properties: { subflowId: 'local-child' } } }],
-      edges: [],
+      flow: {
+        id: 'local-root',
+        name: 'Root',
+        nodes: [{ id: 'n1', data: { type: 'subflow', label: 'child', properties: { subflowId: 'local-child' } } }],
+        edges: [],
+      },
     },
-    { id: 'local-child', name: 'Child', nodes: [], edges: [] },
+    { flow: { id: 'local-child', name: 'Child', nodes: [], edges: [] } },
   ],
-  plannedExecutions: [{ name: 'Nightly', flowId: 'local-root', prompt: 'go', trigger: { type: 'schedule', cron: '0 0 * * *' } }],
+  plannedExecutions: [
+    { id: 'pe-nightly', name: 'Nightly', flowId: 'local-root', prompt: 'go', enabled: true, trigger: { type: 'schedule', cron: '0 0 * * *' } },
+  ],
 });
 
 beforeEach(() => {
@@ -332,20 +344,25 @@ describe('installPackage — adopt-and-configure', () => {
     expect(summary.updated.filter((u) => u.type === 'server')).toHaveLength(0);
   });
 
-  it('Test D: remote server buildRemoteServerConfig tags envFromSecret env values as isSecret', async () => {
+  it('Test D: remote server env declarations tag secret-derived values as isSecret', async () => {
     // Override to use a remote-server manifest (no adopt path).
     fetchPackageManifestMock.mockResolvedValue({
-      schemaVersion: '1',
+      schemaVersion: 1,
+      id: 'pkg-remote-pkg-id',
       name: 'remote-pkg',
       version: '1.0.0',
-      secrets: [{ key: 'API_KEY', required: true }],
+      secrets: [{ name: 'API_KEY', required: true }],
       mcpServers: [
         {
-          localName: 'my-remote',
-          ref: { kind: 'remote', transport: 'streamable', serverUrl: 'https://example.com/mcp' },
-          envFromSecret: { API_KEY: 'API_KEY' },
+          name: 'my-remote',
+          transport: 'streamable',
+          installOrigin: { sourceType: 'remote', url: 'https://example.com/mcp' },
+          envDeclarations: [{ name: 'API_KEY', isSecret: true, secretRef: 'API_KEY' }],
         },
       ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
     });
     // No pre-existing servers — remote server is a fresh upsert.
     loadServerConfigsMock.mockResolvedValue([]);

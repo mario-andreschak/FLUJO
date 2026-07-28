@@ -1,16 +1,25 @@
 /**
  * Package install orchestrator (issue #198).
  *
- * The single source of truth that BOTH the REST route and (eventually) the
- * Browse-tab UI call. Pure orchestration — no HTTP concerns. It sequences:
+ * The single source of truth that BOTH the REST route and the Browse-tab UI
+ * call. Pure orchestration — no HTTP concerns. It sequences:
  *
- *   fetch + validate manifest
+ *   fetch + validate manifest (against the real #192 `flujoPackageSchema` /
+ *   `FlujoPackage` — NOT a separate ad hoc schema; see note below)
  *     -> (consent preview, when not yet granted)
  *     -> MCP servers (by reference)
  *     -> models
  *     -> flows (fresh, deterministic ids + reference remapping)
  *     -> planned executions (remapped flowId, created DISABLED)
  *     -> summary
+ *
+ * NOTE: this used to validate against a bespoke schema in
+ * `@/shared/types/packages/manifest` (plural "packages") that was never
+ * reconciled with the actual #192 manifest format the publish side
+ * (`buildPackage.ts` / the wizard, `@/shared/types/package` singular) produces
+ * — every real published package failed "Invalid package manifest" on
+ * install. Fixed by validating with `flujoPackageSchema` / `FlujoPackage`
+ * (the same types the wizard and registry backstop already use) instead.
  *
  * Fail-soft: a missing REQUIRED secret disables the dependent entity instead of
  * aborting the whole install; only an invalid manifest or a fetch failure fails
@@ -27,11 +36,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import {
-  parsePackageManifest,
-  PackageManifest,
-  ManifestFlow,
-} from '@/shared/types/packages/manifest';
+import { validatePackage } from '@/shared/types/package/package.serialize';
+import type {
+  FlujoPackage,
+  PackagedFlow,
+  PackagedMcpServer,
+  PackagedModel,
+  PackagedPlannedExecution,
+} from '@/shared/types/package/package';
+import type { EnvDeclaration } from '@/shared/types/package/installOrigin';
 import { fetchPackageManifest } from './packageRegistry';
 import { installRegistryServer } from '@/backend/services/mcp/registryInstall';
 import { modelService } from '@/backend/services/model';
@@ -41,7 +54,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import type { Model } from '@/shared/types/model';
 import type { ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
-import type { MCPServerConfig, EnvVarValue } from '@/shared/types/mcp';
+import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/packages/installPackage');
 
@@ -49,7 +62,7 @@ export type PackageEntityType = 'server' | 'model' | 'flow' | 'plannedExecution'
 
 export interface InstallEntityRef {
   type: PackageEntityType;
-  /** Human-readable name (localName / displayName / flow name / execution name). */
+  /** Human-readable name (server name / displayName / flow name / execution name). */
   name: string;
   /** The id the entity was persisted under, when applicable. */
   id?: string;
@@ -95,7 +108,7 @@ export interface InstallPackageInput {
   source: 'registry';
   packageId: string;
   version?: string;
-  /** Secret values keyed by manifest secret key. Never logged / persisted. */
+  /** Secret values keyed by manifest secret name. Never logged / persisted. */
   secrets?: Record<string, string>;
   /**
    * When false (or omitted) the orchestrator performs a DRY RUN: it validates
@@ -225,20 +238,20 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     return s;
   }
 
-  // 2. Validate.
-  const parsed = parsePackageManifest(raw);
-  if (!parsed.ok) {
+  // 2. Validate against the real #192 schema.
+  const parsed = validatePackage(raw);
+  if (!parsed.success || !parsed.data) {
     const s = empty();
-    s.errors.push('Invalid package manifest.', ...parsed.errors);
+    s.errors.push('Invalid package manifest.', ...(parsed.errors ?? []));
     return s;
   }
-  const manifest = parsed.manifest;
+  const manifest = parsed.data;
 
   const secrets = input.secrets ?? {};
-  const secretProvided = (key: string): boolean =>
-    Object.prototype.hasOwnProperty.call(secrets, key) && `${secrets[key] ?? ''}`.length > 0;
-  const secretRequired = (key: string): boolean =>
-    (manifest.secrets ?? []).some((s) => s.key === key && s.required === true);
+  const secretProvided = (name: string): boolean =>
+    Object.prototype.hasOwnProperty.call(secrets, name) && `${secrets[name] ?? ''}`.length > 0;
+  const secretRequired = (name: string): boolean =>
+    (manifest.secrets ?? []).some((s) => s.name === name && s.required === true);
 
   // 3. Consent preview (dry-run): no mutations.
   if (input.consentGranted !== true) {
@@ -283,7 +296,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 
   // Snapshot MCP server names + configs that pre-exist BEFORE we install any,
   // so remote (upsert) servers can be classified created-vs-adopted for uninstall,
-  // and registry servers with matching localName can be adopted in place.
+  // and registry servers with matching name can be adopted in place.
   const existingServerNames = new Set<string>();
   const existingServerConfigs = new Map<string, MCPServerConfig>();
   try {
@@ -498,40 +511,48 @@ export async function uninstallPackage(packageName: string): Promise<UninstallSu
 // Preview
 // ---------------------------------------------------------------------------
 
-type ManifestServerEntry = NonNullable<PackageManifest['mcpServers']>[number];
-
-function serverSource(server: ManifestServerEntry): string {
-  return server.ref.kind === 'registry' ? `registry:${server.ref.registryName}` : `remote:${server.ref.serverUrl}`;
+function serverSource(server: PackagedMcpServer): string {
+  const origin = server.installOrigin;
+  if (origin.sourceType === 'remote') return `remote:${origin.url}`;
+  return `${origin.sourceType}:${origin.ref ?? origin.name ?? server.name}`;
 }
 
-function buildPreview(manifest: PackageManifest, secretProvided: (k: string) => boolean): InstallPreview {
+/** Every secret name a server's env/header declarations reference. */
+function serverSecretRefs(server: PackagedMcpServer): string[] {
+  return [...server.envDeclarations, ...(server.headerDeclarations ?? [])]
+    .map((d) => d.secretRef)
+    .filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => boolean): InstallPreview {
   return {
     servers: (manifest.mcpServers ?? []).map((s) => ({
-      localName: s.localName,
+      localName: s.name,
       source: serverSource(s),
-      // Include both envFromSecret and headersFromSecret field names in the
-      // missing list so the consent screen shows all required fields.
-      requiredEnvMissing: [
-        ...Object.entries(s.envFromSecret ?? {}),
-        ...Object.entries(s.headersFromSecret ?? {}),
-      ]
-        .filter(([, key]) => (manifest.secrets ?? []).some((sec) => sec.key === key && sec.required) && !secretProvided(key))
-        .map(([name]) => name),
+      requiredEnvMissing: serverSecretRefs(s).filter(
+        (name) => (manifest.secrets ?? []).some((sec) => sec.name === name && sec.required) && !secretProvided(name),
+      ),
     })),
     models: (manifest.models ?? []).map((m) => ({
-      displayName: m.displayName,
-      ...(m.apiKeyGlobalVar ? { apiKeyFrom: `\${global:${m.apiKeyGlobalVar}}` } : m.apiKeySecret ? { apiKeyFrom: `secret:${m.apiKeySecret}` } : {}),
-      ...(m.apiKeySecret && (manifest.secrets ?? []).some((sec) => sec.key === m.apiKeySecret && sec.required) && !secretProvided(m.apiKeySecret)
+      displayName: m.displayName || m.name,
+      ...(m.apiKeyRef.kind === 'global'
+        ? { apiKeyFrom: `\${global:${m.apiKeyRef.var}}` }
+        : m.apiKeyRef.kind === 'secret'
+          ? { apiKeyFrom: `secret:${m.apiKeyRef.secret}` }
+          : {}),
+      ...(m.apiKeyRef.kind === 'secret' &&
+        (manifest.secrets ?? []).some((sec) => sec.name === (m.apiKeyRef as { secret: string }).secret && sec.required) &&
+        !secretProvided((m.apiKeyRef as { secret: string }).secret)
         ? { missingRequiredSecret: true }
         : {}),
     })),
-    flows: (manifest.flows ?? []).map((f) => ({ name: f.name })),
+    flows: (manifest.flows ?? []).map((f) => ({ name: f.flow.name })),
     plannedExecutions: (manifest.plannedExecutions ?? []).map((p) => ({ name: p.name })),
     secrets: (manifest.secrets ?? []).map((s) => ({
-      key: s.key,
-      ...(s.label ? { label: s.label } : {}),
+      key: s.name,
+      ...(s.description ? { label: s.description } : {}),
       required: s.required === true,
-      provided: secretProvided(s.key),
+      provided: secretProvided(s.name),
     })),
   };
 }
@@ -542,8 +563,8 @@ function buildPreview(manifest: PackageManifest, secretProvided: (k: string) => 
 
 interface InstallCtx {
   secrets: Record<string, string>;
-  secretProvided: (key: string) => boolean;
-  secretRequired: (key: string) => boolean;
+  secretProvided: (name: string) => boolean;
+  secretRequired: (name: string) => boolean;
   summary: InstallSummary;
   ledgerEntities: PackageInstallRecord['entities'];
   ledgerCreated: LedgerCreated;
@@ -553,48 +574,69 @@ interface InstallCtx {
   existingServerConfigs: Map<string, MCPServerConfig>;
 }
 
+/** Resolved env/header values for one packaged server, plus which required secrets are missing. */
+function resolveDeclarations(
+  declarations: EnvDeclaration[],
+  ctx: Pick<InstallCtx, 'secrets' | 'secretProvided' | 'secretRequired'>,
+): { values: Record<string, string>; secretNames: Set<string>; missingRequired: string[] } {
+  const { secrets, secretProvided, secretRequired } = ctx;
+  const values: Record<string, string> = {};
+  const secretNames = new Set<string>();
+  const missingRequired: string[] = [];
+
+  for (const decl of declarations) {
+    if (decl.secretRef) {
+      if (secretProvided(decl.secretRef)) {
+        values[decl.name] = secrets[decl.secretRef];
+        if (decl.isSecret) secretNames.add(decl.name);
+      } else if (secretRequired(decl.secretRef)) {
+        missingRequired.push(decl.name);
+      }
+    } else if (decl.globalVar) {
+      values[decl.name] = `\${global:${decl.globalVar}}`;
+    }
+    // Neither secretRef nor globalVar: nothing to resolve — the declaration is
+    // metadata-only (e.g. documents a var the server reads from its own env).
+  }
+  return { values, secretNames, missingRequired };
+}
+
 /**
- * Adopt-and-configure: when a registry-ref server's localName already exists in
- * FLUJO, merge the manifest env into the existing config rather than running a
- * new registry install. Secret-derived values are tagged isSecret for
- * encryption at rest. The server is classified as `updated` (never `created`)
- * so uninstall will skip it.
+ * Adopt-and-configure: when a registry/marketplace-ref server's name already
+ * exists in FLUJO, merge the manifest env into the existing config rather than
+ * running a new registry install. Secret-derived values are tagged isSecret
+ * for encryption at rest. The server is classified as `updated` (never
+ * `created`) so uninstall will skip it.
  */
 async function adoptAndConfigureServer(
-  server: NonNullable<PackageManifest['mcpServers']>[number],
+  server: PackagedMcpServer,
   ctx: InstallCtx,
   missingRequired: string[],
+  resolvedEnv: Record<string, string>,
+  secretEnvNames: Set<string>,
 ): Promise<void> {
-  const { secrets, secretProvided, summary, ledgerEntities, existingServerConfigs } = ctx;
+  const { summary, ledgerEntities, existingServerConfigs } = ctx;
   const source = serverSource(server);
 
-  const existingConfig = existingServerConfigs.get(server.localName);
+  const existingConfig = existingServerConfigs.get(server.name);
   if (!existingConfig) {
     // Snapshot was stale — nothing to adopt; skip without error.
-    summary.servers.push({ localName: server.localName, source, installed: false,
+    summary.servers.push({ localName: server.name, source, installed: false,
       error: 'server vanished between snapshot and install' });
-    summary.skipped.push({ type: 'server', name: server.localName,
+    summary.skipped.push({ type: 'server', name: server.name,
       note: 'server not found in configs (stale snapshot)' });
     return;
   }
 
-  // Merge env: existing keys preserved, manifest literal env keys win (plain strings),
-  // envFromSecret keys win and are tagged isSecret for encryption at rest.
+  // Merge env: existing keys preserved, resolved declarations win (secret-backed
+  // ones tagged isSecret for encryption at rest).
   const mergedEnv: Record<string, EnvVarValue> = { ...(existingConfig.env ?? {}) };
-  for (const [envName, value] of Object.entries(server.env ?? {})) {
-    mergedEnv[envName] = value; // non-secret literal
-  }
-  for (const [envName, secretKey] of Object.entries(server.envFromSecret ?? {})) {
-    if (secretProvided(secretKey)) {
-      mergedEnv[envName] = { value: secrets[secretKey], metadata: { isSecret: true } };
-    }
-    // Missing required secret: skip the key — don't disable a pre-existing server.
+  for (const [envName, value] of Object.entries(resolvedEnv)) {
+    mergedEnv[envName] = secretEnvNames.has(envName) ? { value, metadata: { isSecret: true } } : value;
   }
 
-  // Save merged env. updateServerConfig reconnects the server automatically when
-  // the config meaningfully changed.
   const saved = await mcpService.updateServerConfig(
-    server.localName,
+    server.name,
     { env: mergedEnv } as Partial<MCPServerConfig>,
   );
   const failed =
@@ -604,119 +646,80 @@ async function adoptAndConfigureServer(
     (saved as { success?: boolean }).success === false;
   if (failed) {
     const error = (saved as { error?: string }).error ?? 'unknown error';
-    summary.servers.push({ localName: server.localName, source, installed: false, error });
-    summary.skipped.push({ type: 'server', name: server.localName, note: error });
+    summary.servers.push({ localName: server.name, source, installed: false, error });
+    summary.skipped.push({ type: 'server', name: server.name, note: error });
     return;
   }
 
   // Classify as updated (not created) — uninstall must never delete this server.
-  ledgerEntities.servers.push(server.localName);
+  ledgerEntities.servers.push(server.name);
   // NOTE: intentionally NOT adding to ledgerCreated.servers
   summary.servers.push({
-    localName: server.localName, source, installed: true,
-    serverName: server.localName, alreadyExisted: true,
+    localName: server.name, source, installed: true,
+    serverName: server.name, alreadyExisted: true,
   });
   const note = missingRequired.length > 0
     ? `env partially merged — missing required secret(s) for: ${missingRequired.join(', ')}`
     : undefined;
   summary.updated.push({
-    type: 'server', name: server.localName, id: server.localName,
+    type: 'server', name: server.name, id: server.name,
     ...(note ? { note } : {}),
   });
 }
 
-/**
- * After a successful new registry install, re-load the installed config and tag
- * any env entries that came from envFromSecret as isSecret so they are
- * encrypted at rest. Fail-soft: a tagging failure is logged but not fatal.
- */
-async function tagSecretEnvKeys(
-  serverName: string,
-  envFromSecret: Record<string, string>,
-  secrets: Record<string, string>,
-  secretProvided: (k: string) => boolean,
-): Promise<void> {
-  const allConfigs = await mcpService.loadServerConfigs().catch(() => null);
-  if (!Array.isArray(allConfigs)) return;
-  const existing = allConfigs.find((c) => c.name === serverName);
-  if (!existing) return;
-
-  let changed = false;
-  const updatedEnv: Record<string, EnvVarValue> = { ...(existing.env ?? {}) };
-  for (const [envName, secretKey] of Object.entries(envFromSecret)) {
-    if (secretProvided(secretKey)) {
-      updatedEnv[envName] = { value: secrets[secretKey], metadata: { isSecret: true } };
-      changed = true;
-    }
-  }
-  if (!changed) return;
-  try {
-    await mcpService.updateServerConfig(serverName, { env: updatedEnv } as Partial<MCPServerConfig>);
-  } catch (err) {
-    log.warn(`tagSecretEnvKeys: failed to re-tag secret env for "${serverName}"`, err);
-  }
-}
-
 async function installServer(
-  server: NonNullable<PackageManifest['mcpServers']>[number],
+  server: PackagedMcpServer,
   ctx: InstallCtx,
 ): Promise<void> {
-  const { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames } = ctx;
+  const { secrets, summary, ledgerEntities, ledgerCreated, existingServerNames } = ctx;
   const source = serverSource(server);
+  const origin = server.installOrigin;
 
-  // Resolve env: literal values + values pulled from provided secrets. A missing
-  // REQUIRED secret disables the server instead of failing the whole install.
-  const env: Record<string, string> = { ...(server.env ?? {}) };
-  const missingRequired: string[] = [];
-  for (const [envName, secretKey] of Object.entries(server.envFromSecret ?? {})) {
-    if (secretProvided(secretKey)) {
-      env[envName] = secrets[secretKey];
-    } else if (secretRequired(secretKey)) {
-      missingRequired.push(envName);
-    }
+  const env = resolveDeclarations(server.envDeclarations, ctx);
+  const headers = resolveDeclarations(server.headerDeclarations ?? [], ctx);
+  const missingRequired = [...env.missingRequired, ...headers.missingRequired];
+
+  const resolvedHeaders: Record<string, MCPHeaderValue> = {};
+  for (const [headerName, value] of Object.entries(headers.values)) {
+    resolvedHeaders[headerName] = headers.secretNames.has(headerName)
+      ? { value, metadata: { isSecret: true } }
+      : value;
   }
 
-  // Resolve headers for remote servers (literal + secret-derived).
-  // For registry servers, headers are schema-rejected; guard here defensively.
-  const resolvedHeaders: Record<string, import('@/shared/types/mcp').MCPHeaderValue> = {};
-  if (server.ref.kind === 'remote') {
-    // Literal header values
-    for (const [headerName, headerValue] of Object.entries(server.headers ?? {})) {
-      resolvedHeaders[headerName] = headerValue;
-    }
-    // Secret-derived header values
-    for (const [headerName, secretKey] of Object.entries(server.headersFromSecret ?? {})) {
-      if (secretProvided(secretKey)) {
-        resolvedHeaders[headerName] = { value: secrets[secretKey], metadata: { isSecret: true } };
-      } else if (secretRequired(secretKey)) {
-        missingRequired.push(headerName);
-      }
-      // If not required and not provided: skip
-    }
-  } else if (
-    (server.headers && Object.keys(server.headers).length > 0) ||
-    (server.headersFromSecret && Object.keys(server.headersFromSecret).length > 0)
-  ) {
-    log.warn('installServer: headers/headersFromSecret are ignored for non-remote server refs', server.localName);
+  if (origin.sourceType === 'github') {
+    // No automated github clone/build install path exists server-side yet
+    // (that flow currently only runs client-side in the GitHub tab wizard).
+    summary.servers.push({ localName: server.name, source, installed: false,
+      error: 'GitHub-sourced servers are not auto-installable yet — install manually from the MCP page' });
+    summary.skipped.push({ type: 'server', name: server.name,
+      note: 'GitHub-sourced servers require manual install' });
+    return;
   }
 
-  if (server.ref.kind === 'registry') {
-    // ADOPT-AND-CONFIGURE: if a server with this localName already exists,
-    // merge env into it rather than installing a new server from the registry.
-    if (existingServerNames.has(server.localName)) {
-      await adoptAndConfigureServer(server, ctx, missingRequired);
+  if (origin.sourceType === 'registry' || origin.sourceType === 'marketplace') {
+    const registryName = origin.ref ?? origin.name;
+    if (!registryName) {
+      summary.servers.push({ localName: server.name, source, installed: false, error: 'missing registry ref' });
+      summary.skipped.push({ type: 'server', name: server.name, note: 'installOrigin has no ref/name' });
+      return;
+    }
+
+    // ADOPT-AND-CONFIGURE: if a server with this name already exists, merge env
+    // into it rather than installing a new server from the registry.
+    if (existingServerNames.has(server.name)) {
+      await adoptAndConfigureServer(server, ctx, missingRequired, env.values, env.secretNames);
       return;
     }
 
     // NEW INSTALL: fail-soft if a required secret is missing.
     if (missingRequired.length > 0) {
-      summary.disabled.push({ type: 'server', name: server.localName, note: `missing required secret(s) for: ${missingRequired.join(', ')}` });
-      summary.servers.push({ localName: server.localName, source, installed: false, needsEnv: missingRequired });
+      summary.disabled.push({ type: 'server', name: server.name, note: `missing required secret(s) for: ${missingRequired.join(', ')}` });
+      summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
       return;
     }
-    const result = await installRegistryServer(server.ref.registryName, env);
+    const result = await installRegistryServer(registryName, env.values);
     const entry: InstallServerResult = {
-      localName: server.localName,
+      localName: server.name,
       source,
       installed: result.installed,
       ...(result.serverName ? { serverName: result.serverName } : {}),
@@ -727,18 +730,18 @@ async function installServer(
     summary.servers.push(entry);
     if (result.installed) {
       if (result.serverName) ledgerEntities.servers.push(result.serverName);
-      const ref: InstallEntityRef = { type: 'server', name: server.localName, ...(result.serverName ? { id: result.serverName } : {}) };
+      const ref: InstallEntityRef = { type: 'server', name: server.name, ...(result.serverName ? { id: result.serverName } : {}) };
       if (result.alreadyExisted) summary.updated.push(ref);
       else {
         if (result.serverName) ledgerCreated.servers.push(result.serverName);
         summary.created.push(ref);
         // Tag secret-derived env keys as isSecret for encryption at rest.
-        if (result.serverName && Object.keys(server.envFromSecret ?? {}).length > 0) {
-          await tagSecretEnvKeys(result.serverName, server.envFromSecret ?? {}, secrets, secretProvided);
+        if (result.serverName && env.secretNames.size > 0) {
+          await tagSecretEnvKeys(result.serverName, env.values, env.secretNames);
         }
       }
     } else {
-      summary.skipped.push({ type: 'server', name: server.localName, note: result.error ?? (result.needsEnv ? `needs env: ${result.needsEnv.join(', ')}` : 'not installed') });
+      summary.skipped.push({ type: 'server', name: server.name, note: result.error ?? (result.needsEnv ? `needs env: ${result.needsEnv.join(', ')}` : 'not installed') });
     }
     return;
   }
@@ -746,71 +749,104 @@ async function installServer(
   // Remote (sse / streamable / websocket) — plain config creation. Install
   // DISABLED when a required secret is missing (rather than dropping it).
   const disabled = missingRequired.length > 0;
-  const secretEnvKeys = new Set(Object.keys(server.envFromSecret ?? {}));
   try {
-    const config = buildRemoteServerConfig(server, env, disabled, resolvedHeaders, secretEnvKeys);
-    const saved = await mcpService.updateServerConfig(server.localName, config);
+    const config = buildRemoteServerConfig(server, env.values, disabled, resolvedHeaders, env.secretNames);
+    const saved = await mcpService.updateServerConfig(server.name, config);
     const failed = !Array.isArray(saved) && saved && 'success' in saved && (saved as { success?: boolean }).success === false;
     if (failed) {
       const error = (saved as { error?: string }).error ?? 'unknown error';
-      summary.servers.push({ localName: server.localName, source, installed: false, error });
-      summary.skipped.push({ type: 'server', name: server.localName, note: error });
+      summary.servers.push({ localName: server.name, source, installed: false, error });
+      summary.skipped.push({ type: 'server', name: server.name, note: error });
       return;
     }
-    ledgerEntities.servers.push(server.localName);
+    ledgerEntities.servers.push(server.name);
     // Remote servers are an upsert: classify created-vs-adopted from the
     // pre-install snapshot so uninstall never deletes a user's own server.
-    if (!existingServerNames.has(server.localName)) ledgerCreated.servers.push(server.localName);
-    summary.servers.push({ localName: server.localName, source, installed: true, serverName: server.localName, ...(disabled ? { disabled: true, needsEnv: missingRequired } : {}) });
-    const ref: InstallEntityRef = { type: 'server', name: server.localName, id: server.localName };
+    if (!existingServerNames.has(server.name)) ledgerCreated.servers.push(server.name);
+    summary.servers.push({ localName: server.name, source, installed: true, serverName: server.name, ...(disabled ? { disabled: true, needsEnv: missingRequired } : {}) });
+    const ref: InstallEntityRef = { type: 'server', name: server.name, id: server.name };
     if (disabled) summary.disabled.push({ ...ref, note: `installed disabled — missing required secret(s) for: ${missingRequired.join(', ')}` });
     else summary.created.push(ref);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    summary.servers.push({ localName: server.localName, source, installed: false, error });
-    summary.skipped.push({ type: 'server', name: server.localName, note: error });
+    summary.servers.push({ localName: server.name, source, installed: false, error });
+    summary.skipped.push({ type: 'server', name: server.name, note: error });
+  }
+}
+
+/**
+ * Re-tag an already-installed server's secret-derived env entries as
+ * `isSecret` so they are encrypted at rest. Fail-soft: a tagging failure is
+ * logged but not fatal.
+ */
+async function tagSecretEnvKeys(
+  serverName: string,
+  envValues: Record<string, string>,
+  secretNames: Set<string>,
+): Promise<void> {
+  if (secretNames.size === 0) return;
+  const allConfigs = await mcpService.loadServerConfigs().catch(() => null);
+  if (!Array.isArray(allConfigs)) return;
+  const existing = allConfigs.find((c) => c.name === serverName);
+  if (!existing) return;
+
+  const updatedEnv: Record<string, EnvVarValue> = { ...(existing.env ?? {}) };
+  let changed = false;
+  for (const name of secretNames) {
+    if (envValues[name] === undefined) continue;
+    updatedEnv[name] = { value: envValues[name], metadata: { isSecret: true } };
+    changed = true;
+  }
+  if (!changed) return;
+  try {
+    await mcpService.updateServerConfig(serverName, { env: updatedEnv } as Partial<MCPServerConfig>);
+  } catch (err) {
+    log.warn(`tagSecretEnvKeys: failed to re-tag secret env for "${serverName}"`, err);
   }
 }
 
 function buildRemoteServerConfig(
-  server: NonNullable<PackageManifest['mcpServers']>[number],
+  server: PackagedMcpServer,
   env: Record<string, string>,
   disabled: boolean,
-  headers: Record<string, import('@/shared/types/mcp').MCPHeaderValue> = {},
-  secretEnvKeys: Set<string> = new Set(),
+  headers: Record<string, MCPHeaderValue>,
+  secretEnvNames: Set<string>,
 ): MCPServerConfig {
-  if (server.ref.kind !== 'remote') {
-    throw new Error('buildRemoteServerConfig called for a non-remote ref');
+  const origin = server.installOrigin;
+  if (origin.sourceType !== 'remote' || !origin.url) {
+    throw new Error('buildRemoteServerConfig called for a non-remote (or url-less) server');
   }
-  const transport = server.ref.transport ?? 'streamable';
+  const transport = server.transport === 'websocket' || server.transport === 'sse' || server.transport === 'streamable'
+    ? server.transport
+    : 'streamable';
   const base = {
-    name: server.localName,
+    name: server.name,
     disabled,
-    autoApprove: [] as string[],
+    autoApprove: server.autoApprove ?? [],
     rootPath: '',
     env: Object.fromEntries(
       Object.entries(env).map(([k, v]) => [
         k,
-        secretEnvKeys.has(k) ? { value: v, metadata: { isSecret: true } } : v,
+        secretEnvNames.has(k) ? { value: v, metadata: { isSecret: true } } : v,
       ])
     ),
     _buildCommand: '',
     _installCommand: '',
   };
   if (transport === 'websocket') {
-    return { ...base, transport: 'websocket', websocketUrl: server.ref.serverUrl } as MCPServerConfig;
+    return { ...base, transport: 'websocket', websocketUrl: origin.url } as MCPServerConfig;
   }
   const hasHeaders = Object.keys(headers).length > 0;
   return {
     ...base,
     transport,
-    serverUrl: server.ref.serverUrl,
+    serverUrl: origin.url,
     ...(hasHeaders ? { headers } : {}),
   } as MCPServerConfig;
 }
 
 async function installModel(
-  model: NonNullable<PackageManifest['models']>[number],
+  model: PackagedModel,
   ctx: InstallCtx,
 ): Promise<void> {
   const { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated } = ctx;
@@ -819,40 +855,47 @@ async function installModel(
   // missing REQUIRED secret installs the model DISABLED, i.e. keyless).
   let apiKey = '';
   let disabledNote: string | undefined;
-  if (model.apiKeyGlobalVar) {
-    apiKey = `\${global:${model.apiKeyGlobalVar}}`;
-  } else if (model.apiKeySecret) {
-    if (secretProvided(model.apiKeySecret)) {
-      apiKey = secrets[model.apiKeySecret];
-    } else if (secretRequired(model.apiKeySecret)) {
-      disabledNote = `installed without an API key — missing required secret "${model.apiKeySecret}"`;
+  if (model.apiKeyRef.kind === 'global') {
+    apiKey = `\${global:${model.apiKeyRef.var}}`;
+  } else if (model.apiKeyRef.kind === 'secret') {
+    const secretName = model.apiKeyRef.secret;
+    if (secretProvided(secretName)) {
+      apiKey = secrets[secretName];
+    } else if (secretRequired(secretName)) {
+      disabledNote = `installed without an API key — missing required secret "${secretName}"`;
     }
   }
 
+  const displayName = model.displayName || model.name;
   const fields: Partial<Model> = {
     name: model.name,
-    displayName: model.displayName,
+    displayName,
     ...(model.provider ? { provider: model.provider as ModelProvider } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     ...(model.description ? { description: model.description } : {}),
     ...(model.promptTemplate ? { promptTemplate: model.promptTemplate } : {}),
     ...(model.temperature ? { temperature: model.temperature } : {}),
+    ...(model.reasoningSchema ? { reasoningSchema: model.reasoningSchema } : {}),
+    ...(model.functionCallingSchema ? { functionCallingSchema: model.functionCallingSchema } : {}),
+    ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+    ...(model.maxTurns !== undefined ? { maxTurns: model.maxTurns } : {}),
+    ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
     ApiKey: apiKey,
   };
 
   const existing = (await modelService.loadModels()).find(
-    (m) => (m.displayName ?? '').toLowerCase() === model.displayName.toLowerCase(),
+    (m) => (m.displayName ?? '').toLowerCase() === displayName.toLowerCase(),
   );
 
   if (existing) {
     const res = await modelService.updateModel({ ...existing, ...fields, id: existing.id } as Model);
     if (res.success) {
-      ledgerEntities.models[model.displayName] = existing.id;
-      const ref: InstallEntityRef = { type: 'model', name: model.displayName, id: existing.id };
+      ledgerEntities.models[displayName] = existing.id;
+      const ref: InstallEntityRef = { type: 'model', name: displayName, id: existing.id };
       if (disabledNote) summary.disabled.push({ ...ref, note: disabledNote });
       else summary.updated.push(ref);
     } else {
-      summary.skipped.push({ type: 'model', name: model.displayName, note: res.error });
+      summary.skipped.push({ type: 'model', name: displayName, note: res.error });
     }
     return;
   }
@@ -860,18 +903,18 @@ async function installModel(
   const id = uuidv4();
   const res = await modelService.addModel({ id, ...fields } as Model);
   if (res.success) {
-    ledgerEntities.models[model.displayName] = id;
+    ledgerEntities.models[displayName] = id;
     ledgerCreated.models.push(id);
-    const ref: InstallEntityRef = { type: 'model', name: model.displayName, id };
+    const ref: InstallEntityRef = { type: 'model', name: displayName, id };
     if (disabledNote) summary.disabled.push({ ...ref, note: disabledNote });
     else summary.created.push(ref);
   } else {
-    summary.skipped.push({ type: 'model', name: model.displayName, note: res.error });
+    summary.skipped.push({ type: 'model', name: displayName, note: res.error });
   }
 }
 
 async function installFlows(
-  manifest: PackageManifest,
+  manifest: FlujoPackage,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
   ledgerCreated: LedgerCreated,
@@ -881,34 +924,35 @@ async function installFlows(
   // (subflow) references can be remapped regardless of flow order.
   const idMap: Record<string, string> = {};
   for (const f of flows) {
-    idMap[f.id] = deterministicFlowId(manifest.name, f.id);
+    idMap[f.flow.id] = deterministicFlowId(manifest.name, f.flow.id);
   }
 
   const existingIds = new Set((await flowService.loadFlows()).map((f) => f.id));
 
-  for (const manifestFlow of flows) {
-    const newId = idMap[manifestFlow.id];
-    const flow = remapFlow(manifestFlow, newId, idMap);
+  for (const packagedFlow of flows) {
+    const localId = packagedFlow.flow.id;
+    const newId = idMap[localId];
+    const flow = remapFlow(packagedFlow, newId, idMap);
     const wasPresent = existingIds.has(newId);
     const res = await flowService.saveFlow(flow);
     if (res.success) {
-      ledgerEntities.flows[manifestFlow.id] = newId;
-      const ref: InstallEntityRef = { type: 'flow', name: manifestFlow.name, id: newId };
+      ledgerEntities.flows[localId] = newId;
+      const ref: InstallEntityRef = { type: 'flow', name: packagedFlow.flow.name, id: newId };
       if (wasPresent) summary.updated.push(ref);
       else {
         ledgerCreated.flows.push(newId);
         summary.created.push(ref);
       }
     } else {
-      summary.skipped.push({ type: 'flow', name: manifestFlow.name, note: res.error });
+      summary.skipped.push({ type: 'flow', name: packagedFlow.flow.name, note: res.error });
     }
   }
   return idMap;
 }
 
-/** Deep-clone a manifest flow, assign the fresh id, and remap subflow refs. */
-function remapFlow(manifestFlow: ManifestFlow, newId: string, idMap: Record<string, string>): Flow {
-  const clone = JSON.parse(JSON.stringify(manifestFlow)) as Flow & { nodes: Array<{ data?: { properties?: Record<string, unknown> } }> };
+/** Deep-clone a packaged flow, assign the fresh id, and remap subflow refs. */
+function remapFlow(packagedFlow: PackagedFlow, newId: string, idMap: Record<string, string>): Flow {
+  const clone = JSON.parse(JSON.stringify(packagedFlow.flow)) as Flow & { nodes: Array<{ data?: { properties?: Record<string, unknown> } }> };
   clone.id = newId;
   // Do not carry manifest-authored timestamps; saveFlow re-stamps them.
   delete (clone as { createdAt?: number }).createdAt;
@@ -930,7 +974,7 @@ function remapFlow(manifestFlow: ManifestFlow, newId: string, idMap: Record<stri
 }
 
 async function installPlannedExecution(
-  pe: NonNullable<PackageManifest['plannedExecutions']>[number],
+  pe: PackagedPlannedExecution,
   packageName: string,
   flowIdMap: Record<string, string>,
   summary: InstallSummary,
@@ -942,7 +986,7 @@ async function installPlannedExecution(
   const mappedFlowId = flowIdMap[pe.flowId] ?? pe.flowId;
 
   // Strip manifest-local id/timestamps; force enabled:false; remap flowId.
-  const { flowId: _fid, ...rest } = pe as Record<string, unknown> & { flowId: string };
+  const { id: _localId, flowId: _fid, createdAt: _c, updatedAt: _u, ...rest } = pe as Record<string, unknown> & { id: string; flowId: string };
   const config = {
     ...rest,
     id,
