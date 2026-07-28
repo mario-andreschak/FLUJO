@@ -247,10 +247,31 @@ function isSecretValue(value: EnvVarValue | undefined): boolean {
   return typeof value === 'object' && value !== null && value.metadata?.isSecret === true;
 }
 
-/** Build env/header DECLARATIONS (names + isSecret only, never values). */
+/** The literal string value of a plain (non-secret) env entry, if any. */
+function literalValue(value: EnvVarValue | undefined): string | undefined {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && !value.metadata?.isSecret && typeof value.value === 'string') {
+    return value.value;
+  }
+  return undefined;
+}
+
+/**
+ * Build env/header DECLARATIONS (names + isSecret, never a literal secret
+ * value). A literal `${global:VAR}` value IS preserved as a `globalVar`
+ * binding (not a value) — otherwise it is silently dropped on install, same
+ * class of bug as an unrecorded model API key global-var binding.
+ */
 function declarationsFrom(record: Record<string, EnvVarValue> | undefined): EnvDeclaration[] {
   if (!record) return [];
-  return Object.entries(record).map(([name, value]) => ({ name, isSecret: isSecretValue(value) }));
+  return Object.entries(record).map(([name, value]) => {
+    const globalMatch = !isSecretValue(value) ? GLOBAL_VAR_REGEX.exec(literalValue(value) ?? '') : null;
+    return {
+      name,
+      isSecret: isSecretValue(value),
+      ...(globalMatch ? { globalVar: globalMatch[1] } : {}),
+    };
+  });
 }
 
 export interface McpValidationResult {
@@ -478,6 +499,20 @@ export function buildManifestFromEntities(
 
   for (const s of deriveMcpSecrets(mcp.packaged)) pushSecret(s);
 
+  // requiredGlobals: every `${global:VAR}` this package expects the INSTALLING
+  // host to already have set — model API keys bound to a global var, plus any
+  // MCP env/header value literally bound to one. Declared so install can warn
+  // the user instead of silently shipping a dead `${global:VAR}` reference.
+  const requiredGlobals = new Set<string>();
+  for (const { apiKeyRef } of modelInputs) {
+    if (apiKeyRef.kind === 'global') requiredGlobals.add(apiKeyRef.var);
+  }
+  for (const server of mcp.packaged) {
+    for (const decl of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
+      if (decl.globalVar) requiredGlobals.add(decl.globalVar);
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, resolved, errors, warnings };
   }
@@ -491,6 +526,7 @@ export function buildManifestFromEntities(
       author: metadata.author,
       publisher: metadata.publisher,
       tags: metadata.tags,
+      ...(requiredGlobals.size > 0 ? { requiredGlobals: Array.from(requiredGlobals) } : {}),
       secrets,
       models: modelInputs,
       mcpServers: mcp.packaged,

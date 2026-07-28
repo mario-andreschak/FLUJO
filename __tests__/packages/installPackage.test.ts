@@ -379,3 +379,165 @@ describe('installPackage — adopt-and-configure', () => {
     expect(config.env['API_KEY']).toEqual({ value: 'sk-1', metadata: { isSecret: true } });
   });
 });
+
+describe('installPackage — {{secret.NAME}} placeholder resolution', () => {
+  it('replaces {{secret.NAME}} with the supplied value in model, flow and planned-execution content', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-placeholder-pkg-id',
+      name: 'placeholder-pkg',
+      version: '1.0.0',
+      secrets: [{ name: 'API_KEY', required: true }],
+      mcpServers: [],
+      models: [{
+        id: 'model-1', name: 'gpt-4o', displayName: 'My GPT', provider: 'openai',
+        promptTemplate: 'Use key {{secret.API_KEY}} please', apiKeyRef: { kind: 'none' },
+      }],
+      flows: [{
+        flow: {
+          id: 'local-root', name: 'Root',
+          nodes: [{ id: 'n1', data: { type: 'process', properties: { prompt: 'token={{secret.API_KEY}}' } } }],
+          edges: [],
+        },
+      }],
+      plannedExecutions: [{
+        id: 'pe-1', name: 'Nightly', flowId: 'local-root', enabled: true,
+        prompt: 'run with {{secret.API_KEY}}', trigger: { type: 'schedule', cron: '0 0 * * *' },
+      }],
+    });
+
+    await installPackage({ source: 'registry', packageId: 'placeholder-pkg', secrets: { API_KEY: 'sk-real-value' }, consentGranted: true });
+
+    expect(addModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({ promptTemplate: 'Use key sk-real-value please' }));
+    const savedFlow = saveFlowMock.mock.calls[0][0] as { nodes: Array<{ data: { properties: { prompt: string } } }> };
+    expect(savedFlow.nodes[0].data.properties.prompt).toBe('token=sk-real-value');
+    expect(schedulerCreateMock.mock.calls[0][0]).toEqual(expect.objectContaining({ prompt: 'run with sk-real-value' }));
+  });
+
+  it('leaves the placeholder untouched when the secret was not supplied', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-placeholder-pkg-2-id',
+      name: 'placeholder-pkg-2',
+      version: '1.0.0',
+      secrets: [{ name: 'OPT', required: false }],
+      mcpServers: [],
+      models: [],
+      flows: [{
+        flow: {
+          id: 'local-root', name: 'Root',
+          nodes: [{ id: 'n1', data: { type: 'process', properties: { prompt: 'token={{secret.OPT}}' } } }],
+          edges: [],
+        },
+      }],
+      plannedExecutions: [],
+    });
+
+    await installPackage({ source: 'registry', packageId: 'placeholder-pkg-2', secrets: {}, consentGranted: true });
+    const savedFlow = saveFlowMock.mock.calls[0][0] as { nodes: Array<{ data: { properties: { prompt: string } } }> };
+    expect(savedFlow.nodes[0].data.properties.prompt).toBe('token={{secret.OPT}}');
+  });
+});
+
+describe('installPackage — process-node model binding remap', () => {
+  it('remaps properties.boundModel from the manifest-local model id to the freshly-installed model id', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-bound-pkg-id',
+      name: 'bound-pkg',
+      version: '1.0.0',
+      secrets: [],
+      mcpServers: [],
+      models: [{ id: 'model-1', name: 'gpt-4o', displayName: 'My GPT', provider: 'openai', apiKeyRef: { kind: 'none' } }],
+      flows: [{
+        flow: {
+          id: 'local-root', name: 'Root',
+          nodes: [{ id: 'n1', data: { type: 'process', properties: { boundModel: 'model-1', modelName: 'stale-name' } } }],
+          edges: [],
+        },
+      }],
+      plannedExecutions: [],
+    });
+    addModelMock.mockResolvedValue({ success: true });
+
+    await installPackage({ source: 'registry', packageId: 'bound-pkg', secrets: {}, consentGranted: true });
+
+    const installedModelId = addModelMock.mock.calls[0][0].id as string;
+    expect(installedModelId).not.toBe('model-1');
+    const savedFlow = saveFlowMock.mock.calls[0][0] as { nodes: Array<{ data: { properties: { boundModel: string; modelName: string } } }> };
+    expect(savedFlow.nodes[0].data.properties.boundModel).toBe(installedModelId);
+    expect(savedFlow.nodes[0].data.properties.modelName).toBe('gpt-4o');
+  });
+
+  it('remaps boundModel to a pre-existing (adopted) model id, not a fresh one', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-bound-pkg-2-id',
+      name: 'bound-pkg-2',
+      version: '1.0.0',
+      secrets: [],
+      mcpServers: [],
+      models: [{ id: 'model-1', name: 'gpt-4o', displayName: 'My GPT', provider: 'openai', apiKeyRef: { kind: 'none' } }],
+      flows: [{
+        flow: {
+          id: 'local-root', name: 'Root',
+          nodes: [{ id: 'n1', data: { type: 'process', properties: { boundModel: 'model-1' } } }],
+          edges: [],
+        },
+      }],
+      plannedExecutions: [],
+    });
+    loadModelsMock.mockResolvedValue([{ id: 'existing-model-xyz', displayName: 'My GPT' }]);
+
+    await installPackage({ source: 'registry', packageId: 'bound-pkg-2', secrets: {}, consentGranted: true });
+
+    expect(addModelMock).not.toHaveBeenCalled();
+    const savedFlow = saveFlowMock.mock.calls[0][0] as { nodes: Array<{ data: { properties: { boundModel: string } } }> };
+    expect(savedFlow.nodes[0].data.properties.boundModel).toBe('existing-model-xyz');
+  });
+});
+
+describe('installPackage — requiredGlobals / missingGlobals', () => {
+  it('reports requiredGlobals that are not currently set as a host global var, in both preview and the final summary', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-globals-pkg-id',
+      name: 'globals-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['OPENAI_KEY'],
+      secrets: [],
+      mcpServers: [],
+      models: [{ id: 'model-1', name: 'gpt-4o', displayName: 'My GPT', provider: 'openai', apiKeyRef: { kind: 'global', var: 'OPENAI_KEY' } }],
+      flows: [],
+      plannedExecutions: [],
+    });
+
+    const preview = await installPackage({ source: 'registry', packageId: 'globals-pkg' });
+    expect(preview.preview!.missingGlobals).toEqual(['OPENAI_KEY']);
+
+    const summary = await installPackage({ source: 'registry', packageId: 'globals-pkg', consentGranted: true });
+    expect(summary.missingGlobals).toEqual(['OPENAI_KEY']);
+    // The model still installs with the literal ${global:VAR} binding — it's a
+    // host-config gap, not a reason to fail-soft-disable the model itself.
+    expect(addModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({ ApiKey: '${global:OPENAI_KEY}' }));
+  });
+
+  it('reports no missing globals once the host has the global var set', async () => {
+    store.set('global_env_vars', { OPENAI_KEY: 'sk-already-set' });
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-globals-pkg-2-id',
+      name: 'globals-pkg-2',
+      version: '1.0.0',
+      requiredGlobals: ['OPENAI_KEY'],
+      secrets: [],
+      mcpServers: [],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+
+    const preview = await installPackage({ source: 'registry', packageId: 'globals-pkg-2' });
+    expect(preview.preview!.missingGlobals).toEqual([]);
+  });
+});

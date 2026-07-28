@@ -259,6 +259,39 @@ describe('buildManifestFromEntities', () => {
     expect(result.package!.secrets.some((s) => s.name === (pkgModel.apiKeyRef as { secret: string }).secret)).toBe(true);
   });
 
+  it('records a global-var-bound model API key in requiredGlobals (not silently dropped)', () => {
+    const ents: PackageEntities = {
+      flows: [flow('f', 'F', [processNode('m1')])],
+      models: [model('m1', 'GlobalKeyed', '${global:OPENAI_KEY}')],
+      mcpServers: [],
+      plannedExecutions: [],
+    };
+    const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.requiredGlobals).toEqual(['OPENAI_KEY']);
+    const pkgModel = result.package!.models[0] as unknown as Record<string, unknown>;
+    expect(pkgModel.apiKeyRef).toEqual({ kind: 'global', var: 'OPENAI_KEY' });
+  });
+
+  it('records an MCP server env value literally bound to a global var in requiredGlobals', () => {
+    const ents: PackageEntities = {
+      flows: [],
+      models: [],
+      mcpServers: [registryServer('web', { API_BASE: '${global:MY_API_BASE}' })],
+      plannedExecutions: [],
+    };
+    const resolved = resolveDependencies({ mcpServerNames: ['web'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.requiredGlobals).toEqual(['MY_API_BASE']);
+    const decl = result.package!.mcpServers[0].envDeclarations.find((d) => d.name === 'API_BASE');
+    expect(decl?.globalVar).toBe('MY_API_BASE');
+    expect(decl?.isSecret).toBe(false);
+  });
+
   it('fails the build when a local-only MCP server is included', () => {
     const ents: PackageEntities = {
       flows: [],

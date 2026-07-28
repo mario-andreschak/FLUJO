@@ -239,6 +239,14 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                 </Alert>
               )}
 
+              {manifest.missingGlobals.length > 0 && (
+                <Alert severity="warning" sx={{ mt: 1 }}>
+                  This package expects host global variable(s) that aren&apos;t set yet:{' '}
+                  {manifest.missingGlobals.join(', ')}. Set them in Settings after install, or the
+                  bound model(s)/server(s) won&apos;t have a working API key.
+                </Alert>
+              )}
+
               <Divider sx={{ my: 2 }} />
 
               {manifest.secrets.length > 0 ? (
@@ -295,6 +303,12 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   ? `Installed "${result.package?.name}": ${result.created.length} created, ${result.updated.length} updated, ${result.disabled.length} disabled.`
                   : `Install failed: ${result.errors[0] ?? 'unknown error'}`}
               </Alert>
+              {result.missingGlobals.length > 0 && (
+                <Alert severity="warning" sx={{ mb: 1 }}>
+                  Set these global variable(s) in Settings for the installed entities to work:{' '}
+                  {result.missingGlobals.join(', ')}.
+                </Alert>
+              )}
               <Button size="small" onClick={closeDialog}>
                 Close
               </Button>

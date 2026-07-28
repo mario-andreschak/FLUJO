@@ -37,6 +37,7 @@ import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { validatePackage } from '@/shared/types/package/package.serialize';
+import { SECRET_PLACEHOLDER_REGEX } from '@/shared/types/package/constants';
 import type {
   FlujoPackage,
   PackagedFlow,
@@ -87,6 +88,13 @@ export interface InstallPreview {
   flows: Array<{ name: string }>;
   plannedExecutions: Array<{ name: string }>;
   secrets: Array<{ key: string; label?: string; required: boolean; provided: boolean }>;
+  /**
+   * `${global:VAR}` names this package expects the host to already have set
+   * (in Settings), that are NOT currently set. Unlike `secrets[]` these are
+   * host-level config, not something install can collect a value for — the
+   * consent screen surfaces them so the user knows to set them afterwards.
+   */
+  missingGlobals: string[];
 }
 
 export interface InstallSummary {
@@ -102,6 +110,8 @@ export interface InstallSummary {
   disabled: InstallEntityRef[];
   servers: InstallServerResult[];
   errors: string[];
+  /** `requiredGlobals` names that are still unset on this host after install. */
+  missingGlobals: string[];
 }
 
 export interface InstallPackageInput {
@@ -207,6 +217,46 @@ export function deterministicExecutionId(packageName: string, name: string): str
 }
 
 // ---------------------------------------------------------------------------
+// Secret-placeholder resolution ({{secret.NAME}} -> the supplied value)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deep-replace every `{{secret.NAME}}` occurrence in a value with the supplied
+ * secret's value. A placeholder whose secret wasn't provided is left as-is
+ * (fail-soft, matching the rest of the install posture — the dependent entity
+ * still installs, just with the placeholder unresolved).
+ */
+function resolveSecretPlaceholders<T>(value: T, secrets: Record<string, string>): T {
+  if (typeof value === 'string') {
+    if (!value.includes('{{secret.')) return value;
+    const re = new RegExp(SECRET_PLACEHOLDER_REGEX.source, 'g');
+    return value.replace(re, (match, name: string) =>
+      Object.prototype.hasOwnProperty.call(secrets, name) ? secrets[name] : match,
+    ) as unknown as T;
+  }
+  if (Array.isArray(value)) return value.map((v) => resolveSecretPlaceholders(v, secrets)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = resolveSecretPlaceholders(v, secrets);
+    }
+    return out as unknown as T;
+  }
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// requiredGlobals (host `${global:VAR}` bindings the package expects)
+// ---------------------------------------------------------------------------
+
+/** Which of `requiredGlobals` are NOT currently set as a host global env var. */
+async function computeMissingGlobals(requiredGlobals: string[] | undefined): Promise<string[]> {
+  if (!requiredGlobals || requiredGlobals.length === 0) return [];
+  const stored = await loadItem<Record<string, unknown>>(StorageKey.GLOBAL_ENV_VARS, {});
+  return requiredGlobals.filter((name) => !Object.prototype.hasOwnProperty.call(stored, name));
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
 
@@ -220,6 +270,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     disabled: [],
     servers: [],
     errors: [],
+    missingGlobals: [],
   });
 
   if (input.source !== 'registry') {
@@ -259,13 +310,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       ok: true,
       dryRun: true,
       package: { name: manifest.name, version: manifest.version, ...(manifest.publisher ? { publisher: manifest.publisher } : {}) },
-      preview: buildPreview(manifest, secretProvided),
+      preview: {
+        ...buildPreview(manifest, secretProvided),
+        missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
+      },
       created: [],
       updated: [],
       skipped: [],
       disabled: [],
       servers: [],
       errors: [],
+      missingGlobals: [],
     };
   }
 
@@ -279,7 +334,16 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     disabled: [],
     servers: [],
     errors: [],
+    missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
   };
+
+  // Resolve {{secret.NAME}} placeholders in free-text content (prompts,
+  // descriptions, promptTemplates, ...) BEFORE installing models/flows/planned
+  // executions — otherwise the placeholder survives verbatim into the
+  // installed entity instead of the value the user just supplied.
+  const resolvedModels = (manifest.models ?? []).map((m) => resolveSecretPlaceholders(m, secrets));
+  const resolvedFlows = (manifest.flows ?? []).map((f) => resolveSecretPlaceholders(f, secrets));
+  const resolvedPlannedExecutions = (manifest.plannedExecutions ?? []).map((p) => resolveSecretPlaceholders(p, secrets));
 
   const ledgerEntities: PackageInstallRecord['entities'] = {
     flows: {},
@@ -316,16 +380,22 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     await installServer(server, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
   }
 
-  // 5. Models (before flows so name-based boundModel references resolve).
-  for (const model of manifest.models ?? []) {
-    await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
+  // 5. Models (before flows so id-based boundModel references resolve).
+  //    modelIdMap: manifest-local model.id -> the installed model's real id,
+  //    so flow nodes' `properties.boundModel` (which binds by id) can be
+  //    remapped in step 6 — otherwise every process node bound to a packaged
+  //    model comes out "unbound" after install (the model gets a fresh id).
+  const modelIdMap: Record<string, { id: string; name: string }> = {};
+  for (const model of resolvedModels) {
+    const installed = await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
+    if (installed) modelIdMap[model.id] = installed;
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
-  const flowIdMap = await installFlows(manifest, summary, ledgerEntities, ledgerCreated);
+  const flowIdMap = await installFlows(manifest.name, resolvedFlows, modelIdMap, summary, ledgerEntities, ledgerCreated);
 
   // 7. Planned executions — remapped flowId, created DISABLED.
-  for (const pe of manifest.plannedExecutions ?? []) {
+  for (const pe of resolvedPlannedExecutions) {
     await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities, ledgerCreated);
   }
 
@@ -524,7 +594,7 @@ function serverSecretRefs(server: PackagedMcpServer): string[] {
     .filter((v): v is string => typeof v === 'string' && v.length > 0);
 }
 
-function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => boolean): InstallPreview {
+function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => boolean): Omit<InstallPreview, 'missingGlobals'> {
   return {
     servers: (manifest.mcpServers ?? []).map((s) => ({
       localName: s.name,
@@ -845,10 +915,11 @@ function buildRemoteServerConfig(
   } as MCPServerConfig;
 }
 
+/** Returns the installed model's real id + name (for flow boundModel remapping), or undefined if the install failed. */
 async function installModel(
   model: PackagedModel,
   ctx: InstallCtx,
-): Promise<void> {
+): Promise<{ id: string; name: string } | undefined> {
   const { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated } = ctx;
 
   // Resolve the API key: global-var binding, provided secret, or empty (a
@@ -894,10 +965,10 @@ async function installModel(
       const ref: InstallEntityRef = { type: 'model', name: displayName, id: existing.id };
       if (disabledNote) summary.disabled.push({ ...ref, note: disabledNote });
       else summary.updated.push(ref);
-    } else {
-      summary.skipped.push({ type: 'model', name: displayName, note: res.error });
+      return { id: existing.id, name: model.name };
     }
-    return;
+    summary.skipped.push({ type: 'model', name: displayName, note: res.error });
+    return undefined;
   }
 
   const id = uuidv4();
@@ -908,23 +979,25 @@ async function installModel(
     const ref: InstallEntityRef = { type: 'model', name: displayName, id };
     if (disabledNote) summary.disabled.push({ ...ref, note: disabledNote });
     else summary.created.push(ref);
-  } else {
-    summary.skipped.push({ type: 'model', name: displayName, note: res.error });
+    return { id, name: model.name };
   }
+  summary.skipped.push({ type: 'model', name: displayName, note: res.error });
+  return undefined;
 }
 
 async function installFlows(
-  manifest: FlujoPackage,
+  packageName: string,
+  flows: PackagedFlow[],
+  modelIdMap: Record<string, { id: string; name: string }>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
   ledgerCreated: LedgerCreated,
 ): Promise<Record<string, string>> {
-  const flows = manifest.flows ?? [];
   // Build the manifest-local-id -> installed-id map first, so cross-flow
   // (subflow) references can be remapped regardless of flow order.
   const idMap: Record<string, string> = {};
   for (const f of flows) {
-    idMap[f.flow.id] = deterministicFlowId(manifest.name, f.flow.id);
+    idMap[f.flow.id] = deterministicFlowId(packageName, f.flow.id);
   }
 
   const existingIds = new Set((await flowService.loadFlows()).map((f) => f.id));
@@ -932,7 +1005,7 @@ async function installFlows(
   for (const packagedFlow of flows) {
     const localId = packagedFlow.flow.id;
     const newId = idMap[localId];
-    const flow = remapFlow(packagedFlow, newId, idMap);
+    const flow = remapFlow(packagedFlow, newId, idMap, modelIdMap);
     const wasPresent = existingIds.has(newId);
     const res = await flowService.saveFlow(flow);
     if (res.success) {
@@ -950,8 +1023,22 @@ async function installFlows(
   return idMap;
 }
 
-/** Deep-clone a packaged flow, assign the fresh id, and remap subflow refs. */
-function remapFlow(packagedFlow: PackagedFlow, newId: string, idMap: Record<string, string>): Flow {
+/**
+ * Deep-clone a packaged flow, assign the fresh id, and remap subflow +
+ * process-node model refs. `properties.boundModel` binds by model ID (see
+ * flowValidation.ts) — since install always gives a model a fresh id
+ * (uuidv4()) or resolves to a pre-existing one by displayName, the packaged
+ * id never survives verbatim, so every bound node must be remapped here or it
+ * shows up as "unbound" after install. `properties.modelName` is a cosmetic
+ * display-only cache (no effect on execution/validation) — refreshed to match
+ * for consistency.
+ */
+function remapFlow(
+  packagedFlow: PackagedFlow,
+  newId: string,
+  idMap: Record<string, string>,
+  modelIdMap: Record<string, { id: string; name: string }>,
+): Flow {
   const clone = JSON.parse(JSON.stringify(packagedFlow.flow)) as Flow & { nodes: Array<{ data?: { properties?: Record<string, unknown> } }> };
   clone.id = newId;
   // Do not carry manifest-authored timestamps; saveFlow re-stamps them.
@@ -968,6 +1055,11 @@ function remapFlow(packagedFlow: PackagedFlow, newId: string, idMap: Record<stri
       props.parallelSubflowIds = props.parallelSubflowIds.map((id: unknown) =>
         typeof id === 'string' && idMap[id] ? idMap[id] : id,
       );
+    }
+    if (typeof props.boundModel === 'string' && modelIdMap[props.boundModel]) {
+      const installed = modelIdMap[props.boundModel];
+      props.boundModel = installed.id;
+      props.modelName = installed.name;
     }
   }
   return clone as Flow;
