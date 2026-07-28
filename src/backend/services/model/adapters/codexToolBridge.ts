@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/services/model/adapters/codexToolBridge');
@@ -18,6 +18,8 @@ export interface BridgeTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown> | undefined;
+  /** Preserve real MCP hints when the caller has them; never invent safer hints. */
+  annotations?: ToolAnnotations;
   handler: (args: Record<string, unknown>) => Promise<CallToolResult>;
 }
 
@@ -57,6 +59,7 @@ export async function startCodexToolBridge(tools: BridgeTool[]): Promise<CodexTo
         description: t.description,
         // MCP requires an object schema; parameter-less tools get the minimal one.
         inputSchema: (t.inputSchema ?? { type: 'object', properties: {} }) as { type: 'object' },
+        ...(t.annotations ? { annotations: t.annotations } : {}),
       })),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {

@@ -313,6 +313,16 @@ describe('generateFlow — hard failures', () => {
     );
   });
 
+  it('uses an empty key for a Codex model authenticated by codex login', async () => {
+    getModelMock.mockResolvedValue({ ...generatorModel, adapter: 'codex-cli', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+
+    const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
+
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
+  });
+
   it('502 when the adapter call throws', async () => {
     createCompletionMock.mockRejectedValue(new Error('Premature close'));
     const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
