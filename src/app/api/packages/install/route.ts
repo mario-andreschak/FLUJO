@@ -5,13 +5,20 @@
  * provision a tenant without a browser: install a registry package (a bundle of
  * flows, models, MCP-server references and planned executions) in one call.
  *
- * The request itself IS the consent (`consentGranted: true`) — this route is
- * fail-closed behind `assertLocalRequest` and is deliberately NOT on the public
- * API allow-list. Hosted tenants opt in only via `FLUJO_EXTRA_LOCAL_HOSTS`.
+ * For headless callers the request itself IS the consent (`consentGranted`
+ * defaults to `true`) — this route is fail-closed behind `assertLocalRequest`
+ * and is deliberately NOT on the public API allow-list. Hosted tenants opt in
+ * only via `FLUJO_EXTRA_LOCAL_HOSTS`.
+ *
+ * The Packages page "Install from registry" UI instead calls this route twice:
+ * once with `consentGranted: false` to fetch a dry-run preview (manifest
+ * contents + required secrets, no mutations), then again with
+ * `consentGranted: true` plus the collected secret values to actually install.
  *
  * Body: { source: 'registry', packageId: string, version?: string,
- *         secrets?: Record<string,string> }
- * Response: the install summary (created / updated / skipped / disabled / errors).
+ *         secrets?: Record<string,string>, consentGranted?: boolean }
+ * Response: the install summary (created / updated / skipped / disabled / errors),
+ * or `{ dryRun: true, preview }` when consentGranted is false.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
@@ -34,11 +41,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { source, packageId, version, secrets } = (body ?? {}) as {
+  const { source, packageId, version, secrets, consentGranted } = (body ?? {}) as {
     source?: unknown;
     packageId?: unknown;
     version?: unknown;
     secrets?: unknown;
+    consentGranted?: unknown;
   };
 
   if (source !== 'registry') {
@@ -52,6 +60,9 @@ export async function POST(request: NextRequest) {
   }
   if (secrets !== undefined && (typeof secrets !== 'object' || secrets === null || Array.isArray(secrets))) {
     return NextResponse.json({ error: 'secrets must be an object of string values' }, { status: 400 });
+  }
+  if (consentGranted !== undefined && typeof consentGranted !== 'boolean') {
+    return NextResponse.json({ error: 'consentGranted must be a boolean' }, { status: 400 });
   }
   const secretRecord = (secrets ?? {}) as Record<string, unknown>;
   for (const [k, v] of Object.entries(secretRecord)) {
@@ -67,7 +78,7 @@ export async function POST(request: NextRequest) {
     packageId,
     ...(version ? { version } : {}),
     secrets: secretRecord as Record<string, string>,
-    consentGranted: true,
+    consentGranted: consentGranted === undefined ? true : (consentGranted as boolean),
   });
 
   return NextResponse.json(summary, { status: summary.ok ? 200 : 400 });

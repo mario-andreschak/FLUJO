@@ -14,6 +14,7 @@ import type {
 } from '@/backend/services/packages/buildPackage';
 import type { PackageSecret } from '@/shared/types/package/secrets';
 import type { SecretProposal } from '@/shared/types/package/secretProposal';
+import type { InstallSummary } from '@/backend/services/packages/installPackage';
 
 const log = createLogger('frontend/services/packages');
 
@@ -98,6 +99,30 @@ class PackageService {
     return (body?.candidates ?? []) as SecretValueCandidate[];
   }
 
+  /**
+   * Install a package from the online registry (issue #198). Two-phase: call
+   * with `consentGranted: false` (or omitted) first for a dry-run preview of
+   * the manifest contents + required secrets, then again with
+   * `consentGranted: true` and the collected secret values to actually install.
+   */
+  async installFromRegistry(input: {
+    packageId: string;
+    version?: string;
+    secrets?: Record<string, string>;
+    consentGranted?: boolean;
+  }): Promise<InstallSummary> {
+    const response = await fetch('/api/packages/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'registry', ...input }),
+    });
+    const body = await response.json();
+    if (!response.ok && body?.ok === undefined) {
+      throw new Error(body?.error || `HTTP ${response.status}`);
+    }
+    return body as InstallSummary;
+  }
+
   /** Build the package manifest; returns the structured build result. */
   async build(
     selection: PackageSelection,
@@ -138,4 +163,4 @@ export const packageService: PackageService = new Proxy({} as PackageService, {
   },
 });
 
-export type { PackageSelection, PackageMetadataInput, BuildManifestResult, ResolvedSelection };
+export type { PackageSelection, PackageMetadataInput, BuildManifestResult, ResolvedSelection, InstallSummary };
