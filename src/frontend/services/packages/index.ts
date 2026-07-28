@@ -22,6 +22,13 @@ export interface DeriveSecretsResult {
   warnings: string[];
 }
 
+/** A pickable candidate value for the manual-secret picker (issue #285). */
+export interface SecretValueCandidate {
+  source: string;
+  location: string;
+  text: string;
+}
+
 export interface ResolveResult {
   resolved: ResolvedSelection;
   mcp: {
@@ -71,6 +78,24 @@ class PackageService {
       throw new Error(body?.error || `HTTP ${response.status}`);
     }
     return body as DeriveSecretsResult;
+  }
+
+  /**
+   * Enumerate pickable candidate values for the "Add a secret manually" value
+   * picker (issue #285). Returns only plaintext already present in the packaged
+   * content — never API keys or MCP env/header values.
+   */
+  async scanTargets(selection: PackageSelection): Promise<SecretValueCandidate[]> {
+    const response = await fetch('/api/packages/scan-targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selection }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body?.error || `HTTP ${response.status}`);
+    }
+    return (body?.candidates ?? []) as SecretValueCandidate[];
   }
 
   /** Build the package manifest; returns the structured build result. */

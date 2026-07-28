@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -13,11 +13,14 @@ import {
   DialogContentText,
   DialogTitle,
   Paper,
+  InputAdornment,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import SearchIcon from '@mui/icons-material/Search';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages/InstalledPackagesList');
@@ -57,6 +60,7 @@ export default function InstalledPackagesList() {
   const [confirmTarget, setConfirmTarget] = useState<InstalledPackage | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastResult, setLastResult] = useState<UninstallSummary | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,14 +106,40 @@ export default function InstalledPackagesList() {
     }
   }, [load]);
 
+  const filteredPackages = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return packages;
+    return packages.filter((p) =>
+      `${p.packageName} ${p.version}`.toLowerCase().includes(q),
+    );
+  }, [packages, searchTerm]);
+
   return (
-    <Box sx={{ maxWidth: 640, mx: 'auto', mt: 3 }}>
+    <Box sx={{ maxWidth: { xs: '100%', md: 1100 }, mx: 'auto', mt: 3 }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
         <Typography variant="h6">Installed packages</Typography>
         <Button size="small" startIcon={<RefreshIcon />} onClick={() => void load()} disabled={loading}>
           Refresh
         </Button>
       </Stack>
+
+      {packages.length > 0 && (
+        <TextField
+          size="small"
+          fullWidth
+          placeholder="Search installed packages…"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+          sx={{ mb: 2 }}
+        />
+      )}
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
@@ -129,9 +159,13 @@ export default function InstalledPackagesList() {
         <Typography variant="body2" color="text.secondary">
           No packages installed yet.
         </Typography>
+      ) : filteredPackages.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          No packages match “{searchTerm}”.
+        </Typography>
       ) : (
         <Stack spacing={1}>
-          {packages.map((pkg) => (
+          {filteredPackages.map((pkg) => (
             <Paper key={pkg.packageName} variant="outlined" sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <Box>
                 <Stack direction="row" spacing={1} alignItems="center">

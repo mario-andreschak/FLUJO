@@ -15,6 +15,7 @@ import {
   DialogTitle,
   Divider,
   FormControlLabel,
+  InputAdornment,
   List,
   ListItem,
   ListItemButton,
@@ -32,6 +33,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
 import RegistryAccountSettings from '@/frontend/components/Settings/RegistryAccountSettings';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
@@ -44,6 +46,7 @@ import type {
   BuildManifestResult,
   PackageSelection,
   ResolveResult,
+  SecretValueCandidate,
 } from '@/frontend/services/packages';
 import type { SecretKind, SecretProposal } from '@/shared/types/package/secretProposal';
 import { buildManualProposal, SECRET_KINDS } from '@/shared/types/package/secretProposal';
@@ -96,6 +99,11 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
   const [selectedPlanned, setSelectedPlanned] = useState<Set<string>>(new Set());
+  // Step 0 per-column search (issue #285).
+  const [flowSearch, setFlowSearch] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
+  const [serverSearch, setServerSearch] = useState('');
+  const [plannedSearch, setPlannedSearch] = useState('');
 
   // Step 1 — resolution result.
   const [resolving, setResolving] = useState(false);
@@ -118,6 +126,12 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [manualName, setManualName] = useState('');
   const [manualKind, setManualKind] = useState<SecretKind>('other');
   const [manualError, setManualError] = useState<string | null>(null);
+  // Step 2 "Pick a value from the app" picker (issue #285).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  const [pickerCandidates, setPickerCandidates] = useState<SecretValueCandidate[]>([]);
+  const [pickerSearch, setPickerSearch] = useState('');
   // Step 4 inline registry login (issue #208).
   const [loginOpen, setLoginOpen] = useState(false);
 
@@ -284,6 +298,38 @@ export default function PackageWizard({ open, onClose }: Props) {
     setManualKind('other');
   };
 
+  /** Open the value picker and load candidate strings from the packaged content (#285). */
+  const openValuePicker = useCallback(async () => {
+    setPickerOpen(true);
+    setPickerError(null);
+    setPickerSearch('');
+    setPickerLoading(true);
+    try {
+      const candidates = await getPackageService().scanTargets(selection);
+      setPickerCandidates(candidates);
+    } catch (err) {
+      setPickerError(err instanceof Error ? err.message : 'Failed to load candidate values');
+      setPickerCandidates([]);
+    } finally {
+      setPickerLoading(false);
+    }
+  }, [selection]);
+
+  /** Pick a candidate value: pre-fill the manual-secret form and close the picker (#285). */
+  const pickValue = (candidate: SecretValueCandidate) => {
+    setManualExcerpt(candidate.text);
+    setManualError(null);
+    setPickerOpen(false);
+  };
+
+  const filteredCandidates = useMemo(() => {
+    const q = pickerSearch.trim().toLowerCase();
+    if (!q) return pickerCandidates;
+    return pickerCandidates.filter((c) =>
+      `${c.text} ${c.location} ${c.source}`.toLowerCase().includes(q),
+    );
+  }, [pickerCandidates, pickerSearch]);
+
   const filteredProposals = useMemo(() => {
     const q = proposalFilter.trim().toLowerCase();
     if (!q) return contentProposals;
@@ -407,31 +453,56 @@ export default function PackageWizard({ open, onClose }: Props) {
     options: EntityOption[],
     selected: Set<string>,
     onToggle: (id: string) => void,
-  ) => (
-    <Box sx={{ flex: 1, minWidth: 220 }}>
-      <Typography variant="subtitle2" gutterBottom>
-        {title} {selected.size > 0 && <Chip label={selected.size} size="small" />}
-      </Typography>
-      {options.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          None available
+    search: string,
+    onSearch: (value: string) => void,
+  ) => {
+    const q = search.trim().toLowerCase();
+    const filtered = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
+    return (
+      <Box sx={{ flex: 1, minWidth: 240 }}>
+        <Typography variant="subtitle2" gutterBottom>
+          {title} {selected.size > 0 && <Chip label={selected.size} size="small" />}
         </Typography>
-      ) : (
-        <List dense sx={{ maxHeight: 220, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
-          {options.map((opt) => (
-            <ListItem key={opt.id} disablePadding>
-              <ListItemButton onClick={() => onToggle(opt.id)} dense>
-                <ListItemIcon sx={{ minWidth: 36 }}>
-                  <Checkbox edge="start" checked={selected.has(opt.id)} tabIndex={-1} disableRipple />
-                </ListItemIcon>
-                <ListItemText primary={opt.label} />
-              </ListItemButton>
-            </ListItem>
-          ))}
-        </List>
-      )}
-    </Box>
-  );
+        <TextField
+          size="small"
+          fullWidth
+          placeholder={`Search ${title.toLowerCase()}…`}
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+          sx={{ mb: 1 }}
+        />
+        {options.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            None available
+          </Typography>
+        ) : filtered.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            No matches for “{search}”.
+          </Typography>
+        ) : (
+          <List dense sx={{ maxHeight: { xs: 240, md: '45vh' }, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
+            {filtered.map((opt) => (
+              <ListItem key={opt.id} disablePadding>
+                <ListItemButton onClick={() => onToggle(opt.id)} dense>
+                  <ListItemIcon sx={{ minWidth: 36 }}>
+                    <Checkbox edge="start" checked={selected.has(opt.id)} tabIndex={-1} disableRipple />
+                  </ListItemIcon>
+                  <ListItemText primary={opt.label} />
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </List>
+        )}
+      </Box>
+    );
+  };
 
   const renderStepContent = () => {
     switch (activeStep) {
@@ -447,10 +518,10 @@ export default function PackageWizard({ open, onClose }: Props) {
               MCP servers, planned-execution flows) are pulled in automatically in the next step.
             </Typography>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-              {renderList('Flows', entities.flows, selectedFlows, toggle(setSelectedFlows))}
-              {renderList('Models', entities.models, selectedModels, toggle(setSelectedModels))}
-              {renderList('MCP servers', entities.mcpServers, selectedServers, toggle(setSelectedServers))}
-              {renderList('Planned executions', entities.plannedExecutions, selectedPlanned, toggle(setSelectedPlanned))}
+              {renderList('Flows', entities.flows, selectedFlows, toggle(setSelectedFlows), flowSearch, setFlowSearch)}
+              {renderList('Models', entities.models, selectedModels, toggle(setSelectedModels), modelSearch, setModelSearch)}
+              {renderList('MCP servers', entities.mcpServers, selectedServers, toggle(setSelectedServers), serverSearch, setServerSearch)}
+              {renderList('Planned executions', entities.plannedExecutions, selectedPlanned, toggle(setSelectedPlanned), plannedSearch, setPlannedSearch)}
             </Stack>
           </Stack>
         );
@@ -708,6 +779,14 @@ export default function PackageWizard({ open, onClose }: Props) {
               <Button variant="outlined" onClick={addManualProposal} disabled={!manualExcerpt.trim()}>
                 Add
               </Button>
+              <Button
+                variant="text"
+                startIcon={<SearchIcon />}
+                onClick={() => void openValuePicker()}
+                disabled={nothingSelected}
+              >
+                Pick from app
+              </Button>
             </Stack>
 
             <Divider />
@@ -942,6 +1021,74 @@ export default function PackageWizard({ open, onClose }: Props) {
           >
             Retry publish
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Pick a value to redact</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            These are plaintext values found in the packaged flows, models and planned
+            executions. Pick one to pre-fill the value to redact. API keys and MCP
+            env/header values are never listed — they are already declared as secrets.
+          </Typography>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="Search values…"
+            value={pickerSearch}
+            onChange={(e) => setPickerSearch(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+            sx={{ mb: 2 }}
+          />
+          {pickerLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : pickerError ? (
+            <Alert severity="error">{pickerError}</Alert>
+          ) : pickerCandidates.length === 0 ? (
+            <Alert severity="info">No pickable plaintext values found in the packaged content.</Alert>
+          ) : filteredCandidates.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              No values match “{pickerSearch}”.
+            </Typography>
+          ) : (
+            <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: '50vh', overflow: 'auto' }}>
+              {filteredCandidates.map((c, i) => (
+                <ListItem key={`${c.location}-${i}`} disablePadding divider>
+                  <ListItemButton onClick={() => pickValue(c)} alignItems="flex-start">
+                    <ListItemText
+                      primary={
+                        <Box component="code" sx={{ wordBreak: 'break-all' }}>
+                          {c.text.length > 120 ? `${c.text.slice(0, 120)}…` : c.text}
+                        </Box>
+                      }
+                      secondary={
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
+                          <Chip label={c.source} size="small" variant="outlined" />
+                          <Typography variant="caption" color="text.secondary">
+                            {c.location}
+                          </Typography>
+                        </Stack>
+                      }
+                      primaryTypographyProps={{ component: 'div' }}
+                      secondaryTypographyProps={{ component: 'div' }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPickerOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </>

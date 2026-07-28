@@ -64,7 +64,7 @@ export default function PackagesManager() {
             alignItems: 'center',
             textAlign: 'center',
             gap: 2,
-            maxWidth: 640,
+            maxWidth: { xs: '100%', md: 1100 },
             mx: 'auto',
           }}
         >

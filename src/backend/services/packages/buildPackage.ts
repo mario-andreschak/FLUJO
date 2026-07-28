@@ -37,6 +37,7 @@ import type { PackageSecret } from '@/shared/types/package/secrets';
 import type { SecretSubstitution } from '@/shared/types/package/secretProposal';
 import { applySecretSubstitutions, backstopScan, deriveSecretProposals } from './deriveSecrets';
 import type { DeriveResult } from './deriveSecrets';
+import { extractScanTargets, type ScanTarget } from './secretScanTargets';
 import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
@@ -621,4 +622,42 @@ export async function deriveSecretsForSelection(
   }
 
   return deriveSecretProposals(scanEntities, deriveOptions);
+}
+
+/** A pickable candidate value for the wizard's "Add a secret manually" picker (#285). */
+export interface SecretValueCandidate {
+  /** Grouping source: 'flow' | 'model' | 'plannedExecution' (derived from the location prefix). */
+  source: string;
+  /** Dotted location path back to the field (from the scan extractor). */
+  location: string;
+  /** The literal string value the user may choose to redact. */
+  text: string;
+}
+
+/**
+ * Enumerate pickable candidate values for the wizard's manual-secret picker
+ * (issue #285). Reuses the SAME secure content extractor as secret derivation
+ * (`extractScanTargets`), which is the choke-point guaranteeing model API keys
+ * and MCP env/header VALUES are never emitted — only plaintext already present
+ * in flow/model/planned-execution config. No new scanning logic; pure I/O
+ * wrapper over the resolved selection. Deduped by text, longest-first so the
+ * most specific values surface first.
+ */
+export async function scanTargetsForSelection(
+  selection: PackageSelection,
+): Promise<SecretValueCandidate[]> {
+  const { resolved, entities } = await resolvePackageSelection(selection);
+  const scanEntities = restrictToResolved(resolved, entities);
+  const targets: ScanTarget[] = extractScanTargets(scanEntities);
+
+  const seen = new Set<string>();
+  const candidates: SecretValueCandidate[] = [];
+  for (const t of targets) {
+    if (seen.has(t.text)) continue;
+    seen.add(t.text);
+    const source = t.location.split(':')[0] || 'other';
+    candidates.push({ source, location: t.location, text: t.text });
+  }
+  candidates.sort((a, b) => b.text.length - a.text.length);
+  return candidates;
 }
