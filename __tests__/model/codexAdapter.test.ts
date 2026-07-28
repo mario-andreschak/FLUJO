@@ -61,6 +61,12 @@ jest.mock('@/backend/services/runResources/boundToolResult', () => ({
 jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({
   resolveCodexModelCatalogPath: jest.fn(async () => 'C:\\Users\\test\\.codex\\models_cache.json'),
 }));
+jest.mock('@/backend/services/model/adapters/codexRuntimeHome', () => ({
+  prepareCodexRuntimeEnvironment: jest.fn(async () => ({
+    home: 'C:\\flujo\\db\\codex-runtime',
+    env: { PATH: 'C:\\Windows', CODEX_HOME: 'C:\\flujo\\db\\codex-runtime' },
+  })),
+}));
 
 import { CodexAdapter } from '@/backend/services/model/adapters/codexAdapter';
 
@@ -116,23 +122,30 @@ describe('CodexAdapter — thread setup', () => {
 
   it('passes the API key when present and omits it when empty (codex login)', async () => {
     await new CodexAdapter().createCompletion(baseInput());
-    expect((codexCtorMock.mock.calls[0][0] as Record<string, unknown>).apiKey).toBe('sk-test');
+    const keyed = codexCtorMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(keyed.apiKey).toBe('sk-test');
+    expect(keyed.env).toEqual({
+      PATH: 'C:\\Windows',
+      CODEX_HOME: 'C:\\flujo\\db\\codex-runtime',
+    });
 
     codexCtorMock.mockClear();
     await new CodexAdapter().createCompletion(baseInput({ apiKey: '' }));
     expect('apiKey' in (codexCtorMock.mock.calls[0][0] as Record<string, unknown>)).toBe(false);
   });
 
-  it('uses Codex local model catalog to avoid a failing online refresh', async () => {
+  it('disables Codex shell and uses its local model catalog', async () => {
     await new CodexAdapter().createCompletion(baseInput());
     const opts = codexCtorMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.config).toEqual({
+      service_tier: 'default',
+      features: { shell_tool: false },
       model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
     });
     expect(capturedBridgeTools).toEqual([]);
   });
 
-  it('prepends the system prompt to the flattened input', async () => {
+  it('passes the system prompt through stdin instead of Codex CLI config', async () => {
     await new CodexAdapter().createCompletion(
       baseInput({
         messages: [
@@ -141,9 +154,15 @@ describe('CodexAdapter — thread setup', () => {
         ] as OpenAI.ChatCompletionMessageParam[],
       }),
     );
-    const input = runStreamedMock.mock.calls[0][0] as string;
-    expect(input).toContain('<system_instructions>\nYou are terse.\n</system_instructions>');
-    expect(input).toContain('hi');
+    const opts = codexCtorMock.mock.calls[0][0] as {
+      config: Record<string, unknown>;
+    };
+    expect(opts.config).not.toHaveProperty('developer_instructions');
+    const input = runStreamedMock.mock.calls[0][0] as Array<{ type: string; text?: string }>;
+    expect(input).toEqual([
+      { type: 'text', text: '<system_instructions>\nYou are terse.\n</system_instructions>' },
+      { type: 'text', text: expect.stringContaining('hi') },
+    ]);
   });
 });
 
@@ -192,6 +211,25 @@ describe('CodexAdapter — transcript & usage', () => {
     }));
     await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow(/boom/);
   });
+
+  it('does not fail a successful turn because of a non-fatal error item', async () => {
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: eventStream([
+        {
+          type: 'item.completed',
+          item: { id: 'warning-1', type: 'error', message: 'Optional service tier was omitted.' },
+        },
+        agentMessage('done'),
+        turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 }),
+      ])(),
+    }));
+
+    await expect(new CodexAdapter().createCompletion(baseInput())).resolves.toMatchObject({
+      completion: {
+        choices: [{ message: { content: 'done' } }],
+      },
+    });
+  });
 });
 
 const mcpTool: OpenAI.ChatCompletionTool = {
@@ -213,8 +251,15 @@ describe('CodexAdapter — tool bridging', () => {
     );
     const cfg = (codexCtorMock.mock.calls[0][0] as { config: Record<string, unknown> }).config;
     expect(cfg).toEqual({
+      service_tier: 'default',
+      features: { shell_tool: false },
       model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
-      mcp_servers: { flujo: { url: 'http://127.0.0.1:1234/mcp/testtoken' } },
+      mcp_servers: {
+        flujo: {
+          url: 'http://127.0.0.1:1234/mcp/testtoken',
+          default_tools_approval_mode: 'approve',
+        },
+      },
     });
     expect(capturedBridgeTools.map(t => t.name)).toEqual(['my-server__list_things']);
     // Raw JSON Schema passes through untouched (no Zod translation on this path).

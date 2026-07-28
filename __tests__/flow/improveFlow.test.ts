@@ -287,6 +287,18 @@ describe('improveFlow — input validation & failures', () => {
     );
   });
 
+  it('uses an empty key for a Codex model authenticated by codex login', async () => {
+    const flow = makeExistingFlow();
+    getModelMock.mockResolvedValue({ ...generatorModel, adapter: 'codex-cli', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(flowToSpec(flow))));
+
+    const result = await improveFlow({ flow, description: 'x', modelId: 'model-gen' });
+
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
+  });
+
   it('502 when the adapter call throws', async () => {
     createCompletionMock.mockRejectedValue(new Error('Premature close'));
     const result = await improveFlow({ flow: makeExistingFlow(), description: 'x', modelId: 'model-gen' });
