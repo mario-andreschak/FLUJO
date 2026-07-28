@@ -267,7 +267,6 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         key={s.key}
                         size="small"
                         type={visibleSecrets[s.key] ? 'text' : 'password'}
-                        type="password"
                         label={s.label || s.key}
                         helperText={
                           s.required
