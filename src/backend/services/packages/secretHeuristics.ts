@@ -63,6 +63,24 @@ const WINDOWS_PATH_ALLOW_PREFIXES = [
   'c:\\windows', 'c:\\program files', 'c:\\programdata',
 ];
 
+/**
+ * Trailing characters a path match should never keep: sentence punctuation
+ * (`.`, `,`, `;`, `:`, `!`, `?`, closing brackets/quotes) and a bare trailing
+ * separator (`/`, `\`) — a directory referenced with and without its trailing
+ * slash is the same secret. Without this, a path embedded mid-sentence
+ * ("see c:/foo/bar.") or with an incidental trailing slash produces a
+ * different excerpt per occurrence and the review list shows the same secret
+ * several times over.
+ */
+const PATH_TRAILING_TRIM_RE = /[.,;:!?)\]}'"/\\]$/;
+
+/** Strip sentence punctuation / a trailing separator off a matched path. */
+function trimPathTrailing(value: string): string {
+  let v = value;
+  while (v.length > 1 && PATH_TRAILING_TRIM_RE.test(v)) v = v.slice(0, -1);
+  return v;
+}
+
 /** Is this matched path a well-known non-secret system/tooling path? */
 function isAllowlistedPath(pathValue: string): boolean {
   const lower = pathValue.toLowerCase();
@@ -216,12 +234,15 @@ function collectRuleMatches(text: string, rules: Rule[]): RawMatch[] {
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       const groupIdx = rule.group ?? 0;
-      const value = m[groupIdx];
+      let value = m[groupIdx];
       if (!value) {
         if (re.lastIndex === m.index) re.lastIndex++;
         continue;
       }
       const start = m.index + (groupIdx > 0 ? m[0].indexOf(value) : 0);
+      // Drop sentence punctuation / a trailing separator so the same path
+      // embedded in different contexts always yields the same excerpt.
+      if (rule.kind === 'path') value = trimPathTrailing(value);
       // Allow-list well-known non-secret system paths (issue #208).
       if (rule.kind === 'path' && isAllowlistedPath(value)) {
         if (re.lastIndex === m.index) re.lastIndex++;

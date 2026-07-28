@@ -57,6 +57,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const [result, setResult] = useState<InstallSummary | null>(null);
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
 
+
   const runSearch = useCallback(async (q: string) => {
     setSearching(true);
     setSearchError(null);
@@ -266,6 +267,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         key={s.key}
                         size="small"
                         type={visibleSecrets[s.key] ? 'text' : 'password'}
+                        type="password"
                         label={s.label || s.key}
                         helperText={
                           s.required
