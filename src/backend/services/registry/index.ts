@@ -107,8 +107,23 @@ function toStatus(account: StoredRegistryAccount): RegistryAccountStatus {
   };
 }
 
+/**
+ * Masked, browser-safe view of the stored account, verified against the real
+ * decryptability of the token (not just presence of the ciphertext string).
+ * `toStatus()`'s `hasToken` check alone can't tell a usable token from stale/
+ * undecryptable ciphertext (e.g. left over from an encryption-key change), which
+ * showed the account as "signed in" while `publish()` still threw
+ * `NotAuthenticatedError`.
+ */
 export async function getAccountStatus(): Promise<RegistryAccountStatus> {
-  return toStatus(await loadStored());
+  const account = await loadStored();
+  if (account.accessToken) {
+    const decrypted = await decryptApiKey(account.accessToken);
+    if (!decrypted) {
+      return toStatus({ ...account, accessToken: '' });
+    }
+  }
+  return toStatus(account);
 }
 
 /**
@@ -309,10 +324,16 @@ async function withAccessToken<T>(
   call: (token: string) => Promise<client.RegistryHttpResponse<T>>,
 ): Promise<client.RegistryHttpResponse<T>> {
   const account = await loadStored();
-  if (!account.accessToken) throw new NotAuthenticatedError();
+  if (!account.accessToken) {
+    log.warn('withAccessToken: no accessToken stored; treating as signed out.');
+    throw new NotAuthenticatedError();
+  }
 
   const accessToken = await decryptApiKey(account.accessToken);
-  if (!accessToken) throw new NotAuthenticatedError();
+  if (!accessToken) {
+    log.warn('withAccessToken: stored accessToken could not be decrypted; treating as signed out.');
+    throw new NotAuthenticatedError();
+  }
 
   let result = await call(accessToken);
   if (result.status !== 401) return result;
