@@ -13,3 +13,4 @@ export * from './installOrigin';
 export * from './package';
 export * from './package.schema';
 export * from './package.serialize';
+export * from './package.import';

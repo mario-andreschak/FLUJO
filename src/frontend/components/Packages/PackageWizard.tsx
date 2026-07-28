@@ -34,6 +34,7 @@ import {
   useTheme,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import RegistryAccountSettings from '@/frontend/components/Settings/RegistryAccountSettings';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
@@ -50,6 +51,8 @@ import type {
 } from '@/frontend/services/packages';
 import type { SecretKind, SecretProposal } from '@/shared/types/package/secretProposal';
 import { buildManualProposal, SECRET_KINDS } from '@/shared/types/package/secretProposal';
+import { packageToWizardDraft, parseImportedPackage } from '@/shared/types/package/package.import';
+import type { WizardDraft } from '@/shared/types/package/package.import';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages/PackageWizard');
@@ -104,6 +107,10 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [modelSearch, setModelSearch] = useState('');
   const [serverSearch, setServerSearch] = useState('');
   const [plannedSearch, setPlannedSearch] = useState('');
+
+  // Step 0 — re-import of a previously exported manifest.
+  const [importedDraft, setImportedDraft] = useState<WizardDraft | null>(null);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
 
   // Step 1 — resolution result.
   const [resolving, setResolving] = useState(false);
@@ -210,6 +217,63 @@ export default function PackageWizard({ open, onClose }: Props) {
     });
   };
 
+  /**
+   * Re-import a previously exported manifest (.json): restores the selection,
+   * the metadata fields and which secrets were accepted, so iterating on a
+   * package doesn't mean re-walking every step. Secret VALUES are never in a
+   * manifest, so accepted rows are matched by NAME after the content scan
+   * re-runs (step 2 reports any that can't be recovered).
+   */
+  const importManifestFile = useCallback(
+    async (file: File) => {
+      setImportErrors([]);
+      let text: string;
+      try {
+        text = await file.text();
+      } catch (err) {
+        setImportErrors([err instanceof Error ? err.message : 'Failed to read the file']);
+        return;
+      }
+      const parsed = parseImportedPackage(text);
+      if (!parsed.ok) {
+        setImportedDraft(null);
+        setImportErrors(parsed.errors.slice(0, 8));
+        return;
+      }
+      const draft = packageToWizardDraft(parsed.package, {
+        flowIds: entities.flows.map((f) => f.id),
+        modelIds: entities.models.map((m) => m.id),
+        mcpServerNames: entities.mcpServers.map((s) => s.id),
+        plannedExecutionIds: entities.plannedExecutions.map((p) => p.id),
+      });
+      setSelectedFlows(new Set(draft.selection.flowIds));
+      setSelectedModels(new Set(draft.selection.modelIds));
+      setSelectedServers(new Set(draft.selection.mcpServerNames));
+      setSelectedPlanned(new Set(draft.selection.plannedExecutionIds));
+      setName(draft.metadata.name);
+      setVersion(draft.metadata.version);
+      setDescription(draft.metadata.description);
+      setTagsInput(draft.metadata.tags.join(', '));
+      // Anything derived from the old selection is stale.
+      setResolveResult(null);
+      setResolveError(null);
+      setContentProposals([]);
+      setDerivedOnce(false);
+      setDeriveError(null);
+      setDeriveWarnings([]);
+      setBuildResult(null);
+      setBuildError(null);
+      setPublishResult(null);
+      setImportedDraft(draft);
+      log.info('Imported package manifest into the wizard', {
+        name: draft.metadata.name,
+        version: draft.metadata.version,
+        missing: draft.missing.length,
+      });
+    },
+    [entities],
+  );
+
   const runResolve = useCallback(async () => {
     setResolving(true);
     setResolveError(null);
@@ -235,6 +299,11 @@ export default function PackageWizard({ open, onClose }: Props) {
    * (sending packaged content to that provider). Preserves the user's per-row
    * accept/rename choices across a re-scan.
    */
+  const importedSecretNames = useMemo(
+    () => (importedDraft ? new Set(importedDraft.secretNames) : null),
+    [importedDraft],
+  );
+
   const runDerive = useCallback(
     async (modelIdentifier?: string) => {
       setDeriving(true);
@@ -251,10 +320,17 @@ export default function PackageWizard({ open, onClose }: Props) {
           const acceptedById = new Map(prev.map((p) => [p.id, p.accepted]));
           const nameById = new Map(prev.map((p) => [p.id, p.suggestedSecretName]));
           const manual = prev.filter((p) => p.source === 'manual');
+          // After a manifest re-import, reproduce the imported package's choices:
+          // accept exactly the rows whose suggested name it declared.
+          const imported = importedSecretNames;
           const scanned = res.proposals.map((p) => ({
             ...p,
-            // Default-accept everything except low-confidence noise (issue #208).
-            accepted: acceptedById.has(p.id) ? acceptedById.get(p.id) : p.confidence !== 'low',
+            accepted: acceptedById.has(p.id)
+              ? acceptedById.get(p.id)
+              : imported
+                ? imported.has(p.suggestedSecretName)
+                : // Default-accept everything except low-confidence noise (issue #208).
+                  p.confidence !== 'low',
             suggestedSecretName: nameById.get(p.id) ?? p.suggestedSecretName,
           }));
           const scannedIds = new Set(scanned.map((p) => p.id));
@@ -268,7 +344,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         setDerivedOnce(true);
       }
     },
-    [selection, scanEntropy, scanRepoSlug],
+    [selection, scanEntropy, scanRepoSlug, importedSecretNames],
   );
 
   const toggleProposalGroup = (ids: string[]) =>
@@ -390,6 +466,18 @@ export default function PackageWizard({ open, onClose }: Props) {
         .includes(q),
     );
   }, [groupedProposals, proposalFilter]);
+
+  // Secrets the imported manifest declared that neither the entity-secret step
+  // nor the re-run content scan produced — their VALUES were redacted on export,
+  // so they can only be restored by re-adding them manually (issue: re-import).
+  const unrecoveredSecretNames = useMemo(() => {
+    if (!importedDraft || !derivedOnce) return [];
+    const known = new Set<string>([
+      ...(resolveResult?.secrets ?? []).map((s) => s.name),
+      ...contentProposals.map((p) => p.suggestedSecretName),
+    ]);
+    return importedDraft.secretNames.filter((n) => !known.has(n));
+  }, [importedDraft, derivedOnce, resolveResult, contentProposals]);
 
   const kindCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -570,6 +658,56 @@ export default function PackageWizard({ open, onClose }: Props) {
               Pick the entities to include. Dependencies (subflows, referenced models and
               MCP servers, planned-execution flows) are pulled in automatically in the next step.
             </Typography>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Button component="label" variant="outlined" startIcon={<UploadFileIcon />}>
+                Import manifest (.json)
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    // Reset the input so re-picking the same file fires onChange again.
+                    e.target.value = '';
+                    if (file) void importManifestFile(file);
+                  }}
+                />
+              </Button>
+              <Typography variant="caption" color="text.secondary">
+                Restores the selection, metadata and accepted secrets from a package you
+                exported earlier.
+              </Typography>
+            </Stack>
+            {importErrors.length > 0 && (
+              <Alert severity="error" onClose={() => setImportErrors([])}>
+                <AlertTitle>Could not import that file</AlertTitle>
+                {importErrors.map((e, i) => (
+                  <div key={i}>{e}</div>
+                ))}
+              </Alert>
+            )}
+            {importedDraft && (
+              <Alert severity={importedDraft.missing.length > 0 ? 'warning' : 'success'}>
+                <AlertTitle>
+                  Imported “{importedDraft.metadata.name}” v{importedDraft.metadata.version}
+                </AlertTitle>
+                Restored {importedDraft.selection.flowIds.length} flow(s),{' '}
+                {importedDraft.selection.modelIds.length} model(s),{' '}
+                {importedDraft.selection.mcpServerNames.length} MCP server(s),{' '}
+                {importedDraft.selection.plannedExecutionIds.length} planned execution(s) and{' '}
+                {importedDraft.secretNames.length} secret name(s).
+                {importedDraft.missing.length > 0 && (
+                  <Box sx={{ mt: 1 }}>
+                    No longer on this host (left unselected):
+                    {importedDraft.missing.map((m, i) => (
+                      <div key={i}>
+                        {m.type}: {m.label}
+                      </div>
+                    ))}
+                  </Box>
+                )}
+              </Alert>
+            )}
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               {renderList('Flows', entities.flows, selectedFlows, toggle(setSelectedFlows), flowSearch, setFlowSearch)}
               {renderList('Models', entities.models, selectedModels, toggle(setSelectedModels), modelSearch, setModelSearch)}
@@ -788,6 +926,15 @@ export default function PackageWizard({ open, onClose }: Props) {
                   ))}
                 </List>
               </>
+            )}
+
+            {unrecoveredSecretNames.length > 0 && (
+              <Alert severity="warning">
+                <AlertTitle>Secrets from the imported manifest that need re-adding</AlertTitle>
+                A manifest never carries secret values, so these declarations could not be
+                matched to anything in the current content — re-add them below if they still
+                apply: {unrecoveredSecretNames.join(', ')}.
+              </Alert>
             )}
 
             {deriveWarnings.length > 0 && (
