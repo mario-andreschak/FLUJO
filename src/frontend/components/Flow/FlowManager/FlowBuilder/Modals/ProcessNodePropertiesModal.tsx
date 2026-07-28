@@ -10,7 +10,9 @@ import {
     Divider,
     Typography,
     Tabs,
-    Tab
+    Tab,
+    FormControlLabel,
+    Switch
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
@@ -64,6 +66,8 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   // prompt through the handoff tool that overrides the isolated prompt below).
   const [allowCallerPrompt, setAllowCallerPrompt] = useState(true);
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
+  // Issue #259: opt in to the synthetic `todo` tool for this node.
+  const [enableTodoTool, setEnableTodoTool] = useState(false);
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
   // into scope + key for editing and recombined via buildKvRef on save.
   const [captureVariable, setCaptureVariable] = useState('');
@@ -186,6 +190,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
       setIsolatedPrompt(node.data.properties?.isolatedPrompt || '');
       setAllowCallerPrompt(node.data.properties?.allowCallerPrompt !== false);
       setOutputMode(node.data.properties?.outputMode || 'full-conversation');
+      setEnableTodoTool(node.data.properties?.enableTodoTool || false);
 
       // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
       setCaptureVariable(node.data.properties?.captureVariable || '');
@@ -311,6 +316,10 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         allowCallerPrompt: allowCallerPrompt,
         outputMode: outputMode,
       };
+
+      // Issue #259: only persist enableTodoTool when ON, so flows that don't use
+      // it stay byte-identical (same delete-when-false convention as captureX).
+      if (enableTodoTool) properties.enableTodoTool = true; else delete properties.enableTodoTool;
 
       // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
       // when empty, so flowToSpec never emits an empty captureX and existing
@@ -517,6 +526,17 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               isModelBound={isModelBound}
               models={models}
               nodeData={nodeData}
+            />
+            {/* Issue #259: opt in to the run-scoped `todo` task list. */}
+            <FormControlLabel
+              sx={{ mt: 1 }}
+              control={
+                <Switch
+                  checked={enableTodoTool}
+                  onChange={(e) => setEnableTodoTool(e.target.checked)}
+                />
+              }
+              label="Enable todo tool (run-scoped task list)"
             />
           </Box>
 

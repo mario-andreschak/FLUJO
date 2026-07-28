@@ -44,6 +44,7 @@ import {
   drainHoldReason,
 } from './chatQueue';
 import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
+import TodoDock from './TodoDock';
 import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
@@ -60,7 +61,7 @@ import { createLogger } from '@/utils/logger';
 // Correctly import SharedState here
 import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
-import type { ExecutionEvent } from '@/shared/types/execution/events'; // Live execution events (SSE)
+import type { ExecutionEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
   LiveActivity,
   EMPTY_LIVE_ACTIVITY,
@@ -450,6 +451,9 @@ const Chat: React.FC = () => {
   // Per-lane progress rows for parallel subflow fan-outs (issue #157). Pure
   // reducer state rebuilt from the SSE replay (from seq 0) on re-attach.
   const [liveLanes, setLiveLanes] = useState<LiveLanes>(EMPTY_LIVE_LANES);
+  // Run-scoped `todo` list (issue #259): the full current checklist from the
+  // latest `todo:update` SSE event, rebuilt from the bus replay on re-attach.
+  const [currentTodos, setCurrentTodos] = useState<TodoEventItem[]>([]);
   // Node ids seen in the `node:enter` SSE stream, accumulated for the whole
   // conversation (issue #243). The other executed-path sources only cover
   // Process nodes; this stream covers EVERY node type, so it is what makes
@@ -1148,6 +1152,7 @@ const Chat: React.FC = () => {
         setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
         setLiveLanes(EMPTY_LIVE_LANES);
+        setCurrentTodos([]);
         if (event.conversationId) {
           patchConversationStatus(event.conversationId, 'running');
           markConversationStopped(event.conversationId, false); // a new run clears the prior Stop notice
@@ -1214,6 +1219,12 @@ const Chat: React.FC = () => {
         touch({});
         break;
       }
+      case 'todo:update':
+        // Full current list (not a delta) — replace wholesale so a late-joining
+        // client rebuilds the checklist from the ring buffer (issue #259).
+        setCurrentTodos(event.todos ?? []);
+        touch({});
+        break;
       case 'tool:call':
         touch({ activeNode: event.name });
         break;
@@ -3268,6 +3279,13 @@ const Chat: React.FC = () => {
                   but never for background runs in other conversations, and never
                   while the debugger owns the pause UI. Owns its own 1s tick so
                   the rest of the tree doesn't re-render. */}
+              {/* Todo dock (issue #259): a live checklist maintained by the
+                  model's `todo` tool. Shown while the viewed conversation is
+                  running and has any tasks. */}
+              {viewedConversationRunning && currentTodos.length > 0 && (
+                <TodoDock todos={currentTodos} />
+              )}
+
               {viewedConversationRunning && !isDebugPaused && (
                 <LiveRunIndicator
                   liveStats={liveStats}

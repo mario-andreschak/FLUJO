@@ -105,6 +105,18 @@ export interface StartNodeProperties {
 }
 
 // ProcessNode specific properties
+/** Status of a single `todo` task (issue #259), mirroring opencode's set. */
+export type TodoStatus = 'pending' | 'in_progress' | 'done' | 'cancelled';
+
+/** One run-scoped task tracked by the synthetic `todo` tool (issue #259). */
+export interface TodoItem {
+    id: string;
+    content: string;
+    status: TodoStatus;
+    createdAt: number;
+    updatedAt: number;
+}
+
 export interface ProcessNodeProperties {
     name?: string;
     /** True once the user edits the node's label by hand; suppresses auto-naming
@@ -157,6 +169,11 @@ export interface ProcessNodeProperties {
      *  working with the answer. Off by default; leave off for unattended flows
      *  (or deny action `question` via permissionRules). */
     allowQuestion?: boolean;
+    /** Issue #259: opt in to the synthetic `todo` tool so this node's model can
+     *  maintain a run-scoped task list (SharedState.todos) across a multi-turn
+     *  visit. The list is re-injected into the system prompt each turn and shown
+     *  live in the UI. Off by default (undefined/false = off). */
+    enableTodoTool?: boolean;
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -586,6 +603,16 @@ export interface SharedState {
      * prompt path). Resolved by resolveRunVars.ts.
      */
     variables?: Record<string, string>;
+    /**
+     * Issue #259 (`todo` tool): a run-scoped task list a node's model can
+     * CREATE/UPDATE via the synthetic `todo` tool when the node opts in
+     * (`enableTodoTool`). Plain JSON-serializable, so it persists with the
+     * conversation (persistConversationState), survives wire-only compaction
+     * (compaction never touches SharedState) and is re-injected into the system
+     * prompt each turn by ProcessNode.prep. NOT seeded for child runs, so spawned
+     * workers cannot scribble over the parent's plan (non-inheritance AC).
+     */
+    todos?: TodoItem[];
     // MCP context for tool handling
     mcpContext?: MCPContext;
     /** Issue #239: the MCP node references for the currently executing ProcessNode.

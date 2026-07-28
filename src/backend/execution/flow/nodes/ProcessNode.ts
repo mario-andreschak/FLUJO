@@ -7,6 +7,7 @@ import { ModelHandler } from '../handlers/ModelHandler';
 import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
+import { buildTodoTool, TODO_TOOL_NAME, formatTodoBlock } from '../handlers/todoTool';
 import { isWhollyDenied } from '../permissionEngine';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
@@ -427,6 +428,17 @@ export class ProcessNode extends BaseNode {
       availableTools = [...availableTools, buildQuestionTool()];
     }
 
+    // Todo tool (issue #259): offer the synthetic `todo` tool only when this
+    // Process node opts in (`enableTodoTool`). Like the question tool, it is
+    // offered iff enabled (not sticky-armed), so flows that don't use it keep a
+    // byte-identical tool set (preserving the #89 prefix-cache). A flow-level
+    // `deny` rule for action `todo` removes it even when the node opted in.
+    const todoDenied = isWhollyDenied(sharedState.permissionRules ?? [], TODO_TOOL_NAME);
+    if (node_params?.properties?.enableTodoTool === true && !todoDenied &&
+        !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
+      availableTools = [...availableTools, buildTodoTool()];
+    }
+
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
@@ -649,6 +661,29 @@ export class ProcessNode extends BaseNode {
 
     if (armed.size > 0) {
       sharedState.armedSyntheticTools = Array.from(armed).sort();
+    }
+
+    // Todo tool (issue #259): re-inject the current run-scoped task list into the
+    // model's view each turn, so intent survives a compacting history. Appended
+    // as a WIRE-ONLY user message (prepResult.messages / persisted transcript is
+    // untouched, like the isolated/scoped wire views) rather than into the FROZEN
+    // system prompt (#249) — mutating that prefix every time a status flips would
+    // bust the provider prefix cache. Only emitted once the list is non-empty, so
+    // a todo-enabled node with no tasks yet keeps a byte-identical wire view.
+    if (node_params?.properties?.enableTodoTool === true && (sharedState.todos?.length ?? 0) > 0) {
+      const todoBlock = formatTodoBlock(sharedState.todos);
+      if (todoBlock) {
+        const base = prepResult.wireMessages ?? wireBase;
+        prepResult.wireMessages = [
+          ...base,
+          {
+            id: uuidv4(),
+            role: 'user',
+            content: todoBlock,
+            timestamp: Date.now(),
+          } as FlujoChatMessage,
+        ];
+      }
     }
 
     log.info('Assembled node context', {

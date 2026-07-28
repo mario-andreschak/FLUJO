@@ -33,6 +33,7 @@ import { captureToolResult } from '@/backend/services/runResources/capture';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
+import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
@@ -861,8 +862,9 @@ export class ModelHandler {
     const hasRunResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name));
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
+    const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
     const localToolExecutors =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -908,6 +910,17 @@ export class ModelHandler {
                 unattended: input.unattended,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'question failed');
+              return outcome.data;
+            },
+            // todo (issue #259): lets a self-orchestrating model maintain its
+            // run-scoped task list in-loop, same as the request/response path.
+            [TODO_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeTodoTool(args, {
+                conversationId,
+                node: runResourceNode,
+                emit,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'todo failed');
               return outcome.data;
             },
           }
@@ -1624,6 +1637,7 @@ export class ModelHandler {
         if (isMCPResourceToolName(toolName)) return LOCAL_GROUP;
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
+        if (isTodoToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
       };
@@ -1775,6 +1789,34 @@ export class ModelHandler {
             });
             const resultContent = outcome.success
               ? (typeof outcome.data === 'string' ? outcome.data : JSON.stringify(outcome.data))
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // Todo tool (issue #259): synthetic FLUJO tool that replaces the
+          // run-scoped task list on the live SharedState and emits a todo:update
+          // event for the live view. Only offered when the node opted in
+          // (ProcessNode.prep enableTodoTool), so this branch is inert otherwise.
+          if (isTodoToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeTodoTool(args, { conversationId, node, emit });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
             emit?.({
               type: 'tool:result',

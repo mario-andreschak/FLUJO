@@ -35,6 +35,7 @@ export type ExecutionEventType =
   | 'subflow:done'
   | 'resource:read'
   | 'resource:write'
+  | 'todo:update'
   | 'breakpoint:hit'
   | 'error';
 
@@ -307,6 +308,25 @@ export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';
   node: NodeRef;
 }
+/** One task in a `todo:update` event (issue #259) — mirrors SharedState.todos. */
+export interface TodoEventItem {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'done' | 'cancelled';
+  createdAt: number;
+  updatedAt: number;
+}
+/**
+ * The run-scoped `todo` list was created/updated by a model via the synthetic
+ * `todo` tool (issue #259). Carries the FULL current list (not a delta) so a
+ * late-joining / replaying client rebuilds the checklist from the bus ring
+ * buffer. Live-view only; the authoritative copy lives on SharedState.todos.
+ */
+export interface TodoUpdateEvent extends ExecutionEventBase {
+  type: 'todo:update';
+  node?: NodeRef;
+  todos: TodoEventItem[];
+}
 export interface ErrorEvent extends ExecutionEventBase {
   type: 'error';
   node?: NodeRef;
@@ -338,6 +358,7 @@ export type ExecutionEvent =
   | SubflowDoneEvent
   | ResourceReadEvent
   | ResourceWriteEvent
+  | TodoUpdateEvent
   | BreakpointHitEvent
   | ErrorEvent;
 
