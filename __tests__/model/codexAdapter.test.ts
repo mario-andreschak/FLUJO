@@ -223,6 +223,56 @@ describe('CodexAdapter — transcript & usage', () => {
     expect(tc.function.arguments).toContain('ls');
   });
 
+  it('continues the same thread once after the exact mid-response connection close', async () => {
+    const close = 'Connection closed mid-response. The response above may be incomplete.';
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([agentMessage('partial'), { type: 'turn.failed', error: { message: close } }])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([agentMessage('continued'), turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 2 })])(),
+      }));
+
+    const { completion, transcript } = await new CodexAdapter().createCompletion(baseInput());
+
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+    expect(runStreamedMock).toHaveBeenCalledTimes(2);
+    expect(runStreamedMock.mock.calls[1][0]).toContain('Continue the interrupted response');
+    expect(completion.choices[0].message.content).toBe('partial\n\ncontinued');
+    expect(transcript).toHaveLength(2);
+  });
+
+  it('does not continue a second matching close or unrelated failures', async () => {
+    const close = 'Connection closed mid-response. The response above may be incomplete.';
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([{ type: 'turn.failed', error: { message: close } }])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([{ type: 'turn.failed', error: { message: close } }])(),
+      }));
+
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow(close);
+    expect(runStreamedMock).toHaveBeenCalledTimes(2);
+
+    runStreamedMock.mockReset();
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: eventStream([{ type: 'turn.failed', error: { message: 'authentication failed' } }])(),
+    }));
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow('authentication failed');
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not continue after cancellation', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(new CodexAdapter().createCompletion(baseInput({ signal: controller.signal }))).rejects.toThrow(
+      'Codex run cancelled by user.',
+    );
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+  });
+
   it('throws on turn.failed', async () => {
     runStreamedMock.mockImplementationOnce(async () => ({
       events: eventStream([{ type: 'turn.failed', error: { message: 'boom' } }])(),
@@ -333,6 +383,28 @@ describe('CodexAdapter — tool bridging', () => {
     const roles = transcript!.map(m => m.role);
     // assistant(tool_call) + tool(result) + final assistant answer.
     expect(roles).toEqual(['assistant', 'tool', 'assistant']);
+  });
+
+  it('does not duplicate a completed bridged tool pair when continuing', async () => {
+    const close = 'Connection closed mid-response. The response above may be incomplete.';
+    callToolMock.mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'ok' }] } });
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: (async function* () {
+          await capturedBridgeTools[0].handler({ q: 'x' });
+          yield { type: 'turn.failed', error: { message: close } };
+        })(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([agentMessage('continued'), turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 })])(),
+      }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({ tools: [mcpTool], toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } } }),
+    );
+
+    expect(callToolMock).toHaveBeenCalledTimes(1);
+    expect(transcript!.filter(m => m.role === 'tool')).toHaveLength(1);
   });
 
   it('a rejected approval never dispatches and surfaces the feedback (#247)', async () => {

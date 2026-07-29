@@ -45,6 +45,7 @@ import {
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
+import { PermissionEffect, PermissionRule } from '@/shared/types/permissions';
 import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { createEdgeFromConnection } from './Canvas/utils/edgeUtils';
@@ -71,6 +72,10 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import HealingIcon from '@mui/icons-material/Healing';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import HistoryIcon from '@mui/icons-material/History';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
@@ -134,6 +139,8 @@ type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
 // rename dialog, 'invalid-name' means nothing was saved).
 type SaveResult = 'saved' | 'invalid-name' | 'rename-dialog';
 
+type PermissionRuleDraft = PermissionRule & { id: string };
+
 export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, allFlows }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
@@ -154,6 +161,23 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // text is driven forward to its single next step instead of silently ending
   // the run. `undefined` = follow the source default (scheduled ON, chat OFF).
   const [flowUnattended, setFlowUnattended] = useState<boolean>(initialFlow?.unattended ?? false);
+  // Rule IDs are editor-only. PermissionRule has no persisted ID, so keep a
+  // stable key separately while still saving the shared rule shape unchanged.
+  const permissionRuleIdRef = useRef(0);
+  const createPermissionRuleDraft = useCallback((rule: PermissionRule): PermissionRuleDraft => ({
+    ...rule,
+    id: `permission-rule-${++permissionRuleIdRef.current}`,
+  }), []);
+  const [permissionRules, setPermissionRules] = useState<PermissionRuleDraft[]>(
+    () => (initialFlow?.permissionRules || []).map(createPermissionRuleDraft)
+  );
+  // Preserve omission for legacy flows until the user intentionally configures
+  // rules; an explicit empty array is used when an existing rule set is cleared.
+  const [permissionRulesConfigured, setPermissionRulesConfigured] = useState(
+    initialFlow?.permissionRules !== undefined
+  );
+  const [permissionRulesDialogOpen, setPermissionRulesDialogOpen] = useState(false);
+  const [permissionRulesError, setPermissionRulesError] = useState<string | null>(null);
 
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
@@ -249,6 +273,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setFlowName(initialFlow.name);
       setFlowDescription(initialFlow.description || '');
       setFlowUnattended(initialFlow.unattended ?? false);
+      setPermissionRules((initialFlow.permissionRules || []).map(createPermissionRuleDraft));
+      setPermissionRulesConfigured(initialFlow.permissionRules !== undefined);
+      setPermissionRulesError(null);
 
       // Initialize history with initial state
       const initialState: HistoryEntry = {
@@ -266,6 +293,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setFlowName('NewFlow');
       setFlowDescription('');
       setFlowUnattended(false);
+      setPermissionRules([]);
+      setPermissionRulesConfigured(false);
+      setPermissionRulesError(null);
 
       // Initialize history with the Start node
       const emptyState: HistoryEntry = {
@@ -275,7 +305,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setHistory([emptyState]);
       setHistoryIndex(0);
     }
-  }, [initialFlow]);
+  }, [initialFlow, createPermissionRuleDraft]);
   
   // Keys that don't represent a real edit: selection/drag/measurement state
   // must create neither an undo step nor "unsaved changes".
@@ -393,6 +423,53 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setHasUnsavedChanges(true);
   };
 
+  const updatePermissionRule = (id: string, changes: Partial<PermissionRule>) => {
+    setPermissionRules(rules => rules.map(rule => rule.id === id ? { ...rule, ...changes } : rule));
+    setPermissionRulesConfigured(true);
+    setPermissionRulesError(null);
+    setHasUnsavedChanges(true);
+  };
+
+  const addPermissionRule = () => {
+    setPermissionRules(rules => [...rules, createPermissionRuleDraft({ action: '', resource: '', effect: 'ask' })]);
+    setPermissionRulesConfigured(true);
+    setPermissionRulesError(null);
+    setHasUnsavedChanges(true);
+  };
+
+  const removePermissionRule = (id: string) => {
+    setPermissionRules(rules => rules.filter(rule => rule.id !== id));
+    setPermissionRulesConfigured(true);
+    setPermissionRulesError(null);
+    setHasUnsavedChanges(true);
+  };
+
+  const movePermissionRule = (index: number, direction: -1 | 1) => {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= permissionRules.length) return;
+    setPermissionRules(rules => {
+      const reordered = [...rules];
+      [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+      return reordered;
+    });
+    setPermissionRulesConfigured(true);
+    setHasUnsavedChanges(true);
+  };
+
+  const getPermissionRulesForSave = useCallback((): PermissionRule[] | undefined =>
+    permissionRulesConfigured
+      ? permissionRules.map(({ id: _id, ...rule }) => rule)
+      : undefined,
+  [permissionRules, permissionRulesConfigured]);
+
+  const validatePermissionRules = useCallback((): boolean => {
+    const invalidRule = permissionRules.find(rule => !rule.action.trim() || !rule.resource.trim());
+    if (!invalidRule) return true;
+    setPermissionRulesError('Each permission rule needs both an action and a resource. Use * to match any value.');
+    setPermissionRulesDialogOpen(true);
+    return false;
+  }, [permissionRules]);
+
   // Handle save flow
   const handleSave = useCallback((): SaveResult => {
     log.debug(`handleSave: Attempting to save flow "${flowName}"`);
@@ -402,6 +479,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     if (error) {
       log.warn(`handleSave: Invalid flow name - ${error}`);
       setFlowNameError(error);
+      return 'invalid-name';
+    }
+    if (!validatePermissionRules()) {
       return 'invalid-name';
     }
     
@@ -434,13 +514,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edges,
       folder: initialFlow?.folder,    // Preserve folder assignment
       favorite: initialFlow?.favorite, // Preserve favorite status
+      permissionRules: getPermissionRulesForSave(),
     };
 
     log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
     onSave(flow);
     setHasUnsavedChanges(false);
     return 'saved';
-  }, [flowName, flowDescription, flowUnattended, nodes, edges, initialFlow, onSave, allFlows]);
+  }, [flowName, flowDescription, flowUnattended, nodes, edges, initialFlow, onSave, allFlows, getPermissionRulesForSave, validatePermissionRules]);
 
   // Navigation guard: the parent must route "leave the builder" actions
   // (back to dashboard, switching flows) through here so unsaved changes get
@@ -484,6 +565,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(info.flow.edges || []));
     setFlowName(info.flow.name);
     setFlowDescription(info.flow.description || '');
+    if (info.flow.permissionRules !== undefined) {
+      setPermissionRules(info.flow.permissionRules.map(createPermissionRuleDraft));
+      setPermissionRulesConfigured(true);
+    }
     setFlowNameError(validateFlowName(info.flow.name));
     setHasUnsavedChanges(true);
 
@@ -528,6 +613,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setFlowName(restored.name);
     setFlowDescription(restored.description || '');
     setFlowUnattended(restored.unattended ?? false);
+    setPermissionRules((restored.permissionRules || []).map(createPermissionRuleDraft));
+    setPermissionRulesConfigured(restored.permissionRules !== undefined);
     setFlowNameError(validateFlowName(restored.name));
     setHasUnsavedChanges(true);
     setImproveNotice({
@@ -551,6 +638,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edges,
       folder: initialFlow?.folder,
       favorite: initialFlow?.favorite,
+      permissionRules: getPermissionRulesForSave(),
     };
     const { flow: repaired, changes } = autoRepairFlow(currentFlow);
     if (changes.length === 0) {
@@ -571,7 +659,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       severity: 'success',
       message: `Repaired the flow — ${parts.join(', ')}. Review the changes (Undo reverts them), then Save to keep them.`,
     });
-  }, [initialFlow, flowName, flowDescription, nodes, edges, filterInvalidEdges]);
+  }, [initialFlow, flowName, flowDescription, flowUnattended, nodes, edges, filterInvalidEdges, getPermissionRulesForSave]);
 
   // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
   // it, so model selection / install opt-in / result handling are all reused.
@@ -595,6 +683,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edges: flowToCopy.edges,
       folder: flowToCopy.folder,    // Preserve folder assignment
       favorite: flowToCopy.favorite, // Preserve favorite status
+      permissionRules: flowToCopy.permissionRules,
     };
     
     log.info(`handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`);
@@ -644,6 +733,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edges,
         folder: initialFlow?.folder,
         favorite: initialFlow?.favorite,
+        permissionRules: getPermissionRulesForSave(),
       };
       onSave(flow);
       setHasUnsavedChanges(false);
@@ -993,6 +1083,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             </Tooltip>
 
             <Button
+              variant="outlined"
+              onClick={() => setPermissionRulesDialogOpen(true)}
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              Permission Rules{permissionRules.length ? ` (${permissionRules.length})` : ''}
+            </Button>
+
+            <Button
               variant="contained"
               color="primary"
               onClick={handleSave}
@@ -1241,12 +1339,75 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           name: flowName,
           description: flowDescription,
           unattended: flowUnattended,
+          permissionRules: getPermissionRulesForSave(),
           nodes,
           edges,
         }}
         onImproved={handleImproved}
         initialDescription={improveInitialDescription}
       />
+      <Dialog
+        open={permissionRulesDialogOpen}
+        onClose={() => setPermissionRulesDialogOpen(false)}
+        fullWidth
+        maxWidth="md"
+        aria-labelledby="permission-rules-dialog-title"
+      >
+        <DialogTitle id="permission-rules-dialog-title">Flow permission rules</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Rules are evaluated in order; the last matching rule wins. Use * to match any action or resource.
+          </DialogContentText>
+          {permissionRulesError && <Alert severity="error" sx={{ mb: 2 }}>{permissionRulesError}</Alert>}
+          {permissionRules.length === 0 ? (
+            <Typography color="text.secondary" sx={{ mb: 2 }}>
+              No flow-level rules. Add one to allow, deny, or ask for matching tool calls.
+            </Typography>
+          ) : (
+            permissionRules.map((rule, index) => (
+              <Box key={rule.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <Typography aria-label={`Rule ${index + 1}`} sx={{ minWidth: 24 }}>{index + 1}.</Typography>
+                <TextField
+                  label="Action"
+                  size="small"
+                  value={rule.action}
+                  onChange={(event) => updatePermissionRule(rule.id, { action: event.target.value })}
+                  inputProps={{ 'aria-label': `Rule ${index + 1} action` }}
+                  sx={{ flex: 1 }}
+                />
+                <TextField
+                  label="Resource"
+                  size="small"
+                  value={rule.resource}
+                  onChange={(event) => updatePermissionRule(rule.id, { resource: event.target.value })}
+                  inputProps={{ 'aria-label': `Rule ${index + 1} resource` }}
+                  sx={{ flex: 1 }}
+                />
+                <TextField
+                  select
+                  label="Effect"
+                  size="small"
+                  value={rule.effect}
+                  onChange={(event) => updatePermissionRule(rule.id, { effect: event.target.value as PermissionEffect })}
+                  inputProps={{ 'aria-label': `Rule ${index + 1} effect` }}
+                  sx={{ minWidth: 100 }}
+                >
+                  <MenuItem value="allow">Allow</MenuItem>
+                  <MenuItem value="deny">Deny</MenuItem>
+                  <MenuItem value="ask">Ask</MenuItem>
+                </TextField>
+                <Tooltip title="Move rule up"><span><IconButton aria-label={`Move rule ${index + 1} up`} onClick={() => movePermissionRule(index, -1)} disabled={index === 0}><ArrowUpwardIcon /></IconButton></span></Tooltip>
+                <Tooltip title="Move rule down"><span><IconButton aria-label={`Move rule ${index + 1} down`} onClick={() => movePermissionRule(index, 1)} disabled={index === permissionRules.length - 1}><ArrowDownwardIcon /></IconButton></span></Tooltip>
+                <Tooltip title="Delete rule"><IconButton aria-label={`Delete rule ${index + 1}`} onClick={() => removePermissionRule(rule.id)}><DeleteOutlineIcon /></IconButton></Tooltip>
+              </Box>
+            ))
+          )}
+          <Button startIcon={<AddIcon />} onClick={addPermissionRule}>Add rule</Button>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPermissionRulesDialogOpen(false)}>Done</Button>
+        </DialogActions>
+      </Dialog>
       
       {/* Dialog for Copy/Rename/Unsaved Changes */}
       <Dialog open={dialogOpen} onClose={handleDialogClose}>

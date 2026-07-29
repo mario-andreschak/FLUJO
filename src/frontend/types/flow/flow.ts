@@ -1,4 +1,5 @@
 import { Node, Edge } from '@xyflow/react';
+import { PermissionRule } from '@/shared/types/permissions';
 
 export interface FlowNode extends Node {
   data: {
@@ -35,6 +36,8 @@ export interface Flow {
    * Flow type and runFlow's resolveUnattended.
    */
   unattended?: boolean;
+  /** Ordered flow-level rules that control MCP tool-call permissions. */
+  permissionRules?: PermissionRule[];
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

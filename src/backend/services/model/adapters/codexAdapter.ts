@@ -66,6 +66,16 @@ function isHandoffName(name: string): boolean {
   return name.startsWith('handoff_to_') || name === 'handoff';
 }
 
+const CODEX_CONNECTION_CLOSED_MID_RESPONSE =
+  'Connection closed mid-response. The response above may be incomplete.';
+
+/** Only the SDK's precise mid-stream transport close is safe to continue. */
+function isRetryableCodexConnectionClose(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'AbortError') return false;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes(CODEX_CONNECTION_CLOSED_MID_RESPONSE);
+}
+
 interface ToolInteraction {
   id: string;
   name: string;
@@ -476,69 +486,88 @@ export class CodexAdapter implements CompletionAdapter {
         usingLocalModelCatalog: Boolean(modelCatalogPath),
       });
 
-      const { events } = await thread.runStreamed(
-        inputItems.length === 1 && inputItems[0].type === 'text' ? inputItems[0].text : inputItems,
-        { signal: abortController.signal },
-      );
+      const initialInput =
+        inputItems.length === 1 && inputItems[0].type === 'text' ? inputItems[0].text : inputItems;
+      const continuationInput =
+        'Continue the interrupted response from exactly where it stopped. Do not repeat content or tool calls already completed.';
 
-      for await (const event of events) {
-        if (signal?.aborted) break;
-        if (event.type === 'thread.started') {
-          capturedThreadId = event.thread_id;
-          continue;
-        }
-        // Handoff end conditions (issue #156), mirroring the Claude adapter: a
-        // PLAIN handoff ends the run at the next streamed event; SPAWN handoffs
-        // end when the model produces a message without another call — or at
-        // the runaway cap.
-        if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
-          abortController.abort();
-          break;
-        }
-        if (event.type === 'item.completed') {
-          const item = event.item;
-          if (item.type === 'agent_message') {
-            // A message AFTER spawning means the model stopped queueing
-            // workers: end the run without accumulating post-handoff narration.
-            if (handoffCalls.length > 0) {
+      // A network close can occur after the CLI has emitted useful partial
+      // output. Resume the same SDK thread once, preserving its tool state and
+      // appending only newly streamed assistant messages to the transcript.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let attemptFailure: Error | undefined;
+        try {
+          const { events } = await thread.runStreamed(
+            attempt === 0 ? initialInput : continuationInput,
+            { signal: abortController.signal },
+          );
+
+          for await (const event of events) {
+            if (signal?.aborted) break;
+            if (event.type === 'thread.started') {
+              capturedThreadId = event.thread_id;
+              continue;
+            }
+            // Handoff end conditions (issue #156), mirroring the Claude adapter: a
+            // PLAIN handoff ends the run at the next streamed event; SPAWN handoffs
+            // end when the model produces a message without another call — or at
+            // the runaway cap.
+            if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
               abortController.abort();
               break;
             }
-            if (item.text) {
-              resultText += (resultText ? '\n\n' : '') + item.text;
-              recordMessage({ role: 'assistant', content: item.text });
-              streamedText = true;
+            if (event.type === 'item.completed') {
+              const item = event.item;
+              if (item.type === 'agent_message') {
+                // A message AFTER spawning means the model stopped queueing
+                // workers: end the run without accumulating post-handoff narration.
+                if (handoffCalls.length > 0) {
+                  abortController.abort();
+                  break;
+                }
+                if (item.text) {
+                  resultText += (resultText ? '\n\n' : '') + item.text;
+                  recordMessage({ role: 'assistant', content: item.text });
+                  streamedText = true;
+                }
+              } else if (item.type === 'command_execution') {
+                recordToolPair({
+                  id: `call_${uuidv4()}`,
+                  name: 'shell',
+                  argsJson: JSON.stringify({ command: item.command }),
+                  resultContent: item.aggregated_output ?? '',
+                });
+              } else if (item.type === 'error') {
+                log.warn('Codex reported a non-fatal item', { message: item.message });
+              }
+              // mcp_tool_call items are deliberately NOT recorded here — the bridge
+              // handlers already record each call/result pair (with approval and
+              // bounding applied), so mirroring the item would duplicate them.
+            } else if (event.type === 'turn.completed') {
+              usage = event.usage as CodexUsage;
+              completedTurn = true;
+            } else if (event.type === 'turn.failed') {
+              attemptFailure = new Error(
+                (event as { error?: { message?: string } }).error?.message ?? 'unknown error',
+              );
             }
-          } else if (item.type === 'command_execution') {
-            // Codex's built-in shell (read-only sandbox). Surface it in the
-            // transcript as a synthetic tool pair so the run's actions are
-            // visible in FLUJO instead of vanishing into the subprocess.
-            recordToolPair({
-              id: `call_${uuidv4()}`,
-              name: 'shell',
-              argsJson: JSON.stringify({ command: item.command }),
-              resultContent: item.aggregated_output ?? '',
-            });
-          } else if (item.type === 'error') {
-            // The SDK classifies ErrorItem as non-fatal. Warnings such as an
-            // unsupported optional service tier arrive here even when the MCP
-            // call and turn succeed, so only turn.failed may fail the request.
-            log.warn('Codex reported a non-fatal item', { message: item.message });
           }
-          // mcp_tool_call items are deliberately NOT recorded here — the bridge
-          // handlers already record each call/result pair (with approval and
-          // bounding applied), so mirroring the item would duplicate them.
-        } else if (event.type === 'turn.completed') {
-          usage = event.usage as CodexUsage;
-          completedTurn = true;
-        } else if (event.type === 'turn.failed') {
-          failure = (event as { error?: { message?: string } }).error?.message ?? 'unknown error';
+        } catch (err) {
+          attemptFailure = err instanceof Error ? err : new Error(String(err));
         }
+
+        if (signal?.aborted && handoffCalls.length === 0) {
+          throw new Error('Codex run cancelled by user.');
+        }
+        if (!attemptFailure || handoffCalls.length > 0) break;
+        if (attempt === 0 && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
+          log.warn('Codex connection closed mid-response; continuing the same thread once');
+          continue;
+        }
+        failure = attemptFailure.message;
+        break;
       }
 
-      if (signal?.aborted && handoffCalls.length === 0) {
-        throw new Error('Codex run cancelled by user.');
-      }
       if (failure && handoffCalls.length === 0) {
         throw new Error(`Codex run failed: ${failure}`);
       }

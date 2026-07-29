@@ -328,6 +328,16 @@ export function buildUserMessage(
   return { systemPrompt, content: blocks };
 }
 
+/** Count only system messages at the start of the conversation array. */
+function countLeadingSystemMessages(messages: readonly OpenAI.ChatCompletionMessageParam[]): number {
+  let count = 0;
+  for (const message of messages) {
+    if (message.role !== 'system') break;
+    count++;
+  }
+  return count;
+}
+
 interface ToolInteraction {
   id: string;
   name: string;
@@ -403,6 +413,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // `resume` instead of re-flattening the whole history. `findReusableSession`
     // surfaces whether reuse is possible this turn — used both as the Phase-0
     // measurement signal AND, when `sessionResume` is on, to actually resume.
+    const leadingSystemMessageCount = countLeadingSystemMessages(messages);
     const sessionTracking =
       conversationId && nodeId
         ? {
@@ -431,6 +442,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         sessionTracking.key,
         sessionTracking.prefixHash,
         messages.length,
+        leadingSystemMessageCount,
       );
       // Only resume when there are genuinely new messages beyond the watermark;
       // an empty delta would mean "nothing new to say" (degenerate) — fall back
@@ -925,7 +937,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // `reusableSessionAvailable` is logged as the measurement signal.
     if (sessionTracking) {
       const reusableSessionAvailable = Boolean(
-        findReusableSession(sessionTracking.key, sessionTracking.prefixHash, messages.length),
+        findReusableSession(
+          sessionTracking.key,
+          sessionTracking.prefixHash,
+          messages.length,
+          leadingSystemMessageCount,
+        ),
       );
       if (handoffCalls.length > 0 || !capturedSessionId) {
         invalidateSession(sessionTracking.key);
@@ -934,6 +951,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           sessionId: capturedSessionId,
           prefixHash: sessionTracking.prefixHash,
           seenMessageCount: messages.length + transcript.length,
+          leadingSystemMessageCount,
         });
       }
       log.debug('Claude session usage (#154)', {
@@ -944,6 +962,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         reusableSessionAvailable,
         capturedSession: Boolean(capturedSessionId),
         inputMessages: messages.length,
+        leadingSystemMessageCount,
         transcriptMessages: transcript.length,
         watermark: messages.length + transcript.length,
         promptTokens,

@@ -176,16 +176,8 @@ const TriggerNodePropertiesModal = ({
       prompt,
     };
 
-    // Update node data on canvas
-    const label = name.trim() || 'Trigger';
-    onSave(node.id, {
-      ...node.data,
-      label,
-      type: 'trigger',
-      properties,
-    });
-
-    // Sync to PlannedExecution API
+    // Synchronize first so a failed request never leaves the canvas pointing
+    // at a planned execution that was not created or updated.
     const input: PlannedExecutionInput = {
       name: name.trim() || 'Flow Trigger',
       flowId,
@@ -208,6 +200,15 @@ const TriggerNodePropertiesModal = ({
         return;
       }
       setIsSaved(true);
+
+      // Persist the node link only after the PlannedExecution API accepted it.
+      const label = name.trim() || 'Trigger';
+      onSave(node.id, {
+        ...node.data,
+        label,
+        type: 'trigger',
+        properties,
+      });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save trigger configuration');
       setSaving(false);

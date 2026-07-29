@@ -8,8 +8,7 @@
  *
  * `buildBugReportContext` is pure + synchronous (fully unit-testable in node).
  * `collectBugReportContext` is the browser-side collector that gathers the safe inputs
- * (app version + install mode from GET /api/update, MCP server *names* from
- * GET /api/mcp/servers) and delegates to the pure builder.
+ * (app version + install mode from GET /api/update) and delegates to the pure builder.
  */
 
 import { SafeBugContext } from '@/shared/types/bugReport';
@@ -17,7 +16,6 @@ import { SafeBugContext } from '@/shared/types/bugReport';
 export interface BugReportContextInput {
   appVersion?: string;
   installMode?: string;
-  mcpServerNames?: string[];
   userAgent?: string;
   /**
    * Relative page path (+ hash) only, e.g. `/chat#foo`. SECURITY: never pass an
@@ -81,9 +79,6 @@ export function buildBugReportContext(input: BugReportContextInput = {}): SafeBu
     installMode: (input.installMode || '').trim() || 'unknown',
     os: detectOs(ua),
     browser: detectBrowser(ua),
-    mcpServerNames: Array.isArray(input.mcpServerNames)
-      ? input.mcpServerNames.filter((n): n is string => typeof n === 'string' && n.length > 0)
-      : [],
     pageUrl: sanitizePageUrl(input.pageUrl),
     timestamp: (input.now ?? new Date()).toISOString(),
   };
@@ -96,7 +91,6 @@ export function buildBugReportContext(input: BugReportContextInput = {}): SafeBu
 export async function collectBugReportContext(): Promise<SafeBugContext> {
   let appVersion = 'unknown';
   let installMode = 'unknown';
-  const mcpServerNames: string[] = [];
 
   try {
     const res = await fetch('/api/update');
@@ -116,21 +110,6 @@ export async function collectBugReportContext(): Promise<SafeBugContext> {
     /* ignore — degrade gracefully */
   }
 
-  try {
-    const res = await fetch('/api/mcp/servers');
-    if (res.ok) {
-      const servers = await res.json();
-      if (Array.isArray(servers)) {
-        for (const s of servers) {
-          // Names ONLY. Never include command/args/env/headers/secrets.
-          if (s && typeof s.name === 'string') mcpServerNames.push(s.name);
-        }
-      }
-    }
-  } catch {
-    /* ignore — degrade gracefully */
-  }
-
   // Relative page location ONLY (pathname + hash). Never the origin/host, and the
   // query string is dropped in the builder so no token-bearing `?...` can leak.
   const pageUrl =
@@ -141,7 +120,6 @@ export async function collectBugReportContext(): Promise<SafeBugContext> {
   return buildBugReportContext({
     appVersion,
     installMode,
-    mcpServerNames,
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
     pageUrl,
   });

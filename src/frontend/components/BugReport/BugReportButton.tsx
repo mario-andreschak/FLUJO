@@ -144,8 +144,8 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
               Found a problem? Describe it here. FLUJO attaches only safe, non-sensitive context
-              (app version, install mode, browser/OS, the current page, and the <em>names</em> of
-              your configured MCP servers). No API keys, environment variables, or secrets are ever
+              (app version, install mode, browser/OS, and the current page). No API keys,
+              environment variables, or secrets are ever
               included. You can optionally polish the report with an AI model, then review it on
               GitHub before submitting.
             </Typography>

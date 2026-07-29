@@ -43,13 +43,12 @@ const OVERFLOW_MESSAGE =
   '351213 tokens (347939 of text input, 3274 of tool input). Please reduce the length of ' +
   'either one, or use the context-compression plugin to compress your prompt automatically.';
 
-// Programmable adapter: call 1 returns a context-overflow error in the body,
-// call 2 (the refit retry) returns a normal completion. Each call records the
-// messages it was given so the test can assert the wire shrank between them.
+// The programmable adapter rejects only an oversized wire payload. This lets
+// the tests distinguish the proactive first-call refit from the reactive retry.
 let calls: OpenAI.ChatCompletionMessageParam[][] = [];
 const createCompletionMock = jest.fn((input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
   calls.push(input.messages);
-  if (calls.length === 1) {
+  if (toolContentOf(input.messages).length > 3000) {
     return Promise.resolve({ completion: { error: { message: OVERFLOW_MESSAGE } } });
   }
   return Promise.resolve({
@@ -164,6 +163,25 @@ describe('context-length overflow refit', () => {
     // The retry succeeded.
     expect(result.success).toBe(true);
     if (result.success) expect(result.value.content).toBe('ok');
+  });
+
+  it('refits a known-context request before its first provider call', async () => {
+    getModelMock.mockResolvedValue({
+      id: 'model-1',
+      name: 'test-model',
+      provider: 'openai',
+      contextWindow: 20_000,
+      maxTokens: 4_096,
+    });
+    seedState('conv-budget');
+    const result = await callModel('conv-budget');
+
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    const sent = toolContentOf(calls[0]);
+    expect(sent.length).toBeLessThan(3000);
+    expect(sent).toContain('flujo://run/conv-of/res-1');
+    expect(writeRunResourceMock).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(true);
   });
 
   it('does not retry on a non-overflow provider error', async () => {

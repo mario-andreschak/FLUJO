@@ -113,6 +113,71 @@ describe('ClaudeSubscriptionAdapter — session resume (#154)', () => {
     expect(await promptContentOf(1)).toBe('follow-up question');
   });
 
+  it('resumes when the contiguous leading system-message count is unchanged', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    const system = { role: 'system', content: 'be concise' } as OpenAI.ChatCompletionMessageParam;
+
+    queryMock.mockImplementationOnce(() => successStream('sess-system', 'first answer'));
+    await adapter.createCompletion(baseInput({
+      sessionResume: true,
+      messages: [system, { role: 'user', content: 'hello' }] as OpenAI.ChatCompletionMessageParam[],
+    }));
+
+    queryMock.mockImplementationOnce(() => successStream('sess-system', 'second answer'));
+    await adapter.createCompletion(baseInput({
+      sessionResume: true,
+      messages: [
+        system,
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'follow-up' },
+      ] as OpenAI.ChatCompletionMessageParam[],
+    }));
+
+    expect(optionsOf(1).resume).toBe('sess-system');
+    expect(await promptContentOf(1)).toBe('follow-up');
+  });
+
+  it('falls back after an added leading system message, then records a reusable replacement', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    const system = { role: 'system', content: 'be concise' } as OpenAI.ChatCompletionMessageParam;
+
+    queryMock.mockImplementationOnce(() => successStream('sess-no-system', 'first answer'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: [{ role: 'user', content: 'hello' }] as OpenAI.ChatCompletionMessageParam[] }));
+
+    queryMock.mockImplementationOnce(() => successStream('sess-with-system', 'second answer'));
+    await adapter.createCompletion(baseInput({
+      sessionResume: true,
+      messages: [system, { role: 'user', content: 'hello' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'follow-up' }] as OpenAI.ChatCompletionMessageParam[],
+    }));
+    expect(optionsOf(1).resume).toBeUndefined();
+    expect(await promptContentOf(1)).toContain('Human: hello');
+
+    queryMock.mockImplementationOnce(() => successStream('sess-with-system', 'third answer'));
+    await adapter.createCompletion(baseInput({
+      sessionResume: true,
+      messages: [system, { role: 'user', content: 'hello' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'follow-up' }, { role: 'assistant', content: 'second answer' }, { role: 'user', content: 'again' }] as OpenAI.ChatCompletionMessageParam[],
+    }));
+    expect(optionsOf(2).resume).toBe('sess-with-system');
+    expect(await promptContentOf(2)).toBe('again');
+  });
+
+  it('falls back after a removed leading system message', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    const system = { role: 'system', content: 'be concise' } as OpenAI.ChatCompletionMessageParam;
+
+    queryMock.mockImplementationOnce(() => successStream('sess-system', 'first answer'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: [system, { role: 'user', content: 'hello' }] as OpenAI.ChatCompletionMessageParam[] }));
+
+    queryMock.mockImplementationOnce(() => successStream('sess-no-system', 'second answer'));
+    await adapter.createCompletion(baseInput({
+      sessionResume: true,
+      messages: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'follow-up' }] as OpenAI.ChatCompletionMessageParam[],
+    }));
+    expect(optionsOf(1).resume).toBeUndefined();
+    expect(await promptContentOf(1)).toContain('Human: hello');
+  });
+
   it('never resumes when the flag is OFF (always re-flattens)', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
 

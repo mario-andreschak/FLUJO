@@ -39,6 +39,7 @@ import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
 import { loadItem } from '@/utils/storage/backend';
@@ -235,7 +236,7 @@ export class ModelHandler {
    * are not encrypted. Best-effort: any failure (or a missing value) reads as
    * disabled, so the adapter keeps its always-correct full-flatten behaviour.
    */
-  private static async isClaudeSessionResumeEnabled(): Promise<boolean> {
+  static async isClaudeSessionResumeEnabled(): Promise<boolean> {
     try {
       const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
       return Boolean(settings?.experimental?.claudeSessionResume);
@@ -481,6 +482,49 @@ export class ModelHandler {
     }
   }
 
+  /** A live Claude transcript assistant message is prose only when it has text
+   * and is not the assistant half of a tool-call pair. */
+  private static isStreamedAssistantProse(message: FlujoChatMessage): boolean {
+    const assistant = message as Extract<FlujoChatMessage, { role: 'assistant' }>;
+    return assistant.role === 'assistant'
+      && typeof assistant.content === 'string'
+      && assistant.content.length > 0
+      && !assistant.tool_calls?.length;
+  }
+
+  /**
+   * Compensate a failed self-orchestrating model attempt. Streamed prose has
+   * already reached the append-only log, so remove it from the live projection
+   * and append matching log-only removals. Tool calls/results are deliberately
+   * never tracked here and therefore survive a failed attempt.
+   */
+  private static async removeFailedStreamedAssistantProse(
+    conversationId: string | undefined,
+    messageIds: ReadonlySet<string>
+  ): Promise<void> {
+    if (!conversationId || messageIds.size === 0) return;
+    try {
+      // Lazy require keeps the existing FlowExecutor -> ProcessNode ->
+      // ModelHandler cycle broken.
+      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const state = FlowExecutor.conversationStates.get(conversationId);
+      if (!state || !Array.isArray(state.messages)) return;
+
+      // Only compensate messages still present. This makes repeated failure
+      // handling idempotent: after the first pass neither state nor log changes.
+      const removals = [...messageIds].filter((id) => state.messages.some((message) => message.id === id));
+      if (removals.length === 0) return;
+      const removalSet = new Set(removals);
+      for (let index = state.messages.length - 1; index >= 0; index--) {
+        if (removalSet.has(state.messages[index].id)) state.messages.splice(index, 1);
+      }
+      state.updatedAt = Date.now();
+      await appendRawForState(state, removals.map((messageId) => ({ type: 'message:removed', messageId })));
+    } catch (err) {
+      log.warn(`Failed to compensate streamed prose for failed conversation ${conversationId}`, { err });
+    }
+  }
+
   /**
    * Build the resource-aware truncation-marker lookup (issue #168): captured
    * run resources for oversized PRIOR tool results/args, keyed by the producing
@@ -520,6 +564,43 @@ export class ModelHandler {
    * stay consistent: anything the refit will truncate is first made recoverable.
    */
   private static readonly OVERFLOW_TOOL_RESULT_HEAD_CHARS = 2000;
+
+  /**
+   * Guardrail reserved from advertised context windows for provider framing and
+   * tokenizer-estimation variance. This is not a tokenizer: payload estimates
+   * below are deliberately conservative character-based approximations.
+   */
+  private static readonly OUTGOING_INPUT_SAFETY_TOKENS = 4096;
+
+  /**
+   * Output caps are optional for some adapters. When a model advertises a
+   * context window but no cap is configured, reserve this conservative amount
+   * instead of assuming that the provider will generate no output.
+   */
+  private static readonly UNSPECIFIED_OUTPUT_TOKEN_RESERVE = 8192;
+
+  private static resolveOutgoingInputBudget(
+    contextWindow: number | undefined,
+    maxTokens: number | undefined
+  ): number | undefined {
+    if (!Number.isFinite(contextWindow) || (contextWindow ?? 0) <= 0) return undefined;
+
+    const outputReserve =
+      normalizeMaxTokens(maxTokens) ?? ModelHandler.UNSPECIFIED_OUTPUT_TOKEN_RESERVE;
+    const budget = Math.floor(
+      (contextWindow as number) - outputReserve - ModelHandler.OUTGOING_INPUT_SAFETY_TOKENS
+    );
+    return budget > 0 ? budget : undefined;
+  }
+
+  /** Estimate the complete provider payload using the same conservative
+   * character-based convention as summarizing compaction. */
+  private static estimateOutgoingInputTokens(
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools?: OpenAI.ChatCompletionTool[]
+  ): number {
+    return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
+  }
 
   /**
    * True when a provider error is a context-window overflow (the request had
@@ -1307,6 +1388,57 @@ export class ModelHandler {
         }
       }
 
+      // A known context window lets us prevent a bad first request rather than
+      // waiting for the provider to reject it. Only wire messages are refitted;
+      // the persisted conversation remains unchanged. Models without usable
+      // context metadata keep the historical reactive-overflow behavior.
+      const inputBudget = ModelHandler.resolveOutgoingInputBudget(
+        model.contextWindow,
+        opts?.maxTokens
+      );
+      if (inputBudget !== undefined) {
+        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
+        if (estimatedInputTokens > inputBudget && !isSelfOrchestratingAdapter(model.adapter)) {
+          let budgetMarkers = opts?.runResourceMarkers;
+          if (opts?.conversationId) {
+            budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
+              opts.conversationId,
+              apiMessages,
+              budgetMarkers,
+              opts?.nodeId
+            );
+          }
+          const refittedMessages = compactForWire(apiMessages, {
+            resourceMarkers: budgetMarkers,
+            compactRecentToolResults: true,
+            toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+          });
+          const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
+          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools);
+
+          if (estimatedInputTokens <= inputBudget) {
+            log.warn('Refitted outgoing model request to its advertised input budget', {
+              modelId,
+              estimatedInputTokens,
+              inputBudget,
+            });
+            apiMessages = refittedMessages;
+            sanitizedTools = refittedTools;
+          } else {
+            return {
+              success: false,
+              error: createModelError(
+                'context_budget_exceeded',
+                `Estimated input (${estimatedInputTokens} tokens) exceeds the safe budget (${inputBudget} tokens). Reduce the active context, tool schemas, or configure summarizing compaction.`,
+                modelId,
+                undefined,
+                { estimatedInputTokens, inputBudget, contextWindow: model.contextWindow }
+              )
+            };
+          }
+        }
+      }
+
       // Select the completion adapter for this model's provider/SDK. The
       // OpenAI-compatible adapter wraps the original hardened-client path; the
       // native adapters (Anthropic, Gemini, Claude CLI) translate to/from their
@@ -1371,6 +1503,15 @@ export class ModelHandler {
           };
         }
 
+        // The Claude subscription adapter streams transcript messages before its
+        // terminal SDK result is known. Scope prose IDs to this model attempt so
+        // a later SDK failure can compensate only its incomplete narration.
+        const streamedAssistantProseIds = new Set<string>();
+        const onTranscriptMessage = (message: FlujoChatMessage) => {
+          if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
+          opts?.onTranscriptMessage?.(message);
+        };
+
         try {
           // Fingerprint the cacheable prefix of THIS attempt (tool block + system
           // message) and classify what drifted since the previous call on this
@@ -1406,7 +1547,7 @@ export class ModelHandler {
               localToolExecutors: opts?.localToolExecutors,
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
-              onTranscriptMessage: opts?.onTranscriptMessage,
+              onTranscriptMessage,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
               nodeId: opts?.nodeId,
@@ -1554,6 +1695,13 @@ export class ModelHandler {
 
           return result;
         } catch (error) {
+          // A genuine Claude subscription failure can follow streamed prose. Do
+          // not replay that failed-turn narration on recovery; tool activity from
+          // the same attempt is not in this set and remains durable. User-driven
+          // cancellation has its own partial-run semantics, so leave it intact.
+          if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
+            await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+          }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         }
       };
