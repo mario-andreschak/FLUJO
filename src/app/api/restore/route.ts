@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
-import { saveItem } from '@/utils/storage/backend';
+import { assertSafeCollectionId, saveCollectionItem, saveItem } from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/storage';
 import type { Flow } from '@/shared/types/flow';
@@ -127,6 +127,40 @@ export async function POST(request: NextRequest) {
       }
     }
     
+    // Restore modern conversation snapshots independently from legacy history.
+    // Only accept one-level JSON entries with validated ids; archive paths are
+    // never joined to the filesystem. Restoration is intentionally upsert-only.
+    if (selections.includes('chatHistory')) {
+      const conversationPrefix = 'storage/conversations/';
+      const conversationEntries = Object.keys(zip.files).filter((entryPath) =>
+        entryPath.startsWith(conversationPrefix) &&
+        !zip.files[entryPath].dir
+      );
+
+      for (const entryPath of conversationEntries) {
+        try {
+          const relativePath = entryPath.slice(conversationPrefix.length);
+          if (!relativePath.endsWith('.json') || relativePath.includes('/')) {
+            log.warn(`Skipped unsafe conversation archive entry [${requestId}]:`, entryPath);
+            continue;
+          }
+
+          const conversationId = relativePath.slice(0, -'.json'.length);
+          assertSafeCollectionId(conversationId);
+          const conversation = JSON.parse(await zip.files[entryPath].async('string')) as Record<string, unknown>;
+          if (conversation.conversationId !== conversationId) {
+            log.warn(`Skipped conversation with mismatched id [${requestId}]:`, entryPath);
+            continue;
+          }
+          assertSafeCollectionId(conversation.conversationId);
+          await saveCollectionItem('conversations', conversationId, conversation);
+          log.debug(`Restored conversation [${requestId}]:`, conversationId);
+        } catch (error) {
+          log.error(`Error restoring conversation [${requestId}] from ${entryPath}:`, error);
+        }
+      }
+    }
+
     // Restore MCP servers folder if selected
     if (selections.includes('mcpServersFolder')) {
       try {

@@ -19,6 +19,7 @@ const saveCollectionItemMock = jest.fn();
 // in memory. Backup aggregates it back into the single array the zip expects,
 // and restore imports each flow through flowService (upsert).
 const flowFiles = new Map<string, unknown>();
+const conversationFiles = new Map<string, unknown>();
 
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: (...args: unknown[]) => loadItemMock(...args),
@@ -26,12 +27,15 @@ jest.mock('@/utils/storage/backend', () => ({
   saveCollectionItem: (...args: unknown[]) => saveCollectionItemMock(...args),
   loadCollectionItem: jest.fn(async (_c: string, id: string, fallback: unknown) =>
     flowFiles.has(id) ? flowFiles.get(id) : fallback),
-  listCollectionItems: jest.fn(async () => Array.from(flowFiles.values())),
+  listCollectionItems: jest.fn(async (collection: string) =>
+    Array.from((collection === 'conversations' ? conversationFiles : flowFiles).values())),
   // loadFlows backfills timestamps from file mtime (#108); model the stats API.
   listCollectionItemsWithStats: jest.fn(async () =>
     Array.from(flowFiles.values()).map((item) => ({ item, mtimeMs: 0 }))),
   deleteCollectionItem: jest.fn(async (_c: string, id: string) => { flowFiles.delete(id); }),
-  assertSafeCollectionId: jest.fn(),
+  assertSafeCollectionId: jest.fn((id: string) => {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('Unsafe collection item id');
+  }),
   migrateArrayFileToCollection: jest.fn(async () => 0),
 }));
 
@@ -87,6 +91,9 @@ beforeEach(() => {
   // Seed the per-flow collection with the fixture flow(s).
   flowFiles.clear();
   for (const f of flowsData) flowFiles.set((f as { id: string }).id, f);
+  conversationFiles.clear();
+  conversationFiles.set('conversation-1', { conversationId: 'conversation-1', messages: [{ role: 'user', content: 'hello' }] });
+  conversationFiles.set('conversation-2', { conversationId: 'conversation-2', messages: [] });
   (global as unknown as { __flujo_flowsCache: unknown }).__flujo_flowsCache = null;
   (global as unknown as { __flujo_flowsMigration: unknown }).__flujo_flowsMigration = undefined;
 });
@@ -142,6 +149,21 @@ describe('backup route', () => {
     expect(zip.file(`storage/${StorageKey.FLOWS}.json`)).toBeTruthy();
   });
 
+  it('backs up modern conversations alongside legacy history', async () => {
+    const legacyHistory = [{ id: 'legacy-chat' }];
+    loadItemMock.mockImplementation(async (key: StorageKey) =>
+      key === StorageKey.CHAT_HISTORY ? legacyHistory : null
+    );
+
+    const response = await callBackup(['chatHistory']);
+    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+
+    expect(JSON.parse(await zip.file('storage/history.json')!.async('string'))).toEqual(legacyHistory);
+    expect(JSON.parse(await zip.file('storage/conversations/conversation-1.json')!.async('string')))
+      .toEqual(conversationFiles.get('conversation-1'));
+    expect(zip.file('storage/conversations/conversation-2.json')).toBeTruthy();
+  });
+
   it('rejects an empty selection list', async () => {
     expect((await callBackup([])).status).toBe(400);
     expect((await callBackup(undefined)).status).toBe(400);
@@ -167,6 +189,26 @@ describe('backup → restore round-trip', () => {
       StorageKey.FLOWS,
       'flow-1',
       expect.objectContaining({ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000 }),
+    );
+  });
+
+  it('restores modern and legacy conversations independently and skips unsafe entries', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['chatHistory'] }));
+    zip.file('storage/history.json', JSON.stringify([{ id: 'legacy-chat' }]));
+    zip.file('storage/conversations/good-id.json', JSON.stringify({ conversationId: 'good-id', messages: [] }));
+    zip.file('storage/conversations/mismatch.json', JSON.stringify({ conversationId: 'other-id' }));
+    zip.file('storage/conversations/nested/bad.json', JSON.stringify({ conversationId: 'bad' }));
+    zip.file('storage/conversations/malformed.json', '{');
+
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['chatHistory']);
+    expect(response.status).toBe(200);
+    expect(saveItemMock).toHaveBeenCalledWith(StorageKey.CHAT_HISTORY, [{ id: 'legacy-chat' }]);
+    expect(saveCollectionItemMock).toHaveBeenCalledTimes(1);
+    expect(saveCollectionItemMock).toHaveBeenCalledWith(
+      'conversations',
+      'good-id',
+      { conversationId: 'good-id', messages: [] },
     );
   });
 

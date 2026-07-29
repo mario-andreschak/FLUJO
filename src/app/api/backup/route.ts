@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
-import { loadItem } from '@/utils/storage/backend';
+import { assertSafeCollectionId, listCollectionItems, loadItem } from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
@@ -101,6 +101,33 @@ export async function POST(request: NextRequest) {
       }
     }
     
+    // Modern conversations live one-file-per-conversation. Keep the legacy
+    // storage/history.json entry above for backward compatibility, and add the
+    // collection snapshots independently so mixed archives preserve both.
+    if (selections.includes('chatHistory')) {
+      try {
+        const conversations = await listCollectionItems<Record<string, unknown>>('conversations');
+        for (const conversation of conversations) {
+          const conversationId = conversation.conversationId;
+          if (typeof conversationId !== 'string') {
+            log.warn(`Skipped conversation without an id [${requestId}]`);
+            continue;
+          }
+          try {
+            assertSafeCollectionId(conversationId);
+            zip.file(
+              `storage/conversations/${conversationId}.json`,
+              JSON.stringify(conversation, null, 2),
+            );
+          } catch (error) {
+            log.warn(`Skipped conversation with an unsafe id [${requestId}]:`, error);
+          }
+        }
+      } catch (error) {
+        log.error(`Error adding conversations to backup [${requestId}]:`, error);
+      }
+    }
+
     // Add MCP servers folder if selected
     if (selections.includes('mcpServersFolder')) {
       try {
