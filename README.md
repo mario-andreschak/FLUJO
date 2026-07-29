@@ -16,6 +16,9 @@ One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones F
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
 ```
 
+Prefer a graphical installer? Download `flujo-setup.exe` from the
+[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) instead.
+
 **Linux / macOS** — paste into a terminal:
 
 ```bash
@@ -42,7 +45,7 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 # FLUJO
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.30.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.31.0-green.svg)](package.json)
 
 FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
 
@@ -305,6 +308,11 @@ $env:FLUJO_DIR = "D:\Apps\FLUJO"; $env:FLUJO_START = "1"; irm https://raw.github
 ```
 
 See [`scripts/install.ps1`](scripts/install.ps1) for all options.
+
+Prefer a graphical installer? Download `flujo-setup.exe` from the
+[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) — it's a
+wizard around the same `install.ps1` script above (see
+[`installer/flujo-setup.iss`](installer/flujo-setup.iss)).
 
 ### One-line install (Linux / macOS)
 
