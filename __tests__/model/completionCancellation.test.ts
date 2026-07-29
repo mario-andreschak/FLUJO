@@ -56,6 +56,12 @@ jest.mock('@/backend/services/model/adapters', () => ({
   getCompletionAdapter: () => ({ createCompletion: createCompletionMock }),
 }));
 
+const mockAppendRawForState = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/backend/execution/flow/conversationLog', () => ({
+  ...jest.requireActual('@/backend/execution/flow/conversationLog'),
+  appendRawForState: (...args: unknown[]) => mockAppendRawForState(...args),
+}));
+
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 
@@ -92,6 +98,7 @@ const callModel = (conversationId?: string) =>
 beforeEach(() => {
   conversationStates.clear();
   createCompletionMock.mockClear();
+  mockAppendRawForState.mockClear();
   adapterBehavior = 'complete';
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
@@ -147,6 +154,33 @@ describe('mid-flight completion cancellation', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error.code).toBe('cancelled');
     expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('removes only streamed Claude prose when the SDK fails after tool activity (issue #296)', async () => {
+    const state = seedState('conv-claude-failure');
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'claude-test', provider: 'claude-subscription', adapter: 'claude-cli' });
+    createCompletionMock.mockImplementationOnce(async (input: { onTranscriptMessage?: (message: any) => void }) => {
+      input.onTranscriptMessage?.({ id: 'prose-1', timestamp: 1, role: 'assistant', content: 'I will call the tool.' });
+      input.onTranscriptMessage?.({
+        id: 'tool-call-1',
+        timestamp: 2,
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+      });
+      input.onTranscriptMessage?.({ id: 'tool-result-1', timestamp: 3, role: 'tool', tool_call_id: 'call-1', content: 'done' });
+      throw new Error('Claude SDK parse failed');
+    });
+
+    const result = await callModel('conv-claude-failure');
+
+    expect(result.success).toBe(false);
+    expect(state.messages.map((message) => message.id)).toEqual(['tool-call-1', 'tool-result-1']);
+    expect(mockAppendRawForState).toHaveBeenCalledTimes(1);
+    expect(mockAppendRawForState).toHaveBeenCalledWith(
+      state,
+      [{ type: 'message:removed', messageId: 'prose-1' }]
+    );
   });
 
   it('passes no signal-driven abort for calls without a conversation (no watch, normal completion)', async () => {

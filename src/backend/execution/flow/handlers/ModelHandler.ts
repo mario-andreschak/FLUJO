@@ -39,6 +39,7 @@ import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
 import { loadItem } from '@/utils/storage/backend';
@@ -478,6 +479,49 @@ export class ModelHandler {
       state.updatedAt = Date.now();
     } catch (err) {
       log.warn(`Failed to fold streamed message into conversation ${conversationId}`, { err });
+    }
+  }
+
+  /** A live Claude transcript assistant message is prose only when it has text
+   * and is not the assistant half of a tool-call pair. */
+  private static isStreamedAssistantProse(message: FlujoChatMessage): boolean {
+    const assistant = message as Extract<FlujoChatMessage, { role: 'assistant' }>;
+    return assistant.role === 'assistant'
+      && typeof assistant.content === 'string'
+      && assistant.content.length > 0
+      && !assistant.tool_calls?.length;
+  }
+
+  /**
+   * Compensate a failed self-orchestrating model attempt. Streamed prose has
+   * already reached the append-only log, so remove it from the live projection
+   * and append matching log-only removals. Tool calls/results are deliberately
+   * never tracked here and therefore survive a failed attempt.
+   */
+  private static async removeFailedStreamedAssistantProse(
+    conversationId: string | undefined,
+    messageIds: ReadonlySet<string>
+  ): Promise<void> {
+    if (!conversationId || messageIds.size === 0) return;
+    try {
+      // Lazy require keeps the existing FlowExecutor -> ProcessNode ->
+      // ModelHandler cycle broken.
+      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const state = FlowExecutor.conversationStates.get(conversationId);
+      if (!state || !Array.isArray(state.messages)) return;
+
+      // Only compensate messages still present. This makes repeated failure
+      // handling idempotent: after the first pass neither state nor log changes.
+      const removals = [...messageIds].filter((id) => state.messages.some((message) => message.id === id));
+      if (removals.length === 0) return;
+      const removalSet = new Set(removals);
+      for (let index = state.messages.length - 1; index >= 0; index--) {
+        if (removalSet.has(state.messages[index].id)) state.messages.splice(index, 1);
+      }
+      state.updatedAt = Date.now();
+      await appendRawForState(state, removals.map((messageId) => ({ type: 'message:removed', messageId })));
+    } catch (err) {
+      log.warn(`Failed to compensate streamed prose for failed conversation ${conversationId}`, { err });
     }
   }
 
@@ -1459,6 +1503,15 @@ export class ModelHandler {
           };
         }
 
+        // The Claude subscription adapter streams transcript messages before its
+        // terminal SDK result is known. Scope prose IDs to this model attempt so
+        // a later SDK failure can compensate only its incomplete narration.
+        const streamedAssistantProseIds = new Set<string>();
+        const onTranscriptMessage = (message: FlujoChatMessage) => {
+          if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
+          opts?.onTranscriptMessage?.(message);
+        };
+
         try {
           // Fingerprint the cacheable prefix of THIS attempt (tool block + system
           // message) and classify what drifted since the previous call on this
@@ -1494,7 +1547,7 @@ export class ModelHandler {
               localToolExecutors: opts?.localToolExecutors,
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
-              onTranscriptMessage: opts?.onTranscriptMessage,
+              onTranscriptMessage,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
               nodeId: opts?.nodeId,
@@ -1642,6 +1695,13 @@ export class ModelHandler {
 
           return result;
         } catch (error) {
+          // A genuine Claude subscription failure can follow streamed prose. Do
+          // not replay that failed-turn narration on recovery; tool activity from
+          // the same attempt is not in this set and remains durable. User-driven
+          // cancellation has its own partial-run semantics, so leave it intact.
+          if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
+            await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+          }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         }
       };
