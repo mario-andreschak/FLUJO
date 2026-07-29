@@ -3,10 +3,8 @@
  *
  * The guard rewrites unsafe `${var:NAME}` usage out of an auto-generated FlowSpec BEFORE it
  * is compiled, so a dangling or empty-baked variable can never reach execution:
- *   - HISTORY  — valid earlier producer + non-isolated consumer → strip the token, force the
+ *   - HISTORY  — valid earlier producer → strip the token, force the
  *                consumer to full-history, drop the now-unused capture.
- *   - RESOURCE — valid earlier producer + an isolated consumer → convert the pair to a tracked
- *                run resource (captureResource / ${res:NAME}).
  *   - DANGLING — no provably-earlier producer → remove the dangling reference.
  * It is pure, deterministic and idempotent, and recurses into inline subflow children.
  */
@@ -62,7 +60,7 @@ describe('guardGeneratedFlowSpec — issue #217', () => {
     expect(changes.some((c) => c.code === 'var-history')).toBe(true);
   });
 
-  it('converts a var to a run resource when the consumer is isolated', () => {
+  it('uses history rather than an unsupported passive process resource for an isolated consumer', () => {
     const spec = baseSpec(
       [
         { key: 's', type: 'start', prompt: 'sys' },
@@ -86,10 +84,10 @@ describe('guardGeneratedFlowSpec — issue #217', () => {
     const a = spec.nodes.find((n) => n.key === 'a')!;
     const b = spec.nodes.find((n) => n.key === 'b')!;
     expect(a.captureVariable).toBeUndefined();
-    expect(a.captureResource).toBe('report');
-    expect(b.isolatedPrompt).toContain('${res:report}');
+    expect(a.captureResource).toBeUndefined();
+    expect(b.inputMode).toBe('full-history');
     expect(b.isolatedPrompt).not.toContain('${var:report}');
-    expect(changes.some((c) => c.code === 'var-resource')).toBe(true);
+    expect(changes.some((c) => c.code === 'var-history')).toBe(true);
   });
 
   it('treats a producer that is not an ancestor as no producer (dangling)', () => {

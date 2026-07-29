@@ -182,11 +182,8 @@ GENERATED-FLOW DEFAULTS (context saving): process nodes you leave without an exp
 GENERATED-FLOW DATA-FLOW POLICY (IMPORTANT — carry data through the conversation, NOT scratchpad variables):
 1. PREFER CONVERSATION HISTORY. For a later step to use an earlier step's output, keep that output in the thread: give the earlier (producer) step outputMode "full-conversation" (or leave "latest-message" when only its final text matters) and give the later (consumer) step inputMode "full-history" so it actually sees the producer's turn. This is the default, robust way to move data forward.
 2. DO NOT emit \${var:NAME} in generated prompts. The scratchpad variable feature (captureVariable + \${var:NAME}) is a valid HAND-AUTHORING tool, but for AUTO-GENERATED flows it is a footgun: a missing/late capture silently bakes an EMPTY string into the reading step's prompt and breaks the run. Do not use \${var:NAME} just to shuttle ordinary text one step forward — use history (rule 1).
-3. WHEN HISTORY IS INSUFFICIENT (the consumer is "isolated"/"latest-message" and still needs an earlier step's data, or the artifact is large/structured/binary), use a RUN RESOURCE instead of a scratchpad variable: the producer step sets "captureResource": "NAME" and the consumer step injects \${res:NAME} in its prompt. A run resource survives isolated/latest-message scoping and is tracked with lineage. Example:
-   { "key": "writer",  "type": "process", "model": "...", "prompt": "Draft the full report.", "captureResource": "report" }
-   { "key": "critic",  "type": "process", "model": "...", "inputMode": "isolated", "isolatedPrompt": "Critique this report:\n\n\${res:report}" }
-   (edge writer -> critic). Use \${res:NAME}, never \${var:NAME}, in generated flows.
-4. Any \${var:NAME} you emit anyway will be automatically rewritten to history or a run resource (or removed if nothing captures it), so emit history/\${res:...} directly to keep control of the design.
+3. DO NOT emit passive "captureResource" on a process node. Process artifacts require an explicit Resource node connected from the producing process; the model writes the artifact through the supplied write_resource tool. Use that advanced graph-visible protocol only when the artifact itself must be tracked. Ordinary generated flows should use history.
+4. Any \${var:NAME} you emit anyway will be automatically rewritten to history (or removed if nothing captures it).
 
 ${acquisition}
 
