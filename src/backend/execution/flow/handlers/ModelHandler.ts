@@ -235,7 +235,7 @@ export class ModelHandler {
    * are not encrypted. Best-effort: any failure (or a missing value) reads as
    * disabled, so the adapter keeps its always-correct full-flatten behaviour.
    */
-  private static async isClaudeSessionResumeEnabled(): Promise<boolean> {
+  static async isClaudeSessionResumeEnabled(): Promise<boolean> {
     try {
       const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
       return Boolean(settings?.experimental?.claudeSessionResume);

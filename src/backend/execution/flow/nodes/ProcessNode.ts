@@ -16,6 +16,7 @@ import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
 import { flowService } from '@/backend/services/flow/index';
+import { modelService } from '@/backend/services/model';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
@@ -561,18 +562,37 @@ export class ProcessNode extends BaseNode {
       sharedState.handoffInput && sharedState.handoffInput.targetNodeId === node_params?.id
         ? sharedState.handoffInput
         : undefined;
+    // Claude's experimental session resume tracks a message-count watermark. An
+    // output-folded history from another node no longer aligns with it, so keep
+    // the full history for this eligible call. Explicit input scoping remains
+    // unsafe and continues through the normal wire-view path below.
+    let preserveFullHistoryForClaudeResume = false;
+    if (inputMode === 'full-history') {
+      try {
+        const model = await modelService.getModel(boundModel);
+        preserveFullHistoryForClaudeResume =
+          model?.adapter === 'claude-cli' &&
+          await ModelHandler.isClaudeSessionResumeEnabled();
+      } catch (err) {
+        // If the model cannot be resolved, retain the established folding behavior.
+        log.warn('Could not determine Claude session-resume compatibility', { err });
+      }
+    }
+
     let wireBase = prepResult.messages;
-    try {
-      const flow = await flowService.getFlow(flowId);
-      const collapsedNodeIds = new Set(
-        (flow?.nodes ?? [])
-          .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
-          .map((n) => n.id)
-      );
-      wireBase = collapseNodeOutputs(prepResult.messages, collapsedNodeIds);
-    } catch (err) {
-      // Collapsing is a context-token optimization — never block the run on it.
-      log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
+    if (!preserveFullHistoryForClaudeResume) {
+      try {
+        const flow = await flowService.getFlow(flowId);
+        const collapsedNodeIds = new Set(
+          (flow?.nodes ?? [])
+            .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
+            .map((n) => n.id)
+        );
+        wireBase = collapseNodeOutputs(prepResult.messages, collapsedNodeIds);
+      } catch (err) {
+        // Collapsing is a context-token optimization — never block the run on it.
+        log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
+      }
     }
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
       // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
