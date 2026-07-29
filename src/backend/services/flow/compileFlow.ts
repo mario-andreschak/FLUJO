@@ -24,6 +24,7 @@ import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
 import { compileFlowSpec, FlowSpec } from '@/utils/shared/flowSpecCompiler';
+import { compileSimpleFlowSpec, type SimpleFlowSpec } from '@/utils/shared/simpleFlowSpec';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
 import { gatherGenerationContext, mergeIssues } from './generationContext';
 
@@ -53,7 +54,13 @@ export type CompileSpecResult = CompileSpecSuccess | CompileSpecFailure;
 
 export async function compileSpec(
   spec: unknown,
-  options: { save?: boolean; updateFlowId?: string; keepPills?: boolean } = {}
+  options: {
+    save?: boolean;
+    updateFlowId?: string;
+    keepPills?: boolean;
+    /** Defaults to advanced for REST/backward compatibility. */
+    profile?: 'simple' | 'advanced';
+  } = {}
 ): Promise<CompileSpecResult> {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
     return { success: false, error: 'The spec must be a JSON object (a FlowSpec)', statusCode: 400 };
@@ -71,7 +78,9 @@ export async function compileSpec(
     // subflow reference to the flow being replaced would recurse into itself.
     compileContext = { ...compileContext, flows: flows.filter((f) => f.id !== options.updateFlowId) };
   }
-  const compiled = compileFlowSpec(spec as FlowSpec, compileContext, { keepPills: options.keepPills });
+  const compiled = options.profile === 'simple'
+    ? compileSimpleFlowSpec(spec as SimpleFlowSpec, compileContext, { keepPills: options.keepPills })
+    : compileFlowSpec(spec as FlowSpec, compileContext, { keepPills: options.keepPills });
 
   if (!compiled.flow) {
     return {
