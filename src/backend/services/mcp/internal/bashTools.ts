@@ -53,14 +53,21 @@ type ShellKind = 'default' | 'pwsh' | 'bash';
 /**
  * Locate an executable by name on `PATH` ourselves (rather than relying on
  * `spawn`'s own resolution) so we can know in advance whether `pwsh`/`bash`
- * are actually available and degrade gracefully instead of failing async with
- * ENOENT (issue #225).
+ * are actually available and return a deterministic error instead of failing
+ * asynchronously with ENOENT (issue #225).
  */
+function getEnvCaseInsensitive(name: string): string | undefined {
+  const direct = process.env[name];
+  if (direct !== undefined) return direct;
+  const key = Object.keys(process.env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key ? process.env[key] : undefined;
+}
+
 function findExecutableOnPath(name: string): string | null {
-  const pathEnv = process.env.PATH ?? process.env.Path ?? '';
+  const pathEnv = getEnvCaseInsensitive('PATH') ?? '';
   const dirs = pathEnv.split(path.delimiter).filter(Boolean);
   const exts = process.platform === 'win32'
-    ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    ? (getEnvCaseInsensitive('PATHEXT') ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
     : [''];
   for (const dir of dirs) {
     for (const ext of exts) {
@@ -228,7 +235,11 @@ async function scanCommandForExternalPaths(command: string, cwd: string, roots: 
   // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
   // POSIX (/foo), and ~-prefixed home paths.
   const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
-  const matches = command.match(tokenRe) ?? [];
+  const matches = (command.match(tokenRe) ?? []).filter(
+    // A single-letter slash token is a Windows command switch, not a POSIX path.
+    // Keep longer tokens so genuine POSIX absolute paths remain advisory notices.
+    (token) => !(process.platform === 'win32' && /^\/[A-Za-z]$/.test(token))
+  );
   const home = (() => {
     try {
       return getHomeDir();
@@ -309,19 +320,17 @@ interface SpawnPlan {
   file: string;
   args: string[];
   useShell: boolean;
-  /** The shell actually used, which may differ from what was requested (see `fallbackFrom`). */
   effectiveShell: ShellKind;
-  /** Set when the requested shell wasn't available and we degraded to the default shell. */
-  fallbackFrom?: ShellKind;
+  /** Explicit shell lookup failed before any user command was executed. */
+  unavailableShell?: Exclude<ShellKind, 'default'>;
 }
 
 /**
  * Build the spawn arguments for the requested shell. Returns the command, argv
  * and whether Node's `shell:true` wrapping applies. `pwsh`/`bash` are resolved
  * to a concrete executable path up front (checking Git for Windows' well-known
- * install locations for `bash` when it isn't on `PATH`); if the requested
- * shell can't be found at all, this degrades to the default OS shell rather
- * than failing, matching the tool's documented behavior (issue #225).
+ * install locations for `bash` when it isn't on `PATH`). An unavailable
+ * explicitly requested shell is reported before any user command is executed.
  */
 function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
   if (shell === 'pwsh') {
@@ -329,14 +338,14 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
     if (resolved) {
       return { file: resolved, args: ['-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
     }
-    return { file: command, args: [], useShell: true, effectiveShell: 'default', fallbackFrom: 'pwsh' };
+    return { file: '', args: [], useShell: false, effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
   }
   if (shell === 'bash') {
     const resolved = resolveBashExecutable();
     if (resolved) {
       return { file: resolved, args: ['-c', command], useShell: false, effectiveShell: 'bash' };
     }
-    return { file: command, args: [], useShell: true, effectiveShell: 'default', fallbackFrom: 'bash' };
+    return { file: '', args: [], useShell: false, effectiveShell: 'bash', unavailableShell: 'bash' };
   }
   // Default OS shell via Node's shell wrapper.
   return { file: command, args: [], useShell: true, effectiveShell: 'default' };
@@ -347,25 +356,24 @@ function coerceShell(input: unknown): ShellKind {
 }
 
 interface SpawnOutcome {
-  child: ChildProcess;
+  child?: ChildProcess;
   startError?: string;
   effectiveShell: ShellKind;
-  fallbackFrom?: ShellKind;
+  unavailableShell?: Exclude<ShellKind, 'default'>;
 }
 
 function startChild(command: string, cwd: string, shell: ShellKind): SpawnOutcome {
-  const { file, args, useShell, effectiveShell, fallbackFrom } = buildSpawn(command, shell);
+  const { file, args, useShell, effectiveShell, unavailableShell } = buildSpawn(command, shell);
+  if (unavailableShell) return { effectiveShell, unavailableShell };
   // POSIX: detached so killProcessTree can signal the whole group (see killProcessTree).
   const detached = process.platform !== 'win32';
   try {
     const child = spawn(file, args, { cwd, shell: useShell, env: buildChildEnv(), detached });
-    return { child, effectiveShell, fallbackFrom };
+    return { child, effectiveShell };
   } catch (err) {
     return {
-      child: undefined as unknown as ChildProcess,
       startError: err instanceof Error ? err.message : String(err),
       effectiveShell,
-      fallbackFrom,
     };
   }
 }
@@ -388,7 +396,7 @@ export function bashToolDefinitions(): Tool[] {
   const shellProp = {
     type: 'string',
     enum: ['default', 'pwsh', 'bash'],
-    description: 'Which shell to use: "default" (the OS shell), "pwsh" (PowerShell 7+), or "bash". Falls back to the default shell if the requested one is unavailable.',
+    description: 'Which shell to use: "default" (the OS shell), "pwsh" (PowerShell 7+), or "bash". Explicit shells return an error if unavailable.',
   };
   const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve against the FLUJO data directory. Defaults to the data directory. When bash roots are configured (via the MCP manager, or the FLUJO_BASH_ROOTS / FLUJO_FS_ROOTS env hard ceiling) a cwd outside them is rejected.' };
   return [
@@ -496,10 +504,13 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
 
     const append = makeAppender(() => output, (v, t) => { output = v; truncated = t || truncated; });
 
-    const { child, startError, effectiveShell, fallbackFrom } = startChild(command, cwd, requestedShell);
-    const shellFallback = fallbackFrom ? { requestedShell: fallbackFrom, usedShell: effectiveShell } : undefined;
+    const { child, startError, effectiveShell, unavailableShell } = startChild(command, cwd, requestedShell);
+    if (unavailableShell) {
+      resolve(textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true));
+      return;
+    }
     if (startError || !child) {
-      resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellFallback }, true));
+      resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true));
       return;
     }
 
@@ -523,16 +534,16 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
     child.on('error', (err: Error) => {
       // ENOENT here means the resolved executable vanished between resolution and spawn.
       append(`\n${err.message}`);
-      finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, shellFallback, output: maybeNormalize(output, normalize) }, true));
+      finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, output: maybeNormalize(output, normalize) }, true));
     });
 
     child.on('close', (code: number | null) => {
       const finalOut = maybeNormalize(output, normalize);
       if (timedOut) {
-        finish(textResult({ timedOut: true, cwd, shell: effectiveShell, shellFallback, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]`, ...warn }, true));
+        finish(textResult({ timedOut: true, cwd, shell: effectiveShell, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]`, ...warn }, true));
         return;
       }
-      finish(textResult({ exitCode: code, cwd, shell: effectiveShell, shellFallback, truncated, output: finalOut, ...warn }, code !== 0));
+      finish(textResult({ exitCode: code, cwd, shell: effectiveShell, truncated, output: finalOut, ...warn }, code !== 0));
     });
   });
 }
@@ -567,10 +578,12 @@ async function startTool(args: Record<string, unknown>, roots: string[]): Promis
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
   const requestedShell = coerceShell(args.shell);
-  const { child, startError, effectiveShell, fallbackFrom } = startChild(command, cwd, requestedShell);
-  const shellFallback = fallbackFrom ? { requestedShell: fallbackFrom, usedShell: effectiveShell } : undefined;
+  const { child, startError, effectiveShell, unavailableShell } = startChild(command, cwd, requestedShell);
+  if (unavailableShell) {
+    return textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true);
+  }
   if (startError || !child) {
-    return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellFallback }, true);
+    return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true);
   }
 
   const id = `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -603,7 +616,7 @@ async function startTool(args: Record<string, unknown>, roots: string[]): Promis
     scheduleReap(session);
   });
 
-  return textResult({ sessionId: id, cwd, shell: effectiveShell, shellFallback, ...warn });
+  return textResult({ sessionId: id, cwd, shell: effectiveShell, ...warn });
 }
 
 function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Record<string, unknown> {

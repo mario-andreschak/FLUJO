@@ -91,12 +91,12 @@ describe('bash shell selection (issue #225)', () => {
   it('resolves "bash" to a real bash executable exposing unix utilities, when one is installed', async () => {
     const r = await bashCallTool('run', { command: 'echo bash-test | grep -q bash-test && echo found', shell: 'bash' });
     const out = parse(r);
-    if (out.shellFallback) return; // No bash install found on this machine at all — nothing to assert.
+    if (r.isError) return; // No bash install found on this machine at all — nothing to assert.
     expect(out.shell).toBe('bash');
     expect(out.output as string).toContain('found');
   });
 
-  it('falls back to the default shell (and reports it) when the requested shell is unavailable', async () => {
+  it('returns an explicit error without executing when the requested shell is unavailable', async () => {
     const originalPath = process.env.PATH;
     const originalWinPath = process.env.Path;
     const originalProgramFiles = process.env.ProgramFiles;
@@ -108,11 +108,13 @@ describe('bash shell selection (issue #225)', () => {
     delete process.env['ProgramFiles(x86)'];
     process.env.LocalAppData = '';
     try {
-      const r = await bashCallTool('run', { command: 'echo fallback-test', shell: 'bash' });
+      _resetBashShellCacheForTests();
+      const r = await bashCallTool('run', { command: 'echo must-not-run', shell: 'bash' });
       const out = parse(r);
-      expect(out.shell).toBe('default');
-      expect(out.shellFallback).toEqual({ requestedShell: 'bash', usedShell: 'default' });
-      expect(out.output as string).toContain('fallback-test');
+      expect(r.isError).toBe(true);
+      expect(out.shell).toBe('bash');
+      expect(out.error).toContain('could not be resolved');
+      expect(out.output).toBeUndefined();
     } finally {
       process.env.PATH = originalPath;
       process.env.Path = originalWinPath;
@@ -120,6 +122,30 @@ describe('bash shell selection (issue #225)', () => {
       if (originalProgramFilesX86 !== undefined) process.env['ProgramFiles(x86)'] = originalProgramFilesX86;
       process.env.LocalAppData = originalLocalAppData;
     }
+  });
+
+  it('rejects an unavailable explicit shell for background execution', async () => {
+    const originalPath = process.env.PATH;
+    const originalWinPath = process.env.Path;
+    process.env.PATH = '';
+    process.env.Path = '';
+    try {
+      _resetBashShellCacheForTests();
+      const r = await bashCallTool('start', { command: 'echo must-not-run', shell: 'pwsh' });
+      const out = parse(r);
+      expect(r.isError).toBe(true);
+      expect(out.shell).toBe('pwsh');
+      expect(out.sessionId).toBeUndefined();
+    } finally {
+      process.env.PATH = originalPath;
+      process.env.Path = originalWinPath;
+    }
+  });
+
+  it('does not report a Windows dir /b switch as an external path', async () => {
+    if (!isWin) return;
+    const r = await bashCallTool('run', { command: 'echo dir /b' });
+    expect(parse(r).warnings).toBeUndefined();
   });
 });
 
