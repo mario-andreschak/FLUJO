@@ -6,6 +6,7 @@ import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
+import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
 
 const log = createLogger('backend/init');
 
@@ -72,6 +73,7 @@ export function ensureBackendInitialized(): Promise<void> {
 async function runInitialization(): Promise<void> {
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
+  await ensureVendoredFlowGenerator();
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay
