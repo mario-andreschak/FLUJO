@@ -240,6 +240,46 @@ class ChatService {
     return parse<{ conversationId: string; flow: Flow }>(response);
   }
 
+  /** Snapshot the latest editable, vendored Flow Generator for a modal session. */
+  async synthesizeFlowGenerator(payload: {
+    conversationId: string;
+    modelId: string;
+  }): Promise<{ conversationId: string; flow: Flow }> {
+    const response = await fetch('/api/flow/generator', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return parse<{ conversationId: string; flow: Flow }>(response);
+  }
+
+  /** Send one non-streaming turn through a conversation-backed flow snapshot. */
+  async completeFlowGeneratorTurn(payload: {
+    conversationId: string;
+    messages: Array<Record<string, unknown>>;
+  }): Promise<any> {
+    const response = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'flow-Flow Generator Session',
+        messages: payload.messages,
+        stream: false,
+        metadata: {
+          flujo: 'true',
+          conversationId: payload.conversationId,
+        },
+      }),
+    });
+    return parse<any>(response);
+  }
+
+  /** Restore the bundled generator definition after user edits. */
+  async restoreFlowGenerator(): Promise<{ flow: Flow }> {
+    const response = await fetch('/api/flow/generator', { method: 'PUT' });
+    return parse<{ flow: Flow }>(response);
+  }
+
   /** POST /v1/chat/conversations/{id}/cancel — cancel an in-flight run. */
   async cancel(id: string): Promise<void> {
     log.debug('cancel: Entering method', { conversationId: id });

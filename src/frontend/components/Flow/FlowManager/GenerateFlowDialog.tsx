@@ -1,53 +1,51 @@
 "use client";
 
 /**
- * "Generate flow" dialog (issue #14): describe a flow in plain language, pick which
- * configured model does the generating, and get back an UNSAVED draft that the flows
- * page opens in the FlowBuilder for review. Generation runs entirely backend-side
- * (POST /api/flow/generate); this dialog never sees key material.
+ * Conversation-backed Flow Generator (issue #338).
+ *
+ * The modal runs the editable, vendored Flow Generator as a conversation
+ * snapshot. Its draft_flow tool returns an unsaved bundle that is handed to
+ * the existing Flow Builder review path.
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
   Button,
-  Checkbox,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
-  DialogContentText,
   DialogTitle,
   FormControl,
-  FormControlLabel,
+  IconButton,
   InputLabel,
   MenuItem,
   Select,
-  TextField,
+  Tooltip,
+  Typography,
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import { Flow } from '@/frontend/types/flow/flow';
-import { Model } from '@/shared/types/model';
-import { flowService } from '@/frontend/services/flow';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+// eslint-disable-next-line import/named
+import { v4 as uuidv4 } from 'uuid';
+import type { Flow } from '@/frontend/types/flow/flow';
+import type { Model } from '@/shared/types/model';
+import type { ChatMessage } from '@/frontend/components/Chat';
+import ChatInput from '@/frontend/components/Chat/ChatInput';
+import ChatMessages from '@/frontend/components/Chat/ChatMessages';
+import { chatService } from '@/frontend/services/chat';
 import { modelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Flow/FlowManager/GenerateFlowDialog');
 
 export interface GeneratedFlowInfo {
-  /** The root draft flow (opened in the builder for review). */
   flow: Flow;
-  /**
-   * The whole draft bundle (root + auto-generated subflow descendants) in dependency order
-   * (descendants first). Single-level drafts have just the root. The caller saves the
-   * descendants before the root so every subflowId resolves.
-   */
   flows: Flow[];
   rootFlowId: string;
   errorCount: number;
   warningCount: number;
   attempts: number;
-  /** MCP servers the generator installed during this generation (allowInstall only). */
   installedServers: Array<{
     name: string;
     tools: string[];
@@ -61,34 +59,99 @@ export interface GeneratedFlowInfo {
 interface GenerateFlowDialogProps {
   open: boolean;
   onClose: () => void;
-  /** Called with the draft when generation succeeds; the caller opens it in the builder. */
   onGenerated: (result: GeneratedFlowInfo) => void;
 }
 
+interface DraftPayload {
+  flow: Flow;
+  flows: Flow[];
+  rootFlowId: string;
+  validation?: { errorCount?: number; warningCount?: number };
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Tool-result adapters may wrap MCP text once or twice. Walk only the known
+ * content/text shapes and return the newest complete draft_flow payload.
+ */
+export function extractFlowDraft(messages: Array<Record<string, any>>): DraftPayload | null {
+  const inspect = (input: unknown, depth = 0): DraftPayload | null => {
+    if (depth > 5) return null;
+    const parsed = parseJson(input);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const record = parsed as Record<string, any>;
+    if (
+      record.flow &&
+      Array.isArray(record.flows) &&
+      typeof record.rootFlowId === 'string'
+    ) {
+      return record as DraftPayload;
+    }
+    if (Array.isArray(record.content)) {
+      for (let index = record.content.length - 1; index >= 0; index--) {
+        const found = inspect(record.content[index], depth + 1);
+        if (found) return found;
+      }
+    }
+    if ('text' in record) return inspect(record.text, depth + 1);
+    if ('data' in record) return inspect(record.data, depth + 1);
+    return null;
+  };
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const found = inspect(messages[index]?.content);
+    if (found) return found;
+  }
+  return null;
+}
+
+function displayMessages(messages: Array<Record<string, any>>): ChatMessage[] {
+  return messages
+    .filter((message) => (
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof message.content === 'string' &&
+      message.content.trim()
+    ))
+    .map((message, index) => ({
+      id: typeof message.id === 'string' ? message.id : `generator-message-${index}`,
+      role: message.role,
+      content: message.content,
+      timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now() + index,
+      processNodeId: message.processNodeId,
+    })) as ChatMessage[];
+}
+
 const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogProps) => {
-  const [description, setDescription] = useState('');
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
-  const [allowInstall, setAllowInstall] = useState(false);
-  const [allowSubflows, setAllowSubflows] = useState(false);
-  const [maxDepth, setMaxDepth] = useState(2);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [wireMessages, setWireMessages] = useState<Array<Record<string, any>>>([]);
+  const [draft, setDraft] = useState<DraftPayload | null>(null);
+  const [isWorking, setIsWorking] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load the configured models when the dialog opens (frontend model list is masked).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    modelService
-      .loadModels()
+    modelService.loadModels()
       .then((loaded) => {
         if (cancelled) return;
         setModels(loaded);
-        // Keep a previously picked model if it still exists; else default to the first.
-        setModelId((prev) => (loaded.some((m) => m.id === prev) ? prev : loaded[0]?.id ?? ''));
+        setModelId((current) => loaded.some((model) => model.id === current)
+          ? current
+          : loaded[0]?.id ?? '');
       })
-      .catch((err) => {
-        log.warn('Failed to load models for the generate dialog', err);
+      .catch((cause) => {
+        log.warn('Failed to load generator models', cause);
         if (!cancelled) setError('Could not load your models. Configure a model first.');
       });
     return () => {
@@ -96,167 +159,182 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     };
   }, [open]);
 
+  const visibleMessages = useMemo(() => displayMessages(wireMessages), [wireMessages]);
+
+  const startSession = useCallback(async (): Promise<string> => {
+    if (conversationId) return conversationId;
+    if (!modelId) throw new Error('Choose a generator model first.');
+    const id = uuidv4();
+    const { flow } = await chatService.synthesizeFlowGenerator({
+      conversationId: id,
+      modelId,
+    });
+    const now = Date.now();
+    await chatService.createConversation({
+      id,
+      title: 'Flow generation',
+      flowId: flow.id,
+      flowSnapshot: flow,
+      createdAt: now,
+      updatedAt: now,
+    });
+    setConversationId(id);
+    return id;
+  }, [conversationId, modelId]);
+
+  const handleSend = useCallback(async (content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || isWorking) return;
+    setError(null);
+    setIsWorking(true);
+    const userMessage = {
+      id: uuidv4(),
+      role: 'user',
+      content: trimmed,
+      timestamp: Date.now(),
+    };
+    const nextMessages = [...wireMessages, userMessage];
+    setWireMessages(nextMessages);
+    try {
+      const id = await startSession();
+      const response = await chatService.completeFlowGeneratorTurn({
+        conversationId: id,
+        messages: nextMessages,
+      });
+      const canonical = Array.isArray(response?.messages)
+        ? response.messages
+        : nextMessages;
+      setWireMessages(canonical);
+      const proposed = extractFlowDraft(canonical);
+      if (proposed) setDraft(proposed);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsWorking(false);
+    }
+  }, [isWorking, startSession, wireMessages]);
+
+  const handleOpenDraft = useCallback(() => {
+    if (!draft) return;
+    onGenerated({
+      flow: draft.flow,
+      flows: draft.flows,
+      rootFlowId: draft.rootFlowId,
+      errorCount: draft.validation?.errorCount ?? 0,
+      warningCount: draft.validation?.warningCount ?? 0,
+      attempts: wireMessages.filter((message) => message.role === 'user').length,
+      installedServers: [],
+    });
+  }, [draft, onGenerated, wireMessages]);
+
+  const handleRestore = useCallback(async () => {
+    setIsRestoring(true);
+    setError(null);
+    try {
+      await chatService.restoreFlowGenerator();
+      setConversationId(null);
+      setWireMessages([]);
+      setDraft(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsRestoring(false);
+    }
+  }, []);
+
   const handleClose = useCallback(() => {
-    if (isGenerating) return; // no closing mid-flight; the request is not cancellable
+    if (isWorking || isRestoring) return;
+    setConversationId(null);
+    setWireMessages([]);
+    setDraft(null);
     setError(null);
     onClose();
-  }, [isGenerating, onClose]);
-
-  const handleGenerate = useCallback(async () => {
-    setError(null);
-    setIsGenerating(true);
-    try {
-      const result = await flowService.generateFlow(description.trim(), modelId, {
-        allowInstall,
-        allowSubflows,
-        ...(allowSubflows ? { maxDepth } : {}),
-      });
-      if (!result.success) {
-        setError(result.error);
-        return;
-      }
-      log.info('Draft flow generated', {
-        flowId: result.flow.id,
-        flowCount: result.flows.length,
-        attempts: result.attempts,
-        errors: result.validation.errorCount,
-        warnings: result.validation.warningCount,
-        installedServers: result.installedServers.length,
-      });
-      setDescription('');
-      onGenerated({
-        flow: result.flow,
-        flows: result.flows.map((f) => f.flow),
-        rootFlowId: result.rootFlowId,
-        errorCount: result.validation.errorCount,
-        warningCount: result.validation.warningCount,
-        attempts: result.attempts,
-        installedServers: result.installedServers,
-      });
-    } finally {
-      setIsGenerating(false);
-    }
-  }, [description, modelId, allowInstall, allowSubflows, maxDepth, onGenerated]);
-
-  const canGenerate = !isGenerating && description.trim().length > 0 && !!modelId;
+  }, [isRestoring, isWorking, onClose]);
 
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Generate a flow</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ mb: 2 }}>
-          Describe what the flow should do — which steps, which tools, what the result is.
-          The generated flow opens in the builder as a draft for you to review before saving.
-        </DialogContentText>
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-            {error}
+    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <AutoAwesomeIcon color="primary" />
+        <Box sx={{ flex: 1 }}>
+          Generate a flow
+          <Typography variant="body2" color="text.secondary">
+            Chat with your editable Flow Generator. Drafts stay unsaved until you review them.
+          </Typography>
+        </Box>
+        <Tooltip title="Restore the bundled Flow Generator">
+          <span>
+            <IconButton onClick={handleRestore} disabled={isWorking || isRestoring}>
+              <RestartAltIcon />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </DialogTitle>
+      <DialogContent dividers sx={{ p: 0 }}>
+        <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+          {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+          <FormControl size="small" fullWidth disabled={isWorking || !!conversationId}>
+            <InputLabel id="flow-generator-model-label">Generator model</InputLabel>
+            <Select
+              labelId="flow-generator-model-label"
+              label="Generator model"
+              value={modelId}
+              onChange={(event) => setModelId(event.target.value)}
+            >
+              {models.map((model) => (
+                <MenuItem key={model.id} value={model.id}>
+                  {model.displayName?.trim() || model.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
+
+        <Box sx={{ minHeight: 360, maxHeight: '55vh', overflowY: 'auto', p: 2 }}>
+          {visibleMessages.length === 0 ? (
+            <Box sx={{ py: 8, textAlign: 'center', color: 'text.secondary' }}>
+              <Typography variant="h6">What should the flow accomplish?</Typography>
+              <Typography variant="body2">
+                Include the desired result and any external tools it must use.
+              </Typography>
+            </Box>
+          ) : (
+            <ChatMessages
+              messages={visibleMessages}
+              conversationId={conversationId ?? 'new-flow-generator'}
+              onToggleDisabled={() => undefined}
+              onSplitConversation={() => undefined}
+            />
+          )}
+        </Box>
+
+        {draft && (
+          <Alert severity={draft.validation?.errorCount ? 'warning' : 'success'} sx={{ mx: 2, mb: 1 }}>
+            Draft ready: {draft.flow.name} · {draft.flow.nodes.length} nodes ·{' '}
+            {draft.validation?.errorCount ?? 0} errors · {draft.validation?.warningCount ?? 0} warnings
           </Alert>
         )}
-        <TextField
-          autoFocus
-          fullWidth
-          multiline
-          minRows={4}
-          label="What should this flow do?"
-          placeholder="e.g. Research a topic on the web, then summarize the findings as bullet points"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          disabled={isGenerating}
-          sx={{ mb: 2 }}
-        />
-        <FormControl fullWidth disabled={isGenerating || models.length === 0}>
-          <InputLabel id="generate-flow-model-label">Generator model</InputLabel>
-          <Select
-            labelId="generate-flow-model-label"
-            label="Generator model"
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-          >
-            {models.map((m) => (
-              <MenuItem key={m.id} value={m.id}>
-                {m.displayName?.trim() || m.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        <FormControlLabel
-          sx={{ mt: 2 }}
-          control={
-            <Checkbox
-              checked={allowInstall}
-              onChange={(e) => setAllowInstall(e.target.checked)}
-              disabled={isGenerating}
-            />
-          }
-          label="Let the generator install MCP servers it needs (self-improve)"
-        />
-        <FormControlLabel
-          sx={{ mt: 1, display: 'flex' }}
-          control={
-            <Checkbox
-              checked={allowSubflows}
-              onChange={(e) => setAllowSubflows(e.target.checked)}
-              disabled={isGenerating}
-            />
-          }
-          label="Allow multi-level flows (auto-generate nested subflows)"
-        />
-        {allowSubflows && (
-          <Box sx={{ mt: 1, ml: 4, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <FormControl sx={{ maxWidth: 220 }} size="small" disabled={isGenerating}>
-              <InputLabel id="generate-flow-depth-label">Max nesting depth</InputLabel>
-              <Select
-                labelId="generate-flow-depth-label"
-                label="Max nesting depth"
-                value={maxDepth}
-                onChange={(e) => setMaxDepth(Number(e.target.value))}
-              >
-                <MenuItem value={1}>1 level</MenuItem>
-                <MenuItem value={2}>2 levels</MenuItem>
-                <MenuItem value={3}>3 levels</MenuItem>
-              </Select>
-            </FormControl>
-            <Alert severity="info">
-              The generator can design subflows that are themselves generated (up to a few
-              flows total). This is slower and uses more tokens. You review the whole bundle
-              before anything is saved.
-            </Alert>
-          </Box>
-        )}
-        {allowInstall && (
-          <Alert severity="warning" sx={{ mt: 1 }}>
-            The generator may <strong>download, install, and run third-party MCP servers</strong> from
-            the public registry on this machine. It prefers servers that need no API keys, but anything
-            it installs executes real code with your user&apos;s permissions. The <strong>exact command
-            and arguments</strong> of every install are recorded (audited) before it runs, and each
-            installed server is listed in the post-generation summary so you can review — and remove
-            (on the MCP page) — exactly what was added.
-          </Alert>
-        )}
-        {isGenerating && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 2 }}>
-            <CircularProgress size={20} />
-            <DialogContentText>
-              {allowInstall
-                ? 'Generating… the model may search the marketplace and install servers (this can take a few minutes).'
-                : 'Generating… the model designs the flow and FLUJO checks it (this can take up to a minute).'}
-            </DialogContentText>
-          </Box>
-        )}
+
+        <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider' }}>
+          <ChatInput
+            onSendMessage={(content) => { void handleSend(content); }}
+            disabled={isWorking || !modelId}
+          />
+          {isWorking && (
+            <Typography variant="caption" color="text.secondary">
+              The generator is checking available building blocks and preparing a draft…
+            </Typography>
+          )}
+        </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose} disabled={isGenerating}>
-          Cancel
-        </Button>
+        <Button onClick={handleClose} disabled={isWorking || isRestoring}>Close</Button>
         <Button
-          onClick={handleGenerate}
           variant="contained"
-          color="primary"
+          onClick={handleOpenDraft}
+          disabled={!draft || isWorking}
           startIcon={<AutoAwesomeIcon />}
-          disabled={!canGenerate}
         >
-          Generate
+          Open draft in builder
         </Button>
       </DialogActions>
     </Dialog>
