@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkDailyActivity } from '@/backend/services/telemetry';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
 
@@ -14,6 +15,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
+  const lock = await assertUnlocked();
+  if (lock) return lock;
 
   try {
     return NextResponse.json(await checkDailyActivity());
