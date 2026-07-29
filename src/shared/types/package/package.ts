@@ -101,6 +101,17 @@ export interface PackagedFlow {
 }
 
 /**
+ * A host-level global variable required by packaged content. Values are never
+ * exported; the installer asks for them and persists them in Global Variables.
+ */
+export interface PackageGlobal {
+  name: string;
+  description?: string;
+  required: boolean;
+  isSecret?: boolean;
+}
+
+/**
  * A packaged trigger: the live `TriggerConfig` union, except the webhook
  * variant's per-instance secret `token` is excluded (optional) — the serializer
  * omits it.
@@ -134,8 +145,10 @@ export interface FlujoPackage {
   author?: string;
   publisher?: string;
   tags?: string[];
-  /** `${global:VAR}` names the package expects the host to provide. */
+  /** Legacy v1 form retained so previously published packages keep installing. */
   requiredGlobals?: string[];
+  /** Install-time global-variable declarations (names/metadata only). */
+  globals?: PackageGlobal[];
   secrets: PackageSecret[];
   models: PackagedModel[];
   mcpServers: PackagedMcpServer[];

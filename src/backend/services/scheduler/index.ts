@@ -442,6 +442,9 @@ export class SchedulerService {
     const now = new Date().toISOString();
     const execution: PlannedExecution = {
       ...input,
+      // Treat a blank folder as "unfiled" and keep folder names tidy at the
+      // persistence boundary, regardless of whether the caller is the UI/API.
+      folder: input.folder?.trim() || undefined,
       trigger: this.normalizeTrigger(input.trigger),
       id: input.id ?? uuidv4(),
       createdAt: now,
@@ -468,9 +471,22 @@ export class SchedulerService {
     if (index < 0) {
       return { error: `No planned execution with id "${id}"` };
     }
+    const rawFolder = (patch as { folder?: unknown }).folder;
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'folder') &&
+      rawFolder !== undefined &&
+      typeof rawFolder !== 'string'
+    ) {
+      return { error: 'Folder must be text' };
+    }
     const merged: PlannedExecution = {
       ...file.executions[index],
       ...patch,
+      // An explicit blank folder clears the assignment. When folder is absent
+      // from the patch, retain the current assignment.
+      ...(Object.prototype.hasOwnProperty.call(patch, 'folder')
+        ? { folder: typeof rawFolder === 'string' ? rawFolder.trim() || undefined : undefined }
+        : {}),
       ...(patch.trigger ? { trigger: this.normalizeTrigger(patch.trigger) } : {}),
       id,
       createdAt: file.executions[index].createdAt,
@@ -483,6 +499,12 @@ export class SchedulerService {
     const executions = [...file.executions];
     executions[index] = merged;
     await this.saveFile({ ...file, executions });
+    // Folder changes are organizational metadata only. Avoid re-arming every
+    // trigger or cancelling queued work just because a card was moved.
+    const runtimeConfigChanged = Object.keys(patch).some(key => key !== 'folder');
+    if (!runtimeConfigChanged) {
+      return { execution: merged };
+    }
     await this.reconcile();
     // A queued fire captured the PRE-update snapshot (stale flowId/prompt/
     // overlapStrategy) at enqueue time (issue #122). Cancel those stale fires
@@ -536,6 +558,12 @@ export class SchedulerService {
   ): string | null {
     if (!input.name?.trim()) {
       return 'A name is required';
+    }
+    if (input.folder !== undefined && typeof input.folder !== 'string') {
+      return 'Folder must be text';
+    }
+    if (input.folder && input.folder.trim().length > 120) {
+      return 'Folder must be 120 characters or fewer';
     }
     if (!input.flowId) {
       return 'A flow is required';

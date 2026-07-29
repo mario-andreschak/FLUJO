@@ -55,6 +55,17 @@ describe('POST /api/registry/feedback', () => {
     expect(response.status).toBe(429);
   });
 
+  it('reports an unavailable registry as a temporary service failure', async () => {
+    submitFeedbackMock.mockResolvedValue({ status: 502, body: {} });
+
+    const response = await POST(request({ notice: 'More docs, please.', rating: 1 }));
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'The feedback service is temporarily unavailable.',
+    });
+  });
+
   it('rejects cross-origin submissions before forwarding', async () => {
     const response = await POST(
       request(

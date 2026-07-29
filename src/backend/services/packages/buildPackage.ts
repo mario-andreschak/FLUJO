@@ -27,7 +27,12 @@ import {
   serializePackage,
   validatePackage,
 } from '@/shared/types/package/package.serialize';
-import type { FlujoPackage, PackageApiKeyRef, PackagedMcpServer } from '@/shared/types/package/package';
+import type {
+  FlujoPackage,
+  PackageApiKeyRef,
+  PackageGlobal,
+  PackagedMcpServer,
+} from '@/shared/types/package/package';
 import type {
   EnvDeclaration,
   HeaderDeclaration,
@@ -48,36 +53,98 @@ const log = createLogger('backend/services/packages/buildPackage');
 
 const FLOW_GLOBAL_VAR_REGEX = /\$\{global:([A-Za-z0-9_.-]+)\}/g;
 
-/** Convert globals referenced anywhere in packaged flows into package secrets. */
-function convertFlowGlobalsToSecrets(flows: Flow[]): {
-  flows: Flow[];
-  secrets: PackageSecret[];
-} {
-  const names = new Set<string>();
-  const visit = (value: unknown): unknown => {
-    if (typeof value === 'string') {
-      return value.replace(FLOW_GLOBAL_VAR_REGEX, (_match, name: string) => {
-        names.add(name);
-        return `{{secret.${name}}}`;
-      });
+/** Collect `${global:NAME}` references recursively without changing content. */
+function collectGlobalsDeep(value: unknown, names = new Set<string>()): Set<string> {
+  if (typeof value === 'string') {
+    const regex = new RegExp(FLOW_GLOBAL_VAR_REGEX.source, 'g');
+    for (const match of value.matchAll(regex)) names.add(match[1]);
+    return names;
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) collectGlobalsDeep(child, names);
+    return names;
+  }
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      collectGlobalsDeep(child, names);
     }
-    if (Array.isArray(value)) return value.map(visit);
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, child]) => [key, visit(child)]),
-      );
-    }
-    return value;
-  };
+  }
+  return names;
+}
 
-  return {
-    flows: flows.map((flow) => visit(flow) as Flow),
-    secrets: Array.from(names, (name) => ({
+/** Derive install-time global declarations from every selected entity. */
+export function previewPackageGlobals(
+  resolved: ResolvedSelection,
+  entities: PackageEntities,
+): PackageGlobal[] {
+  const names = new Set<string>();
+  const flowIds = new Set(resolved.flowIds);
+  const modelIds = new Set(resolved.modelIds);
+  const plannedIds = new Set(resolved.plannedExecutionIds);
+  for (const flow of entities.flows) {
+    if (flowIds.has(flow.id)) collectGlobalsDeep(flow, names);
+  }
+  for (const model of entities.models) {
+    if (modelIds.has(model.id)) collectGlobalsDeep(model, names);
+  }
+  for (const execution of entities.plannedExecutions) {
+    if (plannedIds.has(execution.id)) collectGlobalsDeep(execution, names);
+  }
+  const packagedMcp = validateMcpSelection(resolved.mcpServerNames, entities.mcpServers);
+  for (const server of packagedMcp.packaged) {
+    for (const declaration of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
+      if (declaration.globalVar) names.add(declaration.globalVar);
+    }
+  }
+  return Array.from(names, (name) => ({
       name,
-      description: `Global variable ${name} referenced by a packaged flow`,
+      description: `Global variable ${name} required by this package`,
       required: true,
-    })),
-  };
+      isSecret: false,
+    }));
+}
+
+function normalizeGlobalDeclarations(
+  derived: PackageGlobal[],
+  supplied: PackageGlobal[],
+): PackageGlobal[] {
+  const suppliedByName = new Map(supplied.map((entry) => [entry.name, entry]));
+  return derived.map((entry) => {
+    const override = suppliedByName.get(entry.name);
+    return override
+      ? {
+          ...entry,
+          description: override.description?.trim() || entry.description,
+          required: override.required !== false,
+          isSecret: override.isSecret === true,
+        }
+      : entry;
+  });
+}
+
+/** Names of entity secrets that the author chose not to request on install. */
+export type ExcludedPackageSecrets = string[];
+
+/** Convert a model key to no-key when its derived declaration was excluded. */
+function excludeModelSecret(
+  derived: ReturnType<typeof deriveModelApiKeyRef>,
+  excluded: Set<string>,
+): ReturnType<typeof deriveModelApiKeyRef> {
+  if (derived.secret && excluded.has(derived.secret.name)) {
+    return { ref: { kind: 'none' } };
+  }
+  return derived;
+}
+
+/** Remove MCP secret bindings selected for exclusion while retaining metadata. */
+function excludeMcpSecrets(servers: PackagedMcpServer[], excluded: Set<string>): void {
+  for (const server of servers) {
+    for (const declaration of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
+      if (declaration.secretRef && excluded.has(declaration.secretRef)) {
+        delete declaration.secretRef;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +542,8 @@ export function buildManifestFromEntities(
    * backstop. Empty by default so the base #194 build path is unchanged.
    */
   substitutions: SecretSubstitution[] = [],
+  globalDeclarations: PackageGlobal[] = [],
+  excludedSecrets: ExcludedPackageSecrets = [],
 ): BuildManifestResult {
   const errors: string[] = [];
   const warnings = [...resolved.warnings];
@@ -486,6 +555,7 @@ export function buildManifestFromEntities(
   // MCP servers (by reference) — local-only servers hard-abort.
   const mcp = validateMcpSelection(resolved.mcpServerNames, entities.mcpServers);
   errors.push(...mcp.errors);
+  const excludedSecretNames = new Set(excludedSecrets);
 
   // Secrets: model keys + MCP secret declarations.
   const secrets: PackageSecret[] = [];
@@ -511,10 +581,8 @@ export function buildManifestFromEntities(
   // deep-clones the entities (inputs untouched) and adds one required
   // `secrets[]` entry per distinct placeholder.
   let models = modelsRaw;
-  const flowGlobals = convertFlowGlobalsToSecrets(flowsRaw);
-  let flows = flowGlobals.flows;
+  let flows = flowsRaw;
   let plannedExecutions = plannedExecutionsRaw;
-  for (const secret of flowGlobals.secrets) pushSecret(secret);
   if (substitutions.length > 0) {
     const sub = applySecretSubstitutions(
       { flows, models: modelsRaw, plannedExecutions: plannedExecutionsRaw },
@@ -528,12 +596,19 @@ export function buildManifestFromEntities(
   }
 
   const modelInputs = models.map((model) => {
-    const { ref, secret } = deriveModelApiKeyRef(model);
+    const { ref, secret } = excludeModelSecret(deriveModelApiKeyRef(model), excludedSecretNames);
     pushSecret(secret);
     return { model, apiKeyRef: ref };
   });
 
   for (const s of deriveMcpSecrets(mcp.packaged)) pushSecret(s);
+  excludeMcpSecrets(mcp.packaged, excludedSecretNames);
+  for (let i = secrets.length - 1; i >= 0; i -= 1) {
+    if (excludedSecretNames.has(secrets[i].name)) {
+      secretNames.delete(secrets[i].name);
+      secrets.splice(i, 1);
+    }
+  }
 
   // requiredGlobals: every `${global:VAR}` this package expects the INSTALLING
   // host to already have set — model API keys bound to a global var, plus any
@@ -548,6 +623,10 @@ export function buildManifestFromEntities(
       if (decl.globalVar) requiredGlobals.add(decl.globalVar);
     }
   }
+  const globals = normalizeGlobalDeclarations(
+    previewPackageGlobals(resolved, entities),
+    globalDeclarations,
+  );
 
   if (errors.length > 0) {
     return { ok: false, resolved, errors, warnings };
@@ -563,6 +642,7 @@ export function buildManifestFromEntities(
       publisher: metadata.publisher,
       tags: metadata.tags,
       ...(requiredGlobals.size > 0 ? { requiredGlobals: Array.from(requiredGlobals) } : {}),
+      ...(globals.length > 0 ? { globals } : {}),
       secrets,
       models: modelInputs,
       mcpServers: mcp.packaged,
@@ -624,6 +704,8 @@ export async function buildPackageManifest(
   metadata: PackageMetadataInput,
   /** Accepted content-secret proposals from the "Secret review" step (#195). */
   acceptedSecrets: SecretProposal[] = [],
+  globalDeclarations: PackageGlobal[] = [],
+  excludedSecrets: ExcludedPackageSecrets = [],
 ): Promise<BuildManifestResult> {
   log.info(`Building package "${metadata.name}" v${metadata.version}`);
   const { resolved, entities } = await resolvePackageSelection(selection);
@@ -634,7 +716,14 @@ export async function buildPackageManifest(
       secretName: p.suggestedSecretName,
       description: p.suggestedDescription,
     }));
-  return buildManifestFromEntities(resolved, entities, metadata, substitutions);
+  return buildManifestFromEntities(
+    resolved,
+    entities,
+    metadata,
+    substitutions,
+    globalDeclarations,
+    excludedSecrets,
+  );
 }
 
 /**

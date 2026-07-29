@@ -50,6 +50,7 @@ import type {
   SecretValueCandidate,
 } from '@/frontend/services/packages';
 import type { SecretKind, SecretProposal } from '@/shared/types/package/secretProposal';
+import type { PackageGlobal } from '@/shared/types/package/package';
 import { buildManualProposal, SECRET_KINDS } from '@/shared/types/package/secretProposal';
 import { packageToWizardDraft, parseImportedPackage } from '@/shared/types/package/package.import';
 import type { WizardDraft } from '@/shared/types/package/package.import';
@@ -127,6 +128,8 @@ export default function PackageWizard({ open, onClose }: Props) {
   const [resolving, setResolving] = useState(false);
   const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [globalDescriptions, setGlobalDescriptions] = useState<Record<string, string>>({});
+  const [excludedEntitySecrets, setExcludedEntitySecrets] = useState<Set<string>>(new Set());
 
   // Step 2 — content-secret derivation (issue #195).
   const [contentProposals, setContentProposals] = useState<SecretProposal[]>([]);
@@ -268,6 +271,8 @@ export default function PackageWizard({ open, onClose }: Props) {
       // Anything derived from the old selection is stale.
       setResolveResult(null);
       setResolveError(null);
+      setGlobalDescriptions({});
+      setExcludedEntitySecrets(new Set());
       setContentProposals([]);
       setDerivedOnce(false);
       setDeriveError(null);
@@ -289,6 +294,8 @@ export default function PackageWizard({ open, onClose }: Props) {
     setResolving(true);
     setResolveError(null);
     setResolveResult(null);
+    setGlobalDescriptions({});
+    setExcludedEntitySecrets(new Set());
     // The selection changed — any previously derived proposals are now stale.
     setContentProposals([]);
     setDerivedOnce(false);
@@ -297,6 +304,9 @@ export default function PackageWizard({ open, onClose }: Props) {
     try {
       const result = await getPackageService().resolve(selection);
       setResolveResult(result);
+      setGlobalDescriptions(
+        Object.fromEntries((result.globals ?? []).map((entry) => [entry.name, entry.description ?? ''])),
+      );
     } catch (err) {
       setResolveError(err instanceof Error ? err.message : 'Failed to resolve dependencies');
     } finally {
@@ -522,6 +532,11 @@ export default function PackageWizard({ open, onClose }: Props) {
           tags: tags.length ? tags : undefined,
         },
         contentProposals.filter((p) => p.accepted),
+        (resolveResult?.globals ?? []).map<PackageGlobal>((entry) => ({
+          ...entry,
+          description: globalDescriptions[entry.name]?.trim() || entry.description,
+        })),
+        Array.from(excludedEntitySecrets),
       );
       setBuildResult(result);
       if (!result.ok) {
@@ -532,7 +547,17 @@ export default function PackageWizard({ open, onClose }: Props) {
     } finally {
       setBuilding(false);
     }
-  }, [selection, name, version, description, tagsInput, contentProposals]);
+  }, [
+    selection,
+    name,
+    version,
+    description,
+    tagsInput,
+    contentProposals,
+    resolveResult,
+    globalDescriptions,
+    excludedEntitySecrets,
+  ]);
 
   /**
    * Publish the built manifest to the hosted package registry (issue #197).
@@ -786,6 +811,36 @@ export default function PackageWizard({ open, onClose }: Props) {
       case 2:
         return (
           <Stack spacing={2}>
+            <Typography variant="subtitle2">Global variables</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Global variables referenced by the package. Add a useful description for each one;
+              installers will supply values and FLUJO will create them in Global Variables.
+            </Typography>
+            {!resolveResult || (resolveResult.globals ?? []).length === 0 ? (
+              <Alert severity="success">No global variables referenced by this package.</Alert>
+            ) : (
+              <Stack spacing={1.5}>
+                {resolveResult.globals.map((entry) => (
+                  <TextField
+                    key={entry.name}
+                    size="small"
+                    label={entry.name}
+                    value={globalDescriptions[entry.name] ?? ''}
+                    onChange={(event) =>
+                      setGlobalDescriptions((current) => ({
+                        ...current,
+                        [entry.name]: event.target.value,
+                      }))
+                    }
+                    helperText="Description shown during package installation"
+                    fullWidth
+                  />
+                ))}
+              </Stack>
+            )}
+
+            <Divider />
+
             <Typography variant="subtitle2">Declared secrets (entity keys)</Typography>
             <Typography variant="body2" color="text.secondary">
               Secrets the package will declare from model API keys and MCP env/headers.
@@ -797,6 +852,19 @@ export default function PackageWizard({ open, onClose }: Props) {
               <List dense>
                 {resolveResult.secrets.map((s) => (
                   <ListItem key={s.name}>
+                    <Checkbox
+                      edge="start"
+                      checked={!excludedEntitySecrets.has(s.name)}
+                      onChange={(event) =>
+                        setExcludedEntitySecrets((current) => {
+                          const next = new Set(current);
+                          if (event.target.checked) next.delete(s.name);
+                          else next.add(s.name);
+                          return next;
+                        })
+                      }
+                      inputProps={{ 'aria-label': `Include ${s.name} in package secrets` }}
+                    />
                     <ListItemText
                       primary={
                         <>
@@ -804,7 +872,11 @@ export default function PackageWizard({ open, onClose }: Props) {
                           {s.required && <Chip label="required" size="small" color="warning" />}
                         </>
                       }
-                      secondary={s.description}
+                      secondary={
+                        excludedEntitySecrets.has(s.name)
+                          ? 'Excluded — the package will not request this value'
+                          : s.description
+                      }
                     />
                   </ListItem>
                 ))}

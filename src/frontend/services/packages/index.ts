@@ -15,6 +15,7 @@ import type {
 import type { PackageSecret } from '@/shared/types/package/secrets';
 import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import type { InstallSummary } from '@/backend/services/packages/installPackage';
+import type { PackageGlobal } from '@/shared/types/package/package';
 import type { RegistryPackageSearchResult } from '@/backend/utils/packageRegistryClient';
 
 const log = createLogger('frontend/services/packages');
@@ -39,6 +40,7 @@ export interface ResolveResult {
     servers: Array<{ name: string; sourceType: string }>;
   };
   secrets: PackageSecret[];
+  globals: PackageGlobal[];
 }
 
 class PackageService {
@@ -145,11 +147,13 @@ class PackageService {
     selection: PackageSelection,
     metadata: PackageMetadataInput,
     acceptedSecrets: SecretProposal[] = [],
+    globals: PackageGlobal[] = [],
+    excludedSecrets: string[] = [],
   ): Promise<BuildManifestResult> {
     const response = await fetch('/api/packages/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selection, metadata, acceptedSecrets }),
+      body: JSON.stringify({ selection, metadata, acceptedSecrets, globals, excludedSecrets }),
     });
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('application/json')) {

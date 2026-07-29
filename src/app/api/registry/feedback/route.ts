@@ -58,13 +58,13 @@ export async function POST(request: NextRequest) {
       );
     }
     return NextResponse.json(
-      { error: 'Could not submit feedback. Please try again.' },
+      { error: 'The feedback service is temporarily unavailable.' },
       { status: 502 },
     );
   } catch (error) {
     log.error('Feedback submission failed', error);
     return NextResponse.json(
-      { error: 'Could not submit feedback. Please try again.' },
+      { error: 'The feedback service is temporarily unavailable.' },
       { status: 500 },
     );
   }

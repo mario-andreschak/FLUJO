@@ -15,6 +15,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import {
   previewPackageSecrets,
+  previewPackageGlobals,
   resolvePackageSelection,
   validateMcpSelection,
   type PackageSelection,
@@ -52,6 +53,7 @@ export async function POST(request: NextRequest) {
     const { resolved, entities } = await resolvePackageSelection(selection);
     const mcp = validateMcpSelection(resolved.mcpServerNames, entities.mcpServers);
     const secrets = previewPackageSecrets(resolved, entities);
+    const globals = previewPackageGlobals(resolved, entities);
     return NextResponse.json({
       resolved,
       mcp: {
@@ -60,6 +62,7 @@ export async function POST(request: NextRequest) {
         servers: mcp.packaged.map((s) => ({ name: s.name, sourceType: s.installOrigin.sourceType })),
       },
       secrets,
+      globals,
     });
   } catch (err) {
     log.error('Failed to resolve package selection', err);

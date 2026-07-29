@@ -1191,6 +1191,7 @@ async function installPlannedExecution(
     ...rest,
     id,
     flowId: mappedFlowId,
+    folder: packageName,
     enabled: false,
   } as Parameters<typeof scheduler.create>[0];
 

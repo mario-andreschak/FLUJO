@@ -89,6 +89,22 @@ describe('SchedulerService', () => {
     expect(runFlowMock).not.toHaveBeenCalled();
   });
 
+  it('persists folder organization without re-arming runtime triggers', async () => {
+    const { execution } = await scheduler.create(scheduleInput({ folder: '  Operations  ' }));
+    expect(execution?.folder).toBe('Operations');
+
+    const reconcile = jest.spyOn(scheduler, 'reconcile');
+    const moved = await scheduler.update(execution!.id, { folder: '  Reporting  ' });
+    expect(moved.execution?.folder).toBe('Reporting');
+    expect(readFile()?.executions[0].folder).toBe('Reporting');
+    expect(reconcile).not.toHaveBeenCalled();
+
+    const cleared = await scheduler.update(execution!.id, { folder: '' });
+    expect(cleared.execution?.folder).toBeUndefined();
+    expect(readFile()?.executions[0].folder).toBeUndefined();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
   it('rejects an invalid cron pattern', async () => {
     const { error } = await scheduler.create(
       scheduleInput({ trigger: { type: 'schedule', cron: 'not a cron' } })

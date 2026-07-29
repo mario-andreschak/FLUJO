@@ -17,6 +17,7 @@ import type {
   PackagedMcpServer,
   PackagedModel,
   PackagedPlannedExecution,
+  PackageGlobal,
 } from './package';
 import { flujoPackageSchema, hasEncryptedBlob } from './package.schema';
 
@@ -61,7 +62,7 @@ export function collectFlowReferences(flow: Flow): PackagedFlowReferences {
     if (typeof modelRef === 'string' && modelRef) modelIds.add(modelRef);
 
     if (nodeType === 'mcp') {
-      const serverRef = props.mcpServer ?? props.serverName ?? props.server;
+      const serverRef = props.boundServer ?? props.mcpServer ?? props.serverName ?? props.server;
       if (typeof serverRef === 'string' && serverRef) mcpServerNames.add(serverRef);
     }
   }
@@ -89,6 +90,7 @@ export interface SerializePackageInput {
   publisher?: string;
   tags?: string[];
   requiredGlobals?: string[];
+  globals?: PackageGlobal[];
   secrets?: PackageSecret[];
   models?: PackageModelInput[];
   /** Already declared by-reference (env/header values never present). */
@@ -130,6 +132,7 @@ function buildPackage(input: SerializePackageInput): FlujoPackage {
     publisher: input.publisher,
     tags: input.tags,
     requiredGlobals: input.requiredGlobals,
+    globals: input.globals,
     secrets: input.secrets ?? [],
     models: (input.models ?? []).map(packModel),
     mcpServers: input.mcpServers ?? [],

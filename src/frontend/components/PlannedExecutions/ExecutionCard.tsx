@@ -23,11 +23,14 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import { RunRecord, RunRecordStatus } from '@/shared/types/plannedExecution';
 import {
   plannedExecutionsService,
   PlannedExecutionListEntry,
 } from '@/frontend/services/plannedExecutions';
+import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { describeTrigger } from './triggerSummary';
 
 /** How many run records to show before the "Load more" button. */
@@ -101,11 +104,24 @@ interface ExecutionCardProps {
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: (enabled: boolean) => void;
+  /** Existing folder names offered by the shared folder picker. */
+  folders: string[];
+  /** Assign or clear this execution's organizing folder. */
+  onSetFolder: (folder: string | undefined) => void;
   /** Called after a manual run finishes so the list can refresh lastRun. */
   onRanNow: () => void;
 }
 
-const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRanNow }: ExecutionCardProps) => {
+const ExecutionCard = ({
+  entry,
+  paused,
+  folders,
+  onEdit,
+  onDelete,
+  onToggleEnabled,
+  onSetFolder,
+  onRanNow,
+}: ExecutionCardProps) => {
   const { execution, status, lastRun } = entry;
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
@@ -113,6 +129,7 @@ const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRan
   const [runningNow, setRunningNow] = useState(false);
   const [detail, setDetail] = useState<RunRecord | null>(null);
   const [visibleCount, setVisibleCount] = useState(RUNS_PAGE_SIZE);
+  const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
 
   const loadRuns = useCallback(async () => {
     setLoadingRuns(true);
@@ -157,6 +174,14 @@ const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRan
               </Tooltip>
             )}
             {!execution.enabled && <Chip size="small" label="Off" variant="outlined" />}
+            {execution.folder && (
+              <Chip
+                size="small"
+                variant="outlined"
+                icon={<FolderOutlinedIcon />}
+                label={execution.folder}
+              />
+            )}
           </Box>
           {status.running ? (
             // Live "in flight" state (issue #50): shown as soon as a run starts,
@@ -226,6 +251,15 @@ const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRan
         <Tooltip title="Edit">
           <IconButton onClick={onEdit}>
             <EditIcon />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={execution.folder ? `Folder: ${execution.folder}` : 'Move to folder'}>
+          <IconButton
+            onClick={(event) => setFolderAnchorEl(event.currentTarget)}
+            color={execution.folder ? 'primary' : 'default'}
+            aria-label="move to folder"
+          >
+            <DriveFileMoveOutlinedIcon />
           </IconButton>
         </Tooltip>
         <Tooltip title="Delete">
@@ -322,6 +356,15 @@ const ExecutionCard = ({ entry, paused, onEdit, onDelete, onToggleEnabled, onRan
           )}
         </Box>
       </Collapse>
+
+      <FolderAssignMenu
+        anchorEl={folderAnchorEl}
+        open={Boolean(folderAnchorEl)}
+        currentFolder={execution.folder}
+        folders={folders}
+        onClose={() => setFolderAnchorEl(null)}
+        onAssign={onSetFolder}
+      />
 
       <Dialog open={detail !== null} onClose={() => setDetail(null)} maxWidth="md" fullWidth>
         <DialogTitle component="div">

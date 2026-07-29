@@ -161,6 +161,8 @@ export type OverlapStrategy = 'skip' | 'queue' | 'parallel' | 'error';
 export interface PlannedExecution {
   id: string;
   name: string;
+  /** Optional user-assigned folder used to organize the execution browser. */
+  folder?: string;
   enabled: boolean;
   /** The flow to run when the trigger fires. */
   flowId: string;

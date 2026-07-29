@@ -44,6 +44,15 @@ export const packageSecretSchema = z
   })
   .strict();
 
+export const packageGlobalSchema = z
+  .object({
+    name: z.string().min(1).regex(IDENTIFIER_REGEX, 'invalid global variable name'),
+    description: z.string().optional(),
+    required: z.boolean(),
+    isSecret: z.boolean().optional(),
+  })
+  .strict();
+
 export const packageApiKeyRefSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('secret'), secret: z.string().min(1) }).strict(),
   z.object({ kind: z.literal('global'), var: z.string().min(1) }).strict(),
@@ -164,6 +173,7 @@ export const flujoPackageSchema = z
     publisher: z.string().optional(),
     tags: z.array(z.string()).optional(),
     requiredGlobals: z.array(z.string()).optional(),
+    globals: z.array(packageGlobalSchema).optional(),
     secrets: z.array(packageSecretSchema),
     models: z.array(packagedModelSchema),
     mcpServers: z.array(packagedMcpServerSchema),

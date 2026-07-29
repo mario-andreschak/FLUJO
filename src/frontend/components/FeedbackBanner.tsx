@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import SentimentDissatisfiedOutlinedIcon from '@mui/icons-material/SentimentDissatisfiedOutlined';
 import SentimentSatisfiedAltOutlinedIcon from '@mui/icons-material/SentimentSatisfiedAltOutlined';
+import { openGitHubNewIssue } from '@/frontend/utils/openGitHubIssue';
 
 type Sentiment = 'happy' | 'unhappy';
 
@@ -24,6 +25,7 @@ export default function FeedbackBanner() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackAvailable, setFallbackAvailable] = useState(false);
 
   const characterCount = Array.from(notice).length;
   const trimmedCharacterCount = Array.from(notice.trim()).length;
@@ -33,6 +35,7 @@ export default function FeedbackBanner() {
     if (!sentiment || !canSubmit) return;
     setSubmitting(true);
     setError(null);
+    setFallbackAvailable(false);
     try {
       const response = await fetch('/api/registry/feedback', {
         method: 'POST',
@@ -45,14 +48,24 @@ export default function FeedbackBanner() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
         setError(typeof body.error === 'string' ? body.error : 'Could not submit feedback.');
+        setFallbackAvailable(response.status >= 500);
         return;
       }
       setSubmitted(true);
     } catch {
-      setError('Could not submit feedback. Please check your connection and try again.');
+      setError('The feedback service is temporarily unavailable.');
+      setFallbackAvailable(true);
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleGitHubFallback = () => {
+    if (!sentiment) return;
+    openGitHubNewIssue({
+      title: 'FLUJO feedback',
+      body: `Sentiment: ${sentiment === 'happy' ? 'Happy' : 'Not really'}\n\n${notice.trim()}`,
+    });
   };
 
   if (submitted) {
@@ -128,8 +141,21 @@ export default function FeedbackBanner() {
         </Button>
       </Box>
       {error && (
-        <Alert severity="error" sx={{ mt: 2 }} onClose={() => setError(null)}>
+        <Alert
+          severity="error"
+          sx={{ mt: 2 }}
+          onClose={() => {
+            setError(null);
+            setFallbackAvailable(false);
+          }}
+          action={fallbackAvailable ? (
+            <Button color="inherit" size="small" onClick={handleGitHubFallback}>
+              Open on GitHub
+            </Button>
+          ) : undefined}
+        >
           {error}
+          {fallbackAvailable && ' You can send it through a pre-filled GitHub issue instead.'}
         </Alert>
       )}
     </Paper>

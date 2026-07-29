@@ -163,7 +163,12 @@ describe('installPackage — happy path', () => {
     // Planned execution: created disabled, with a remapped flowId.
     expect(schedulerCreateMock).toHaveBeenCalledTimes(1);
     expect(schedulerCreateMock.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ id: 'pkg-my-pkg-nightly', enabled: false, flowId: 'pkg-my-pkg-local-root' }),
+      expect.objectContaining({
+        id: 'pkg-my-pkg-nightly',
+        enabled: false,
+        flowId: 'pkg-my-pkg-local-root',
+        folder: 'my-pkg',
+      }),
     );
     expect(summary.disabled.some((d) => d.type === 'plannedExecution' && d.name === 'Nightly')).toBe(true);
   });
