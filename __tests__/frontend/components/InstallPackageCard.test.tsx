@@ -123,4 +123,68 @@ describe('InstallPackageCard', () => {
     await waitFor(() => expect(getRegistryStatusMock).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Delete Example package' })).not.toBeInTheDocument();
   });
+
+  it('guides the user through substituting a package model with an installed model', async () => {
+    installFromRegistryMock
+      .mockResolvedValueOnce({
+        ok: true,
+        dryRun: true,
+        package: { name: 'Example package', version: '1.0.0' },
+        preview: {
+          servers: [],
+          models: [{ id: 'package-model', displayName: 'Package Claude' }],
+          installedModels: [
+            { id: 'installed-model', displayName: 'My Claude', name: 'claude-sonnet' },
+          ],
+          flows: [{ name: 'Example flow' }],
+          plannedExecutions: [],
+          secrets: [],
+          missingGlobals: [],
+        },
+        created: [],
+        updated: [],
+        skipped: [],
+        disabled: [],
+        servers: [],
+        errors: [],
+        missingGlobals: [],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        dryRun: false,
+        package: { name: 'Example package', version: '1.0.0' },
+        created: [],
+        updated: [],
+        skipped: [],
+        disabled: [],
+        servers: [],
+        errors: [],
+        missingGlobals: [],
+      });
+
+    render(<InstallPackageCard />);
+    fireEvent.click(await screen.findByText('Example package'));
+
+    expect(await screen.findByText(/created with models that are not installed/i)).toBeInTheDocument();
+    const continueButton = screen.getByRole('button', { name: /Continue to review/i });
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use one of yours' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use My Claude' }));
+    expect(continueButton).toBeEnabled();
+
+    fireEvent.click(continueButton);
+    expect(screen.getByRole('heading', { name: 'Review and install' })).toBeInTheDocument();
+    expect(screen.getByText('My Claude')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Install package' }));
+
+    await waitFor(() => {
+      expect(installFromRegistryMock).toHaveBeenLastCalledWith(expect.objectContaining({
+        packageId: 'example-package',
+        modelMappings: { 'package-model': 'installed-model' },
+        consentGranted: true,
+      }));
+    });
+  });
 });

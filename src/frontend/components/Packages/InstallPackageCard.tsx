@@ -19,15 +19,18 @@ import {
   Grid,
   IconButton,
   InputAdornment,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Select,
+  Step,
+  StepLabel,
+  Stepper,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
+import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import SearchIcon from '@mui/icons-material/Search';
+import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
 import Visibility from '@mui/icons-material/Visibility';
@@ -84,6 +87,9 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const [preview, setPreview] = useState<InstallSummary | null>(null);
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [modelMappings, setModelMappings] = useState<Record<string, string>>({});
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [showInstalledModels, setShowInstalledModels] = useState(false);
+  const [installStep, setInstallStep] = useState(0);
   const [result, setResult] = useState<InstallSummary | null>(null);
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
 
@@ -138,6 +144,9 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setResult(null);
     setSecretValues({});
     setModelMappings({});
+    setActiveModelId(null);
+    setShowInstalledModels(false);
+    setInstallStep(0);
     setVisibleSecrets({});
     setError(null);
     setLoading(true);
@@ -152,6 +161,9 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         return;
       }
       setPreview(summary);
+      const firstPackageModel = summary.preview?.models[0];
+      setActiveModelId(firstPackageModel?.id ?? null);
+      setInstallStep(firstPackageModel ? 0 : 1);
     } catch (err) {
       log.warn('Failed to fetch package preview', err);
       setError(err instanceof Error ? err.message : String(err));
@@ -189,11 +201,35 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setResult(null);
     setSecretValues({});
     setModelMappings({});
+    setActiveModelId(null);
+    setShowInstalledModels(false);
+    setInstallStep(0);
     setVisibleSecrets({});
     setError(null);
   }, []);
 
   const manifest = preview?.preview;
+  const activeModel = manifest?.models.find((model) => model.id === activeModelId) ?? manifest?.models[0];
+  const resolvedModelCount = manifest?.models.filter((model) =>
+    Object.prototype.hasOwnProperty.call(modelMappings, model.id),
+  ).length ?? 0;
+  const allModelsResolved = manifest?.models.every((model) =>
+    Object.prototype.hasOwnProperty.call(modelMappings, model.id),
+  ) ?? true;
+
+  const choosePackageModel = useCallback((modelId: string) => {
+    setActiveModelId(modelId);
+    setShowInstalledModels(Boolean(modelMappings[modelId]));
+  }, [modelMappings]);
+
+  const resolveAsNewModel = useCallback((modelId: string) => {
+    setModelMappings((current) => ({ ...current, [modelId]: '' }));
+    setShowInstalledModels(false);
+  }, []);
+
+  const resolveWithInstalledModel = useCallback((modelId: string, installedModelId: string) => {
+    setModelMappings((current) => ({ ...current, [modelId]: installedModelId }));
+  }, []);
 
   return (
     <Box sx={{ maxWidth: { xs: '100%', md: 1100 }, mx: 'auto', mt: 3 }}>
@@ -313,139 +349,512 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         </DialogActions>
       </Dialog>
 
-      <Dialog open={selected !== null} onClose={loading ? undefined : closeDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>{selected?.name}</DialogTitle>
-        <DialogContent>
+      <Dialog
+        open={selected !== null}
+        onClose={loading ? undefined : closeDialog}
+        maxWidth={false}
+        fullWidth
+        PaperProps={{
+          sx: {
+            width: 'min(1400px, calc(100vw - 32px))',
+            maxWidth: 'none',
+            minHeight: { xs: 'calc(100vh - 32px)', md: 760 },
+            maxHeight: 'calc(100vh - 32px)',
+            borderRadius: { xs: 2, md: 3 },
+          },
+        }}
+      >
+        <DialogTitle sx={{ px: { xs: 2, md: 4 }, pt: { xs: 2, md: 3 }, pb: 1 }}>
+          <Typography component="span" variant="h5" fontWeight={700}>
+            Install {selected?.name}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Match the package to your FLUJO, then review and install it.
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={{ px: { xs: 2, md: 4 }, pb: 3 }}>
           {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
           {loading && !preview && !result && (
-            <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 420 }}>
               <CircularProgress size={24} />
             </Box>
           )}
 
           {manifest && preview?.package && (
             <Box>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Chip size="small" variant="outlined" label={`v${preview.package.version}`} />
-                {preview.package.publisher && (
-                  <Chip size="small" variant="outlined" label={preview.package.publisher} />
-                )}
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                alignItems={{ sm: 'center' }}
+                justifyContent="space-between"
+                sx={{ mb: 2.5 }}
+              >
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Chip size="small" variant="outlined" label={`v${preview.package.version}`} />
+                  {preview.package.publisher && (
+                    <Chip size="small" variant="outlined" label={preview.package.publisher} />
+                  )}
+                  <Typography variant="caption" color="text.secondary">
+                    {manifest.servers.length} server(s) · {manifest.models.length} model(s) ·{' '}
+                    {manifest.flows.length} flow(s) · {manifest.plannedExecutions.length} planned execution(s)
+                  </Typography>
+                </Stack>
+                <Typography variant="caption" color="text.secondary">
+                  Step {installStep + 1} of 2
+                </Typography>
               </Stack>
 
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-                {manifest.servers.length} MCP server(s) · {manifest.models.length} model(s) ·{' '}
-                {manifest.flows.length} flow(s) · {manifest.plannedExecutions.length} planned execution(s)
-              </Typography>
+              <Stepper activeStep={installStep} sx={{ maxWidth: 720, mx: 'auto', mb: 3 }}>
+                <Step>
+                  <StepLabel>Match models</StepLabel>
+                </Step>
+                <Step>
+                  <StepLabel>Review &amp; install</StepLabel>
+                </Step>
+              </Stepper>
 
-              {manifest.servers.some((s) => s.requiredEnvMissing.length > 0) && (
-                <Alert severity="warning" sx={{ mt: 1 }}>
-                  Some MCP servers require environment values that aren&apos;t covered by a secret
-                  below — those servers will install disabled.
-                </Alert>
-              )}
+              {installStep === 0 && manifest.models.length > 0 && activeModel && (
+                <Box>
+                  <Box sx={{ textAlign: 'center', maxWidth: 820, mx: 'auto', mb: 3 }}>
+                    <Typography variant="h4" fontWeight={750} sx={{ mb: 1 }}>
+                      The package was created with models that are not installed in your FLUJO.
+                    </Typography>
+                    <Typography variant="h6" color="text.secondary" fontWeight={400}>
+                      Let&apos;s replace or recreate them!
+                    </Typography>
+                  </Box>
 
-              {manifest.missingGlobals.length > 0 && (
-                <Alert severity="warning" sx={{ mt: 1 }}>
-                  This package expects host global variable(s) that aren&apos;t set yet:{' '}
-                  {manifest.missingGlobals.join(', ')}. Set them in Settings after install, or the
-                  bound model(s)/server(s) won&apos;t have a working API key.
-                </Alert>
-              )}
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: {
+                        xs: 'minmax(0, 1fr)',
+                        md: 'minmax(260px, 0.85fr) 88px minmax(420px, 1.35fr)',
+                      },
+                      gap: { xs: 2, md: 2.5 },
+                      alignItems: 'stretch',
+                    }}
+                  >
+                    <Box>
+                      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
+                        <Typography variant="overline" color="text.secondary" fontWeight={700}>
+                          Models in this package
+                        </Typography>
+                        <Chip
+                          size="small"
+                          color={allModelsResolved ? 'success' : 'default'}
+                          label={`${resolvedModelCount}/${manifest.models.length} ready`}
+                        />
+                      </Stack>
+                      <Stack spacing={1.25}>
+                        {manifest.models.map((model) => {
+                          const isSelected = model.id === activeModel.id;
+                          const isResolved = Object.prototype.hasOwnProperty.call(modelMappings, model.id);
+                          const installedChoice = manifest.installedModels.find(
+                            (installed) => installed.id === modelMappings[model.id],
+                          );
+                          return (
+                            <Card
+                              key={model.id}
+                              variant="outlined"
+                              sx={{
+                                borderWidth: isSelected ? 2 : 1,
+                                borderColor: isSelected ? 'primary.main' : 'divider',
+                                bgcolor: isSelected ? 'action.selected' : 'background.paper',
+                                transition: 'border-color 120ms ease, background-color 120ms ease',
+                              }}
+                            >
+                              <CardActionArea
+                                onClick={() => choosePackageModel(model.id)}
+                                aria-label={`Configure ${model.displayName}`}
+                                sx={{ minHeight: 104, p: 2 }}
+                              >
+                                <Stack direction="row" spacing={1.5} alignItems="center">
+                                  <Box
+                                    sx={{
+                                      width: 44,
+                                      height: 44,
+                                      borderRadius: 2,
+                                      display: 'grid',
+                                      placeItems: 'center',
+                                      bgcolor: isSelected ? 'primary.main' : 'action.hover',
+                                      color: isSelected ? 'primary.contrastText' : 'text.secondary',
+                                      flex: '0 0 auto',
+                                    }}
+                                  >
+                                    <SmartToyOutlinedIcon />
+                                  </Box>
+                                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                                    <Typography variant="subtitle1" fontWeight={700} noWrap>
+                                      {model.displayName}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary" display="block">
+                                      Package model
+                                    </Typography>
+                                    {isResolved && (
+                                      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5 }}>
+                                        <CheckCircleRoundedIcon color="success" sx={{ fontSize: 16 }} />
+                                        <Typography variant="caption" color="success.main" noWrap>
+                                          {installedChoice
+                                            ? `Using ${installedChoice.displayName}`
+                                            : 'Will be created'}
+                                        </Typography>
+                                      </Stack>
+                                    )}
+                                  </Box>
+                                </Stack>
+                              </CardActionArea>
+                            </Card>
+                          );
+                        })}
+                      </Stack>
+                    </Box>
 
-              <Divider sx={{ my: 2 }} />
+                    <Box
+                      aria-hidden
+                      sx={{
+                        display: 'grid',
+                        placeItems: 'center',
+                        minHeight: { xs: 64, md: 360 },
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          width: 64,
+                          height: 64,
+                          borderRadius: '50%',
+                          display: 'grid',
+                          placeItems: 'center',
+                          bgcolor: 'primary.main',
+                          color: 'primary.contrastText',
+                          boxShadow: 3,
+                          transform: { xs: 'rotate(90deg)', md: 'none' },
+                        }}
+                      >
+                        <ArrowForwardRoundedIcon sx={{ fontSize: 38 }} />
+                      </Box>
+                    </Box>
 
-              {manifest.models.length > 0 && (
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                    Model substitutions
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    Install each package model as new, or bind its flow nodes to a model already installed here.
-                  </Typography>
-                  <Stack spacing={1.5}>
-                    {manifest.models.map((model) => (
-                      <FormControl key={model.id} size="small" fullWidth>
-                        <InputLabel id={`model-mapping-${model.id}`}>{model.displayName}</InputLabel>
-                        <Select
-                          labelId={`model-mapping-${model.id}`}
-                          label={model.displayName}
-                          value={modelMappings[model.id] ?? ''}
-                          onChange={(e) => setModelMappings((prev) => ({ ...prev, [model.id]: e.target.value }))}
-                        >
-                          <MenuItem value="">Install as new</MenuItem>
-                          {manifest.installedModels.map((installed) => (
-                            <MenuItem key={installed.id} value={installed.id}>
-                              {installed.displayName}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    ))}
+                    <Card
+                      variant="outlined"
+                      sx={{
+                        p: { xs: 2, md: 3 },
+                        minHeight: { md: 420 },
+                        bgcolor: 'background.default',
+                      }}
+                    >
+                      <Typography variant="overline" color="text.secondary" fontWeight={700}>
+                        Replace {activeModel.displayName}
+                      </Typography>
+                      <Typography variant="h5" fontWeight={700} sx={{ mt: 0.25, mb: 2.5 }}>
+                        What would you like to do?
+                      </Typography>
+
+                      <Grid container spacing={2}>
+                        <Grid item xs={12} sm={6}>
+                          <Button
+                            fullWidth
+                            aria-label="Create new one"
+                            variant={
+                              Object.prototype.hasOwnProperty.call(modelMappings, activeModel.id)
+                                && modelMappings[activeModel.id] === ''
+                                ? 'contained'
+                                : 'outlined'
+                            }
+                            onClick={() => resolveAsNewModel(activeModel.id)}
+                            sx={{
+                              minHeight: 154,
+                              p: 2.5,
+                              textTransform: 'none',
+                              alignItems: 'stretch',
+                              justifyContent: 'flex-start',
+                              textAlign: 'left',
+                            }}
+                          >
+                            <Stack spacing={1} alignItems="flex-start">
+                              <AddCircleOutlineRoundedIcon sx={{ fontSize: 36 }} />
+                              <Typography variant="h6" fontWeight={700}>Create new one</Typography>
+                              <Typography
+                                variant="body2"
+                                color={
+                                  Object.prototype.hasOwnProperty.call(modelMappings, activeModel.id)
+                                    && modelMappings[activeModel.id] === ''
+                                    ? 'inherit'
+                                    : 'text.secondary'
+                                }
+                              >
+                                Recreate this model in your FLUJO with the package&apos;s configuration.
+                              </Typography>
+                            </Stack>
+                          </Button>
+                        </Grid>
+                        <Grid item xs={12} sm={6}>
+                          <Button
+                            fullWidth
+                            aria-label="Use one of yours"
+                            variant={modelMappings[activeModel.id] ? 'contained' : 'outlined'}
+                            onClick={() => setShowInstalledModels(true)}
+                            sx={{
+                              minHeight: 154,
+                              p: 2.5,
+                              textTransform: 'none',
+                              alignItems: 'stretch',
+                              justifyContent: 'flex-start',
+                              textAlign: 'left',
+                            }}
+                          >
+                            <Stack spacing={1} alignItems="flex-start">
+                              <SmartToyOutlinedIcon sx={{ fontSize: 36 }} />
+                              <Typography variant="h6" fontWeight={700}>Use one of yours</Typography>
+                              <Typography
+                                variant="body2"
+                                color={modelMappings[activeModel.id] ? 'inherit' : 'text.secondary'}
+                              >
+                                Connect the package to a model you already have installed.
+                              </Typography>
+                            </Stack>
+                          </Button>
+                        </Grid>
+                      </Grid>
+
+                      {showInstalledModels && (
+                        <Box sx={{ mt: 2.5 }}>
+                          <Divider sx={{ mb: 2 }} />
+                          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
+                            Choose one of your installed models
+                          </Typography>
+                          {manifest.installedModels.length > 0 ? (
+                            <Grid container spacing={1.25}>
+                              {manifest.installedModels.map((installed) => {
+                                const isMapped = modelMappings[activeModel.id] === installed.id;
+                                return (
+                                  <Grid item xs={12} sm={6} key={installed.id}>
+                                    <Card
+                                      variant="outlined"
+                                      sx={{
+                                        height: '100%',
+                                        borderWidth: isMapped ? 2 : 1,
+                                        borderColor: isMapped ? 'primary.main' : 'divider',
+                                        bgcolor: isMapped ? 'action.selected' : 'background.paper',
+                                      }}
+                                    >
+                                      <CardActionArea
+                                        onClick={() => resolveWithInstalledModel(activeModel.id, installed.id)}
+                                        aria-label={`Use ${installed.displayName}`}
+                                        sx={{ minHeight: 76, p: 1.5 }}
+                                      >
+                                        <Stack direction="row" spacing={1.25} alignItems="center">
+                                          <SmartToyOutlinedIcon color={isMapped ? 'primary' : 'action'} />
+                                          <Box sx={{ minWidth: 0 }}>
+                                            <Typography variant="subtitle2" fontWeight={700} noWrap>
+                                              {installed.displayName}
+                                            </Typography>
+                                            <Typography variant="caption" color="text.secondary" noWrap display="block">
+                                              {installed.name}
+                                            </Typography>
+                                          </Box>
+                                          {isMapped && (
+                                            <CheckCircleRoundedIcon
+                                              color="primary"
+                                              sx={{ ml: 'auto !important', flex: '0 0 auto' }}
+                                            />
+                                          )}
+                                        </Stack>
+                                      </CardActionArea>
+                                    </Card>
+                                  </Grid>
+                                );
+                              })}
+                            </Grid>
+                          ) : (
+                            <Alert severity="info">
+                              You do not have any installed models yet. Create this package model as new instead.
+                            </Alert>
+                          )}
+                        </Box>
+                      )}
+                    </Card>
+                  </Box>
+
+                  <Divider sx={{ my: 3 }} />
+                  <Stack direction="row" spacing={1.5} justifyContent="space-between" alignItems="center">
+                    <Button onClick={closeDialog}>Cancel</Button>
+                    <Stack direction="row" spacing={1.5} alignItems="center">
+                      {!allModelsResolved && (
+                        <Typography variant="body2" color="text.secondary">
+                          Choose an option for every model to continue.
+                        </Typography>
+                      )}
+                      <Button
+                        variant="contained"
+                        size="large"
+                        disabled={!allModelsResolved}
+                        endIcon={<ArrowForwardRoundedIcon />}
+                        onClick={() => setInstallStep(1)}
+                      >
+                        Continue to review
+                      </Button>
+                    </Stack>
                   </Stack>
                 </Box>
               )}
 
-              {manifest.secrets.length > 0 ? (
-                <>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                    Secrets requested by this package
-                  </Typography>
-                  <Stack spacing={1.5} sx={{ mb: 2 }}>
-                    {manifest.secrets.map((s) => (
-                      <TextField
-                        key={s.key}
-                        size="small"
-                        type={visibleSecrets[s.key] ? 'text' : 'password'}
-                        label={s.label || s.key}
-                        helperText={
-                          s.required
-                            ? 'Required — leave blank to install the dependent entity disabled'
-                            : 'Optional'
-                        }
-                        value={secretValues[s.key] ?? ''}
-                        onChange={(e) => setSecretValues((prev) => ({ ...prev, [s.key]: e.target.value }))}
-                        fullWidth
-                        InputProps={{
-                          endAdornment: (
-                            <InputAdornment position="end">
-                              <IconButton
-                                size="small"
-                                tabIndex={-1}
-                                aria-label={visibleSecrets[s.key] ? 'Hide secret' : 'Show secret'}
-                                onClick={() =>
-                                  setVisibleSecrets((prev) => ({ ...prev, [s.key]: !prev[s.key] }))
-                                }
-                              >
-                                {visibleSecrets[s.key] ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
-                              </IconButton>
-                            </InputAdornment>
-                          ),
+              {installStep === 1 && (
+                <Box sx={{ maxWidth: 980, mx: 'auto' }}>
+                  <Stack
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1}
+                    alignItems={{ sm: 'center' }}
+                    justifyContent="space-between"
+                    sx={{ mb: 2 }}
+                  >
+                    <Box>
+                      <Typography variant="h4" fontWeight={750}>
+                        Review and install
+                      </Typography>
+                      <Typography variant="body1" color="text.secondary">
+                        Check your model choices and add any package secrets.
+                      </Typography>
+                    </Box>
+                    {manifest.models.length > 0 && (
+                      <Button
+                        onClick={() => {
+                          setInstallStep(0);
+                          setActiveModelId(
+                            manifest.models.find((model) =>
+                              !Object.prototype.hasOwnProperty.call(modelMappings, model.id),
+                            )?.id ?? manifest.models[0].id,
+                          );
+                          setShowInstalledModels(false);
                         }}
-                      />
-                    ))}
+                      >
+                        Change model choices
+                      </Button>
+                    )}
                   </Stack>
-                </>
-              ) : (
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  This package doesn&apos;t request any secrets.
-                </Typography>
-              )}
 
-              <Stack direction="row" spacing={1}>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  onClick={() => void install()}
-                  disabled={loading}
-                  startIcon={loading ? <CircularProgress size={16} /> : <CloudDownloadOutlinedIcon />}
-                >
-                  Install package
-                </Button>
-                <Button onClick={closeDialog} disabled={loading}>
-                  Cancel
-                </Button>
-              </Stack>
+                  {manifest.models.length > 0 && (
+                    <Box sx={{ mb: 2.5 }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                        Model plan
+                      </Typography>
+                      <Grid container spacing={1.5}>
+                        {manifest.models.map((model) => {
+                          const installedChoice = manifest.installedModels.find(
+                            (installed) => installed.id === modelMappings[model.id],
+                          );
+                          return (
+                            <Grid item xs={12} sm={6} key={model.id}>
+                              <Card variant="outlined" sx={{ p: 1.75, height: '100%' }}>
+                                <Stack direction="row" spacing={1.25} alignItems="center">
+                                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                                    <Typography variant="caption" color="text.secondary">Package model</Typography>
+                                    <Typography variant="subtitle2" noWrap>{model.displayName}</Typography>
+                                  </Box>
+                                  <ArrowForwardRoundedIcon color="action" />
+                                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {installedChoice ? 'Your model' : 'New model'}
+                                    </Typography>
+                                    <Typography variant="subtitle2" noWrap>
+                                      {installedChoice?.displayName ?? model.displayName}
+                                    </Typography>
+                                  </Box>
+                                </Stack>
+                              </Card>
+                            </Grid>
+                          );
+                        })}
+                      </Grid>
+                    </Box>
+                  )}
+
+                  {manifest.servers.some((s) => s.requiredEnvMissing.length > 0) && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      Some MCP servers require environment values that aren&apos;t covered by a secret
+                      below — those servers will install disabled.
+                    </Alert>
+                  )}
+
+                  {manifest.missingGlobals.length > 0 && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      This package expects host global variable(s) that aren&apos;t set yet:{' '}
+                      {manifest.missingGlobals.join(', ')}. Set them in Settings after install, or the
+                      bound model(s)/server(s) won&apos;t have a working API key.
+                    </Alert>
+                  )}
+
+                  <Divider sx={{ my: 2.5 }} />
+
+                  {manifest.secrets.length > 0 ? (
+                    <>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                        Secrets requested by this package
+                      </Typography>
+                      <Stack spacing={1.5} sx={{ mb: 2.5 }}>
+                        {manifest.secrets.map((s) => (
+                          <TextField
+                            key={s.key}
+                            size="small"
+                            type={visibleSecrets[s.key] ? 'text' : 'password'}
+                            label={s.label || s.key}
+                            helperText={
+                              s.required
+                                ? 'Required — leave blank to install the dependent entity disabled'
+                                : 'Optional'
+                            }
+                            value={secretValues[s.key] ?? ''}
+                            onChange={(e) => setSecretValues((prev) => ({ ...prev, [s.key]: e.target.value }))}
+                            fullWidth
+                            InputProps={{
+                              endAdornment: (
+                                <InputAdornment position="end">
+                                  <IconButton
+                                    size="small"
+                                    tabIndex={-1}
+                                    aria-label={visibleSecrets[s.key] ? 'Hide secret' : 'Show secret'}
+                                    onClick={() =>
+                                      setVisibleSecrets((prev) => ({ ...prev, [s.key]: !prev[s.key] }))
+                                    }
+                                  >
+                                    {visibleSecrets[s.key]
+                                      ? <VisibilityOff fontSize="small" />
+                                      : <Visibility fontSize="small" />}
+                                  </IconButton>
+                                </InputAdornment>
+                              ),
+                            }}
+                          />
+                        ))}
+                      </Stack>
+                    </>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+                      This package doesn&apos;t request any secrets.
+                    </Typography>
+                  )}
+
+                  <Stack direction="row" spacing={1} justifyContent="space-between">
+                    <Button
+                      onClick={manifest.models.length > 0 ? () => setInstallStep(0) : closeDialog}
+                      disabled={loading}
+                    >
+                      {manifest.models.length > 0 ? 'Back' : 'Cancel'}
+                    </Button>
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      size="large"
+                      onClick={() => void install()}
+                      disabled={loading}
+                      startIcon={loading ? <CircularProgress size={16} /> : <CloudDownloadOutlinedIcon />}
+                    >
+                      Install package
+                    </Button>
+                  </Stack>
+                </Box>
+              )}
             </Box>
           )}
 
