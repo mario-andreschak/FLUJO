@@ -522,6 +522,43 @@ export class ModelHandler {
   private static readonly OVERFLOW_TOOL_RESULT_HEAD_CHARS = 2000;
 
   /**
+   * Guardrail reserved from advertised context windows for provider framing and
+   * tokenizer-estimation variance. This is not a tokenizer: payload estimates
+   * below are deliberately conservative character-based approximations.
+   */
+  private static readonly OUTGOING_INPUT_SAFETY_TOKENS = 4096;
+
+  /**
+   * Output caps are optional for some adapters. When a model advertises a
+   * context window but no cap is configured, reserve this conservative amount
+   * instead of assuming that the provider will generate no output.
+   */
+  private static readonly UNSPECIFIED_OUTPUT_TOKEN_RESERVE = 8192;
+
+  private static resolveOutgoingInputBudget(
+    contextWindow: number | undefined,
+    maxTokens: number | undefined
+  ): number | undefined {
+    if (!Number.isFinite(contextWindow) || (contextWindow ?? 0) <= 0) return undefined;
+
+    const outputReserve =
+      normalizeMaxTokens(maxTokens) ?? ModelHandler.UNSPECIFIED_OUTPUT_TOKEN_RESERVE;
+    const budget = Math.floor(
+      (contextWindow as number) - outputReserve - ModelHandler.OUTGOING_INPUT_SAFETY_TOKENS
+    );
+    return budget > 0 ? budget : undefined;
+  }
+
+  /** Estimate the complete provider payload using the same conservative
+   * character-based convention as summarizing compaction. */
+  private static estimateOutgoingInputTokens(
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools?: OpenAI.ChatCompletionTool[]
+  ): number {
+    return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
+  }
+
+  /**
    * True when a provider error is a context-window overflow (the request had
    * more prompt tokens than the model accepts), as opposed to any other API
    * failure. Matches the several wordings providers use ("maximum context
@@ -1304,6 +1341,57 @@ export class ModelHandler {
             afterChars,
             savedChars: beforeChars - afterChars,
           });
+        }
+      }
+
+      // A known context window lets us prevent a bad first request rather than
+      // waiting for the provider to reject it. Only wire messages are refitted;
+      // the persisted conversation remains unchanged. Models without usable
+      // context metadata keep the historical reactive-overflow behavior.
+      const inputBudget = ModelHandler.resolveOutgoingInputBudget(
+        model.contextWindow,
+        opts?.maxTokens
+      );
+      if (inputBudget !== undefined) {
+        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
+        if (estimatedInputTokens > inputBudget && !isSelfOrchestratingAdapter(model.adapter)) {
+          let budgetMarkers = opts?.runResourceMarkers;
+          if (opts?.conversationId) {
+            budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
+              opts.conversationId,
+              apiMessages,
+              budgetMarkers,
+              opts?.nodeId
+            );
+          }
+          const refittedMessages = compactForWire(apiMessages, {
+            resourceMarkers: budgetMarkers,
+            compactRecentToolResults: true,
+            toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+          });
+          const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
+          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools);
+
+          if (estimatedInputTokens <= inputBudget) {
+            log.warn('Refitted outgoing model request to its advertised input budget', {
+              modelId,
+              estimatedInputTokens,
+              inputBudget,
+            });
+            apiMessages = refittedMessages;
+            sanitizedTools = refittedTools;
+          } else {
+            return {
+              success: false,
+              error: createModelError(
+                'context_budget_exceeded',
+                `Estimated input (${estimatedInputTokens} tokens) exceeds the safe budget (${inputBudget} tokens). Reduce the active context, tool schemas, or configure summarizing compaction.`,
+                modelId,
+                undefined,
+                { estimatedInputTokens, inputBudget, contextWindow: model.contextWindow }
+              )
+            };
+          }
         }
       }
 
