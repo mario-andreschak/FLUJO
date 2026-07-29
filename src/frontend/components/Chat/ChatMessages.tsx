@@ -46,7 +46,6 @@ import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
-import WidgetsIcon from '@mui/icons-material/Widgets'; // #216: canvas-app launcher
 import { ChatMessage } from './index';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
@@ -55,6 +54,7 @@ import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handof
 import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
+import type { McpAppModelContext } from '@/shared/types/chat';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -111,12 +111,21 @@ interface ChatMessagesProps {
   onAnswerQuestion?: (questionId: string, answers: string[][]) => void;
   /** Decline a pending question (the user chose not to answer). */
   onDeclineQuestion?: (questionId: string) => void;
+  /** Stable immediate-turn channel for an MCP App's `ui/message` request. */
+  onAppMessage?: (text: string) => boolean | Promise<boolean>;
   /**
-   * #97: an MCP App handed a message/selection back to the model (ui/message /
-   * ui/update-model-context). Wired to submit a follow-up user message. MUST be
-   * a stable callback — it crosses the memoized MessageBubble boundary.
+   * Stable future-turn-only channel for `ui/update-model-context`. This must
+   * never submit a chat message.
    */
-  onAppMessage?: (text: string) => void;
+  onUpdateModelContext?: (
+    appKey: string,
+    context: McpAppModelContext,
+  ) => boolean | Promise<boolean>;
+  /** Register inline Views so conversation navigation can await teardown. */
+  onRegisterAppTeardown?: (
+    registrationKey: string,
+    teardown: (() => Promise<void>) | null,
+  ) => void;
   /**
    * #216: route a tool result's `ui://` app into the docked canvas surface
    * instead of rendering it inline. For external apps, clicking the bubble
@@ -125,8 +134,6 @@ interface ChatMessagesProps {
    * apps render inline as before.
    */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
-  /** #216: identities (`serverName::uri`) already open in the canvas. */
-  canvasKeys?: Set<string>;
   /**
    * #221: messages the user submitted while a run was in flight (queued).
    * Rendered as dimmed pending bubbles after the last real message so the user
@@ -149,6 +156,10 @@ export interface CanvasLaunchInfo {
   toolName?: string;
   toolArgs?: string;
   resultContent?: string;
+  /** Cancellation outcome sent instead of the result, when present. */
+  cancelledReason?: string;
+  /** Whether the tool invocation failed. */
+  isError?: boolean;
 }
 
 // Type guard to check if a message has tool_calls
@@ -395,7 +406,24 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
  * local state; the component is keyed by the stable message id so the state
  * survives the parent list's re-renders.
  */
-const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId: string; onAppMessage?: (text: string) => void; onOpenInCanvas?: (info: CanvasLaunchInfo) => void; canvasKeys?: Set<string> }> = ({ pairs, messageId, onAppMessage, onOpenInCanvas, canvasKeys }) => {
+const ToolCallTimeline: React.FC<{
+  pairs: ToolCallPair<ChatMessage>[];
+  messageId: string;
+  onAppMessage?: (text: string) => boolean | Promise<boolean>;
+  onUpdateModelContext?: (
+    appKey: string,
+    context: McpAppModelContext,
+  ) => boolean | Promise<boolean>;
+  onRegisterAppTeardown?: ChatMessagesProps['onRegisterAppTeardown'];
+  onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
+}> = ({
+  pairs,
+  messageId,
+  onAppMessage,
+  onUpdateModelContext,
+  onRegisterAppTeardown,
+  onOpenInCanvas,
+}) => {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
@@ -448,7 +476,7 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
         const showRaw = !!rawByKey[key];
 
         return (
-          <Collapse key={key} in={expandedKey === key} unmountOnExit>
+          <Collapse key={key} in={expandedKey === key}>
             <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
               {/* Call parameters */}
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
@@ -498,50 +526,36 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
                 </Typography>
               )}
 
-              {/* #97: an MCP App (ui:// resource) linked to this tool result,
-                  rendered read-only in a sandboxed iframe. Present only when the
-                  server has the MCP Apps opt-in enabled (gated server-side). */}
+              {/* Inline is the protocol default. The user's "Open app" click is
+                  the mount/consent gate; only a View that later declares pip may
+                  request promotion into the persistent canvas. */}
               {pair.result?.ui?.uri && pair.result.ui.serverName && (
-                onOpenInCanvas ? (
-                  // #216: route to the docked canvas. For external apps the
-                  // launcher click is the click-to-mount consent gate — nothing
-                  // untrusted runs until the user opens it. Built-in apps may
-                  // already be open under #331. No live iframe mounts inline.
-                  (() => {
-                    const ui = pair.result.ui;
-                    const isOpen = !!canvasKeys?.has(`${ui.serverName}::${ui.uri}`);
-                    return (
-                      <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
-                        <WidgetsIcon fontSize="small" color="primary" />
-                        <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>
-                          Interactive app from {ui.serverName}
-                        </Typography>
-                        <Button
-                          size="small"
-                          variant={isOpen ? 'text' : 'outlined'}
-                          onClick={() => onOpenInCanvas({
-                            serverName: ui.serverName,
-                            uri: ui.uri,
-                            toolName: pair.toolCall.function.name,
-                            toolArgs: pair.toolCall.function.arguments,
-                            resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
-                          })}
-                        >
-                          {isOpen ? 'Show in canvas' : 'Open in canvas'}
-                        </Button>
-                      </Box>
-                    );
-                  })()
-                ) : (
-                  <McpAppFrame
-                    serverName={pair.result.ui.serverName}
-                    uri={pair.result.ui.uri}
-                    toolName={pair.toolCall.function.name}
-                    toolArgs={pair.toolCall.function.arguments}
-                    toolResultContent={typeof pair.result.content === 'string' ? pair.result.content : undefined}
-                    onAppMessage={onAppMessage}
-                  />
-                )
+                <McpAppFrame
+                  serverName={pair.result.ui.serverName}
+                  uri={pair.result.ui.uri}
+                  toolName={pair.result.ui.toolName ?? pair.toolCall.function.name}
+                  toolArgs={pair.toolCall.function.arguments}
+                  toolResultContent={typeof pair.result.content === 'string' ? pair.result.content : undefined}
+                  toolCancelledReason={pair.result.ui.cancelledReason}
+                  toolIsError={pair.result.ui.isError}
+                  onAppMessage={onAppMessage}
+                  onUpdateModelContext={onUpdateModelContext}
+                  onRegisterTeardown={onRegisterAppTeardown}
+                  teardownRegistrationKey={`${pair.result.ui.serverName}::${pair.result.ui.uri}::${key}`}
+                  onRequestDock={onOpenInCanvas
+                    ? () => onOpenInCanvas({
+                        serverName: pair.result!.ui!.serverName,
+                        uri: pair.result!.ui!.uri,
+                        toolName: pair.result!.ui!.toolName ?? pair.toolCall.function.name,
+                        toolArgs: pair.toolCall.function.arguments,
+                        resultContent: typeof pair.result!.content === 'string'
+                          ? pair.result!.content
+                          : undefined,
+                        cancelledReason: pair.result!.ui!.cancelledReason,
+                        isError: pair.result!.ui!.isError,
+                      })
+                    : undefined}
+                />
               )}
             </Box>
           </Collapse>
@@ -566,11 +580,15 @@ interface MessageBubbleProps {
    */
   toolCallPairs?: ToolCallPair<ChatMessage>[];
   /** #97: stable MCP App -> conversation return channel (see ChatMessagesProps). */
-  onAppMessage?: (text: string) => void;
+  onAppMessage?: (text: string) => boolean | Promise<boolean>;
+  /** Stable MCP App -> future-turn model-context channel. */
+  onUpdateModelContext?: (
+    appKey: string,
+    context: McpAppModelContext,
+  ) => boolean | Promise<boolean>;
+  onRegisterAppTeardown?: ChatMessagesProps['onRegisterAppTeardown'];
   /** #216: route a tool app to the docked canvas (see ChatMessagesProps). */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
-  /** #216: identities already open in the canvas. */
-  canvasKeys?: Set<string>;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -597,8 +615,9 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   showRaw,
   toolCallPairs,
   onAppMessage,
+  onUpdateModelContext,
+  onRegisterAppTeardown,
   onOpenInCanvas,
-  canvasKeys,
   hoistedHandoffs,
   isBeingEdited,
   onMenuOpen,
@@ -806,7 +825,14 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             bubble; clicking a node reveals that call's parameters AND its result
             together. Pairs are handoff-filtered and computed by the container. */}
         {toolCallPairs && toolCallPairs.length > 0 && (
-          <ToolCallTimeline pairs={toolCallPairs} messageId={message.id} onAppMessage={onAppMessage} onOpenInCanvas={onOpenInCanvas} canvasKeys={canvasKeys} />
+          <ToolCallTimeline
+            pairs={toolCallPairs}
+            messageId={message.id}
+            onAppMessage={onAppMessage}
+            onUpdateModelContext={onUpdateModelContext}
+            onRegisterAppTeardown={onRegisterAppTeardown}
+            onOpenInCanvas={onOpenInCanvas}
+          />
         )}
 
         {/* Display tool call result for tool messages. Handoff results are the
@@ -1182,8 +1208,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onAnswerQuestion,
   onDeclineQuestion,
   onAppMessage, // #97: MCP App -> conversation return channel (stable)
+  onUpdateModelContext,
+  onRegisterAppTeardown,
   onOpenInCanvas, // #216: route a tool app to the docked canvas
-  canvasKeys, // #216: identities already open in the canvas
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
 }) => {
@@ -1367,8 +1394,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             showRaw={!!showRawToolResult[message.id]}
             toolCallPairs={renderPairsById.get(message.id)}
             onAppMessage={onAppMessage}
+            onUpdateModelContext={onUpdateModelContext}
+            onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
-            canvasKeys={canvasKeys}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}

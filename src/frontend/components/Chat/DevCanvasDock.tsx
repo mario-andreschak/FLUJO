@@ -16,7 +16,7 @@
  * conditionally unmounting inactive hosts.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Typography, Tooltip, IconButton, Badge, useTheme } from '@mui/material';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import CloseIcon from '@mui/icons-material/Close';
@@ -25,10 +25,16 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
+import type {
+  McpUiDisplayMode,
+  McpUiUpdateModelContextRequest,
+} from '@modelcontextprotocol/ext-apps/app-bridge';
 import McpAppFrame from './McpAppFrame';
 import type { CanvasAppEntry } from './canvasState';
 
 interface DevCanvasDockProps {
+  /** Conversation that owns every frame in this dock. */
+  conversationId: string;
   /** Docked apps in stable tab order. Empty → the dock renders nothing. */
   entries: CanvasAppEntry[];
   /** Currently-focused tab key, or null. */
@@ -38,7 +44,18 @@ interface DevCanvasDockProps {
   /** Close a tab (tears down its bridge upstream). */
   onCloseTab: (key: string) => void;
   /** Human-in-the-loop return channel for app messages. */
-  onAppMessage?: (text: string) => void;
+  onAppMessage?: (text: string) => boolean | Promise<boolean>;
+  /** Future-turn-only storage channel for app model-context updates. */
+  onUpdateModelContext?: (
+    appKey: string,
+    context: McpUiUpdateModelContextRequest['params'],
+  ) => boolean | Promise<boolean>;
+  /** Register a frame's bounded graceful-teardown callback with the owner. */
+  onRegisterTeardown?: (
+    conversationId: string,
+    appKey: string,
+    teardown: (() => Promise<void>) | null,
+  ) => void;
 }
 
 /** Short, human label for a `ui://server/name` resource. */
@@ -47,16 +64,31 @@ function shortResource(uri: string): string {
   return tail || uri;
 }
 
+/** All visible apps must support both sides of the pip/fullscreen transition. */
+export function canFullscreenCanvas(
+  visibleKeys: string[],
+  modesByKey: Record<string, McpUiDisplayMode[]>,
+): boolean {
+  return visibleKeys.length === 1 && visibleKeys.every((key) => {
+    const modes = modesByKey[key] ?? [];
+    return modes.includes('pip') && modes.includes('fullscreen');
+  });
+}
+
 const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
+  conversationId,
   entries,
   activeKey,
   onSelectTab,
   onCloseTab,
   onAppMessage,
+  onUpdateModelContext,
+  onRegisterTeardown,
 }) => {
   const theme = useTheme();
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [appModesByKey, setAppModesByKey] = useState<Record<string, McpUiDisplayMode[]>>({});
   // #216 owner decision #3: general N-up split grid. Keys currently pinned into
   // the split. Empty → only the active tab is shown.
   const [splitKeys, setSplitKeys] = useState<string[]>([]);
@@ -70,15 +102,68 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     return activeKey ? [activeKey] : [];
   }, [activeSplit, activeKey]);
   const visibleSet = useMemo(() => new Set(visibleKeys), [visibleKeys]);
+  const fullscreenAvailable = useMemo(
+    () => canFullscreenCanvas(visibleKeys, appModesByKey),
+    [appModesByKey, visibleKeys],
+  );
 
   const columns = Math.max(1, Math.ceil(Math.sqrt(visibleKeys.length)));
+
+  // A closed tab must not leave stale capabilities behind. If a split/tab
+  // change makes the current fullscreen presentation invalid, exit promptly.
+  useEffect(() => {
+    setAppModesByKey((previous) => {
+      const next = Object.fromEntries(
+        Object.entries(previous).filter(([key]) => liveKeys.has(key)),
+      );
+      return Object.keys(next).length === Object.keys(previous).length ? previous : next;
+    });
+  }, [liveKeys]);
+  useEffect(() => {
+    if (fullscreen && !fullscreenAvailable) setFullscreen(false);
+  }, [fullscreen, fullscreenAvailable]);
 
   if (entries.length === 0) return null;
 
   const toggleSplit = (key: string) => {
+    if (fullscreen) setFullscreen(false);
     setSplitKeys((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
     );
+  };
+
+  const selectTab = (key: string) => {
+    if (
+      fullscreen
+      && !canFullscreenCanvas([key], appModesByKey)
+    ) {
+      setFullscreen(false);
+    }
+    onSelectTab(key);
+  };
+
+  const requestDisplayMode = (
+    key: string,
+    mode: McpUiDisplayMode,
+    appModes: McpUiDisplayMode[],
+  ): McpUiDisplayMode => {
+    const current = fullscreen && visibleSet.has(key) ? 'fullscreen' : 'pip';
+    if (mode === current) return current;
+    if (
+      mode === 'fullscreen'
+      && visibleKeys.length === 1
+      && visibleKeys[0] === key
+      && appModes.includes('pip')
+      && appModes.includes('fullscreen')
+    ) {
+      setFullscreen(true);
+      return 'fullscreen';
+    }
+    if (mode === 'pip' && current === 'fullscreen' && appModes.includes('pip')) {
+      setFullscreen(false);
+      return 'pip';
+    }
+    return current;
   };
 
   return (
@@ -108,7 +193,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
             return (
               <Box
                 key={e.key}
-                onClick={() => onSelectTab(e.key)}
+                onClick={() => selectTab(e.key)}
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
@@ -158,13 +243,33 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
           })}
         </Box>
 
-        <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
-          <IconButton size="small" onClick={() => setFullscreen((v) => !v)} aria-label="Toggle canvas fullscreen">
-            {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
-          </IconButton>
+        <Tooltip
+          title={fullscreen
+            ? 'Exit fullscreen'
+            : fullscreenAvailable
+              ? 'Fullscreen'
+              : 'Every visible app must declare pip and fullscreen support'}
+        >
+          <span>
+            <IconButton
+              size="small"
+              disabled={!fullscreen && !fullscreenAvailable}
+              onClick={() => setFullscreen((value) => !value)}
+              aria-label="Toggle canvas fullscreen"
+            >
+              {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
+            </IconButton>
+          </span>
         </Tooltip>
         <Tooltip title={collapsed ? 'Expand canvas' : 'Collapse canvas'}>
-          <IconButton size="small" onClick={() => setCollapsed((v) => !v)} aria-label="Toggle canvas collapse">
+          <IconButton
+            size="small"
+            onClick={() => {
+              if (!collapsed && fullscreen) setFullscreen(false);
+              setCollapsed((value) => !value);
+            }}
+            aria-label="Toggle canvas collapse"
+          >
             {collapsed ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
@@ -175,10 +280,12 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
       <Box
         sx={{
           display: collapsed ? 'none' : 'grid',
+          position: 'relative',
           gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
           gap: 1,
           p: 1,
           flex: 1,
+          height: fullscreen ? 'auto' : 320,
           minHeight: 0,
           overflow: 'hidden',
         }}
@@ -190,8 +297,17 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
               key={e.key}
               sx={{
                 // A visible pane participates in the grid; a hidden one is removed
-                // from layout via CSS only — its host stays mounted.
-                display: isVisible ? 'flex' : 'none',
+                // from layout via absolute positioning only — its host stays
+                // mounted and measurable for the sizing contract.
+                display: 'flex',
+                ...(isVisible
+                  ? { position: 'relative' }
+                  : {
+                      position: 'absolute',
+                      inset: 0,
+                      visibility: 'hidden',
+                      pointerEvents: 'none',
+                    }),
                 flexDirection: 'column',
                 minHeight: 0,
                 border: 1,
@@ -209,7 +325,27 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 toolName={e.toolName}
                 toolArgs={e.latestToolArgs}
                 toolResultContent={e.latestResultContent}
+                toolCancelledReason={e.latestToolCancelledReason}
+                toolIsError={e.latestToolIsError}
+                toolUpdateId={e.latestToolUpdateId ?? e.updatedAt}
                 onAppMessage={onAppMessage}
+                onUpdateModelContext={onUpdateModelContext}
+                hostDisplayMode={fullscreen && isVisible ? 'fullscreen' : 'pip'}
+                onAvailableDisplayModes={(modes) => {
+                  setAppModesByKey((previous) => {
+                    const prior = previous[e.key] ?? [];
+                    if (
+                      prior.length === modes.length
+                      && prior.every((mode, index) => mode === modes[index])
+                    ) return previous;
+                    return { ...previous, [e.key]: modes };
+                  });
+                }}
+                onRequestDisplayMode={(mode, modes) => requestDisplayMode(e.key, mode, modes)}
+                onRequestClose={() => onCloseTab(e.key)}
+                onRegisterTeardown={(appKey, callback) => {
+                  onRegisterTeardown?.(conversationId, appKey, callback);
+                }}
               />
             </Box>
           );

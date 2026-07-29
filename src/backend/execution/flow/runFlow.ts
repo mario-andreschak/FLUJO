@@ -261,6 +261,8 @@ export interface FlowRunInput {
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
   messages?: any[];
+  /** Latest future-turn context supplied by mounted MCP Apps. */
+  mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
   /** Convenience: a single user message. Used when `messages` is absent. */
   prompt?: string;
   /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
@@ -503,6 +505,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       if (value === undefined || value === null) continue;
       sharedState.variables[key] = typeof value === 'string' ? value : String(value);
     }
+  }
+
+  // MCP Apps: each ui/update-model-context request overwrites that app's
+  // previous value in the frontend-owned map. When the map accompanies a
+  // future user turn, replace the persisted snapshot atomically; omission means
+  // an internal resume should keep the last snapshot.
+  if (input.mcpAppContexts !== undefined) {
+    sharedState.mcpAppContexts = input.mcpAppContexts;
   }
 
   // The conversation's approval setting (single source of truth).

@@ -8,6 +8,10 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import {
+  resolveAdvertisedToolUiLink,
+  toolCancellationReason,
+} from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
@@ -81,7 +85,11 @@ interface ToolInteraction {
   name: string;
   argsJson: string;
   resultContent: string;
+  ui?: ToolUi;
 }
+
+type ToolUi = NonNullable<FlujoChatMessage['ui']>;
+type TranscriptMessage = OpenAI.ChatCompletionMessageParam & { ui?: ToolUi };
 
 /** The Codex SDK usage block (turn.completed). */
 interface CodexUsage {
@@ -164,7 +172,7 @@ export class CodexAdapter implements CompletionAdapter {
     const transcript: FlujoChatMessage[] = [];
     const baseTs = Date.now();
     let txSeq = 0;
-    const recordMessage = (msg: OpenAI.ChatCompletionMessageParam): void => {
+    const recordMessage = (msg: TranscriptMessage): void => {
       const full = { ...msg, id: `m_${uuidv4()}`, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
@@ -175,7 +183,12 @@ export class CodexAdapter implements CompletionAdapter {
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
       });
-      recordMessage({ role: 'tool', tool_call_id: ti.id, content: ti.resultContent });
+      recordMessage({
+        role: 'tool',
+        tool_call_id: ti.id,
+        content: ti.resultContent,
+        ...(ti.ui ? { ui: ti.ui } : {}),
+      });
     };
 
     // Spawn-with-brief bookkeeping (issue #156), mirroring the Claude adapter.
@@ -189,6 +202,7 @@ export class CodexAdapter implements CompletionAdapter {
       callId: string,
       name: string,
       args: Record<string, unknown>,
+      resolveRejectedUi?: (reason: string) => Promise<ToolUi | undefined>,
     ): Promise<CallToolResult | null> => {
       if (!requestToolApproval) return null;
       const { approved, feedback } = await requestToolApproval({ id: callId, name, args });
@@ -196,7 +210,14 @@ export class CodexAdapter implements CompletionAdapter {
       const rejectionText = feedback
         ? `User rejected this tool call: ${feedback}`
         : 'Tool call rejected by the user.';
-      recordToolPair({ id: callId, name, argsJson: JSON.stringify(args), resultContent: rejectionText });
+      const ui = await resolveRejectedUi?.(rejectionText);
+      recordToolPair({
+        id: callId,
+        name,
+        argsJson: JSON.stringify(args),
+        resultContent: rejectionText,
+        ...(ui ? { ui } : {}),
+      });
       return { content: [{ type: 'text', text: rejectionText }], isError: true };
     };
 
@@ -273,6 +294,7 @@ export class CodexAdapter implements CompletionAdapter {
           timeout,
           nodeId: callerNodeId,
           annotations,
+          uiResourceUri,
         } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         return {
@@ -282,10 +304,33 @@ export class CodexAdapter implements CompletionAdapter {
           ...(annotations ? { annotations } : {}),
           handler: async (args) => {
             const callId = `call_${uuidv4()}`;
-            const denied = await gate(callId, readableName, args ?? {});
+            const denied = await gate(
+              callId,
+              readableName,
+              args ?? {},
+              async (reason) => {
+                const link = await resolveAdvertisedToolUiLink(
+                  server,
+                  originalTool,
+                  uiResourceUri,
+                );
+                return link
+                  ? { ...link, cancelledReason: reason, isError: true }
+                  : undefined;
+              },
+            );
             if (denied) return denied;
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
-            const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, undefined, callerNodeId);
+            const result = await mcpService.callTool(
+              server,
+              originalTool,
+              args ?? {},
+              timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+              undefined,
+              callerNodeId,
+              abortController.signal,
+              'model',
+            );
             let callResult: CallToolResult;
             let resultContent: string;
             if (result.success) {
@@ -318,7 +363,27 @@ export class CodexAdapter implements CompletionAdapter {
               resultContent = `Error: ${result.error ?? 'Unknown error'}`;
               callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
             }
-            recordToolPair({ id: callId, name: readableName, argsJson: JSON.stringify(args ?? {}), resultContent });
+            const uiLink = await resolveAdvertisedToolUiLink(
+              server,
+              originalTool,
+              uiResourceUri,
+              result.data,
+            );
+            const cancelledReason = toolCancellationReason(result);
+            const ui = uiLink
+              ? {
+                  ...uiLink,
+                  ...(!result.success ? { isError: true } : {}),
+                  ...(cancelledReason ? { cancelledReason } : {}),
+                }
+              : undefined;
+            recordToolPair({
+              id: callId,
+              name: readableName,
+              argsJson: JSON.stringify(args ?? {}),
+              resultContent,
+              ...(ui ? { ui } : {}),
+            });
             return callResult;
           },
         };

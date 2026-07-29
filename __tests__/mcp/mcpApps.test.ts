@@ -21,6 +21,9 @@ describe('isUiResourceUri', () => {
 
   it('rejects malformed/non-ui schemes and non-strings', () => {
     expect(isUiResourceUri('  ui://x')).toBe(false);
+    expect(isUiResourceUri('ui://')).toBe(false);
+    expect(isUiResourceUri('ui://has space')).toBe(false);
+    expect(isUiResourceUri('ui://x\n')).toBe(false);
     expect(isUiResourceUri('https://example.com')).toBe(false);
     expect(isUiResourceUri('file:///tmp/x')).toBe(false);
     expect(isUiResourceUri(undefined)).toBe(false);
@@ -41,6 +44,8 @@ describe('isMcpAppMimeType', () => {
     expect(isMcpAppMimeType('text/html')).toBe(false);
     expect(isMcpAppMimeType('text/htmlish;profile=mcp-app')).toBe(false);
     expect(isMcpAppMimeType('text/html;profile=mcp-app-extra')).toBe(false);
+    expect(isMcpAppMimeType('text/html;profile=mcp-app;profile=other')).toBe(false);
+    expect(isMcpAppMimeType('text/html;profile=mcp-app;broken')).toBe(false);
     expect(isMcpAppMimeType('application/json')).toBe(false);
     expect(isMcpAppMimeType(undefined)).toBe(false);
   });
@@ -76,10 +81,13 @@ describe('buildAppCsp', () => {
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("frame-src 'none'");
-    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("base-uri 'self'");
     expect(csp).toContain("form-action 'none'");
     // inline is allowed so a self-contained srcdoc can run.
-    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("worker-src 'none'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).not.toContain('blob:');
   });
 
   it('widens only the mapped directive per declared domain list', () => {
@@ -90,7 +98,7 @@ describe('buildAppCsp', () => {
       baseUriDomains: ['https://base.example.com'],
     });
     expect(csp).toContain('connect-src https://api.example.com');
-    expect(csp).toContain('script-src \'unsafe-inline\' https://cdn.example.com');
+    expect(csp).toContain('script-src \'self\' \'unsafe-inline\' https://cdn.example.com');
     expect(csp).toContain('frame-src https://frame.example.com');
     expect(csp).toContain('base-uri https://base.example.com');
     // connect-src must NOT have been widened by resourceDomains.
@@ -143,8 +151,8 @@ describe('buildAppCsp', () => {
 
   it('accepts a valid https wildcard subdomain across resource directives', () => {
     const csp = buildAppCsp({ resourceDomains: ['https://*.cdn.example.com'] });
-    expect(csp).toContain("script-src 'unsafe-inline' https://*.cdn.example.com");
-    expect(csp).toContain('img-src data: blob: https://*.cdn.example.com');
+    expect(csp).toContain("script-src 'self' 'unsafe-inline' https://*.cdn.example.com");
+    expect(csp).toContain("img-src 'self' data: https://*.cdn.example.com");
   });
 
   it('accepts a wss connect domain with a port', () => {
@@ -182,9 +190,7 @@ describe('buildAppSrcDoc', () => {
 });
 
 describe('isValidCspSourceToken', () => {
-  it('accepts the fixed keyword sources and valid https/wss origins', () => {
-    expect(isValidCspSourceToken("'self'")).toBe(true);
-    expect(isValidCspSourceToken("'none'")).toBe(true);
+  it('accepts valid https/wss origins', () => {
     expect(isValidCspSourceToken('https://example.com')).toBe(true);
     expect(isValidCspSourceToken('https://*.cdn.example.com')).toBe(true);
     expect(isValidCspSourceToken('https://example.com:8443')).toBe(true);
@@ -194,6 +200,8 @@ describe('isValidCspSourceToken', () => {
   it('rejects injection payloads, forbidden keywords, wildcards and weak schemes', () => {
     expect(isValidCspSourceToken('example.com; frame-src *')).toBe(false);
     expect(isValidCspSourceToken("'unsafe-inline'")).toBe(false);
+    expect(isValidCspSourceToken("'self'")).toBe(false);
+    expect(isValidCspSourceToken("'none'")).toBe(false);
     expect(isValidCspSourceToken('data:')).toBe(false);
     expect(isValidCspSourceToken('*')).toBe(false);
     expect(isValidCspSourceToken('https://*')).toBe(false);

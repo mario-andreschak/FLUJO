@@ -5,42 +5,74 @@
  * NOT FLUJO. The header must default-deny network egress and reject any
  * server-declared CSP token that could break out of its directive.
  */
-import { buildSandboxCsp } from '@/backend/mcpApps/sandboxServer';
+import {
+  buildSandboxCsp,
+  buildSandboxProxyCsp,
+  buildSandboxProxyHtml,
+  getConfiguredSandboxHostOrigins,
+  getSandboxPublicUrl,
+  SANDBOX_HOST_ORIGINS_ENV,
+  SANDBOX_PUBLIC_URL_ENV,
+} from '@/backend/mcpApps/sandboxServer';
 
 describe('buildSandboxCsp', () => {
   it('defaults to no network egress and blocks framing/base/object', () => {
     const csp = buildSandboxCsp(undefined);
-    expect(csp).toContain("connect-src 'self'");
-    expect(csp).not.toMatch(/connect-src[^;]*https?:/); // no external hosts by default
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("img-src 'self' data:");
+    expect(csp).toContain("media-src 'self' data:");
+    expect(csp).toContain("font-src 'none'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("worker-src 'none'");
     expect(csp).toContain("frame-src 'none'");
     expect(csp).toContain("object-src 'none'");
-    expect(csp).toContain("base-uri 'none'");
-    expect(csp).toContain("default-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("base-uri 'self'");
+    expect(csp).toContain("form-action 'none'");
+    expect(csp).not.toContain('frame-ancestors');
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).not.toContain('blob:');
   });
 
   it('widens only the mapped directive from declared domains', () => {
     const csp = buildSandboxCsp({
-      connectDomains: ['https://api.example.com'],
-      resourceDomains: ['https://cdn.example.com'],
+      connectDomains: ['https://api.example.com', 'wss://events.example.com'],
+      resourceDomains: ['https://cdn.example.com', 'https://*.assets.example.com:8443'],
       frameDomains: ['https://embed.example.com'],
       baseUriDomains: ['https://base.example.com'],
     });
-    expect(csp).toMatch(/connect-src 'self' https:\/\/api\.example\.com/);
+    expect(csp).toMatch(/connect-src https:\/\/api\.example\.com wss:\/\/events\.example\.com/);
     expect(csp).toMatch(/script-src[^;]*https:\/\/cdn\.example\.com/);
+    expect(csp).toMatch(/style-src[^;]*https:\/\/\*\.assets\.example\.com:8443/);
+    expect(csp).toMatch(/img-src[^;]*https:\/\/cdn\.example\.com/);
+    expect(csp).toMatch(/font-src https:\/\/cdn\.example\.com/);
+    expect(csp).toMatch(/media-src[^;]*https:\/\/cdn\.example\.com/);
     expect(csp).toMatch(/frame-src https:\/\/embed\.example\.com/);
     expect(csp).toMatch(/base-uri https:\/\/base\.example\.com/);
     // A resource domain must not leak into connect-src.
     expect(csp).not.toMatch(/connect-src[^;]*cdn\.example\.com/);
+    expect(csp).not.toMatch(/worker-src[^;]*cdn\.example\.com/);
+    expect(csp).not.toMatch(/frame-src[^;]*cdn\.example\.com/);
   });
 
-  it('drops injection payloads (semicolons, quotes, spaces) rather than emitting them', () => {
+  it('drops injection payloads and non-origin CSP expressions rather than emitting them', () => {
     const csp = buildSandboxCsp({
       connectDomains: [
         "https://ok.example.com",
         "https://evil.com; script-src 'unsafe-eval'", // directive break-out
         "https://a.com b.com",                          // space-separated smuggle
+        'https://a.com,b.com',                          // second-policy separator
         "'unsafe-inline'",                              // quoted keyword
         'https://x.com\n; default-src *',               // newline break-out
+        'https://user:password@example.com',             // credentials
+        'https://example.com/path',                      // metadata requires an origin
+        'https://example.com?next=https://evil.test',
+        'https://example.com:99999',
+        'data:',
+        'blob:',
+        '*',
+        'http://insecure.example.com',
       ],
     });
     expect(csp).toContain('https://ok.example.com');
@@ -50,5 +82,94 @@ describe('buildSandboxCsp', () => {
     // The injected tokens must not have widened connect-src with a keyword/host.
     expect(csp).not.toMatch(/connect-src[^;]*unsafe/);
     expect(csp).not.toMatch(/connect-src[^;]*x\.com/);
+    expect(csp).not.toContain('user:password');
+    expect(csp).not.toContain('99999');
+    expect(csp).not.toContain('insecure.example.com');
+    expect(csp).not.toMatch(/connect-src[^;]*data:/);
+    expect(csp).not.toContain('blob:');
+  });
+
+  it('is embedded as the first bytes of the inner srcdoc after sanitization', () => {
+    const html = buildSandboxProxyHtml([], false, {
+      connectDomains: [
+        'https://api.example.com',
+        "https://evil.example; script-src 'unsafe-eval'",
+      ],
+      frameDomains: ['https://embed.example.com'],
+    });
+    expect(html).toContain(
+      'var INNER_CSP_META = "<meta http-equiv=\\"Content-Security-Policy\\"'
+    );
+    expect(html).toContain('connect-src https://api.example.com');
+    expect(html).toContain('frame-src https://embed.example.com');
+    expect(html).not.toContain('evil.example');
+    expect(html).toContain('inner.srcdoc = INNER_CSP_META + params.html');
+  });
+});
+
+describe('buildSandboxProxyCsp', () => {
+  it('permits only the mandatory srcdoc child and pins the exact host ancestor', () => {
+    const csp = buildSandboxProxyCsp('http://127.0.0.1:4200');
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("frame-src 'self'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain('frame-ancestors http://127.0.0.1:4200');
+  });
+
+  it('does not inherit any app-requested network or nested-frame domains', () => {
+    const innerCsp = buildSandboxCsp({
+      connectDomains: ['https://api.example.com'],
+      resourceDomains: ['https://cdn.example.com'],
+      frameDomains: ['https://embed.example.com'],
+    });
+    const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test');
+
+    expect(innerCsp).toContain('api.example.com');
+    expect(innerCsp).toContain('cdn.example.com');
+    expect(innerCsp).toContain('embed.example.com');
+    expect(proxyCsp).not.toContain('api.example.com');
+    expect(proxyCsp).not.toContain('cdn.example.com');
+    expect(proxyCsp).not.toContain('embed.example.com');
+  });
+
+  it('fails closed for a missing or non-HTTP frame ancestor', () => {
+    expect(buildSandboxProxyCsp()).toContain("frame-ancestors 'none'");
+    expect(buildSandboxProxyCsp('javascript:alert(1)')).toContain(
+      "frame-ancestors 'none'"
+    );
+  });
+});
+
+describe('hosted sandbox endpoint configuration', () => {
+  const originalPublicUrl = process.env[SANDBOX_PUBLIC_URL_ENV];
+  const originalHostOrigins = process.env[SANDBOX_HOST_ORIGINS_ENV];
+
+  afterEach(() => {
+    if (originalPublicUrl === undefined) delete process.env[SANDBOX_PUBLIC_URL_ENV];
+    else process.env[SANDBOX_PUBLIC_URL_ENV] = originalPublicUrl;
+    if (originalHostOrigins === undefined) delete process.env[SANDBOX_HOST_ORIGINS_ENV];
+    else process.env[SANDBOX_HOST_ORIGINS_ENV] = originalHostOrigins;
+  });
+
+  it('normalizes a separately hosted public URL and rejects credentialed URLs', () => {
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
+    expect(getSandboxPublicUrl()).toBe('https://apps.example.test/sandbox.html');
+
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://user:secret@apps.example.test/';
+    expect(getSandboxPublicUrl()).toBeUndefined();
+  });
+
+  it('uses only exact valid host origins and embeds the allowlist in the proxy', () => {
+    process.env[SANDBOX_HOST_ORIGINS_ENV] =
+      'https://flujo.example.test, https://flujo.example.test, javascript:bad';
+
+    expect(getConfiguredSandboxHostOrigins()).toEqual(['https://flujo.example.test']);
+    const html = buildSandboxProxyHtml();
+    expect(html).toContain('var HOST_ALLOWLIST_CONFIGURED = true');
+    expect(html).toContain('["https://flujo.example.test"]');
+    expect(html).not.toContain('javascript:bad');
   });
 });

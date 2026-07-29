@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import OpenAI from 'openai';
 import { ChatCompletionMetadata } from '@/shared/types'; // Import the new shared type
+import type { McpAppModelContextMap } from '@/shared/types/chat';
+import { parseMcpAppModelContexts } from '@/backend/mcpApps/modelContext';
 
 const log = createLogger('app/v1/chat/completions/requestParser');
 
@@ -27,6 +29,8 @@ export interface ChatCompletionRequest {
   metadata?: ChatCompletionMetadata;
   // Node ID to start processing from (for message edits)
   processNodeId?: string;
+  /** Validated, future-turn-only context supplied by mounted MCP Apps. */
+  mcpAppContexts?: McpAppModelContextMap;
 }
 
 // Define a new interface for the parsed result including the extracted flags
@@ -113,6 +117,13 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const conversationId = data.metadata?.conversationId || data.conversation_id;
       const requireApproval = data.metadata?.requireApproval === "true";
       const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
+      const parsedAppContexts = parseMcpAppModelContexts(data.metadata?.mcpAppContexts);
+      if (parsedAppContexts.error) {
+        log.warn('Ignoring invalid MCP App model context metadata', {
+          requestId,
+          error: parsedAppContexts.error,
+        });
+      }
 
       const duration = Date.now() - startTime;
       log.info('POST request body parsed successfully', {
@@ -139,6 +150,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         conversation_id: conversationId, 
         requireApproval, 
         flujodebug,
+        mcpAppContexts: parsedAppContexts.contexts,
         processNodeId: data.processNodeId // Pass through processNodeId if provided
       };
     } catch (error) {

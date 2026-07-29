@@ -265,6 +265,59 @@ class MCPService {
   }
 
   /**
+   * Read from an MCP App View. The app source marker selects the backend's
+   * live enableMcpApps authorization gate; ordinary host resource browsing is
+   * intentionally kept on readResource().
+   */
+  async readResourceFromApp(serverName: string, uri: string) {
+    try {
+      const response = await fetch(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/resources/read?uri=${encodeURIComponent(uri)}&source=app`
+      );
+      const data = await response.json();
+      return { ...data, httpStatus: response.status };
+    } catch (error) {
+      log.warn(`MCP App failed to read resource ${uri} on server ${serverName}:`, error);
+      return { success: false, error: 'Failed to read MCP App resource' };
+    }
+  }
+
+  /**
+   * Call a tool from an MCP App hosted for `serverName`.
+   *
+   * The backend treats the URL's server segment as authoritative and verifies
+   * the tool definition grants `_meta.ui.visibility: "app"` (omission defaults
+   * to allowed) before dispatching on that same server connection.
+   */
+  async callToolFromApp(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    timeout?: number,
+    signal?: AbortSignal,
+  ) {
+    try {
+      const response = await fetch(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ args, timeout, source: 'app' }),
+          ...(signal ? { signal } : {}),
+        }
+      );
+
+      const data = await response.json();
+      return { ...data, httpStatus: response.status };
+    } catch (error) {
+      log.warn(`Failed to call MCP App tool ${toolName} on server ${serverName}:`, error);
+      return { success: false, error: 'Failed to call MCP App tool' };
+    }
+  }
+
+  /**
    * Update an MCP server configuration
    * 
    * This function updates the server configuration in the backend.
@@ -286,6 +339,11 @@ class MCPService {
 
       if (response.ok) {
         log.info(`Successfully updated server config for ${serverName}`);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('flujo:mcp-server-config-changed', {
+            detail: { serverName, config: { ...data, ...updates } },
+          }));
+        }
         return { success: true, data };
       }
 
@@ -293,9 +351,15 @@ class MCPService {
       // This prevents the UI from showing an error when toggling a server that can't connect.
       if (updates.disabled !== undefined) {
         log.info(`Config update for ${serverName} treated as success for toggle operation`);
+        const effectiveConfig = { ...updates, name: serverName };
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('flujo:mcp-server-config-changed', {
+            detail: { serverName, config: effectiveConfig },
+          }));
+        }
         return {
           success: true,
-          data: { ...updates, name: serverName },
+          data: effectiveConfig,
           _originalError: data.error, // Store the original error for debugging
         };
       }

@@ -27,10 +27,12 @@ RUN npm run build
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 
+# Mark the install so /api/update reports "pull a new image" instead of a
+# broken in-app git updater. The MCP Apps sandbox is a second browser origin;
+# containers listen beyond loopback while publication remains runner-controlled.
 ENV NODE_ENV=production \
-    # Mark the install so /api/update reports "pull a new image" instead of a
-    # broken in-app git updater (see src/utils/paths.ts + api/update/route.ts).
-    FLUJO_CONTAINER=1
+    FLUJO_CONTAINER=1 \
+    FLUJO_MCP_APP_SANDBOX_HOST=0.0.0.0
     # Optional: restrict the in-chat file-browser MCP tool to specific host directories
     # (requires a matching bind-mount in docker-compose.yml):
     # ENV FLUJO_FS_ROOTS=/data/files
@@ -78,7 +80,7 @@ RUN mkdir -p /app/db /app/mcp-servers /home/node/.npm \
 
 USER node
 
-EXPOSE 4200
+EXPOSE 4200 4201
 
 # /api/cwd is a side-effect-free GET (returns the resolved paths), so it is a
 # safe readiness probe.

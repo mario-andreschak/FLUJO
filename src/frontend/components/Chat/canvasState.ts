@@ -37,6 +37,12 @@ export interface CanvasAppEntry {
   latestToolArgs?: string;
   /** JSON string / text of the latest tool result pushed to the app. */
   latestResultContent?: string;
+  /** Cancellation outcome pushed instead of a result, when applicable. */
+  latestToolCancelledReason?: string;
+  /** Whether the latest completed tool invocation failed. */
+  latestToolIsError?: boolean;
+  /** Stable identity of the latest tool delivery, when the transcript has one. */
+  latestToolUpdateId?: string | number;
   /** True when new data arrived while this tab was NOT active (badge). */
   unread: boolean;
   /** Drives LRU eviction; bumped whenever the tab is activated. */
@@ -78,6 +84,12 @@ export interface CanvasAppInput {
   toolArgs?: string;
   /** JSON string / text of the tool result content. */
   resultContent?: string;
+  /** Cancellation outcome sent instead of `resultContent`. */
+  cancelledReason?: string;
+  /** Whether the completed invocation failed. */
+  isError?: boolean;
+  /** Stable identity for this invocation, even when its payload is unchanged. */
+  updateId?: string | number;
 }
 
 /** Result of a mutation that may evict tabs (LRU cap enforcement). */
@@ -163,7 +175,22 @@ export function openCanvasApp(
     uri: input.uri,
     toolName: input.toolName ?? existing?.toolName,
     latestToolArgs: input.toolArgs ?? existing?.latestToolArgs,
-    latestResultContent: input.resultContent ?? existing?.latestResultContent,
+    latestResultContent: input.cancelledReason !== undefined
+      ? undefined
+      : input.resultContent ?? existing?.latestResultContent,
+    latestToolCancelledReason: input.cancelledReason !== undefined
+      ? input.cancelledReason
+      : input.resultContent !== undefined
+        ? undefined
+        : existing?.latestToolCancelledReason,
+    latestToolIsError: input.cancelledReason !== undefined
+      ? undefined
+      : input.isError !== undefined
+        ? input.isError
+        : input.resultContent !== undefined
+          ? false
+          : existing?.latestToolIsError,
+    latestToolUpdateId: input.updateId ?? existing?.latestToolUpdateId,
     unread: false,
     lastActiveAt: now,
     updatedAt: now,
@@ -196,7 +223,22 @@ export function updateCanvasApp(
     ...existing,
     toolName: input.toolName ?? existing.toolName,
     latestToolArgs: input.toolArgs ?? existing.latestToolArgs,
-    latestResultContent: input.resultContent ?? existing.latestResultContent,
+    latestResultContent: input.cancelledReason !== undefined
+      ? undefined
+      : input.resultContent ?? existing.latestResultContent,
+    latestToolCancelledReason: input.cancelledReason !== undefined
+      ? input.cancelledReason
+      : input.resultContent !== undefined
+        ? undefined
+        : existing.latestToolCancelledReason,
+    latestToolIsError: input.cancelledReason !== undefined
+      ? undefined
+      : input.isError !== undefined
+        ? input.isError
+        : input.resultContent !== undefined
+          ? false
+          : existing.latestToolIsError,
+    latestToolUpdateId: input.updateId ?? existing.latestToolUpdateId,
     updatedAt: now,
     unread: isActive ? false : true,
     lastActiveAt: isActive ? now : existing.lastActiveAt,

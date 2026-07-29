@@ -27,7 +27,9 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     if (!uri) {
       return json({ success: false, error: 'A "uri" query parameter is required' }, 400);
     }
-    const result = await mcpService.readResource(name, uri);
+    const result = request.nextUrl.searchParams.get('source') === 'app'
+      ? await mcpService.readResourceFromApp(name, uri)
+      : await mcpService.readResource(name, uri);
     return json(result, result.success ? 200 : result.statusCode || 500);
   } catch (error) {
     log.error('Error handling GET request', error);

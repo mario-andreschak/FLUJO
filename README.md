@@ -241,6 +241,9 @@ Then open http://localhost:4200.
   `claude setup-token` and pass it as `CLAUDE_CODE_OAUTH_TOKEN`.
 - **fileWatch triggers**: bind-mount the host folder you want to watch into the
   container (see the commented volume example in `docker-compose.yml`).
+- **MCP Apps**: Compose also publishes the isolated sandbox origin on
+  `http://localhost:4201`, loopback-only. Keep both `4200` and `4201` mappings
+  when using interactive MCP Apps.
 
 > ⚠️ **Security:** FLUJO has no authentication layer and its git API runs
 > commands on the server, so the port is bound to **localhost only** by default.
@@ -276,6 +279,26 @@ checks:
 > — an attacker page's Origin never matches these entries — but widening the
 > trusted-host set is only safe on a private network fronted by your own
 > authenticating proxy.
+
+#### MCP Apps behind HTTPS
+
+MCP Apps must run on a different origin from FLUJO. For a hosted HTTPS install,
+give the sandbox its own HTTPS origin (for example
+`https://flujo-apps.example.internal`) and have the trusted proxy TLS-terminate
+that origin to the container's plain HTTP port `4201`. Configure:
+
+```text
+FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://flujo-apps.example.internal/sandbox.html
+FLUJO_MCP_APP_HOST_ORIGINS=https://flujo.example.internal
+```
+
+`FLUJO_MCP_APP_HOST_ORIGINS` is a comma-separated allowlist of exact
+`http(s)://host[:port]` origins permitted to embed the sandbox. Preserve the
+browser's `Referer` header through the proxy; the sandbox checks it against this
+allowlist and pins its `frame-ancestors` CSP to that exact origin. Do not serve
+the sandbox beneath FLUJO's own origin, and do not point the browser directly at
+port `4201` from an HTTPS page—the listener expects TLS termination at the
+separate proxy origin.
 
 ### Run via npx (npm package)
 

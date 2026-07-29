@@ -98,7 +98,7 @@ describe('tool listing and dispatch', () => {
 
   it('callTool dispatches in-process and wraps the CallToolResult in data', async () => {
     const result = await mcpService.callTool(INTERNAL_SERVER_NAME, 'ping', { a: 1 });
-    expect(internalCallToolMock).toHaveBeenCalledWith(mcpService, 'ping', { a: 1 });
+    expect(internalCallToolMock).toHaveBeenCalledWith(mcpService, 'ping', { a: 1 }, 'host');
     expect(result.success).toBe(true);
     expect(result.data).toEqual({ content: [{ type: 'text', text: 'pong' }] });
   });

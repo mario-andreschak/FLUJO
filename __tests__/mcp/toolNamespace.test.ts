@@ -48,6 +48,20 @@ describe('tool namespacing (#16)', () => {
     });
   });
 
+  it('accepts legacy aliases only for pairs present in an advertised map', () => {
+    const mapped = {
+      current_name: {
+        server: 'myserver',
+        tool: 'mytool',
+        clientGeneration: 3,
+      },
+    };
+    expect(decodeToolName('_-_-_myserver_-_-_mytool', mapped)).toEqual(
+      mapped.current_name,
+    );
+    expect(decodeToolName('_-_-_myserver_-_-_unbound', mapped)).toBeNull();
+  });
+
   it('returns null for undecodable names', () => {
     expect(decodeToolName('handoff_to_finish')).toBeNull();
     expect(decodeToolName('mcp_unknown_zzzz')).toBeNull();

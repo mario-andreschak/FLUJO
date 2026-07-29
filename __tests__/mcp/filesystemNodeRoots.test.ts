@@ -27,9 +27,13 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 }));
 
 // Point the data dir at a temp dir so relative node roots resolve somewhere real.
-let dataDir: string;
+// The fallback is needed while Jest evaluates hoisted imports, before beforeEach
+// installs the per-test directory.
 jest.mock('@/utils/paths', () => ({
-  getDataDir: jest.fn(() => dataDir),
+  getDataDir: jest.fn(() => (
+    (globalThis as typeof globalThis & { __flujoFilesystemNodeDataDir?: string })
+      .__flujoFilesystemNodeDataDir ?? process.cwd()
+  )),
 }));
 
 import { filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
@@ -40,16 +44,21 @@ function text(r: CallToolResult): string {
 }
 
 describe('filesystem confinement honors node-level roots', () => {
+  let dataDir: string;
   let workspace: string;
 
   beforeEach(async () => {
     dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-datadir-'));
+    (globalThis as typeof globalThis & { __flujoFilesystemNodeDataDir?: string })
+      .__flujoFilesystemNodeDataDir = dataDir;
     workspace = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-ws-'));
     _resetNodeRootsForTests();
     delete process.env.FLUJO_FS_ROOTS;
   });
   afterEach(async () => {
     _resetNodeRootsForTests();
+    delete (globalThis as typeof globalThis & { __flujoFilesystemNodeDataDir?: string })
+      .__flujoFilesystemNodeDataDir;
     await fsp.rm(dataDir, { recursive: true, force: true });
     await fsp.rm(workspace, { recursive: true, force: true });
   });

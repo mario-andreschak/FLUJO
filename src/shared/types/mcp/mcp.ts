@@ -75,11 +75,12 @@ export type MCPManagerConfig = {
   exposeAsMcpServer?: boolean;
   /**
    * MCP Apps (SEP-1865 / #97): opt-in switch letting this server render its
-   * interactive `ui://` UI resources in the chat tool-call timeline. Off by
+   * interactive `ui://` UI resources in chat or the docked canvas. Off by
    * default — when absent/false FLUJO never fetches or renders server-supplied
    * HTML for this server (the security opt-in is authoritative server-side: the
-   * `ui` link is only attached to a tool message when this is enabled). Phase 1
-   * renders read-only in a strict sandbox; there is no iframe->host bridge yet.
+   * `ui` link is only attached to a tool message when this is enabled). Enabling
+   * it also negotiates the UI extension and allows the isolated AppBridge to
+   * broker same-server app tool/resource requests.
    */
   enableMcpApps?: boolean;
   /**

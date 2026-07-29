@@ -518,9 +518,47 @@ describe('call_mcp_tool', () => {
       data: { content: [{ type: 'text', text: 'downstream' }] },
     });
     const r = await internalCallTool(service, 'call_mcp_tool', { server: 's', tool: 't', args: { x: 1 } });
-    expect(service.callTool).toHaveBeenCalledWith('s', 't', { x: 1 }, undefined);
+    expect(service.callTool).toHaveBeenCalledWith(
+      's',
+      't',
+      { x: 1 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'host',
+    );
     expect(text(r)).toBe('downstream');
   });
+
+  it.each(['model', 'app'] as const)(
+    'preserves the %s audience for nested downstream calls',
+    async (source) => {
+      const service = makeService();
+      service.callTool.mockResolvedValue({
+        success: true,
+        data: { content: [{ type: 'text', text: 'downstream' }] },
+      });
+
+      await internalCallTool(
+        service,
+        'call_mcp_tool',
+        { server: 's', tool: 't' },
+        source,
+      );
+
+      expect(service.callTool).toHaveBeenCalledWith(
+        's',
+        't',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        source,
+      );
+    },
+  );
 
   it('maps a tool failure to an isError result', async () => {
     const service = makeService();

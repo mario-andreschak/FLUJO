@@ -126,7 +126,7 @@ describe('applyCacheBreakpoints', () => {
 
     const out = applyCacheBreakpoints({ messages });
 
-    const content = out.messages[0].content as Array<Record<string, unknown>>;
+    const content = out.messages[0].content as unknown as Array<Record<string, unknown>>;
     expect(content[0]).toHaveProperty('cache_control', EPHEMERAL);
     expect(content[1]).not.toHaveProperty('cache_control');
     expect(out.breakpoints).toBe(1);

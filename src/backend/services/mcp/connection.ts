@@ -21,18 +21,27 @@ import { elicitationEnabled, registerElicitationHandler, elicitationConfigKey } 
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 import { normalizeHeaderValue, isMaskedHeaderValue } from '@/utils/mcp/headers';
 import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
+import {
+  MCP_APPS_EXTENSION_ID,
+  MCP_APP_RESOURCE_MIME_TYPE,
+} from './appsProtocol';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
-// expose a client's own declared capabilities publicly). Roots deliberately do NOT
+// expose a client's own declared capabilities publicly). This includes the per-server
+// MCP Apps opt-in: turning it on/off must renegotiate the UI extension. Roots deliberately do NOT
 // participate: the roots capability is always declared and roots content is resolved
 // fresh per roots/list request (changes are announced via notifications/roots/
 // list_changed) — so no roots change may ever force a client rebuild (issue 46).
 interface ClientWithCapKey { __flujoCapKey?: string }
 
-/** Key of the config that drives client-declared capabilities (sampling + elicitation). */
+/** Key of config that drives connect-time client capabilities. */
 export function capabilityKey(config: MCPServerConfig): string {
-  return samplingConfigKey(config) + '|' + elicitationConfigKey(config);
+  return [
+    samplingConfigKey(config),
+    elicitationConfigKey(config),
+    config.enableMcpApps === true ? 'mcp-apps:on' : 'mcp-apps:off',
+  ].join('|');
 }
 
 // We stash the RAW config key on the transport at creation time so
@@ -210,9 +219,13 @@ export function createNewClient(config: MCPServerConfig): Client {
   // unconditional means roots changes never require a client rebuild; content changes
   // are announced via notifications/roots/list_changed instead. Sampling stays opt-in:
   // it is declared only when the server has an enabled sampling trust policy, so a
-  // server can't ask FLUJO to run LLM calls unless the user opted in.
+  // server can't ask FLUJO to run LLM calls unless the user opted in. MCP Apps is
+  // likewise advertised only for a server whose explicit security opt-in is on.
+  // Built-in servers do not use this factory or an MCP handshake; their first-party
+  // apps are dispatched in-process.
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
+  const serverHasMcpApps = config.enableMcpApps === true;
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
@@ -224,6 +237,15 @@ export function createNewClient(config: MCPServerConfig): Client {
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
         ...(serverHasElicitation ? { elicitation: {} } : {}),
+        ...(serverHasMcpApps
+          ? {
+              extensions: {
+                [MCP_APPS_EXTENSION_ID]: {
+                  mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
+                },
+              },
+            }
+          : {}),
       }
     }
   );
@@ -540,14 +562,14 @@ export function shouldRecreateClient(
     return { needsNewClient: true, reason: 'Existing connection is closed' };
   }
 
-  // A change to a connect-time-negotiated client capability (sampling) must rebuild the
+  // A change to a connect-time-negotiated client capability must rebuild the
   // client: it alters both the declared capability (none<->some) and the config the
   // request handlers close over. Roots are exempt by design (issue 46): the capability
   // is always declared and content changes are served live by the roots/list handler +
   // announced via notifications/roots/list_changed — never a rebuild.
   const currentCapKey = (client as unknown as ClientWithCapKey).__flujoCapKey ?? '';
   if (currentCapKey !== capabilityKey(config)) {
-    return { needsNewClient: true, reason: 'Client capabilities (sampling/elicitation) changed' };
+    return { needsNewClient: true, reason: 'Client capabilities (sampling/elicitation/MCP Apps) changed' };
   }
 
   // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always

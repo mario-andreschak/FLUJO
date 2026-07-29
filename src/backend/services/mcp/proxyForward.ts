@@ -95,7 +95,16 @@ export async function proxyCallTool(
       isError: true,
     };
   }
-  const result = await mcpService.callTool(serverName, toolName, args);
+  const result = await mcpService.callTool(
+    serverName,
+    toolName,
+    args,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    'model',
+  );
   if (result.success) {
     return result.data as CallToolResult;
   }

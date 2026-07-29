@@ -28,6 +28,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
+import { resolveAdvertisedToolUiLink } from '@/backend/mcpApps/toolUi';
 import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
@@ -87,25 +88,21 @@ const CANCEL_POLL_MS = 250;
 
 export class ModelHandler {
   /**
-   * MCP Apps (#97): resolve a tool result's linked `ui://` UI resource, honoring
-   * the per-server opt-in. Returns the `{ uri, serverName }` link only when the
-   * result carries a SEP-1865 `_meta.ui.resourceUri` AND the server has
-   * `enableMcpApps` turned on. The opt-in is enforced here (server-side) so an
-   * un-opted server's HTML is never even referenced to the browser. The config
-   * lookup only runs when a UI link is actually present (rare), so it adds no
-   * per-call cost to ordinary tools.
+   * MCP Apps (#97): resolve a tool definition's linked `ui://` resource while
+   * honoring the per-server opt-in. The stable spec requires predeclared
+   * templates; result metadata can echo that URI but cannot redirect the host
+   * to a different, unreviewed resource.
    */
-  private static async resolveToolUiLink(
+  static async resolveToolUiLink(
     serverName: string,
     toolName: string,
-    resultData: unknown
-  ): Promise<{ uri: string; serverName: string } | undefined> {
-    // The link may ride on the tool RESULT's `_meta` (FLUJO's original Phase-1
-    // assumption) OR — as the ext-apps SDK and the github-mcp-server actually do
-    // it — on the tool DEFINITION's `_meta.ui.resourceUri`. Check the result
-    // first (cheap, already in hand); only fall back to a tools/list lookup when
-    // the result carries no link, so ordinary tools add no per-call cost.
-    let uri = extractUiResourceUri((resultData as { _meta?: unknown } | null | undefined)?._meta);
+    resultData: unknown,
+    advertisedUri?: string,
+  ): Promise<{ uri: string; serverName: string; toolName: string } | undefined> {
+    // New conversations carry the advertised URI in their tool identity map.
+    // Older persisted maps do not, so re-read the model-visible definition as a
+    // compatibility fallback. Never select a URI solely from the call result.
+    let uri = advertisedUri;
     if (!uri) {
       try {
         const { tools } = await mcpService.listServerTools(serverName);
@@ -115,21 +112,7 @@ export class ModelHandler {
         log.warn(`resolveToolUiLink: failed to list tools for ${serverName}`, error);
       }
     }
-    if (!uri) return undefined;
-    try {
-      // Built-in servers (filesystem/bash/flujo) are first-party FLUJO code — their
-      // apps are trusted and always allowed, no per-server opt-in required.
-      const { isBuiltInServerName } = await import('@/backend/services/mcp/internal/registry');
-      if (isBuiltInServerName(serverName)) return { uri, serverName };
-      const configs = await mcpService.loadServerConfigs();
-      if (!Array.isArray(configs)) return undefined;
-      const config = configs.find((c) => c.name === serverName);
-      if (!config?.enableMcpApps) return undefined;
-      return { uri, serverName };
-    } catch (error) {
-      log.warn(`resolveToolUiLink: failed to check MCP Apps opt-in for ${serverName}`, error);
-      return undefined;
-    }
+    return resolveAdvertisedToolUiLink(serverName, toolName, uri, resultData);
   }
 
   /**
@@ -512,7 +495,9 @@ export class ModelHandler {
 
       // Only compensate messages still present. This makes repeated failure
       // handling idempotent: after the first pass neither state nor log changes.
-      const removals = [...messageIds].filter((id) => state.messages.some((message) => message.id === id));
+      const removals = [...messageIds].filter((id) =>
+        state.messages.some((message: FlujoChatMessage) => message.id === id)
+      );
       if (removals.length === 0) return;
       const removalSet = new Set(removals);
       for (let index = state.messages.length - 1; index >= 0; index--) {
@@ -1846,6 +1831,7 @@ export class ModelHandler {
       const executeOneToolCall = async (callIndex: number): Promise<void> => {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
+        const decodedForUi = decodeToolName(name, toolNameMap);
 
         const toolCallMessages: FlujoChatMessage[] = [];
         const processedToolCalls: ProcessedToolCall[] = [];
@@ -1857,13 +1843,24 @@ export class ModelHandler {
           // transcript well-formed. In-flight calls are killed via the signal.
           if (input.shouldAbort?.()) {
             log.info(`Cancellation detected before tool call ${name}; answering it with a synthetic cancelled result.`);
+            const cancelledReason = 'Execution cancelled by user before this tool call ran.';
+            const uiLink = decodedForUi
+              ? await ModelHandler.resolveToolUiLink(
+                  decodedForUi.server,
+                  decodedForUi.tool,
+                  undefined,
+                  decodedForUi.uiResourceUri,
+                )
+              : undefined;
             toolCallMessages.push({
               id: uuidv4(),
               role: "tool",
               tool_call_id: id,
-              content: 'Execution cancelled by user before this tool call ran.',
-              timestamp: Date.now()
+              content: cancelledReason,
+              timestamp: Date.now(),
+              ...(uiLink ? { ui: { ...uiLink, cancelledReason, isError: true } } : {}),
             });
+            processedToolCalls.push({ name, args: {}, id, result: cancelledReason });
             return;
           }
           // Parse the arguments
@@ -2030,7 +2027,7 @@ export class ModelHandler {
           // Decode the model-facing name back to (server, tool). New names use the
           // mcp_<slug>_<hash> scheme (decoded via toolNameMap); legacy conversations
           // used _-_-_SERVER_-_-_TOOL (decoded by decodeToolName's fallback).
-          const decoded = decodeToolName(name, toolNameMap);
+          const decoded = decodedForUi;
           if (!decoded) {
             log.error("invalid tool format", name)
             throw new Error(`Invalid tool name format: ${name}`);
@@ -2050,12 +2047,21 @@ export class ModelHandler {
             log.warn(`Rejecting stale/invalid tool call ${name}: ${freshness.reason}`);
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             emit?.({ type: 'tool:result', toolCallId: id, name, result: freshness.reason, isError: true });
+            const uiLink = await ModelHandler.resolveToolUiLink(
+              decoded.server,
+              decoded.tool,
+              undefined,
+              decoded.uiResourceUri,
+            );
             toolCallMessages.push({
               id: uuidv4(),
               role: 'tool',
               tool_call_id: id,
               content: freshness.reason,
               timestamp: Date.now(),
+              ...(uiLink
+                ? { ui: { ...uiLink, cancelledReason: freshness.reason, isError: true } }
+                : {}),
             });
             processedToolCalls.push({ name, args, id, result: freshness.reason });
             return;
@@ -2081,12 +2087,21 @@ export class ModelHandler {
                 result: deniedContent,
                 isError: true,
               });
+              const uiLink = await ModelHandler.resolveToolUiLink(
+                serverName,
+                toolName,
+                undefined,
+                decoded.uiResourceUri,
+              );
               toolCallMessages.push({
                 id: uuidv4(),
                 role: 'tool',
                 tool_call_id: id,
                 content: deniedContent,
                 timestamp: Date.now(),
+                ...(uiLink
+                  ? { ui: { ...uiLink, cancelledReason: deniedContent, isError: true } }
+                  : {}),
               });
               processedToolCalls.push({ name, args: callArgs, id, result: deniedContent });
               return;
@@ -2173,7 +2188,8 @@ export class ModelHandler {
               message: progress.message
             }),
             decoded.nodeId,
-            signal
+            signal,
+            'model',
           );
 
           // Tier 3 data flow: auto-capture binary/large tool results as
@@ -2273,9 +2289,22 @@ export class ModelHandler {
           // MCP Apps (#97): if the server linked this tool to a `ui://` UI
           // resource (SEP-1865 `_meta.ui.resourceUri`) AND has the per-server
           // opt-in enabled, attach the link so chat can render it sandboxed.
-          const uiLink = result.success
-            ? await ModelHandler.resolveToolUiLink(serverName, toolName, result.data)
-            : undefined;
+          const cancelledReason =
+            !result.success
+            && (
+              result.errorType === 'cancelled'
+              || result.errorType === 'timeout'
+              || signal?.aborted
+              || input.shouldAbort?.()
+            )
+              ? (result.error || 'Tool execution cancelled.')
+              : undefined;
+          const uiLink = await ModelHandler.resolveToolUiLink(
+            serverName,
+            toolName,
+            result.data,
+            decoded.uiResourceUri,
+          );
 
             // Add tool result message with timestamp and ID
             toolCallMessages.push({
@@ -2284,7 +2313,15 @@ export class ModelHandler {
               tool_call_id: id,
               content: resultContent,
               timestamp: Date.now(), // Add timestamp
-              ...(uiLink ? { ui: uiLink } : {})
+              ...(uiLink
+                ? {
+                    ui: {
+                      ...uiLink,
+                      ...(!result.success ? { isError: true } : {}),
+                      ...(cancelledReason ? { cancelledReason } : {}),
+                    },
+                  }
+                : {})
             });
 
           // Add to processed tool calls
@@ -2297,13 +2334,34 @@ export class ModelHandler {
         } catch (error) {
           const errorMessage = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
           emit?.({ type: 'tool:result', toolCallId: id, name, result: errorMessage, isError: true });
+          const wasCancelled =
+            signal?.aborted
+            || input.shouldAbort?.()
+            || /\bcancel(?:led|ed|ation)\b/i.test(errorMessage);
+          const uiLink = decodedForUi
+            ? await ModelHandler.resolveToolUiLink(
+                decodedForUi.server,
+                decodedForUi.tool,
+                undefined,
+                decodedForUi.uiResourceUri,
+              )
+            : undefined;
           // Add error message for this specific tool call with timestamp and ID
           toolCallMessages.push({
             id: uuidv4(), // Generate unique ID
             role: "tool",
             tool_call_id: id,
             content: errorMessage,
-            timestamp: Date.now() // Add timestamp
+            timestamp: Date.now(), // Add timestamp
+            ...(uiLink
+              ? {
+                  ui: {
+                    ...uiLink,
+                    isError: true,
+                    ...(wasCancelled ? { cancelledReason: errorMessage } : {}),
+                  },
+                }
+              : {}),
           });
 
           // Add to processed tool calls with error

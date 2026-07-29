@@ -137,6 +137,12 @@ import {
   FILESYSTEM_SERVER_NAME,
   BASH_SERVER_NAME,
 } from './internal/registry';
+import {
+  checkToolCallVisibility,
+  filterToolsForAudience,
+  ToolCallSource,
+  ToolListAudience,
+} from './appsProtocol';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -1273,8 +1279,11 @@ export class MCPService {
    * empty/failed list (which upstream silently turned into "this node has no MCP tools"),
    * we force a single reconnect-and-retry. Listing tools is idempotent, so retrying is safe.
    */
-  async listServerTools(serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
-    log.debug(`listServerTools: Entering method for server ${serverName}`);
+  async listServerTools(
+    serverName: string,
+    audience: ToolListAudience = 'model'
+  ): Promise<{ tools: ToolResponse[], error?: string }> {
+    log.debug(`listServerTools: Entering method for server ${serverName}, audience ${audience}`);
 
     // The built-in internal server answers in-process — no client, no reconnect
     // machinery. Dynamic import on purpose: internalTools transitively imports
@@ -1287,7 +1296,8 @@ export class MCPService {
         return { tools: [], error };
       }
       const { internalToolDefinitionsFor } = await import('./internal/dispatch');
-      return { tools: await internalToolDefinitionsFor(serverName) };
+      const tools = await internalToolDefinitionsFor(serverName);
+      return { tools: filterToolsForAudience(tools, audience) };
     }
 
     // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
@@ -1303,7 +1313,7 @@ export class MCPService {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
 
-    let result = await listTools(client, serverName);
+    let result = await listTools(client, serverName, audience);
 
     if (result.error) {
       // The connection is likely stale/dead - reconnect from scratch and try once more
@@ -1317,7 +1327,7 @@ export class MCPService {
       }
 
       client = this.clients.get(serverName);
-      result = await listTools(client, serverName);
+      result = await listTools(client, serverName, audience);
 
       if (result.error) {
         log.warn(`listServerTools: Retry after reconnect still failed for ${serverName}:`, result.error);
@@ -1334,8 +1344,17 @@ export class MCPService {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: ToolArgs, timeout?: number, onProgress?: (progress: ToolCallProgress) => void, callerNodeId?: string, signal?: AbortSignal): Promise<MCPServiceResponse> {
-    log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}`);
+  async callTool(
+    serverName: string,
+    toolName: string,
+    args: ToolArgs,
+    timeout?: number,
+    onProgress?: (progress: ToolCallProgress) => void,
+    callerNodeId?: string,
+    signal?: AbortSignal,
+    source: ToolCallSource = 'host'
+  ): Promise<MCPServiceResponse> {
+    log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`);
 
     // The built-in internal server dispatches in-process. The dispatcher always
     // resolves to a CallToolResult (tool-level failures come back as isError
@@ -1347,8 +1366,27 @@ export class MCPService {
         log.warn(`callTool: ${error}`);
         return { success: false, error };
       }
-      const { internalCallToolFor } = await import('./internal/dispatch');
-      const result = await internalCallToolFor(this, serverName, toolName, args, callerNodeId);
+      const { internalCallToolFor, internalToolDefinitionsFor } = await import('./internal/dispatch');
+      if (source === 'app' || source === 'model') {
+        const definitions = await internalToolDefinitionsFor(serverName);
+        const access = checkToolCallVisibility(definitions, serverName, toolName, source);
+        if (!access.allowed) {
+          log.warn(`callTool: Rejected ${source} call to built-in tool: ${access.error}`);
+          return {
+            success: false,
+            error: access.error,
+            statusCode: access.statusCode,
+          };
+        }
+      }
+      const result = await internalCallToolFor(
+        this,
+        serverName,
+        toolName,
+        args,
+        callerNodeId,
+        source,
+      );
       log.info(`callTool: Dispatched internal tool ${toolName} on ${serverName}`);
       return { success: true, data: result };
     }
@@ -1385,9 +1423,114 @@ export class MCPService {
       }
     }
 
-    const result = await callToolFunction(client, serverName, toolName, args, timeout, onProgress, signal);
+    const result = await callToolFunction(
+      client,
+      serverName,
+      toolName,
+      args,
+      timeout,
+      onProgress,
+      signal,
+      source
+    );
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
+  }
+
+  /**
+   * Call a tool on behalf of an MCP App frame.
+   *
+   * The app supplies only a tool name and arguments; `serverName` comes from
+   * the host frame that instantiated it. The low-level call verifies
+   * `_meta.ui.visibility` against definitions listed from that exact client
+   * immediately before dispatch. A failed authorization listing is safe to
+   * reconnect and retry once because the tool has not executed yet.
+   */
+  async callToolFromApp(
+    serverName: string,
+    toolName: string,
+    args: ToolArgs,
+    timeout?: number,
+    signal?: AbortSignal
+  ): Promise<MCPServiceResponse> {
+    const appAccess = await this.checkMcpAppAccess(serverName);
+    if (appAccess) return appAccess;
+
+    let result = await this.callTool(
+      serverName,
+      toolName,
+      args,
+      timeout,
+      undefined,
+      undefined,
+      signal,
+      'app'
+    );
+
+    if (result.errorType !== 'tool-authorization-list') {
+      return result;
+    }
+
+    log.warn(
+      `callToolFromApp: visibility lookup failed for ${serverName}/${toolName}; reconnecting and retrying once before dispatch`
+    );
+    const reconnect = await this.forceReconnect(serverName);
+    if (!reconnect.success) {
+      return {
+        success: false,
+        error: reconnect.error || result.error,
+        statusCode: result.statusCode,
+      };
+    }
+
+    result = await this.callTool(
+      serverName,
+      toolName,
+      args,
+      timeout,
+      undefined,
+      undefined,
+      signal,
+      'app'
+    );
+    return result;
+  }
+
+  /**
+   * Treat the per-server MCP Apps opt-in as a live authorization predicate.
+   * Historical chat messages can outlive a config change, so a persisted
+   * `ui://` marker must not keep app-originated access after the user opts out.
+   * Built-in servers are host-owned and explicitly exempt from this toggle.
+   */
+  async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
+    const internal = await this.isInternalServer(serverName);
+    const config = await this.getServerConfig(serverName);
+    if (config?.disabled === true) return false;
+    if (internal) return true;
+    return config?.enableMcpApps === true;
+  }
+
+  private async checkMcpAppAccess(serverName: string): Promise<MCPServiceResponse | null> {
+    if (await this.isMcpAppAccessEnabled(serverName)) return null;
+
+    const error =
+      `MCP Apps are not enabled for server '${serverName}'. Enable them on the MCP page before opening or using this app.`;
+    log.warn(`MCP App access denied: ${error}`);
+    return { success: false, error, statusCode: 403 };
+  }
+
+  /**
+   * Read a resource on behalf of an MCP App View. Unlike host/control-plane
+   * resource reads, this re-checks the server's current opt-in on every request
+   * so disabling MCP Apps revokes already-persisted or already-open Views.
+   */
+  async readResourceFromApp(
+    serverName: string,
+    uri: string
+  ): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+    const appAccess = await this.checkMcpAppAccess(serverName);
+    if (appAccess) return appAccess as MCPServiceResponse<MCPReadResourceResult>;
+    return this.readResource(serverName, uri);
   }
 
   /**

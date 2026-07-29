@@ -27,7 +27,8 @@ import { filesystemReadResource, FILESYSTEM_APP_URI, DEVCANVAS_DIFF_URI } from '
 function appHtml(): string {
   const res = filesystemReadResource(FILESYSTEM_APP_URI);
   expect(res.success).toBe(true);
-  const html = res.data?.contents?.[0]?.text;
+  const content = res.data?.contents?.[0];
+  const html = content && 'text' in content ? content.text : undefined;
   expect(typeof html).toBe('string');
   return html as string;
 }
@@ -35,7 +36,8 @@ function appHtml(): string {
 function devcanvasHtml(): string {
   const res = filesystemReadResource(DEVCANVAS_DIFF_URI);
   expect(res.success).toBe(true);
-  const html = res.data?.contents?.[0]?.text;
+  const content = res.data?.contents?.[0];
+  const html = content && 'text' in content ? content.text : undefined;
   expect(typeof html).toBe('string');
   return html as string;
 }

@@ -91,6 +91,12 @@ export interface DecodedTool {
   schemaHash?: string;
   /** MCP safety hints captured with the advertised tool definition. */
   annotations?: ToolAnnotations;
+  /**
+   * MCP Apps UI resource declared by the advertised tool definition. Carried
+   * with the identity map so a cancelled/failed invocation can still notify
+   * the app without re-listing tools after the call.
+   */
+  uiResourceUri?: string;
 }
 
 export type ToolNameMap = Record<string, DecodedTool>;
@@ -129,7 +135,18 @@ export function decodeToolName(name: string, map?: ToolNameMap): DecodedTool | n
   if (name.includes(LEGACY_SEP)) {
     const parts = name.split(LEGACY_SEP);
     if (parts.length === 3) {
-      return { server: parts[1], tool: parts[2] };
+      const legacyPair = { server: parts[1], tool: parts[2] };
+      // Once a conversation has an advertised map, legacy spellings are valid
+      // only as aliases for a bound pair. Otherwise a model could fabricate
+      // `_-_-_<server>_-_-_<tool>` and bypass the advertised tool set.
+      if (map) {
+        return Object.values(map).find(
+          (candidate) =>
+            candidate.server === legacyPair.server
+            && candidate.tool === legacyPair.tool,
+        ) ?? null;
+      }
+      return legacyPair;
     }
   }
   return null;

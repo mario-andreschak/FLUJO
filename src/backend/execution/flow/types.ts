@@ -1,6 +1,6 @@
 import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
-import { FlujoChatMessage } from '@/shared/types/chat';
+import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
@@ -575,6 +575,12 @@ export interface SharedState {
     };
     // Messages as the single source of truth, now using our timestamped type
     messages: FlujoChatMessage[];
+    /**
+     * Latest `ui/update-model-context` payload per MCP App. This is persisted
+     * separately from chat messages and injected only into future model wire
+     * contexts; an app update overwrites its previous entry.
+     */
+    mcpAppContexts?: McpAppModelContextMap;
     // Flow ID needed by some nodes
     flowId: string;
     /**
@@ -766,7 +772,7 @@ export interface SharedState {
      * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
      * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
 
     /**
      * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
@@ -904,6 +910,8 @@ export interface ToolDefinition {
     schemaHash?: string;
     /** Server-declared MCP safety hints, preserved for agentic adapters. */
     annotations?: ToolAnnotations;
+    /** MCP Apps UI resource declared on this tool definition. */
+    uiResourceUri?: string;
 }
 
 // MCP Context

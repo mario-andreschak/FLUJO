@@ -39,6 +39,8 @@ import { promises as fs } from 'fs';
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
+import type { ToolCallSource, ToolListAudience } from './appsProtocol';
+import type { ToolCallProgress } from './tools';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -105,12 +107,19 @@ const MIN_FLOW_SCHEDULE_INTERVAL_MS = 60_000;
 export interface InternalDispatchService {
   loadServerConfigs(): Promise<MCPServerConfig[] | MCPServiceResponse>;
   getServerStatus(serverName: string): Promise<{ status: string; message?: string }>;
-  listServerTools(serverName: string): Promise<{ tools: MCPToolResponse[]; error?: string }>;
+  listServerTools(
+    serverName: string,
+    audience?: ToolListAudience,
+  ): Promise<{ tools: MCPToolResponse[]; error?: string }>;
   callTool(
     serverName: string,
     toolName: string,
     args: Record<string, unknown>,
-    timeout?: number
+    timeout?: number,
+    onProgress?: (progress: ToolCallProgress) => void,
+    callerNodeId?: string,
+    signal?: AbortSignal,
+    source?: ToolCallSource,
   ): Promise<MCPServiceResponse>;
   forceReconnect(serverName: string): Promise<MCPServiceResponse>;
   updateServerConfig(
@@ -663,7 +672,8 @@ async function listMcpServers(service: InternalDispatchService): Promise<CallToo
 
 async function listMcpServerTools(
   service: InternalDispatchService,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  source: ToolCallSource,
 ): Promise<CallToolResult> {
   const server = String(args?.server ?? '').trim();
   if (!server) {
@@ -674,7 +684,8 @@ async function listMcpServerTools(
       internalToolDefinitions().map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))
     );
   }
-  const { tools, error } = await service.listServerTools(server);
+  const audience: ToolListAudience = source === 'host' ? 'all' : source;
+  const { tools, error } = await service.listServerTools(server, audience);
   if (error) {
     return textResult({ error }, true);
   }
@@ -683,7 +694,8 @@ async function listMcpServerTools(
 
 async function callMcpTool(
   service: InternalDispatchService,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  source: ToolCallSource,
 ): Promise<CallToolResult> {
   const server = String(args?.server ?? '').trim();
   const tool = String(args?.tool ?? '').trim();
@@ -702,7 +714,16 @@ async function callMcpTool(
       : {};
   const timeout = typeof args?.timeout === 'number' ? args.timeout : undefined;
 
-  const result = await service.callTool(server, tool, toolArgs, timeout);
+  const result = await service.callTool(
+    server,
+    tool,
+    toolArgs,
+    timeout,
+    undefined,
+    undefined,
+    undefined,
+    source,
+  );
   if (!result.success) {
     return textResult({ error: result.error ?? `Tool call failed on ${server}.` }, true);
   }
@@ -1225,7 +1246,8 @@ async function kvSetTool(args: Record<string, unknown>): Promise<CallToolResult>
 export async function internalCallTool(
   service: InternalDispatchService,
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  source: ToolCallSource = 'host',
 ): Promise<CallToolResult> {
   try {
     if (isAuthoringTool(toolName)) {
@@ -1251,9 +1273,9 @@ export async function internalCallTool(
       case 'list_mcp_servers':
         return await listMcpServers(service);
       case 'list_mcp_server_tools':
-        return await listMcpServerTools(service, args);
+        return await listMcpServerTools(service, args, source);
       case 'call_mcp_tool':
-        return await callMcpTool(service, args);
+        return await callMcpTool(service, args, source);
       case 'restart_mcp_server':
         return await restartMcpServer(service, args);
       case 'set_mcp_server_enabled':

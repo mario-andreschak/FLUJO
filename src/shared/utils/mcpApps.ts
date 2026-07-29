@@ -1,35 +1,30 @@
 /**
  * MCP Apps (SEP-1865, extension `io.modelcontextprotocol/ui`) — shared, pure
- * helpers for FLUJO's Phase 1 support (issue #97): read-only, sandboxed
- * rendering of a tool's linked `ui://` UI resource in the chat tool-call
- * timeline.
+ * helpers for FLUJO's sandboxed, interactive host support (issue #97):
+ * classifying tool-linked `ui://` resources, validating metadata, and safely
+ * extracting their HTML.
  *
  * Everything here is framework-free and side-effect-free so it can be unit
  * tested in the node-env Jest harness and reused on both the backend (link
- * extraction / opt-in gating) and the frontend (CSP + sandbox assembly, HTML
- * extraction). NOTHING in this module fetches, renders, or executes anything —
- * it only classifies and assembles strings.
- *
- * Security note: Phase 1 is read-only. There is deliberately NO iframe→host
- * JSON-RPC bridge here; the interactive bridge is a gated Phase 2 that must
- * pass the plan's §5 security checklist first.
+ * extraction / opt-in gating) and the frontend (HTML extraction). Nothing in
+ * this module fetches, renders, or executes server content. The interactive
+ * AppBridge and foreign-origin sandbox live in McpAppFrame/sandboxServer.
  */
 
 /** URI scheme SEP-1865 uses for UI resources, e.g. `ui://weather-dashboard`. */
 export const UI_RESOURCE_SCHEME = 'ui://';
 
 /**
- * MIME type a UI resource is served as. Matched loosely (prefix + profile
- * token) so a server that adds charset/whitespace params still qualifies.
+ * Required media-type profile for UI resources. Parsing tolerates ordinary
+ * whitespace and additional well-formed parameters such as `charset`.
  */
 export const MCP_APP_MIME_PROFILE = 'profile=mcp-app';
 
 /**
- * Sandbox attribute for the rendering iframe. `allow-scripts` WITHOUT
- * `allow-same-origin`: the app may run JS but is denied same-origin access to
- * FLUJO (cookies, storage, DOM, same-origin fetch). This is the core Phase 1
- * isolation boundary — do NOT add `allow-same-origin` (it would defeat the
- * sandbox) without the Phase 2 security review.
+ * Sandbox attribute for the inner app View. `allow-scripts` WITHOUT
+ * `allow-same-origin`: the app may run JS but retains an opaque origin. The
+ * foreign-origin outer proxy has a separate sandbox policy because it owns the
+ * postMessage relay; do not reuse that policy for server-supplied HTML.
  */
 export const MCP_APP_IFRAME_SANDBOX = 'allow-scripts';
 
@@ -72,7 +67,12 @@ export interface ToolUiLink {
 
 /** True when `uri` is a UI resource URI (`ui://…`). */
 export function isUiResourceUri(uri: unknown): uri is string {
-  return typeof uri === 'string' && /^ui:\/\//i.test(uri);
+  return (
+    typeof uri === 'string'
+    && uri.length > UI_RESOURCE_SCHEME.length
+    && uri.slice(0, UI_RESOURCE_SCHEME.length).toLowerCase() === UI_RESOURCE_SCHEME
+    && !/\s/.test(uri)
+  );
 }
 
 /** True when `mimeType` denotes an MCP-app HTML resource (`text/html;profile=mcp-app`). */
@@ -80,19 +80,28 @@ export function isMcpAppMimeType(mimeType: unknown): boolean {
   if (typeof mimeType !== 'string') return false;
   const [essence, ...rawParameters] = mimeType.toLowerCase().split(';');
   if (essence.trim() !== 'text/html') return false;
-  return rawParameters.some((parameter) => {
-    const [name, value, ...extra] = parameter.split('=');
-    return extra.length === 0 && name.trim() === 'profile' && value?.trim() === 'mcp-app';
-  });
+  let foundProfile = false;
+  for (const parameter of rawParameters) {
+    const equals = parameter.indexOf('=');
+    if (equals <= 0) return false;
+    const name = parameter.slice(0, equals).trim();
+    const value = parameter.slice(equals + 1).trim();
+    if (!name || !value) return false;
+    if (name !== 'profile') continue;
+    if (foundProfile || value !== 'mcp-app') return false;
+    foundProfile = true;
+  }
+  return foundProfile;
 }
 
 /**
  * Extract the linked UI resource URI from an MCP `_meta` block, if any.
  *
- * SEP-1865 links a tool (and, in FLUJO's Phase 1, the tool RESULT that echoes
- * it) to its UI via `_meta.ui.resourceUri`. Some servers key the extension by
- * its full identifier (`_meta["io.modelcontextprotocol/ui"].resourceUri`) — we
- * accept both. Returns the URI only when it is a valid `ui://` string.
+ * The stable specification uses `_meta.ui.resourceUri` and retains the flat
+ * `_meta["ui/resourceUri"]` spelling for compatibility. Some servers key the
+ * extension by its full identifier
+ * (`_meta["io.modelcontextprotocol/ui"].resourceUri`). Returns a link only when
+ * it is a valid `ui://` string.
  */
 export function extractUiResourceUri(meta: unknown): string | undefined {
   if (!meta || typeof meta !== 'object') return undefined;
@@ -118,9 +127,8 @@ export function extractUiResourceUri(meta: unknown): string | undefined {
  * space, so ANY token containing a CSP-special character (whitespace, `;`, `,`,
  * quotes, `$`, backtick, `<`/`>`, parentheses, backslash, or an ASCII control
  * char) could inject a brand-new directive/keyword and silently widen the policy
- * — defeating the Phase-1 default-deny egress boundary the whole design rests
+ * — defeating the default-deny egress boundary the whole design rests
  * on. We therefore accept ONLY:
- *   - the exact quoted keywords `'self'` and `'none'`;
  *   - `https://` or `wss://` origins of the form `scheme://[*.]host[:port]`
  *     where `host` is one or more DNS labels (`[a-z0-9-]`, dot-separated), an
  *     optional single `*.` wildcard prefix is allowed, and an optional `:port`
@@ -134,12 +142,23 @@ export function extractUiResourceUri(meta: unknown): string | undefined {
  */
 export function isValidCspSourceToken(token: unknown): boolean {
   if (typeof token !== 'string') return false;
-  if (token === "'self'" || token === "'none'") return true;
   // Defence-in-depth: reject any control char or CSP-special char outright.
   // (control chars, space, DEL and any non-ASCII are caught by the printable
   // complement; the second class rejects CSP/HTML/regex-special printables.)
   if (/[^\x21-\x7e]/.test(token) || /[;,'"`$<>\\()]/.test(token)) return false;
-  return /^(?:https|wss):\/\/(?:\*\.)?(?:[a-z0-9-]+\.)*[a-z0-9-]+(?::\d{1,5})?$/i.test(token);
+  const match = /^(?:https|wss):\/\/(?:\*\.)?([^/:?#]+)(?::(\d{1,5}))?$/i.exec(token);
+  if (!match) return false;
+  const hostname = match[1];
+  if (
+    hostname.length > 253
+    || hostname.split('.').some((label) => (
+      label.length === 0
+      || label.length > 63
+      || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+    ))
+  ) return false;
+  const port = match[2] ? Number(match[2]) : undefined;
+  return port === undefined || (Number.isInteger(port) && port >= 1 && port <= 65_535);
 }
 
 /**
@@ -153,28 +172,37 @@ export function isValidCspSourceToken(token: unknown): boolean {
  * iframe document (belt-and-suspenders alongside the `sandbox` attribute).
  */
 export function buildAppCsp(meta?: UIResourceCsp | null): string {
-  const cleanDomains = (domains?: string[]): string =>
+  const cleanDomains = (
+    domains: string[] | undefined,
+    allowedSchemes: Array<'https' | 'wss'>,
+  ): string =>
     (domains || [])
       .map((d) => (typeof d === 'string' ? d.trim() : ''))
-      .filter((d) => d !== '' && isValidCspSourceToken(d))
+      .filter((d) => (
+        d !== ''
+        && isValidCspSourceToken(d)
+        && allowedSchemes.some((scheme) => d.toLowerCase().startsWith(`${scheme}://`))
+      ))
       .join(' ');
 
-  const connect = cleanDomains(meta?.connectDomains);
-  const resource = cleanDomains(meta?.resourceDomains);
-  const frame = cleanDomains(meta?.frameDomains);
-  const baseUri = cleanDomains(meta?.baseUriDomains);
+  const connect = cleanDomains(meta?.connectDomains, ['https', 'wss']);
+  const resource = cleanDomains(meta?.resourceDomains, ['https']);
+  const frame = cleanDomains(meta?.frameDomains, ['https']);
+  const baseUri = cleanDomains(meta?.baseUriDomains, ['https']);
 
   const directives: string[] = [
     "default-src 'none'",
     // A self-contained srcdoc document needs inline script/style to run at all.
-    `script-src 'unsafe-inline'${resource ? ` ${resource}` : ''}`,
-    `style-src 'unsafe-inline'${resource ? ` ${resource}` : ''}`,
-    `img-src data: blob:${resource ? ` ${resource}` : ''}`,
+    `script-src 'self' 'unsafe-inline'${resource ? ` ${resource}` : ''}`,
+    `style-src 'self' 'unsafe-inline'${resource ? ` ${resource}` : ''}`,
+    `img-src 'self' data:${resource ? ` ${resource}` : ''}`,
     `font-src${resource ? ` ${resource}` : " 'none'"}`,
-    `media-src data: blob:${resource ? ` ${resource}` : ''}`,
+    `media-src 'self' data:${resource ? ` ${resource}` : ''}`,
     `connect-src${connect ? ` ${connect}` : " 'none'"}`,
+    "worker-src 'none'",
     `frame-src${frame ? ` ${frame}` : " 'none'"}`,
-    `base-uri${baseUri ? ` ${baseUri}` : " 'none'"}`,
+    "object-src 'none'",
+    `base-uri${baseUri ? ` ${baseUri}` : " 'self'"}`,
     "form-action 'none'",
   ];
   return directives.join('; ');
@@ -211,10 +239,9 @@ interface ResourceContentEntry {
 }
 
 /**
- * Pull the renderable HTML string out of a ReadResourceResult, enforcing the
- * size cap. Prefers a `text/html;profile=mcp-app` entry; falls back to the
- * first entry carrying `text`. Returns undefined when there is no usable text
- * body or it exceeds {@link MAX_UI_RESOURCE_BYTES}.
+ * Pull the renderable HTML string out of a ReadResourceResult, enforcing exact
+ * resource URI matching, the stable `text/html;profile=mcp-app` MIME profile,
+ * valid text/base64 content, and the size cap.
  */
 export function extractAppHtml(
   result: unknown,

@@ -190,6 +190,11 @@ export async function GET(
         // chat header's token counter and context meter.
         usage: sharedState.usage,
         contextInfo: await buildContextInfo(sharedState),
+        // MCP App context is host-managed conversation state. Returning the
+        // latest per-View map lets the chat hydrate it when a conversation is
+        // revisited instead of accidentally replacing persisted context with
+        // an empty map on navigation.
+        mcpAppContexts: sharedState.mcpAppContexts,
       };
 
       // Return the full conversation data

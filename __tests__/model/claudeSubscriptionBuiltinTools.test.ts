@@ -18,13 +18,27 @@ import type { CompletionInput } from '@/backend/services/model/adapters/types';
 
 // Capture the options the adapter passes to the Agent SDK's query().
 const queryMock = jest.fn();
+const callToolMock = jest.fn();
+const loadServerConfigsMock = jest.fn();
+let sdkToolsMock: Array<{
+  name: string;
+  handler: (args: Record<string, unknown>) => Promise<unknown>;
+}> = [];
 
 // Mock the ESM Agent SDK so it is never really loaded (that ESM load is the very
 // reason the adapter imports it lazily). createSdkMcpServer/tool return inert
 // stand-ins — we only care about the options handed to query().
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...a: unknown[]) => queryMock(...(a as [])),
-  createSdkMcpServer: (cfg: unknown) => ({ __server: cfg }),
+  createSdkMcpServer: (cfg: {
+    tools?: Array<{
+      name: string;
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    }>;
+  }) => {
+    sdkToolsMock = cfg.tools ?? [];
+    return { __server: cfg };
+  },
   tool: (name: string, description: string, shape: unknown, handler: unknown) => ({
     name,
     description,
@@ -36,7 +50,16 @@ jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
 // The adapter imports mcpService at module scope; stub it (a tools-less run never
 // calls it, but we must not drag in its dependency graph).
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { callTool: jest.fn() },
+  mcpService: {
+    callTool: (...a: unknown[]) => callToolMock(...(a as [])),
+    loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
+    isMcpAppAccessEnabled: async (serverName: string) => {
+      const configs = await loadServerConfigsMock();
+      return Array.isArray(configs)
+        && configs.some((config: { name?: string; enableMcpApps?: boolean }) =>
+          config.name === serverName && config.enableMcpApps === true);
+    },
+  },
 }));
 
 import { ClaudeSubscriptionAdapter } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
@@ -70,6 +93,12 @@ const capturedOptions = () => {
 
 beforeEach(() => {
   queryMock.mockReset();
+  callToolMock.mockReset();
+  loadServerConfigsMock.mockReset();
+  loadServerConfigsMock.mockResolvedValue([
+    { name: 'my-server', enableMcpApps: true },
+  ]);
+  sdkToolsMock = [];
   queryMock.mockImplementation(() => successStream());
 });
 
@@ -103,7 +132,7 @@ describe('ClaudeSubscriptionAdapter — malformed tool-call prose quarantine (#2
     );
 
     expect(result.transcript).toHaveLength(1);
-    expect(result.transcript[0]).toMatchObject({ role: 'assistant', content: 'safe terminal fallback' });
+    expect(result.transcript![0]).toMatchObject({ role: 'assistant', content: 'safe terminal fallback' });
     expect(onTranscriptMessage).toHaveBeenCalledTimes(1);
     expect(onTranscriptMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: 'safe terminal fallback' }),
@@ -200,5 +229,120 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     expect(options.disallowedTools as string[]).toContain('Bash');
     // The node's own tools ARE exposed via the in-process MCP server.
     expect(options.mcpServers).toBeDefined();
+  });
+});
+
+const mcpAppTool: OpenAI.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'mcp_hashed_name',
+    description: 'Lists things',
+    parameters: { type: 'object', properties: { q: { type: 'string' } } },
+  },
+};
+
+describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
+  it('preserves the advertised UI, ignores a result redirect, and propagates abort', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: 'ok' }],
+        _meta: { ui: { resourceUri: 'ui://unadvertised-redirect' } },
+      },
+    });
+    queryMock.mockImplementation(() => (async function* () {
+      await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            timeout: 30,
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
+      }),
+    );
+
+    expect(callToolMock).toHaveBeenCalledWith(
+      'my-server',
+      'list_things',
+      { q: 'x' },
+      30,
+      undefined,
+      undefined,
+      expect.any(AbortSignal),
+      'model',
+    );
+    const toolMsg = transcript!.find(message => message.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+    });
+  });
+
+  it('records approval rejection as an MCP App cancellation', async () => {
+    queryMock.mockImplementation(({ options }: {
+      options: {
+        canUseTool: (
+          toolName: string,
+          input: unknown,
+          opts: { toolUseID: string },
+        ) => Promise<{ behavior: string }>;
+      };
+    }) => (async function* () {
+      const denied = await options.canUseTool(
+        `mcp__flujo__${sdkToolsMock[0].name}`,
+        { q: 'x' },
+        { toolUseID: 'approval-call-1' },
+      );
+      expect(denied.behavior).toBe('deny');
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'adjusted',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
+        requestToolApproval: jest.fn(async () => ({
+          approved: false,
+          feedback: 'wrong target',
+        })),
+      }),
+    );
+
+    expect(callToolMock).not.toHaveBeenCalled();
+    const toolMsg = transcript!.find(message => message.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+      cancelledReason: 'User rejected this tool call: wrong target',
+      isError: true,
+    });
   });
 });

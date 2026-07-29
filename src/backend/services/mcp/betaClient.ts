@@ -19,13 +19,18 @@ import {
   httpConfigKey,
   resolveStdioLaunch,
   stdioConfigKey,
+  capabilityKey,
   ClientWithBetaMarker,
   TransportWithConfigKey,
 } from './connection';
 import { createOAuthClientProvider } from './oauth';
 import { createRootsListHandler } from './roots';
-import { samplingEnabled, samplingConfigKey, createSamplingHandler } from './sampling';
-import { elicitationEnabled, elicitationConfigKey, createElicitationHandler } from './elicitation';
+import { samplingEnabled, createSamplingHandler } from './sampling';
+import { elicitationEnabled, createElicitationHandler } from './elicitation';
+import {
+  MCP_APPS_EXTENSION_ID,
+  MCP_APP_RESOURCE_MIME_TYPE,
+} from './appsProtocol';
 
 // ---------------------------------------------------------------------------
 // Experimental v2-beta MCP protocol support (spec revision 2026-07-28).
@@ -77,7 +82,8 @@ export function isBetaClient(client: Client): boolean {
 /**
  * Create a v2-beta MCP client for a server config, mirroring
  * connection.ts#createNewClient: same client identity, same capability policy
- * (roots always declared, sampling only under an enabled trust policy), and
+ * (roots always declared, sampling/elicitation under their trust policies, MCP
+ * Apps only under the server's explicit opt-in), and
  * the SAME live-resolving roots/sampling behaviour — the v2
  * `setRequestHandler` takes a method string instead of a schema, but the
  * handler bodies are shared with the v1 registration (roots.ts/sampling.ts).
@@ -88,6 +94,7 @@ export function isBetaClient(client: Client): boolean {
 export function createNewBetaClient(config: MCPServerConfig): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
+  const serverHasMcpApps = config.enableMcpApps === true;
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
@@ -98,6 +105,15 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
         ...(serverHasElicitation ? { elicitation: {} } : {}),
+        ...(serverHasMcpApps
+          ? {
+              extensions: {
+                [MCP_APPS_EXTENSION_ID]: {
+                  mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
+                },
+              },
+            }
+          : {}),
       },
       // 'auto': probe for a 2026-07-28 server, fall back to the classic
       // initialize handshake on anything else. Never 'pin' — FLUJO must keep
@@ -120,8 +136,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   // Same capability key the v1 factory stamps (see connection.ts ClientWithCapKey):
   // shouldRecreateClient compares it before its beta branch, so a beta client
   // without it would be needlessly rebuilt on every connect once sampling is on.
-  (client as unknown as { __flujoCapKey?: string }).__flujoCapKey =
-    samplingConfigKey(config) + '|' + elicitationConfigKey(config);
+  (client as unknown as { __flujoCapKey?: string }).__flujoCapKey = capabilityKey(config);
   log.info(`Created v2-beta MCP client for ${config.name} (version negotiation: auto)`);
   return client as unknown as Client;
 }

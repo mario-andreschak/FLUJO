@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { MCPHandler } from '../handlers/MCPHandler';
 import { encodeToolName, hashSchema } from '../handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
+import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { SharedState, MCPNodeParams, MCPNodePrepResult, MCPNodeExecResult } from '../types';
 import { FEATURES } from '@/config/features'; // Import feature flags
 
@@ -154,6 +155,7 @@ export class MCPNode extends BaseNode {
             timeout: toolTimeout,
             clientGeneration: mcpService.getClientGeneration(execResult.server!),
             schemaHash,
+            uiResourceUri: extractUiResourceUri((tool as { _meta?: unknown })._meta),
           };
         });
       
@@ -191,6 +193,7 @@ export class MCPNode extends BaseNode {
           clientGeneration: tool.clientGeneration,
           schemaHash: tool.schemaHash,
           annotations: tool.annotations,
+          uiResourceUri: tool.uiResourceUri,
         };
       }
 

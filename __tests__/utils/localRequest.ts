@@ -54,6 +54,9 @@ export function makeLocalRequest(options: LocalRequestOptions = {}): any {
 
   return {
     url,
+    // Real Request/NextRequest objects always expose a signal. Including one
+    // keeps route tests honest when handlers propagate client disconnects.
+    signal: new AbortController().signal,
     headers: {
       get(name: string): string | null {
         const key = String(name).toLowerCase();

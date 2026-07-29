@@ -56,8 +56,18 @@ jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({
 }));
 
 const callToolMock = jest.fn();
+const loadServerConfigsMock = jest.fn();
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { callTool: (...a: unknown[]) => callToolMock(...(a as [])) },
+  mcpService: {
+    callTool: (...a: unknown[]) => callToolMock(...(a as [])),
+    loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
+    isMcpAppAccessEnabled: async (serverName: string) => {
+      const configs = await loadServerConfigsMock();
+      return Array.isArray(configs)
+        && configs.some((config: { name?: string; enableMcpApps?: boolean }) =>
+          config.name === serverName && config.enableMcpApps === true);
+    },
+  },
 }));
 jest.mock('@/backend/services/runResources', () => ({
   getRunResourceSettings: jest.fn(async () => ({})),
@@ -111,6 +121,10 @@ beforeEach(() => {
   resumeThreadMock.mockReset();
   runStreamedMock.mockReset();
   callToolMock.mockReset();
+  loadServerConfigsMock.mockReset();
+  loadServerConfigsMock.mockResolvedValue([
+    { name: 'my-server', enableMcpApps: true },
+  ]);
   bridgeCloseMock.mockClear();
   capturedBridgeTools = [];
   capturedBridgeInstructions = undefined;
@@ -404,10 +418,126 @@ describe('CodexAdapter — tool bridging', () => {
       }),
     );
 
-    expect(callToolMock).toHaveBeenCalledWith('my-server', 'list_things', { q: 'x' }, 30, undefined, undefined);
+    expect(callToolMock).toHaveBeenCalledWith(
+      'my-server',
+      'list_things',
+      { q: 'x' },
+      30,
+      undefined,
+      undefined,
+      expect.any(AbortSignal),
+      'model',
+    );
     const roles = transcript!.map(m => m.role);
     // assistant(tool_call) + tool(result) + final assistant answer.
     expect(roles).toEqual(['assistant', 'tool', 'assistant']);
+  });
+
+  it('records the definition-advertised MCP App UI and ignores a result redirect', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: 'ok' }],
+        _meta: { ui: { resourceUri: 'ui://unadvertised-redirect' } },
+      },
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
+      }),
+    );
+
+    const toolMsg = transcript!.find(m => m.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+    });
+  });
+
+  it('does not let result metadata introduce an unadvertised MCP App UI', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: 'ok' }],
+        _meta: { ui: { resourceUri: 'ui://result-only-dashboard' } },
+      },
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+          },
+        },
+      }),
+    );
+
+    const toolMsg = transcript!.find(m => m.role === 'tool');
+    expect(toolMsg?.ui).toBeUndefined();
+    expect(loadServerConfigsMock).not.toHaveBeenCalled();
+  });
+
+  it('marks a timed-out MCP App invocation as cancelled in the transcript', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: false,
+      error: 'Tool execution timed out after 30 seconds',
+      errorType: 'timeout',
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
+      }),
+    );
+
+    const toolMsg = transcript!.find(m => m.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+      cancelledReason: 'Tool execution timed out after 30 seconds',
+      isError: true,
+    });
   });
 
   it('does not duplicate a completed bridged tool pair when continuing', async () => {
@@ -446,14 +576,27 @@ describe('CodexAdapter — tool bridging', () => {
     const { transcript } = await new CodexAdapter().createCompletion(
       baseInput({
         tools: [mcpTool],
-        toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'my-server',
+            tool: 'list_things',
+            uiResourceUri: 'ui://advertised-dashboard',
+          },
+        },
         requestToolApproval: approvals,
       }),
     );
 
     expect(callToolMock).not.toHaveBeenCalled();
-    const toolMsg = transcript!.find(m => m.role === 'tool') as { content: string };
+    const toolMsg = transcript!.find(m => m.role === 'tool')!;
     expect(toolMsg.content).toContain('User rejected this tool call: wrong target');
+    expect(toolMsg.ui).toEqual({
+      uri: 'ui://advertised-dashboard',
+      serverName: 'my-server',
+      toolName: 'list_things',
+      cancelledReason: 'User rejected this tool call: wrong target',
+      isError: true,
+    });
   });
 
   it('a plain handoff ends the run and surfaces as a routing tool_call', async () => {

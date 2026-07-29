@@ -40,6 +40,7 @@ import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
+import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
@@ -458,6 +459,7 @@ export class ProcessNode extends BaseNode {
           clientGeneration: tool.clientGeneration,
           schemaHash: tool.schemaHash,
           annotations: tool.annotations,
+          uiResourceUri: tool.uiResourceUri,
         };
       }
     }
@@ -628,6 +630,20 @@ export class ProcessNode extends BaseNode {
         inputMode,
         resolvedIsolatedPrompt,
       );
+    }
+
+    // MCP Apps: `ui/update-model-context` is future-turn context, not a chat
+    // message. Add the latest per-app snapshots to the wire view only, directly
+    // before the current user input, so they neither appear in nor mutate the
+    // persisted transcript. This also keeps overwrite semantics: exactly one
+    // synthetic message is generated from the current map on every prep.
+    const contextBase = prepResult.wireMessages ?? wireBase;
+    const withAppContext = withMcpAppModelContext(
+      contextBase,
+      sharedState.mcpAppContexts,
+    );
+    if (withAppContext !== contextBase) {
+      prepResult.wireMessages = withAppContext;
     }
 
     // Issue #168 / #239: expose the synthetic `read_resource` tool so the model
@@ -824,6 +840,7 @@ export class ProcessNode extends BaseNode {
             clientGeneration: t.clientGeneration,
             schemaHash: t.schemaHash,
             annotations: t.annotations,
+            uiResourceUri: t.uiResourceUri,
           };
         }
       }

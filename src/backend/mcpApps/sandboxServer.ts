@@ -1,21 +1,20 @@
 /**
  * MCP Apps (#97) — Phase 2 sandbox proxy origin.
  *
- * The MCP Apps spec (2026-01-26) renders an app's HTML inside a sandboxed
- * iframe, but the iframe runs `allow-scripts allow-same-origin` — so isolation
- * from FLUJO can NOT come from the sandbox attribute alone. It comes from a
- * SEPARATE ORIGIN: a tiny "sandbox proxy" document served from a different
- * origin than the FLUJO app. The proxy creates the real (inner) app iframe,
- * `document.write`s the untrusted HTML into it, and relays postMessage between
- * FLUJO (parent) and the app (inner). Because the proxy is a foreign origin,
- * the app's `allow-same-origin` grants it same-origin access only to the
- * throwaway sandbox origin — never to FLUJO's cookies/storage/DOM.
+ * The MCP Apps spec (2026-01-26) requires a sandbox proxy on a different origin
+ * from FLUJO. That proxy creates the real (inner) app iframe and relays
+ * postMessage between FLUJO (parent) and the app (inner). The inner View is
+ * additionally assigned an opaque origin so apps cannot share the proxy
+ * origin's cookies or persistent storage with one another.
  *
  * This module runs that foreign origin as a dedicated HTTP listener on its own
- * port (default FLUJO_PORT+1). It serves exactly one document — `sandbox.html`
- * — with a Content-Security-Policy set via HTTP HEADER (tamper-proof, unlike a
- * <meta> tag) built from the resource's declared `_meta.ui.csp`, passed in via
- * the `?csp=` query param by the host.
+ * port (4201 by default). It serves exactly one document — `sandbox.html`
+ * — with a host-facing Content-Security-Policy set via HTTP header. The proxy
+ * policy permits only its own mandatory `srcdoc` iframe and never inherits
+ * app-declared network/frame domains. The resource's `_meta.ui.csp`, passed in
+ * via the `?csp=` query param by the host, is instead sanitized and prepended
+ * to that inner `srcdoc` as its first byte. Access also requires an unguessable,
+ * per-process query token obtained through FLUJO's authenticated API.
  *
  * The proxy script is inlined (dependency-free vanilla JS) so this needs no
  * bundler step and stays in lockstep with the constants below.
@@ -25,6 +24,7 @@
  * don't render — FLUJO itself is unaffected.
  */
 import http from 'node:http';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/mcpApps/sandboxServer');
@@ -32,11 +32,68 @@ const log = createLogger('backend/mcpApps/sandboxServer');
 /** JSON-RPC method names shared with the host bridge (see mcpApps.ts). */
 const SANDBOX_PROXY_READY = 'ui/notifications/sandbox-proxy-ready';
 const SANDBOX_RESOURCE_READY = 'ui/notifications/sandbox-resource-ready';
+const SANDBOX_NOTIFICATION_PREFIX = 'ui/notifications/sandbox-';
 
 /** Default port for the sandbox origin. Override with FLUJO_MCP_APP_SANDBOX_PORT. */
 export const DEFAULT_SANDBOX_PORT = 4201;
+export const SANDBOX_AUTH_QUERY_PARAM = 'token';
+export const SANDBOX_PUBLIC_URL_ENV = 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL';
+export const SANDBOX_HOST_ORIGINS_ENV = 'FLUJO_MCP_APP_HOST_ORIGINS';
+
+const MAX_CONFIGURED_HOST_ORIGINS = 16;
+
+type SandboxServerStatus = 'idle' | 'starting' | 'listening' | 'failed';
+
+interface SandboxRuntimeState {
+  authToken: string;
+  status: SandboxServerStatus;
+  port?: number;
+  server?: http.Server;
+}
+
+/**
+ * Next may evaluate instrumentation and route-handler bundles separately in the
+ * same process. Symbol.for keeps their token/readiness state shared rather than
+ * accidentally minting different credentials in each bundle.
+ */
+const SANDBOX_RUNTIME_STATE_KEY = Symbol.for('flujo.mcpApps.sandboxRuntimeState.v1');
+const globalRegistry = globalThis as typeof globalThis & { [key: symbol]: unknown };
+let sandboxRuntime = globalRegistry[SANDBOX_RUNTIME_STATE_KEY] as SandboxRuntimeState | undefined;
+if (!sandboxRuntime) {
+  sandboxRuntime = {
+    authToken: randomBytes(32).toString('base64url'),
+    status: 'idle',
+  };
+  globalRegistry[SANDBOX_RUNTIME_STATE_KEY] = sandboxRuntime;
+}
+
+/** Token required in the sandbox document URL. Never expose it outside an authenticated route. */
+export function getSandboxAuthToken(): string {
+  return sandboxRuntime!.authToken;
+}
+
+/** Constant-time comparison helper used by the listener and available to route-level tests. */
+export function isSandboxAuthTokenValid(candidate: unknown): boolean {
+  if (typeof candidate !== 'string') return false;
+  const supplied = Buffer.from(candidate, 'utf8');
+  const expected = Buffer.from(getSandboxAuthToken(), 'utf8');
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+}
+
+/** Lets the API fail closed instead of directing a View at an untrusted port owner. */
+export function isSandboxServerReady(): boolean {
+  return sandboxRuntime!.status === 'listening';
+}
+
+/** Primarily useful for diagnostics and tests; callers should gate on readiness. */
+export function getSandboxServerStatus(): SandboxServerStatus {
+  return sandboxRuntime!.status;
+}
 
 export function getSandboxPort(): number {
+  if (sandboxRuntime!.status === 'listening' && sandboxRuntime!.port) {
+    return sandboxRuntime!.port;
+  }
   const raw = process.env.FLUJO_MCP_APP_SANDBOX_PORT;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_SANDBOX_PORT;
@@ -45,6 +102,77 @@ export function getSandboxPort(): number {
 /** Bind host for the listener. Loopback by default; set FLUJO_MCP_APP_SANDBOX_HOST to widen. */
 function getSandboxBindHost(): string {
   return process.env.FLUJO_MCP_APP_SANDBOX_HOST || '127.0.0.1';
+}
+
+function parseHttpOrigin(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== '/'
+      || parsed.search
+      || parsed.hash
+    ) {
+      return undefined;
+    }
+    return parsed.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Exact host origins permitted to embed a separately-hosted sandbox proxy.
+ * When this env var is present but malformed, the allowlist is intentionally
+ * empty (fail closed); same-host fallback applies only when it is omitted.
+ */
+export function getConfiguredSandboxHostOrigins(): string[] {
+  const raw = process.env[SANDBOX_HOST_ORIGINS_ENV];
+  if (!raw?.trim()) return [];
+
+  const origins: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw.split(',')) {
+    const origin = parseHttpOrigin(value.trim());
+    if (!origin || seen.has(origin)) continue;
+    seen.add(origin);
+    origins.push(origin);
+    if (origins.length >= MAX_CONFIGURED_HOST_ORIGINS) break;
+  }
+  return origins;
+}
+
+function hasConfiguredSandboxHostOrigins(): boolean {
+  return Boolean(process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim());
+}
+
+/**
+ * Optional browser-visible sandbox URL. Hosted HTTPS deployments terminate
+ * TLS for this distinct origin and proxy it to the plain HTTP listener.
+ */
+export function getSandboxPublicUrl(): string | undefined {
+  const raw = process.env[SANDBOX_PUBLIC_URL_ENV]?.trim();
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      return undefined;
+    }
+    if (parsed.pathname === '/' || parsed.pathname === '') {
+      parsed.pathname = '/sandbox.html';
+    }
+    return parsed.href;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -58,44 +186,159 @@ interface ResourceCsp {
   baseUriDomains?: string[];
 }
 
+type CspScheme = 'https' | 'wss';
+
+/** Keep a malformed/hostile resource from producing an oversized CSP header. */
+const MAX_CSP_SOURCES_PER_DIRECTIVE = 64;
+const MAX_CSP_SOURCE_LENGTH = 2048;
+
 /**
- * Reject any CSP source token that could break out of its directive: whitespace
- * (injects extra sources), `;`/newlines (injects a new directive), or quotes
- * (injects keywords like 'unsafe-eval'). Rejected tokens are dropped, never
- * substituted — matching the spec host's sanitizer.
+ * Validate one server-declared CSP origin.
+ *
+ * The metadata fields contain origins, not arbitrary CSP source expressions.
+ * Accepting CSP's full source grammar here would also accept keywords, schemes,
+ * paths and separators that can silently widen a policy. We intentionally
+ * support only secure origins from the stable spec examples:
+ * `https://host[:port]`, `https://*.host[:port]`, and (for connect-src only)
+ * `wss://...`.
  */
-function sanitizeCspDomains(domains?: string[]): string[] {
-  if (!Array.isArray(domains)) return [];
-  return domains.filter((d) => typeof d === 'string' && d.length > 0 && !/[;\r\n'"` ]/.test(d));
+function isValidCspOrigin(source: unknown, allowedSchemes: readonly CspScheme[]): source is string {
+  if (
+    typeof source !== 'string' ||
+    source.length === 0 ||
+    source.length > MAX_CSP_SOURCE_LENGTH ||
+    /[^\x21-\x7e]/.test(source)
+  ) {
+    return false;
+  }
+
+  const match = /^(https|wss):\/\/(\*\.)?([^/:?#]+)(?::(\d{1,5}))?$/i.exec(source);
+  if (!match || !allowedSchemes.includes(match[1].toLowerCase() as CspScheme)) return false;
+
+  const hostname = match[3];
+  if (hostname.length > 253) return false;
+  const labels = hostname.split('.');
+  if (
+    labels.some(
+      (label) =>
+        label.length === 0 ||
+        label.length > 63 ||
+        !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+    )
+  ) {
+    return false;
+  }
+
+  const port = match[4] ? Number(match[4]) : undefined;
+  return port === undefined || (Number.isInteger(port) && port >= 1 && port <= 65535);
 }
 
 /**
- * Build the CSP header for the sandbox document from the resource's declared
- * `_meta.ui.csp`. `'self'` here is the throwaway sandbox origin (NOT FLUJO), so
- * inline scripts/styles are safe to allow — a self-contained app document needs
- * them to run at all. Network egress is default-deny: `connect-src 'self'` plus
- * only the explicitly declared connect domains.
+ * Drop invalid entries rather than attempting to repair them. De-duplicating
+ * also keeps the response header bounded and deterministic.
+ */
+function sanitizeCspDomains(
+  domains: unknown,
+  allowedSchemes: readonly CspScheme[]
+): string[] {
+  if (!Array.isArray(domains)) return [];
+  const seen = new Set<string>();
+  const clean: string[] = [];
+  for (const source of domains) {
+    if (!isValidCspOrigin(source, allowedSchemes)) continue;
+    const key = source.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    clean.push(source);
+    if (clean.length >= MAX_CSP_SOURCES_PER_DIRECTIVE) break;
+  }
+  return clean;
+}
+
+function sanitizeFrameAncestor(origin?: string): string {
+  if (!origin) return "'none'";
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return "'none'";
+    return parsed.origin;
+  } catch {
+    return "'none'";
+  }
+}
+
+/**
+ * Build the CSP enforced inside the opaque-origin app View from the resource's
+ * declared `_meta.ui.csp`. This follows the stable 2026-01-26 restrictive default:
+ * scripts/styles may be inline, images/media may use data URLs, and everything
+ * else is denied unless its mapped metadata field explicitly declares an
+ * origin.
+ *
+ * A `srcdoc` document has no HTTP response on which to attach a header, so the
+ * proxy prepends this sanitized policy as the document's first CSP meta. The
+ * outer proxy's separate HTTP policy is built by `buildSandboxProxyCsp`.
  */
 export function buildSandboxCsp(csp?: ResourceCsp): string {
-  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains).join(' ');
-  const connectDomains = sanitizeCspDomains(csp?.connectDomains).join(' ');
-  const frameDomains = sanitizeCspDomains(csp?.frameDomains).join(' ');
-  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains).join(' ');
+  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains, ['https']).join(' ');
+  const connectDomains = sanitizeCspDomains(csp?.connectDomains, ['https', 'wss']).join(' ');
+  const frameDomains = sanitizeCspDomains(csp?.frameDomains, ['https']).join(' ');
+  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains, ['https']).join(' ');
 
   const directives = [
-    "default-src 'self' 'unsafe-inline'",
-    `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:${resourceDomains ? ` ${resourceDomains}` : ''}`,
-    `style-src 'self' 'unsafe-inline' blob: data:${resourceDomains ? ` ${resourceDomains}` : ''}`,
-    `img-src 'self' data: blob:${resourceDomains ? ` ${resourceDomains}` : ''}`,
-    `font-src 'self' data: blob:${resourceDomains ? ` ${resourceDomains}` : ''}`,
-    `media-src 'self' data: blob:${resourceDomains ? ` ${resourceDomains}` : ''}`,
-    `connect-src 'self'${connectDomains ? ` ${connectDomains}` : ''}`,
-    `worker-src 'self' blob:${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    "default-src 'none'",
+    `script-src 'self' 'unsafe-inline'${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `style-src 'self' 'unsafe-inline'${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `img-src 'self' data:${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `font-src${resourceDomains ? ` ${resourceDomains}` : " 'none'"}`,
+    `media-src 'self' data:${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `connect-src${connectDomains ? ` ${connectDomains}` : " 'none'"}`,
+    "worker-src 'none'",
     frameDomains ? `frame-src ${frameDomains}` : "frame-src 'none'",
     "object-src 'none'",
-    baseUriDomains ? `base-uri ${baseUriDomains}` : "base-uri 'none'",
+    baseUriDomains ? `base-uri ${baseUriDomains}` : "base-uri 'self'",
+    "form-action 'none'",
   ];
   return directives.join('; ');
+}
+
+/**
+ * Build the HTTP CSP for the trusted relay document itself.
+ *
+ * This policy intentionally has no app-controlled inputs. In particular,
+ * `_meta.ui.csp.frameDomains` must never widen the proxy document: only the
+ * inner View receives those declarations. `frame-src 'self'` permits the
+ * mandatory about:srcdoc child, whose origin is inherited for CSP matching,
+ * while the iframe's `sandbox` attribute still gives the View an opaque origin.
+ */
+export function buildSandboxProxyCsp(frameAncestor?: string): string {
+  return [
+    "default-src 'none'",
+    "script-src 'unsafe-inline'",
+    "style-src 'unsafe-inline'",
+    "img-src 'none'",
+    "font-src 'none'",
+    "media-src 'none'",
+    "connect-src 'none'",
+    "worker-src 'none'",
+    "frame-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    `frame-ancestors ${sanitizeFrameAncestor(frameAncestor)}`,
+  ].join('; ');
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildInnerCspMeta(csp?: ResourceCsp): string {
+  return `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(
+    buildSandboxCsp(csp)
+  )}">`;
 }
 
 /**
@@ -104,9 +347,14 @@ export function buildSandboxCsp(csp?: ResourceCsp): string {
  * loopback origin, self-tests that it cannot reach `window.top` (proving the
  * sandbox is real), creates the inner app iframe, and relays postMessage in
  * both directions with strict origin checks. `sandbox-resource-ready` is
- * intercepted to load the app HTML via `document.write`.
+ * intercepted to load the app HTML via `srcdoc` into an opaque-origin iframe.
  */
-function sandboxHtml(): string {
+export function buildSandboxProxyHtml(
+  configuredHostOrigins = getConfiguredSandboxHostOrigins(),
+  hostAllowlistConfigured = hasConfiguredSandboxHostOrigins(),
+  csp?: ResourceCsp
+): string {
+  const innerCspMeta = buildInnerCspMeta(csp);
   return `<!doctype html>
 <html>
 <head>
@@ -125,25 +373,35 @@ function sandboxHtml(): string {
 (function () {
   var RESOURCE_READY = ${JSON.stringify(SANDBOX_RESOURCE_READY)};
   var PROXY_READY = ${JSON.stringify(SANDBOX_PROXY_READY)};
+  var SANDBOX_PREFIX = ${JSON.stringify(SANDBOX_NOTIFICATION_PREFIX)};
+  var CONFIGURED_HOST_ORIGINS = ${JSON.stringify(configuredHostOrigins)};
+  var HOST_ALLOWLIST_CONFIGURED = ${JSON.stringify(hostAllowlistConfigured)};
+  var INNER_CSP_META = ${JSON.stringify(innerCspMeta)};
 
   if (window.self === window.top) { throw new Error("Sandbox proxy must be embedded in an iframe."); }
   if (!document.referrer) { throw new Error("Sandbox proxy: no referrer to validate embedder."); }
+
+  // The one-time access token and CSP declaration do not belong in untrusted
+  // View-visible referrer state. The HTTP policy is already committed, so strip
+  // the query before creating/loading the inner iframe.
+  try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {}
 
   var referrerOrigin;
   try { referrerOrigin = new URL(document.referrer).origin; }
   catch (e) { throw new Error("Sandbox proxy: unparseable referrer."); }
 
-  // The embedder must be loopback, or the SAME hostname as this sandbox (host
-  // and sandbox share a hostname and differ only by port). This keeps a foreign
-  // web page from embedding the sandbox, without hard-coding a port.
+  // By default the embedder must be loopback or share this sandbox's hostname.
+  // A hosted subdomain deployment instead supplies an exact host-origin
+  // allowlist; its mere presence disables the broader same-host fallback.
   var refHost = new URL(document.referrer).hostname;
   var ownHost = window.location.hostname;
   var loopback = /^(localhost|127\\.0\\.0\\.1|\\[::1\\]|::1)$/;
-  if (!(loopback.test(refHost) || refHost === ownHost)) {
+  var allowedByConfig = CONFIGURED_HOST_ORIGINS.indexOf(referrerOrigin) !== -1;
+  var allowedByDefault = !HOST_ALLOWLIST_CONFIGURED && (loopback.test(refHost) || refHost === ownHost);
+  if (!(allowedByConfig || allowedByDefault)) {
     throw new Error("Sandbox proxy: embedder origin not allowed: " + referrerOrigin);
   }
   var EXPECTED_HOST_ORIGIN = referrerOrigin;
-  var OWN_ORIGIN = window.location.origin;
 
   // Self-test: reaching window.top MUST throw a SecurityError. If it does not,
   // isolation is broken and we refuse to run.
@@ -160,9 +418,23 @@ function sandboxHtml(): string {
     return out.join("; ");
   }
 
+  function isSandboxControlMessage(data) {
+    return !!data && typeof data.method === "string" && data.method.indexOf(SANDBOX_PREFIX) === 0;
+  }
+
+  // Keep the untrusted View on an opaque origin: it cannot read cookies or
+  // persistent storage belonging to another View on this shared proxy origin.
+  // A trusted host may further restrict scripts via the optional override, but
+  // it cannot add same-origin, forms, navigation, popup or download privileges.
+  function sanitizeSandbox(value) {
+    if (typeof value !== "string") { return "allow-scripts"; }
+    return value.split(/\\s+/).indexOf("allow-scripts") === -1 ? "" : "allow-scripts";
+  }
+
   var inner = document.createElement("iframe");
   inner.style.cssText = "width:100%;height:100%;border:none;";
-  inner.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
+  inner.setAttribute("referrerpolicy", "no-referrer");
+  inner.setAttribute("sandbox", sanitizeSandbox());
   document.body.appendChild(inner);
 
   window.addEventListener("message", function (event) {
@@ -171,19 +443,22 @@ function sandboxHtml(): string {
       var data = event.data;
       if (data && data.method === RESOURCE_READY) {
         var params = data.params || {};
-        if (typeof params.sandbox === "string") { inner.setAttribute("sandbox", params.sandbox); }
+        if (typeof params.sandbox === "string") {
+          inner.setAttribute("sandbox", sanitizeSandbox(params.sandbox));
+        }
         var allow = buildAllowAttribute(params.permissions);
         if (allow) { inner.setAttribute("allow", allow); }
         if (typeof params.html === "string") {
-          var doc = inner.contentDocument || (inner.contentWindow && inner.contentWindow.document);
-          if (doc) { doc.open(); doc.write(params.html); doc.close(); }
-          else { inner.srcdoc = params.html; }
+          // The sanitized policy must precede every untrusted app-controlled
+          // byte so markup in the View cannot race or invalidate enforcement.
+          inner.srcdoc = INNER_CSP_META + params.html;
         }
-      } else if (inner.contentWindow) {
+      } else if (!isSandboxControlMessage(data) && inner.contentWindow) {
         inner.contentWindow.postMessage(data, "*");
       }
     } else if (event.source === inner.contentWindow) {
-      if (event.origin !== OWN_ORIGIN && event.origin !== "null") { return; }
+      if (event.origin !== "null") { return; }
+      if (isSandboxControlMessage(event.data)) { return; }
       window.parent.postMessage(event.data, EXPECTED_HOST_ORIGIN);
     }
   });
@@ -195,8 +470,46 @@ function sandboxHtml(): string {
 </html>`;
 }
 
-let started = false;
-let server: http.Server | undefined;
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+/**
+ * Pin frame-ancestors to the exact embedding origin after applying the same
+ * hostname/loopback rule as the in-page relay. A missing or invalid referrer
+ * becomes frame-ancestors 'none'; the proxy script would reject it anyway.
+ */
+function getAllowedFrameAncestor(req: http.IncomingMessage): string | undefined {
+  const referrer = req.headers.referer;
+  const requestHost = req.headers.host;
+  if (!referrer || !requestHost) return undefined;
+  try {
+    const referrerUrl = new URL(referrer);
+    const requestUrl = new URL(`http://${requestHost}`);
+    if (referrerUrl.protocol !== 'http:' && referrerUrl.protocol !== 'https:') return undefined;
+    const configuredOrigins = getConfiguredSandboxHostOrigins();
+    if (hasConfiguredSandboxHostOrigins()) {
+      return configuredOrigins.includes(referrerUrl.origin)
+        ? referrerUrl.origin
+        : undefined;
+    }
+    if (
+      !isLoopbackHostname(referrerUrl.hostname) &&
+      referrerUrl.hostname.toLowerCase() !== requestUrl.hostname.toLowerCase()
+    ) {
+      return undefined;
+    }
+    return referrerUrl.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasValidSandboxAuthToken(url: URL): boolean {
+  const suppliedValues = url.searchParams.getAll(SANDBOX_AUTH_QUERY_PARAM);
+  return suppliedValues.length === 1 && isSandboxAuthTokenValid(suppliedValues[0]);
+}
 
 /**
  * Start the sandbox proxy listener (idempotent). Fire-and-forget from
@@ -204,16 +517,24 @@ let server: http.Server | undefined;
  * won't render.
  */
 export function startSandboxServer(): void {
-  if (started) return;
-  started = true;
+  if (sandboxRuntime!.status !== 'idle') return;
+  sandboxRuntime!.status = 'starting';
   const port = getSandboxPort();
   const host = getSandboxBindHost();
+  sandboxRuntime!.port = port;
 
-  server = http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (req.method !== 'GET' || (url.pathname !== '/' && url.pathname !== '/sandbox.html')) {
       res.statusCode = 404;
       res.end('Not found');
+      return;
+    }
+    if (!hasValidSandboxAuthToken(url)) {
+      res.statusCode = 403;
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.end('Forbidden');
       return;
     }
 
@@ -225,23 +546,36 @@ export function startSandboxServer(): void {
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Security-Policy', buildSandboxCsp(csp));
-    // Frame ancestry: only same-hostname/loopback FLUJO may embed us. Belt-and-
-    // suspenders alongside the in-page referrer check.
+    res.setHeader('Content-Security-Policy', buildSandboxProxyCsp(getAllowedFrameAncestor(req)));
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.end(sandboxHtml());
+    res.end(
+      buildSandboxProxyHtml(
+        getConfiguredSandboxHostOrigins(),
+        hasConfiguredSandboxHostOrigins(),
+        csp
+      )
+    );
   });
+  sandboxRuntime!.server = server;
 
   server.on('error', (err: NodeJS.ErrnoException) => {
+    sandboxRuntime!.status = 'failed';
+    sandboxRuntime!.server = undefined;
     if (err.code === 'EADDRINUSE') {
-      log.warn(`Sandbox proxy port ${port} already in use — assuming a prior instance is serving it.`);
+      log.error(
+        `Sandbox proxy port ${port} is already in use; MCP Apps are disabled rather than trusting the process on that port.`
+      );
     } else {
       log.error('Sandbox proxy server error', err);
     }
   });
 
   server.listen(port, host, () => {
+    sandboxRuntime!.status = 'listening';
     log.info(`MCP Apps sandbox proxy listening on http://${host}:${port}`);
   });
 }

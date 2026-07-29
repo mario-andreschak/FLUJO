@@ -12,6 +12,7 @@ import { ToolDefinition } from '../types';
 import { encodeToolName, hashSchema } from './toolNamespace';
 import { buildMCPResourceTools } from './mcpResourceTools';
 import { isWhollyDenied } from '../permissionEngine';
+import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import OpenAI from 'openai';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
@@ -296,6 +297,7 @@ export class ToolHandler {
                 annotations: tool.annotations,
                 clientGeneration: mcpService.getClientGeneration(boundServer),
                 schemaHash,
+                uiResourceUri: extractUiResourceUri(tool._meta),
               };
             });
 

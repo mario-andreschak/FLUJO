@@ -50,7 +50,16 @@ describe('processToolCalls staleness guard (#255)', () => {
     });
     expect(result.success).toBe(true);
     expect(callToolMock).toHaveBeenCalledTimes(1);
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'op', { a: 1 }, 300, expect.any(Function), undefined, undefined);
+    expect(callToolMock).toHaveBeenCalledWith(
+      'srv',
+      'op',
+      { a: 1 },
+      300,
+      expect.any(Function),
+      undefined,
+      undefined,
+      'model',
+    );
   });
 
   it('rejects the call (no dispatch) after a client-generation bump (reconnect)', async () => {

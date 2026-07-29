@@ -9,6 +9,7 @@
  */
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { InternalDispatchService } from '../internalTools';
+import type { ToolCallSource } from '../appsProtocol';
 import { INTERNAL_SERVER_NAME } from '../internalServerConfig';
 import { FILESYSTEM_SERVER_NAME, BASH_SERVER_NAME } from './registry';
 
@@ -38,12 +39,13 @@ export async function internalCallToolFor(
   serverName: string,
   toolName: string,
   args: Record<string, unknown>,
-  callerNodeId?: string
+  callerNodeId?: string,
+  source: ToolCallSource = 'host',
 ): Promise<CallToolResult> {
   switch (serverName) {
     case INTERNAL_SERVER_NAME: {
       const { internalCallTool } = await import('../internalTools');
-      return internalCallTool(service, toolName, args);
+      return internalCallTool(service, toolName, args, source);
     }
     case FILESYSTEM_SERVER_NAME: {
       const { filesystemCallTool } = await import('./filesystemTools');

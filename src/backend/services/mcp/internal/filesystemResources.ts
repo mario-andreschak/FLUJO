@@ -15,9 +15,9 @@
  */
 import path from 'path';
 import { promises as fs } from 'fs';
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/ext-apps';
 import type { MCPResource, MCPReadResourceResult, MCPServiceResponse } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
+import { MCP_APPS_PROTOCOL_VERSION } from '../appsProtocol';
 import { FILESYSTEM_SERVER_NAME } from './registry';
 import { isInside, loadEffectiveRoots } from './confinement';
 
@@ -445,7 +445,7 @@ const FILESYSTEM_APP_HTML = `<!doctype html>
   rpc("ui/initialize", {
     appInfo: { name: "filesystem-browser", version: "1.0.0" },
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-    protocolVersion: "${LATEST_PROTOCOL_VERSION}"
+    protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}"
   }).then(function (result) {
     applyTheme(result && result.hostContext);
     notify("ui/notifications/initialized", {});
@@ -595,7 +595,7 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
   rpc("ui/initialize", {
     appInfo: { name: "devcanvas-diff", version: "1.0.0" },
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
-    protocolVersion: "${LATEST_PROTOCOL_VERSION}"
+    protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}"
   }).then(function (result) {
     applyTheme(result && result.hostContext);
     notify("ui/notifications/initialized", {});

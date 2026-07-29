@@ -9,6 +9,10 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import {
+  resolveAdvertisedToolUiLink,
+  toolCancellationReason,
+} from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
@@ -364,7 +368,11 @@ interface ToolInteraction {
   name: string;
   argsJson: string;
   resultContent: string;
+  ui?: ToolUi;
 }
+
+type ToolUi = NonNullable<FlujoChatMessage['ui']>;
+type TranscriptMessage = OpenAI.ChatCompletionMessageParam & { ui?: ToolUi };
 
 /**
  * Claude Subscription adapter — drives a Claude Pro/Max subscription through the
@@ -486,6 +494,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
 
     const usedNames = new Set<string>();
+    const mcpToolUiByReadableName = new Map<string, {
+      serverName: string;
+      toolName: string;
+      advertisedUri?: string;
+    }>();
     // Spawn-with-brief (issue #156): a routing model may call handoff tools
     // SEVERAL times — in one turn (parallel tool_use blocks) or one per turn,
     // which is how models under the SDK's agentic loop usually work. Collect
@@ -519,7 +532,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const transcript: FlujoChatMessage[] = [];
     const baseTs = Date.now();
     let txSeq = 0;
-    const recordMessage = (msg: OpenAI.ChatCompletionMessageParam): void => {
+    const recordMessage = (msg: TranscriptMessage): void => {
       const full = { ...msg, id: `m_${uuidv4()}`, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
@@ -532,7 +545,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
       });
-      recordMessage({ role: 'tool', tool_call_id: ti.id, content: ti.resultContent });
+      recordMessage({
+        role: 'tool',
+        tool_call_id: ti.id,
+        content: ti.resultContent,
+        ...(ti.ui ? { ui: ti.ui } : {}),
+      });
     };
 
     // Build the in-process MCP server from the node's tools. MCP tools dispatch to
@@ -616,13 +634,33 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           });
         }
 
-        const { server, tool: originalTool, timeout, nodeId: callerNodeId } = decoded!;
+        const {
+          server,
+          tool: originalTool,
+          timeout,
+          nodeId: callerNodeId,
+          uiResourceUri,
+        } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
+        mcpToolUiByReadableName.set(readableName, {
+          serverName: server,
+          toolName: originalTool,
+          advertisedUri: uiResourceUri,
+        });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
-          const result = await mcpService.callTool(server, originalTool, args ?? {}, timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, undefined, callerNodeId);
+          const result = await mcpService.callTool(
+            server,
+            originalTool,
+            args ?? {},
+            timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+            undefined,
+            callerNodeId,
+            abortController.signal,
+            'model',
+          );
           // Stable lineage id, generated up front so a spilled run resource is
           // keyed by the SAME toolCallId this pair is recorded under (#251).
           const callId = `call_${uuidv4()}`;
@@ -663,11 +701,26 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             resultContent = `Error: ${result.error ?? 'Unknown error'}`;
             callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
           }
+          const uiLink = await resolveAdvertisedToolUiLink(
+            server,
+            originalTool,
+            uiResourceUri,
+            result.data,
+          );
+          const cancelledReason = toolCancellationReason(result);
+          const ui = uiLink
+            ? {
+                ...uiLink,
+                ...(!result.success ? { isError: true } : {}),
+                ...(cancelledReason ? { cancelledReason } : {}),
+              }
+            : undefined;
           recordToolPair({
             id: callId,
             name: readableName,
             argsJson: JSON.stringify(args ?? {}),
             resultContent,
+            ...(ui ? { ui } : {}),
           });
           return callResult;
         });
@@ -757,6 +810,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const rejectionText = feedback
               ? `User rejected this tool call: ${feedback}`
               : 'Tool call rejected by the user.';
+            const linkedTool = mcpToolUiByReadableName.get(readableName);
+            const uiLink = linkedTool
+              ? await resolveAdvertisedToolUiLink(
+                  linkedTool.serverName,
+                  linkedTool.toolName,
+                  linkedTool.advertisedUri,
+                )
+              : undefined;
             // On rejection the SDK never calls the tool handler, so record the
             // rejected call here — otherwise it (and the rejection) wouldn't show
             // up in the conversation transcript at all.
@@ -765,6 +826,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               name: readableName,
               argsJson: JSON.stringify(input ?? {}),
               resultContent: rejectionText,
+              ...(uiLink
+                ? {
+                    ui: {
+                      ...uiLink,
+                      cancelledReason: rejectionText,
+                      isError: true,
+                    },
+                  }
+                : {}),
             });
             return { behavior: 'deny', message: rejectionText };
           }

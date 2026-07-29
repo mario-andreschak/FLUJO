@@ -533,8 +533,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </Box>
         )}
 
-        {/* MCP Apps opt-in (#97): let this server render interactive ui:// UI
-            resources in chat, read-only and sandboxed. Off by default. */}
+        {/* MCP Apps opt-in (#97): let this server render and interact through
+            isolated ui:// apps. Off by default. */}
         {!builtIn && !pickerMode && (
         <Box
           sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
@@ -547,7 +547,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
               onChange={(e) => handleToggleApps(e.target.checked)}
               size="small"
             />
-            <Tooltip title="Allow this server's tools to render interactive apps (MCP Apps / ui:// resources) in chat. Rendered read-only in a strict sandbox. Only enable for servers you trust.">
+            <Tooltip title="Allow this server's tools to render isolated interactive apps (MCP Apps / ui:// resources) and broker same-server tool/resource requests. Only enable for servers you trust.">
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 Render interactive apps
               </Typography>

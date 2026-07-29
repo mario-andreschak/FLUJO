@@ -36,6 +36,22 @@ export type ApprovalDecisionOutcome =
   /** Decision applied and the batch is drained; the run is ready to resume. */
   | { outcome: 'ready'; appendedMessages: FlujoChatMessage[] };
 
+async function cancelledUiForToolCall(
+  sharedState: SharedState,
+  toolCall: OpenAI.ChatCompletionMessageToolCall,
+  reason: string,
+): Promise<FlujoChatMessage['ui']> {
+  const decoded = decodeToolName(toolCall.function.name, sharedState.toolNameMap);
+  if (!decoded) return undefined;
+  const link = await ModelHandler.resolveToolUiLink(
+    decoded.server,
+    decoded.tool,
+    undefined,
+    decoded.uiResourceUri,
+  );
+  return link ? { ...link, cancelledReason: reason, isError: true } : undefined;
+}
+
 export async function applyApprovalDecision(
   sharedState: SharedState,
   toolCallId: string,
@@ -121,12 +137,15 @@ export async function applyApprovalDecision(
             }
           } else if (tcEffect === 'deny') {
             // Auto-deny
+            const deniedReason = `Permission denied (always deny rule): ${tc.function.name}`;
+            const ui = await cancelledUiForToolCall(sharedState, tc, deniedReason);
             const deniedMsg: FlujoChatMessage = {
               id: uuidv4(),
               role: 'tool',
               tool_call_id: tc.id,
-              content: `Permission denied (always deny rule): ${tc.function.name}`,
+              content: deniedReason,
               timestamp: Date.now(),
+              ...(ui ? { ui } : {}),
             };
             sharedState.messages.push(deniedMsg);
             appendedMessages.push(deniedMsg);
@@ -181,16 +200,23 @@ export async function applyApprovalDecision(
   } else {
     // action === 'reject'
     log.info(`Rejecting tool call ${toolCallId} (${toolCallToProcess.function.name})`);
+    const rejectionReason = feedback
+      ? `User rejected this tool call: ${feedback}`
+      : `User rejected tool call: ${toolCallToProcess.function.name}`;
+    const ui = await cancelledUiForToolCall(
+      sharedState,
+      toolCallToProcess,
+      rejectionReason,
+    );
     const rejectionMessage: FlujoChatMessage = {
       role: 'tool',
       tool_call_id: toolCallId,
       // Issue #247: when the user supplies a reason, carry it back to the model
       // so it can adjust; otherwise preserve the exact original fixed string.
-      content: feedback
-        ? `User rejected this tool call: ${feedback}`
-        : `User rejected tool call: ${toolCallToProcess.function.name}`,
+      content: rejectionReason,
       id: uuidv4(),
       timestamp: Date.now(),
+      ...(ui ? { ui } : {}),
     };
     sharedState.messages.push(rejectionMessage);
     appendedMessages.push(rejectionMessage);

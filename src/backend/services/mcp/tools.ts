@@ -5,6 +5,12 @@ import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPToolResponse as ToolResponse, MCPServiceResponse, isTaskCallResponse, MCPTaskHandle } from '@/shared/types/mcp';
 import { isBetaClient } from './betaClient';
 import { sleep } from '@/backend/utils/sleep';
+import {
+  checkToolCallVisibility,
+  filterToolsForAudience,
+  ToolCallSource,
+  ToolListAudience,
+} from './appsProtocol';
 
 const log = createLogger('backend/services/mcp/tools');
 
@@ -67,7 +73,11 @@ function normalizeToolArguments(args: Record<string, unknown>, toolName: string)
 /**
  * List tools available from an MCP server
  */
-export async function listServerTools(client: Client | undefined, serverName: string): Promise<{ tools: ToolResponse[], error?: string }> {
+export async function listServerTools(
+  client: Client | undefined,
+  serverName: string,
+  audience: ToolListAudience = 'model'
+): Promise<{ tools: ToolResponse[], error?: string }> {
   log.debug('Entering listServerTools method');
   if (!client) {
     log.warn(`Server ${serverName} not connected`);
@@ -89,10 +99,11 @@ export async function listServerTools(client: Client | undefined, serverName: st
       // the app link is lost before detection can ever see it.
       ...(tool.annotations ? { annotations: tool.annotations } : {}),
       ...(tool._meta ? { _meta: tool._meta } : {}),
-    }));
+    })) as ToolResponse[];
 
-    log.verbose('Processed tools:', tools);
-    return { tools };
+    const visibleTools = filterToolsForAudience(tools, audience);
+    log.verbose(`Processed tools for ${audience} audience:`, visibleTools);
+    return { tools: visibleTools };
   } catch (error) {
     log.warn(`Failed to list tools for server ${serverName}:`, error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -129,7 +140,8 @@ export async function callTool(
   args: Record<string, unknown>,
   timeout?: number,
   onProgress?: (progress: ToolCallProgress) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  source: ToolCallSource = 'host'
 ): Promise<MCPServiceResponse> {
   log.debug('Entering callTool method');
   if (!client) {
@@ -146,6 +158,33 @@ export async function callTool(
     : MAX_TIMEOUT_MS;
 
   try {
+    // MCP Apps may call tools only on their own backing server, and only when
+    // the server's definition grants the "app" audience. The service passes
+    // the exact client belonging to the frame's server; listing and dispatch
+    // both happen on that same client object, so authorization cannot be
+    // borrowed from another server connection.
+    if (source === 'app' || source === 'model') {
+      const listed = await listServerTools(client, serverName, 'all');
+      if (listed.error) {
+        return {
+          success: false,
+          error: `Could not verify MCP App access to tool '${toolName}' on '${serverName}': ${listed.error}`,
+          errorType: 'tool-authorization-list',
+          statusCode: 502,
+        };
+      }
+
+      const access = checkToolCallVisibility(listed.tools, serverName, toolName, source);
+      if (!access.allowed) {
+        log.warn(`Rejected ${source} tool call: ${access.error}`);
+        return {
+          success: false,
+          error: access.error,
+          statusCode: access.statusCode,
+        };
+      }
+    }
+
     // Resolve any global variable references in the arguments
     log.debug(`Original args for tool ${toolName}:`, args);
     const resolvedArgs = await resolveGlobalVars(args);
@@ -205,64 +244,126 @@ export async function callTool(
       const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
       let currentStatus = taskHandle.status;
       let elapsed = 0;
+      let terminal = TERMINAL.has(currentStatus);
 
-      while (!TERMINAL.has(currentStatus)) {
-        if (signal?.aborted) {
-          // Best-effort cancel — ignore errors and throw regardless.
-          try {
-            await (client as unknown as { request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown> }).request(
-              { method: 'tasks/cancel', params: { taskId: taskHandle.taskId } },
-              undefined,
-              { signal, timeout: 10_000 }
-            );
-          } catch {
-            // Intentionally swallowed — best-effort only.
-          }
-          throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
-        }
-
-        await sleep(pollMs);
-        elapsed += pollMs;
-
-        const pollResponse = await (client as unknown as { request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown> }).request(
-          { method: 'tasks/get', params: { taskId: taskHandle.taskId } },
-          undefined,
-          { signal, timeout: timeoutMs }
-        ) as { task: MCPTaskHandle };
-
-        const task = pollResponse.task;
-        currentStatus = task.status;
-        log.debug(`Task ${taskHandle.taskId} poll: status=${task.status}, elapsed=${elapsed}ms`);
-
-        onProgress?.({
-          progress: task.status === 'completed' ? 100 : Math.min(99, Math.round(elapsed / 1000)),
-          message: `Task ${taskHandle.taskId}: ${task.status}`,
-        });
-
-        if (task.status === 'completed') {
-          return {
-            success: true,
-            data: task.result,
-            progressToken: taskHandle.taskId,
-          };
-        }
-        if (task.status === 'failed') {
-          return {
-            success: false,
-            error: task.error ?? `Task ${taskHandle.taskId} failed`,
-            progressToken: taskHandle.taskId,
-          };
-        }
-        // 'input_required': continue polling (tasks/update deferred to Phase 3)
-        // 'cancelled': loop will exit on next TERMINAL check
+      // A server may return an already-terminal task. Preserve its actual
+      // outcome instead of treating every terminal handle as cancellation.
+      if (currentStatus === 'completed') {
+        return {
+          success: true,
+          data: taskHandle.result,
+          progressToken: taskHandle.taskId,
+        };
+      }
+      if (currentStatus === 'failed') {
+        return {
+          success: false,
+          error: taskHandle.error ?? `Task ${taskHandle.taskId} failed`,
+          progressToken: taskHandle.taskId,
+        };
       }
 
-      // Reached terminal 'cancelled' from the server side.
-      return {
-        success: false,
-        error: `Task ${taskHandle.taskId} was cancelled by the server`,
-        progressToken: taskHandle.taskId,
+      let cancelTaskPromise: Promise<void> | undefined;
+      const cancelTask = (): Promise<void> => {
+        if (!cancelTaskPromise) {
+          // Never reuse the caller's already-aborted signal: doing so prevents
+          // tasks/cancel from reaching the server. This request gets its own
+          // short SDK timeout and is deliberately best-effort.
+          cancelTaskPromise = (async () => {
+            try {
+              await (client as unknown as {
+                request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown>;
+              }).request(
+                { method: 'tasks/cancel', params: { taskId: taskHandle.taskId } },
+                undefined,
+                { timeout: 10_000 }
+              );
+            } catch (cancelError) {
+              log.warn(
+                `Best-effort cancellation failed for task ${taskHandle.taskId}:`,
+                cancelError
+              );
+            }
+          })();
+        }
+        return cancelTaskPromise;
       };
+      const onTaskAbort = () => {
+        void cancelTask();
+      };
+      signal?.addEventListener('abort', onTaskAbort, { once: true });
+
+      try {
+        while (!TERMINAL.has(currentStatus)) {
+          if (signal?.aborted) {
+            await cancelTask();
+            throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
+          }
+
+          await sleep(pollMs);
+          elapsed += pollMs;
+
+          if (signal?.aborted) {
+            await cancelTask();
+            throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
+          }
+
+          const pollResponse = await (client as unknown as {
+            request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown>;
+          }).request(
+            { method: 'tasks/get', params: { taskId: taskHandle.taskId } },
+            undefined,
+            { signal, timeout: timeoutMs }
+          ) as { task: MCPTaskHandle };
+
+          if (signal?.aborted) {
+            await cancelTask();
+            throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
+          }
+
+          const task = pollResponse.task;
+          currentStatus = task.status;
+          terminal = TERMINAL.has(currentStatus);
+          log.debug(`Task ${taskHandle.taskId} poll: status=${task.status}, elapsed=${elapsed}ms`);
+
+          onProgress?.({
+            progress: task.status === 'completed' ? 100 : Math.min(99, Math.round(elapsed / 1000)),
+            message: `Task ${taskHandle.taskId}: ${task.status}`,
+          });
+
+          if (task.status === 'completed') {
+            return {
+              success: true,
+              data: task.result,
+              progressToken: taskHandle.taskId,
+            };
+          }
+          if (task.status === 'failed') {
+            return {
+              success: false,
+              error: task.error ?? `Task ${taskHandle.taskId} failed`,
+              progressToken: taskHandle.taskId,
+            };
+          }
+          // 'input_required': continue polling (tasks/update deferred to Phase 3)
+          // 'cancelled': loop will exit on next TERMINAL check
+        }
+
+        // Reached terminal 'cancelled' from the server side.
+        return {
+          success: false,
+          error: `Tool '${toolName}' task ${taskHandle.taskId} was cancelled by the server.`,
+          errorType: 'cancelled',
+          progressToken: taskHandle.taskId,
+        };
+      } catch (taskError) {
+        // An aborted tasks/get and a polling timeout both leave the remote task
+        // alive unless we explicitly cancel it with a fresh request.
+        if (!terminal) await cancelTask();
+        throw taskError;
+      } finally {
+        signal?.removeEventListener('abort', onTaskAbort);
+      }
     }
 
     return {
@@ -273,6 +374,18 @@ export async function callTool(
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
     let errorMessage = error instanceof Error ? error.message : 'Unknown error';
     let statusCode = 500;
+
+    // A caller-driven AbortSignal is an intentional cancellation, not a server
+    // or transport failure. Preserve that distinction for MCP App hosts so they
+    // can emit ui/notifications/tool-cancelled.
+    if (signal?.aborted) {
+      return {
+        success: false,
+        error: `Tool '${toolName}' call was cancelled.`,
+        errorType: 'cancelled',
+        toolName,
+      };
+    }
 
     // SDK request timer fired (-32001). The SDK has already sent a
     // notifications/cancelled for the in-flight request as part of its timeout

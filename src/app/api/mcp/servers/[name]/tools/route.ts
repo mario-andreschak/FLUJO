@@ -23,7 +23,11 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
 
   try {
     const { name } = await params;
-    const result = await mcpService.listServerTools(name);
+    // This endpoint is the host/control-plane inventory used by the MCP
+    // manager, flow builder, tool tester, and MCP App host. It must expose the
+    // server's complete definition set. Model-facing construction paths request
+    // the `model` audience directly from MCPService and remain filtered there.
+    const result = await mcpService.listServerTools(name, 'all');
     return json(result, 200);
   } catch (error) {
     log.error('Error handling GET request', error);

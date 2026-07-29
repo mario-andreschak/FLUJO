@@ -14,6 +14,7 @@
  * 'cancelled' model error, not a provider failure.
  */
 import type { SharedState } from '@/backend/execution/flow/types';
+import type { CompletionInput } from '@/backend/services/model/adapters/types';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
@@ -32,7 +33,7 @@ jest.mock('@/backend/services/model', () => ({
 // 'hang-until-abort' never resolves until the passed signal aborts.
 let adapterBehavior: 'complete' | 'hang-until-abort' = 'complete';
 const createCompletionMock = jest.fn(
-  (input: { signal?: AbortSignal }) =>
+  (input: CompletionInput) =>
     new Promise((resolve, reject) => {
       if (adapterBehavior === 'hang-until-abort') {
         if (input.signal?.aborted) return reject(new Error('Request was aborted.'));
@@ -159,7 +160,7 @@ describe('mid-flight completion cancellation', () => {
   it('removes only streamed Claude prose when the SDK fails after tool activity (issue #296)', async () => {
     const state = seedState('conv-claude-failure');
     getModelMock.mockResolvedValue({ id: 'model-1', name: 'claude-test', provider: 'claude-subscription', adapter: 'claude-cli' });
-    createCompletionMock.mockImplementationOnce(async (input: { onTranscriptMessage?: (message: any) => void }) => {
+    createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
       input.onTranscriptMessage?.({ id: 'prose-1', timestamp: 1, role: 'assistant', content: 'I will call the tool.' });
       input.onTranscriptMessage?.({
         id: 'tool-call-1',

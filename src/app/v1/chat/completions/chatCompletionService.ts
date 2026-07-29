@@ -63,6 +63,7 @@ async function processChatCompletionInternal(
   const result = await runFlow({
     modelName: data.model,
     messages: data.messages,
+    mcpAppContexts: data.mcpAppContexts,
     processNodeId: data.processNodeId,
     mode: 'conversation',
     conversationId,

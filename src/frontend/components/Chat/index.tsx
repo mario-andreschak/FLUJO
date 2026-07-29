@@ -22,15 +22,21 @@ import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './Ch
 import ChatInput from './ChatInput';
 import DevCanvasDock from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
+  DEFAULT_CANVAS_TAB_CAP,
   emptyCanvasState,
+  enforceCap,
   openCanvasApp,
   updateCanvasApp,
-  syncCanvasAppResult,
   setActiveCanvasTab,
   closeCanvasApp,
   canvasEntries,
   type CanvasState,
+  type CanvasAppInput,
 } from './canvasState';
+import {
+  jsonUtf8ByteLength,
+  MAX_MCP_APP_CONTEXT_BYTES,
+} from './McpAppFrame';
 import {
   QueueMap,
   QueuedMessage,
@@ -52,7 +58,6 @@ import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
-import { isBuiltInServerName } from '@/utils/shared/mcpConstants';
 import { getStartNode } from '@/utils/shared/getStartNode';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
@@ -61,7 +66,12 @@ import { flowService } from '@/frontend/services/flow';
 import { chatService, ChatApiError } from '@/frontend/services/chat';
 import { createLogger } from '@/utils/logger';
 // Correctly import SharedState here
-import { ChatCompletionMetadata, FlujoChatMessage } from '@/shared/types/chat'; // Import the shared types
+import {
+  ChatCompletionMetadata,
+  FlujoChatMessage,
+  type McpAppModelContext,
+  type McpAppModelContextMap,
+} from '@/shared/types/chat'; // Import the shared types
 import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
@@ -153,6 +163,8 @@ export interface Conversation {
     modelDisplayName?: string;
     contextWindow?: number;
   };
+  /** Latest persisted future-turn context from each MCP App View. */
+  mcpAppContexts?: McpAppModelContextMap;
 }
 
 // Represents the summary item shown in the list
@@ -227,10 +239,49 @@ const Chat: React.FC = () => {
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
   // Currently selected conversation ID (persisted)
-  const [currentConversationId, setCurrentConversationId] = useLocalStorage<string | null>(
+  const [currentConversationId, setCurrentConversationIdStored] = useLocalStorage<string | null>(
     StorageKey.CURRENT_CONVERSATION_ID,
     null
   );
+  const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const canvasTeardownsRef = useRef<Map<string, () => Promise<void>>>(new Map());
+  const conversationTransitionGenerationRef = useRef(0);
+  /**
+   * Conversation selection is the parent-owned lifecycle boundary for canvas
+   * Views. Start every teardown synchronously (which invalidates each bridge and
+   * emits ui/resource-teardown), then key the next dock by owner id so callbacks
+   * can never bleed across conversations. Explicit close/LRU paths additionally
+   * keep the subtree mounted for the bounded acknowledgement window.
+   */
+  const setCurrentConversationId = useCallback((nextId: string | null) => {
+    const transitionGeneration = conversationTransitionGenerationRef.current + 1;
+    conversationTransitionGenerationRef.current = transitionGeneration;
+    const previousId = currentConversationIdRef.current;
+    if (previousId === nextId) {
+      setCurrentConversationIdStored(nextId);
+      return;
+    }
+    const prefix = previousId ? `${previousId}\u0000` : null;
+    const teardowns = prefix
+      ? [...canvasTeardownsRef.current.entries()]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([, callback]) => callback)
+      : [];
+    if (teardowns.length === 0) {
+      currentConversationIdRef.current = nextId;
+      setCurrentConversationIdStored(nextId);
+      return;
+    }
+
+    // Keep the old subtree mounted until every View acknowledges
+    // ui/resource-teardown or reaches its bounded one-second deadline. Rapid
+    // selection changes are latest-wins and share each View's teardown promise.
+    void Promise.allSettled(teardowns.map((callback) => callback())).then(() => {
+      if (conversationTransitionGenerationRef.current !== transitionGeneration) return;
+      currentConversationIdRef.current = nextId;
+      setCurrentConversationIdStored(nextId);
+    });
+  }, [setCurrentConversationIdStored]);
 
   // Last flow the user MANUALLY picked in the flow selector (issue #134, item 6).
   // Persisted so a brand-new conversation defaults to it instead of always
@@ -475,8 +526,9 @@ const Chat: React.FC = () => {
   const eventSourceRef = useRef<EventSource | null>(null);
   // Highest event seq applied, for ordering + dedupe across SSE reconnects.
   const lastSeqRef = useRef<number>(-1);
-  // Mirror of the viewed conversation id, for use inside stable event callbacks.
-  const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const mcpAppContextsByConversationRef = useRef<Map<string, McpAppModelContextMap>>(
+    new Map(),
+  );
   useEffect(() => {
     currentConversationIdRef.current = currentConversationId;
   }, [currentConversationId]);
@@ -740,6 +792,15 @@ const Chat: React.FC = () => {
         return;
       }
 
+      if (
+        conversation.mcpAppContexts !== undefined
+        && !mcpAppContextsByConversationRef.current.has(id)
+      ) {
+        mcpAppContextsByConversationRef.current.set(
+          id,
+          { ...conversation.mcpAppContexts },
+        );
+      }
       setDetailedConversation(conversation);
       // Reconcile the sidebar summary with server truth. The backend derives a
       // title from the first user message during a run, but completion/SSE
@@ -2178,11 +2239,18 @@ const Chat: React.FC = () => {
         messages,
         stream: false,
         metadata: (() => {
+            const appContexts = mcpAppContextsByConversationRef.current.get(conversation.id);
             const meta: ChatCompletionMetadata = {
                 flujo: "true",
                 requireApproval: requireApproval ? "true" : undefined,
                 flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
-                conversationId: conversation.id // Pass the correct ID
+                conversationId: conversation.id, // Pass the correct ID
+                // Undefined means "retain backend state"; only a hydrated or
+                // explicitly updated map is sent. This prevents navigation from
+                // accidentally clearing a conversation with `{}`.
+                mcpAppContexts: appContexts === undefined
+                  ? undefined
+                  : JSON.stringify(appContexts),
             };
             // Ensure only defined string values are included
             const filteredMeta: { [key: string]: string } = {};
@@ -2190,6 +2258,9 @@ const Chat: React.FC = () => {
             if (meta.requireApproval) filteredMeta.requireApproval = meta.requireApproval;
             if (meta.flujodebug) filteredMeta.flujodebug = meta.flujodebug; // Include flujodebug
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
+            if (meta.mcpAppContexts !== undefined) {
+              filteredMeta.mcpAppContexts = meta.mcpAppContexts;
+            }
             return filteredMeta;
         })()
       });
@@ -2303,37 +2374,84 @@ const Chat: React.FC = () => {
     });
   };
 
-  // #97: stable MCP App -> conversation return channel. handleSendMessage closes
-  // over conversation state and is recreated each render, so we route through a
-  // ref to keep the callback IDENTITY stable across the memoized MessageBubble
-  // boundary (passing handleSendMessage directly would defeat that memo and
-  // regress chat render perf). An app's ui/message (e.g. a file selection)
-  // becomes a follow-up user message, resuming a waiting model.
+  // #97: stable MCP App -> conversation return channels. ui/message starts a
+  // follow-up user turn. ui/update-model-context is deliberately separate: it
+  // only replaces that app's wire context for a future turn.
   const handleSendMessageRef = useRef(handleSendMessage);
   handleSendMessageRef.current = handleSendMessage;
-  const handleAppMessage = useCallback((text: string) => {
+  const appCallbackConversationId = currentConversationId;
+  const handleAppMessage = useCallback((text: string): boolean => {
+    if (
+      !appCallbackConversationId
+      || currentConversationIdRef.current !== appCallbackConversationId
+    ) return false;
     void handleSendMessageRef.current(text);
-  }, []);
+    return true;
+  }, [appCallbackConversationId]);
+  const handleAppModelContext = useCallback((
+    appKey: string,
+    context: McpAppModelContext,
+  ): boolean => {
+    const capturedConversationId = appCallbackConversationId;
+    if (
+      !capturedConversationId
+      || currentConversationIdRef.current !== capturedConversationId
+    ) return false;
+    const next = {
+      ...(mcpAppContextsByConversationRef.current.get(capturedConversationId) ?? {}),
+    };
+    // An empty update clears this View's prior context.
+    if (context.content === undefined && context.structuredContent === undefined) {
+      delete next[appKey];
+    } else {
+      next[appKey] = context;
+    }
+    if (jsonUtf8ByteLength(next) > MAX_MCP_APP_CONTEXT_BYTES) {
+      log.warn('Rejected oversized aggregate MCP App model context', {
+        conversationId: capturedConversationId,
+        appKey,
+      });
+      return false;
+    }
+    mcpAppContextsByConversationRef.current.set(capturedConversationId, next);
+    return true;
+  }, [appCallbackConversationId]);
 
   // --- #216: conversation-level docked MCP Apps canvas ---------------------
   const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
-  // Built-in app results already considered for #331 auto-mounting. Tracking
-  // message ids makes closing a tab stick until a NEW result for that app
-  // arrives; old conversation history must not immediately reopen it.
-  const observedBuiltInAppResultsRef = useRef<{ conversationId: string | null; ids: Set<string> }>({
-    conversationId: null,
-    ids: new Set(),
-  });
-  // Identities currently open in the canvas (drives the bubble launcher label).
-  const canvasKeys = useMemo(() => new Set(canvasState.order), [canvasState.order]);
+  const [canvasStateOwnerId, setCanvasStateOwnerId] = useState<string | null>(
+    currentConversationId,
+  );
+  const pendingCanvasEvictionsRef = useRef<Set<string>>(new Set());
+  const handleRegisterCanvasTeardown = useCallback((
+    conversationId: string,
+    appKey: string,
+    callback: (() => Promise<void>) | null,
+  ) => {
+    const scopedKey = `${conversationId}\u0000${appKey}`;
+    if (callback) canvasTeardownsRef.current.set(scopedKey, callback);
+    else canvasTeardownsRef.current.delete(scopedKey);
+  }, []);
+  const handleRegisterInlineTeardown = useCallback((
+    registrationKey: string,
+    callback: (() => Promise<void>) | null,
+  ) => {
+    if (!appCallbackConversationId) return;
+    handleRegisterCanvasTeardown(
+      appCallbackConversationId,
+      registrationKey,
+      callback,
+    );
+  }, [appCallbackConversationId, handleRegisterCanvasTeardown]);
 
-  // External-app launcher click = click-to-mount consent gate: open (or focus)
-  // the app in the docked canvas. Built-ins can arrive through #331 below.
-  // LRU eviction beyond the cap is logged, never silent.
+  // A View can enter the canvas only after its inline handshake declared pip
+  // and either the View or user requested the transition.
   const handleOpenInCanvas = useCallback((info: CanvasLaunchInfo) => {
+    setCanvasStateOwnerId(currentConversationIdRef.current);
     setCanvasState((prev) => {
-      const { state, evicted } = openCanvasApp(prev, info);
-      if (evicted.length) log.info(`Canvas tab cap reached — evicted (LRU): ${evicted.join(', ')}`);
+      // Temporarily permit one extra mounted host; the cap effect below awaits
+      // the LRU victim's graceful teardown before removing it.
+      const { state } = openCanvasApp(prev, info, Date.now(), Number.MAX_SAFE_INTEGER);
       return state;
     });
   }, []);
@@ -2341,37 +2459,34 @@ const Chat: React.FC = () => {
     setCanvasState((prev) => setActiveCanvasTab(prev, key));
   }, []);
   const handleCloseCanvasTab = useCallback((key: string) => {
-    setCanvasState((prev) => closeCanvasApp(prev, key));
-  }, []);
+    const owner = appCallbackConversationId;
+    if (!owner) return;
+    const registered = canvasTeardownsRef.current.get(`${owner}\u0000${key}`);
+    const close = () => {
+      if (currentConversationIdRef.current !== owner) return;
+      setCanvasState((prev) => closeCanvasApp(prev, key));
+    };
+    if (registered) void registered().finally(close);
+    else close();
+  }, [appCallbackConversationId]);
 
   // Reset the canvas when switching conversations (per-conversation surface).
   useEffect(() => {
+    setCanvasStateOwnerId(currentConversationId);
     setCanvasState(emptyCanvasState);
-    observedBuiltInAppResultsRef.current = {
-      conversationId: currentConversationId,
-      ids: new Set(),
-    };
   }, [currentConversationId]);
 
-  // #216 live update-in-place plus #331's first-party trust policy. Later tool
-  // results re-feed existing tabs. A previously unseen result from one of
-  // FLUJO's built-in servers may also create its PiP tab automatically; all
-  // external apps still require the bubble launcher's explicit click.
+  // Later results replace an already-open canvas View. New apps remain inline
+  // until a pip-capable View/user explicitly requests the canvas transition.
   const canvasOrderKey = canvasState.order.join('|');
   useEffect(() => {
     const msgs = detailedConversation?.messages;
     if (
       !msgs ||
       !detailedConversation ||
-      detailedConversation.id !== currentConversationId
+      detailedConversation.id !== currentConversationId ||
+      canvasStateOwnerId !== currentConversationId
     ) return;
-
-    if (observedBuiltInAppResultsRef.current.conversationId !== detailedConversation.id) {
-      observedBuiltInAppResultsRef.current = {
-        conversationId: detailedConversation.id,
-        ids: new Set(),
-      };
-    }
 
     const toolCalls = new Map<string, OpenAI.ChatCompletionMessageToolCall>();
     for (const m of msgs) {
@@ -2381,53 +2496,85 @@ const Chat: React.FC = () => {
       }
     }
 
-    const latest = new Map<string, CanvasLaunchInfo>();
-    const unseenBuiltIn: CanvasLaunchInfo[] = [];
+    const latest = new Map<string, CanvasAppInput>();
     for (const m of msgs) {
       const ui = (m as FlujoChatMessage).ui;
       if (m.role === 'tool' && ui?.uri && ui?.serverName && typeof m.content === 'string') {
         const call = typeof m.tool_call_id === 'string' ? toolCalls.get(m.tool_call_id) : undefined;
-        const input: CanvasLaunchInfo = {
+        const input: CanvasAppInput = {
           serverName: ui.serverName,
           uri: ui.uri,
-          toolName: call?.type === 'function' ? call.function.name : undefined,
+          toolName: ui.toolName ?? (call?.type === 'function' ? call.function.name : undefined),
           toolArgs: call?.type === 'function' ? call.function.arguments : undefined,
           resultContent: m.content,
+          cancelledReason: ui.cancelledReason,
+          isError: ui.isError,
+          updateId: m.id,
         };
         latest.set(`${ui.serverName}::${ui.uri}`, input);
-
-        // Record each first-party result once so a manually closed tab stays
-        // closed until fresh data arrives. syncCanvasAppResult repeats the
-        // trust check at the state boundary as a fail-closed safeguard.
-        if (
-          isBuiltInServerName(ui.serverName) &&
-          !observedBuiltInAppResultsRef.current.ids.has(m.id)
-        ) {
-          observedBuiltInAppResultsRef.current.ids.add(m.id);
-          unseenBuiltIn.push(input);
-        }
       }
     }
 
     setCanvasState((prev) => {
       let next = prev;
-      for (const input of unseenBuiltIn) {
-        const result = syncCanvasAppResult(next, input);
-        if (result.evicted.length) {
-          log.info(`Canvas tab cap reached — evicted (LRU): ${result.evicted.join(', ')}`);
-        }
-        next = result.state;
-      }
       for (const key of next.order) {
         const entry = next.entries[key];
         const input = latest.get(key);
-        if (entry && input?.resultContent !== undefined && input.resultContent !== entry.latestResultContent) {
+        if (
+          entry
+          && input
+          && (
+            input.updateId !== entry.latestToolUpdateId
+            || input.toolArgs !== entry.latestToolArgs
+            || (
+              input.cancelledReason === undefined
+              && input.resultContent !== entry.latestResultContent
+            )
+            || input.cancelledReason !== entry.latestToolCancelledReason
+            || input.isError !== entry.latestToolIsError
+          )
+        ) {
           next = updateCanvasApp(next, input);
         }
       }
       return next;
     });
-  }, [currentConversationId, detailedConversation?.id, detailedConversation?.messages, canvasOrderKey]);
+  }, [
+    canvasOrderKey,
+    canvasStateOwnerId,
+    currentConversationId,
+    detailedConversation?.id,
+    detailedConversation?.messages,
+  ]);
+
+  // Enforce the live-host cap only after each LRU victim has acknowledged
+  // ui/resource-teardown (or its one-second deadline elapsed).
+  useEffect(() => {
+    const owner = currentConversationId;
+    if (
+      !owner
+      || canvasStateOwnerId !== owner
+      || canvasState.order.length <= DEFAULT_CANVAS_TAB_CAP
+    ) return;
+    const { evicted } = enforceCap(
+      canvasState,
+      DEFAULT_CANVAS_TAB_CAP,
+      canvasState.activeKey ?? undefined,
+    );
+    for (const key of evicted) {
+      const scopedKey = `${owner}\u0000${key}`;
+      if (pendingCanvasEvictionsRef.current.has(scopedKey)) continue;
+      pendingCanvasEvictionsRef.current.add(scopedKey);
+      log.info(`Canvas tab cap reached — gracefully evicting (LRU): ${key}`);
+      const registered = canvasTeardownsRef.current.get(scopedKey);
+      const pending = registered ? registered() : Promise.resolve();
+      void pending.finally(() => {
+        pendingCanvasEvictionsRef.current.delete(scopedKey);
+        if (currentConversationIdRef.current !== owner) return;
+        setCanvasState((previous) => closeCanvasApp(previous, key));
+      });
+    }
+  }, [canvasState, canvasStateOwnerId, currentConversationId]);
 
   // Edit a message and re-send the conversation (operates on detailedConversation)
   const handleEditMessage = async (messageId: string, newContent: string, processNodeId?: string | null) => {
@@ -2458,12 +2605,17 @@ const Chat: React.FC = () => {
 
     if (updatedDetailedConv.flowId) {
       // Create metadata with processNodeId for the API call
+      const editedConversationAppContexts =
+        mcpAppContextsByConversationRef.current.get(updatedDetailedConv.id);
       const metadata: ChatCompletionMetadata = {
         flujo: "true",
         requireApproval: requireApproval ? "true" : undefined,
         flujodebug: executeInDebugger ? "true" : undefined,
         conversationId: updatedDetailedConv.id,
-        processNodeId: processNodeId || undefined // Add processNodeId to metadata
+        processNodeId: processNodeId || undefined, // Add processNodeId to metadata
+        mcpAppContexts: editedConversationAppContexts === undefined
+          ? undefined
+          : JSON.stringify(editedConversationAppContexts),
       };
 
       // Call the API with the updated metadata
@@ -2516,6 +2668,9 @@ const Chat: React.FC = () => {
             if (metadata.flujodebug) filteredMeta.flujodebug = metadata.flujodebug;
             if (metadata.conversationId) filteredMeta.conversationId = metadata.conversationId;
             if (metadata.processNodeId) filteredMeta.processNodeId = metadata.processNodeId;
+            if (metadata.mcpAppContexts !== undefined) {
+              filteredMeta.mcpAppContexts = metadata.mcpAppContexts;
+            }
             return filteredMeta;
           })()
         });
@@ -3246,8 +3401,9 @@ const Chat: React.FC = () => {
                 onAnswerQuestion={handleAnswerQuestion}
                 onDeclineQuestion={handleDeclineQuestion}
                 onAppMessage={handleAppMessage}
+                onUpdateModelContext={handleAppModelContext}
+                onRegisterAppTeardown={handleRegisterInlineTeardown}
                 onOpenInCanvas={handleOpenInCanvas}
-                canvasKeys={canvasKeys}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
                 queueHoldReason={drainHoldReason({
                   running: runningConvs.has(detailedConversation.id),
@@ -3432,13 +3588,19 @@ const Chat: React.FC = () => {
         {/* #216: docked, tabbed MCP Apps canvas surface. Pinned above the input,
             hidden entirely when no app is docked. Hosts are mounted once and
             shown/hidden via CSS (never reparented). */}
-        <DevCanvasDock
-          entries={canvasEntries(canvasState)}
+        {currentConversationId && <DevCanvasDock
+          key={currentConversationId}
+          conversationId={currentConversationId}
+          entries={canvasStateOwnerId === currentConversationId
+            ? canvasEntries(canvasState)
+            : []}
           activeKey={canvasState.activeKey}
           onSelectTab={handleSelectCanvasTab}
           onCloseTab={handleCloseCanvasTab}
           onAppMessage={handleAppMessage}
-        />
+          onUpdateModelContext={handleAppModelContext}
+          onRegisterTeardown={handleRegisterCanvasTeardown}
+        />}
 
         {/* Chat input */}
         <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>

@@ -116,7 +116,16 @@ describe('proxyCallTool', () => {
     const r = await proxyCallTool('srv', 'echo', { x: 1 });
     expect(r.isError).toBeUndefined();
     expect(r.content).toEqual([{ type: 'text', text: 'hi' }]);
-    expect(svc.callTool).toHaveBeenCalledWith('srv', 'echo', { x: 1 });
+    expect(svc.callTool).toHaveBeenCalledWith(
+      'srv',
+      'echo',
+      { x: 1 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'model',
+    );
   });
 
   it('maps a tool failure to an MCP error result', async () => {

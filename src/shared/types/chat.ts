@@ -31,9 +31,26 @@ export interface ChatCompletionMetadata {
    * Used when editing messages to resume execution from a specific node.
    */
   processNodeId?: string;
+
+  /**
+   * MCP Apps `ui/update-model-context` state, serialized as JSON. The frontend
+   * keeps one entry per live app identity and overwrites it on every update;
+   * the backend validates and stores the map, then adds it only to future model
+   * wire contexts (never as a visible chat message).
+   */
+  mcpAppContexts?: string;
 }
 
 import OpenAI from 'openai';
+
+/** One app's latest `ui/update-model-context` payload. */
+export interface McpAppModelContext {
+  content?: unknown[];
+  structuredContent?: Record<string, unknown>;
+}
+
+/** Context keyed by the host-owned app identity (`serverName::ui://…`). */
+export type McpAppModelContextMap = Record<string, McpAppModelContext>;
 
 /**
  * Extends OpenAI's chat completion message parameter type to include additional fields
@@ -65,14 +82,27 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
    * MCP Apps (SEP-1865, #97): a `role: 'tool'` result may carry a link to an
    * interactive `ui://` UI resource the originating server wants rendered for
    * this tool call. Present only when the server has MCP Apps opt-in enabled
-   * (`enableMcpApps`); the chat renders it as a read-only, sandboxed iframe
-   * (Phase 1 — no iframe→host bridge). Display-only: never part of model context.
+   * (`enableMcpApps`); the chat renders it in an isolated sandbox and brokers
+   * the standard MCP Apps host bridge. Display-only: never part of model context.
    */
   ui?: {
     /** The `ui://…` resource URI to read and render. */
     uri: string;
     /** Server that owns the resource, used to read it back for rendering. */
     serverName: string;
+    /** Original server-side tool name that instantiated the View. */
+    toolName?: string;
+    /**
+     * Present when this invocation ended through MCP cancellation. The host
+     * sends tool-input followed by tool-cancelled instead of tool-result.
+     */
+    cancelledReason?: string;
+    /**
+     * True when the underlying invocation completed with an MCP/tool error.
+     * The View receives a `tool-result` with `isError: true` unless the
+     * invocation was cancelled, in which case `tool-cancelled` takes priority.
+     */
+    isError?: boolean;
   };
 
   /**

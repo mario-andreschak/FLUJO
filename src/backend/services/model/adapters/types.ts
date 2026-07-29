@@ -81,6 +81,7 @@ export interface CompletionInput {
     clientGeneration?: number;
     schemaHash?: string;
     annotations?: ToolAnnotations;
+    uiResourceUri?: string;
   }>;
   /**
    * Executors for caller-defined "virtual" tools (entries in `tools` that are
