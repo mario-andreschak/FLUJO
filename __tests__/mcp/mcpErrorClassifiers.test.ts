@@ -1,4 +1,4 @@
-import { isAuthRequiredError, isTransientStreamError } from '@/utils/mcp/utils';
+import { isAuthRequiredError, isOAuthAuthenticationError, isTransientStreamError } from '@/utils/mcp/utils';
 
 describe('isTransientStreamError', () => {
   it('matches the SDK SSE-disconnect signatures (self-healing, non-fatal)', () => {
@@ -38,5 +38,18 @@ describe('isTransientStreamError', () => {
 
     const unauthorized = new Error('HTTP 401 Unauthorized');
     expect(isTransientStreamError(unauthorized)).toBe(false);
+  });
+});
+
+describe('isOAuthAuthenticationError', () => {
+  it('distinguishes configured OAuth-provider failures from raw HTTP auth failures', () => {
+    const providerError = Object.assign(new Error('refresh failed'), {
+      name: 'OAuthAuthenticationRequired',
+    });
+    const rawUnauthorized = Object.assign(new Error('HTTP 401 Unauthorized'), { code: 401 });
+
+    expect(isOAuthAuthenticationError(providerError)).toBe(true);
+    expect(isOAuthAuthenticationError(rawUnauthorized)).toBe(false);
+    expect(isAuthRequiredError(rawUnauthorized)).toBe(true);
   });
 });

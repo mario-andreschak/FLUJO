@@ -103,6 +103,7 @@ import {
   formatErrorChain,
   formatErrorResponse,
   isAuthRequiredError,
+  isOAuthAuthenticationError,
   isClientConnectionClosed,
   isTransientStreamError
 } from '@/utils/mcp/utils';
@@ -912,51 +913,35 @@ export class MCPService {
     } catch (error) {
       log.error(`connectServer: Failed to connect to server ${config.name}:`, error);
       
-      // Check if this is an OAuth authentication error
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorName = error instanceof Error ? error.name : '';
-      
-      if (errorMessage.includes('OAuth authentication required') || errorName === 'OAuthAuthenticationRequired') {
-        log.info(`OAuth authentication required for server ${config.name}`);
-        
-        // Store the authorization URL if available
-        if (config.transport === 'streamable') {
-          const streamableConfig = config as MCPStreamableConfig;
-          if (streamableConfig.authorizationUrl) {
-            log.info(`Authorization URL available for ${config.name}: ${streamableConfig.authorizationUrl}`);
-          }
+      const oauthProviderError = isOAuthAuthenticationError(error);
+      const requiresAuthentication = isAuthRequiredError(error);
+      let oauthCapable: boolean | undefined;
+
+      // A transport-level 401/403 proves only that this request was rejected. It may be
+      // a static bearer/custom-header failure, so enable and persist OAuth only after the
+      // endpoint advertises OAuth capability. Provider-originated errors are already
+      // conclusive because this server was connected with a configured OAuth provider.
+      if (requiresAuthentication && (config.transport === 'streamable' || config.transport === 'sse')) {
+        const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig).serverUrl;
+        if (serverUrl) {
+          oauthCapable = (await probeOAuthSupport(serverUrl)).oauthCapable;
         }
-        
-        return { 
-          success: false, 
-          error: errorMessage,
-          requiresAuthentication: true 
-        };
       }
-      
-      // Check for other OAuth-related errors (401/403 indicating missing auth) - this also
-      // covers a freshly-added streamable server that has no OAuth config at all yet, where
-      // createTransport() never attached an auth provider and the server just rejected the
-      // unauthenticated request outright (e.g. Asana's MCP V2 API).
-      if (isAuthRequiredError(error)) {
+
+      if (oauthProviderError || oauthCapable) {
         log.info(`OAuth authentication error detected for server ${config.name}: ${errorMessage}`);
-        
-        // For streamable servers, dynamically enable OAuth if not already configured
-        if (config.transport === 'streamable') {
+
+        if (config.transport === 'streamable' && oauthCapable) {
           const streamableConfig = config as MCPStreamableConfig;
-          
-          // If OAuth scopes are not set, this server needs OAuth but wasn't configured for it
           if (!streamableConfig.oauthScopes || streamableConfig.oauthScopes.length === 0) {
-            log.info(`Dynamically enabling OAuth for server ${config.name} due to authentication error`);
-            
+            log.info(`Dynamically enabling OAuth for server ${config.name} after capability confirmation`);
+
             try {
-              // Update the config to include OAuth scopes
               const updatedConfig = {
                 ...streamableConfig,
-                oauthScopes: ['read'] // Set default OAuth scope
+                oauthScopes: ['read'],
               };
-              
-              // Save the updated config to storage
               const configs = await this.loadServerConfigs();
               if (Array.isArray(configs)) {
                 const configIndex = configs.findIndex(c => c.name === config.name);
@@ -971,11 +956,21 @@ export class MCPService {
             }
           }
         }
-        
-        return { 
-          success: false, 
+
+        return {
+          success: false,
           error: 'OAuth authentication failed or tokens have expired. Please re-authenticate.',
-          requiresAuthentication: true 
+          requiresAuthentication: true,
+          oauthCapable: true,
+        };
+      }
+
+      if (requiresAuthentication) {
+        return {
+          success: false,
+          error: errorMessage,
+          requiresAuthentication: true,
+          oauthCapable,
         };
       }
       
