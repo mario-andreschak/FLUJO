@@ -140,6 +140,7 @@ describe('installPackage — happy path', () => {
     // Server: registry install called with the resolved env, recorded as created.
     expect(installRegistryServerMock).toHaveBeenCalledWith('ai.keenable/web-search', { WEB_KEY: 'sk-1' });
     expect(summary.servers[0]).toEqual(expect.objectContaining({ localName: 'web', installed: true, serverName: 'web-search' }));
+    expect(updateServerConfigMock).toHaveBeenCalledWith('web-search', { folder: 'my-pkg' });
 
     // Model: created with a fresh id and the plaintext key (addModel encrypts).
     expect(addModelMock).toHaveBeenCalledTimes(1);
@@ -150,12 +151,14 @@ describe('installPackage — happy path', () => {
       adapter: 'openai-responses',
       reasoningEffort: 'high',
       serviceTier: 'priority',
+      folder: 'my-pkg',
     }));
 
-    // Flows: saved with fresh deterministic ids.
+    // Flows: saved with fresh deterministic ids in the package folder.
     expect(saveFlowMock).toHaveBeenCalledTimes(2);
     const savedIds = saveFlowMock.mock.calls.map((c) => (c[0] as { id: string }).id).sort();
     expect(savedIds).toEqual(['pkg-my-pkg-local-child', 'pkg-my-pkg-local-root']);
+    expect(saveFlowMock.mock.calls.every((c) => (c[0] as { folder?: string }).folder === 'my-pkg')).toBe(true);
 
     // Planned execution: created disabled, with a remapped flowId.
     expect(schedulerCreateMock).toHaveBeenCalledTimes(1);
@@ -311,6 +314,7 @@ describe('installPackage — adopt-and-configure', () => {
     // updateServerConfig called with the merged env, isSecret tagged.
     expect(updateServerConfigMock).toHaveBeenCalledWith('web', {
       env: { WEB_KEY: { value: 'sk-1', metadata: { isSecret: true } } },
+      folder: 'my-pkg',
     });
 
     // Server classified as updated, not created.
@@ -391,8 +395,12 @@ describe('installPackage — adopt-and-configure', () => {
     });
 
     expect(updateServerConfigMock).toHaveBeenCalledTimes(1);
-    const config = updateServerConfigMock.mock.calls[0][1] as { env: Record<string, unknown> };
+    const config = updateServerConfigMock.mock.calls[0][1] as {
+      env: Record<string, unknown>;
+      folder?: string;
+    };
     expect(config.env['API_KEY']).toEqual({ value: 'sk-1', metadata: { isSecret: true } });
+    expect(config.folder).toBe('remote-pkg');
   });
 });
 

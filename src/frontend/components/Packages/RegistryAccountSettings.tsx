@@ -18,7 +18,7 @@ import { registryService } from '@/frontend/services/registry';
 import type { RegistryAccountStatus, RegistryOAuthProvider } from '@/shared/types/registry';
 import { createLogger } from '@/utils/logger';
 
-const log = createLogger('frontend/components/Settings/RegistryAccountSettings');
+const log = createLogger('frontend/components/Packages/RegistryAccountSettings');
 
 type Feedback = { type: 'success' | 'error' | 'info'; text: string } | null;
 
@@ -26,7 +26,7 @@ type Feedback = { type: 'success' | 'error' | 'info'; text: string } | null;
  * Package-registry account settings (issue #197): sign up / log in, the
  * "confirm your email" state with a resend button, log out, and the registry
  * base-URL override. Tokens are never shown — only a confirmation badge and the
- * publisher handle. Follows the GlobalEnvSettings section conventions.
+ * publisher handle.
  */
 export default function RegistryAccountSettings() {
   const [status, setStatus] = useState<RegistryAccountStatus | null>(null);
@@ -63,7 +63,7 @@ export default function RegistryAccountSettings() {
   }, [refresh]);
 
   // Surface the OAuth callback outcome (#207). The callback route redirects back
-  // to `/settings?registry_oauth=success|error`; show a banner, refresh masked
+  // to `/packages?registry_oauth=success|error`; show a banner, refresh masked
   // status, then strip the param so a reload doesn't re-show it.
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -300,9 +300,6 @@ export default function RegistryAccountSettings() {
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Button variant="outlined" onClick={() => handleOAuth('github')} disabled={busy}>
               Continue with GitHub
-            </Button>
-            <Button variant="outlined" onClick={() => handleOAuth('google')} disabled={busy}>
-              Continue with Google
             </Button>
           </Stack>
         </Stack>

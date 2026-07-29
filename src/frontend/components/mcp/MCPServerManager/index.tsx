@@ -47,7 +47,13 @@ import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import {
+  groupByFolder,
+  groupItems,
+  collectFolders,
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+} from '@/utils/shared/cardGrouping';
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
@@ -172,7 +178,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
   const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', 'none');
+  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   // Collapsed sections persisted as a string[] and re-derived into a Set.
   const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:mcp:collapsed', []);

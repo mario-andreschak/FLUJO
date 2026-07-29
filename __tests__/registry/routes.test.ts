@@ -234,7 +234,7 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
       getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=xyz', { host: 'localhost:4200', referer: 'https://registry.example/' }),
     );
     expect(res.status).toBe(307);
-    expect(res.headers.get('location')).toContain('/settings?registry_oauth=success');
+    expect(res.headers.get('location')).toContain('/packages?registry_oauth=success');
     expect(completeOAuthMock).toHaveBeenCalledWith('abc', 'xyz');
   });
 
@@ -244,7 +244,7 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
       getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=stale'),
     );
     expect(res.status).toBe(307);
-    expect(res.headers.get('location')).toContain('/settings?registry_oauth=error');
+    expect(res.headers.get('location')).toContain('/packages?registry_oauth=error');
   });
 
   it('redirects to error when the provider returned an error, without exchanging', async () => {
@@ -252,7 +252,7 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
       getReq('http://localhost:4200/api/registry/oauth/callback?error=access_denied'),
     );
     expect(res.status).toBe(307);
-    expect(res.headers.get('location')).toContain('/settings?registry_oauth=error');
+    expect(res.headers.get('location')).toContain('/packages?registry_oauth=error');
     expect(completeOAuthMock).not.toHaveBeenCalled();
   });
 

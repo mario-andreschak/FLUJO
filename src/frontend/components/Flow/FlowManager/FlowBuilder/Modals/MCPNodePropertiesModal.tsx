@@ -46,15 +46,23 @@ import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/Car
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 interface MCPNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
   onSave: (nodeId: string, data: any) => void;
+  authoringMode?: FlowAuthoringMode;
 }
 
-export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodePropertiesModalProps) => {
+export const MCPNodePropertiesModal = ({
+  open,
+  node,
+  onClose,
+  onSave,
+  authoringMode = 'advanced',
+}: MCPNodePropertiesModalProps) => {
   // Clone node data to avoid direct mutation
   const [nodeData, setNodeData] = useState<{
     label: string;
@@ -306,14 +314,16 @@ export const MCPNodePropertiesModal = ({ open, node, onClose, onSave }: MCPNodeP
     <Dialog 
       open={open} 
       onClose={onClose}
-      maxWidth="md"
+      maxWidth={authoringMode === 'guided' ? 'xl' : 'md'}
       fullWidth
       PaperProps={{
         sx: { 
           borderTop: 5, 
           borderColor: 'info.main',
-          height: '80vh',
-          maxHeight: '80vh'
+          width: authoringMode === 'guided' ? '95vw' : undefined,
+          height: authoringMode === 'guided' ? '90vh' : '80vh',
+          maxWidth: authoringMode === 'guided' ? '95vw' : undefined,
+          maxHeight: authoringMode === 'guided' ? '90vh' : '80vh',
         }
       }}
     >

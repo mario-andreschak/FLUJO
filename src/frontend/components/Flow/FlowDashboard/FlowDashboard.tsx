@@ -34,7 +34,13 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, collectFolders, CardGroup } from '@/utils/shared/cardGrouping';
+import {
+  groupByFolder,
+  groupItems,
+  collectFolders,
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+} from '@/utils/shared/cardGrouping';
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
@@ -84,7 +90,7 @@ const FlowDashboard = ({
   const [sortOption, setSortOption] = useUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
   const [viewMode, setViewMode] = useUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', 'none');
+  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   // Keys of the sections the user has collapsed; everything defaults to expanded.
   // Persisted as a string[] and re-derived into a Set for O(1) lookups.

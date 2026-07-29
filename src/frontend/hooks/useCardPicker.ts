@@ -2,7 +2,12 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
-import { CardGroup, groupByFolder, groupItems } from '@/utils/shared/cardGrouping';
+import {
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+  groupByFolder,
+  groupItems,
+} from '@/utils/shared/cardGrouping';
 import {
   ModelSortOption,
   deriveModelSortGroup,
@@ -98,7 +103,7 @@ export function useCardPicker<T>(domain: CardPickerDomain, rawList: T[]): UseCar
 
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption] = useUiPreference<string>(`flujo-ui:${domain}:sort`, adapter.defaultSort);
-  const [groupMode] = useUiPreference<GroupMode>(`flujo-ui:${domain}:group`, 'none');
+  const [groupMode] = useUiPreference<GroupMode>(`flujo-ui:${domain}:group`, DEFAULT_CARD_GROUP_MODE);
   const [collapsedList, setCollapsedList] = useUiPreference<string[]>(`flujo-ui:${domain}:collapsed`, []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 

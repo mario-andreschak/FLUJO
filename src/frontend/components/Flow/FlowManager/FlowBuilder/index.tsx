@@ -1317,6 +1317,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         node={nodeToEdit}
         onClose={() => setMcpModalOpen(false)}
         onSave={handleNodeUpdate}
+        authoringMode={authoringMode}
       />
       
       <StartNodePropertiesModal

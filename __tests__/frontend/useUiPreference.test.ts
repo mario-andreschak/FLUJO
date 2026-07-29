@@ -49,6 +49,11 @@ describe('readUiPreference', () => {
     expect(readUiPreference('flujo-ui:test:group', 'none')).toBe('folder');
   });
 
+  it('preserves a saved choice when the fresh-instance default changes', () => {
+    storage.setItem('flujo-ui:test:group', JSON.stringify('none'));
+    expect(readUiPreference('flujo-ui:test:group', 'folder')).toBe('none');
+  });
+
   it('falls back to the initial value on malformed JSON', () => {
     storage.setItem('flujo-ui:test:group', 'not json{');
     expect(readUiPreference('flujo-ui:test:group', 'none')).toBe('none');

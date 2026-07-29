@@ -465,16 +465,16 @@ export const ProcessNodePropertiesModal = ({
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth={authoringMode === 'advanced' ? 'xl' : 'md'}
+      maxWidth="xl"
       fullWidth
       PaperProps={{
         sx: {
           borderTop: 5,
           borderColor: 'secondary.main',
-          width: authoringMode === 'advanced' ? '95vw' : '80vw',
-          height: authoringMode === 'advanced' ? '90vh' : '85vh',
-          maxWidth: authoringMode === 'advanced' ? '95vw' : '900px',
-          maxHeight: authoringMode === 'advanced' ? '90vh' : '85vh',
+          width: '95vw',
+          height: '90vh',
+          maxWidth: '95vw',
+          maxHeight: '90vh',
         }
       }}
     >
@@ -491,7 +491,7 @@ export const ProcessNodePropertiesModal = ({
 
       <Divider />
 
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', height: authoringMode === 'advanced' ? 'calc(90vh - 130px)' : 'calc(85vh - 130px)' }}>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', height: 'calc(90vh - 130px)' }}>
         {/* Section tab bar — click to scroll a section into view (issue #300). */}
         <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2, flexShrink: 0 }}>
           <Tabs

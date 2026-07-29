@@ -8,7 +8,7 @@
  * service; the browser only receives the authorize URL, never a token.
  *
  * Local-only + unlock-gated (mints/stores secrets at rest). NOT on the public
- * allow-list — this is triggered from the local Settings UI, unlike the callback.
+ * allow-list — this is triggered from the local Packages UI, unlike the callback.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';

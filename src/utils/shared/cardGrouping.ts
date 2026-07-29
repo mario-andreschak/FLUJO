@@ -18,6 +18,9 @@ export interface CardGroup<T> {
   items: T[];
 }
 
+/** Default grouping for a browser with no saved card-view preference yet. */
+export const DEFAULT_CARD_GROUP_MODE = 'folder' as const;
+
 /** Header label used for items that have no folder assigned. */
 export const UNGROUPED_LABEL = 'Ungrouped';
 /** Stable key for the "Ungrouped" bucket (never collides with a folder name). */

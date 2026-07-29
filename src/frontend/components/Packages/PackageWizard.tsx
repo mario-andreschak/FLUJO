@@ -35,7 +35,7 @@ import {
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
-import RegistryAccountSettings from '@/frontend/components/Settings/RegistryAccountSettings';
+import RegistryAccountSettings from './RegistryAccountSettings';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
@@ -536,8 +536,8 @@ export default function PackageWizard({ open, onClose }: Props) {
 
   /**
    * Publish the built manifest to the hosted package registry (issue #197).
-   * Requires a confirmed, signed-in registry account (managed in Settings →
-   * Package Registry Account); friendly errors are surfaced from the service.
+   * Requires a confirmed, signed-in registry account (managed on the Packages
+   * page); friendly errors are surfaced from the service.
    */
   const publishToRegistry = useCallback(async () => {
     if (!buildResult?.json) return;
@@ -1142,8 +1142,8 @@ export default function PackageWizard({ open, onClose }: Props) {
               <Divider />
               <Typography variant="subtitle2">Publish to the FLUJO package registry</Typography>
               <Typography variant="body2" color="text.secondary">
-                Publishing requires a confirmed registry account (set one up under
-                Settings → Package Registry Account). Only the secret-safe manifest above
+                Publishing requires a confirmed registry account (set one up on the
+                Packages page). Only the secret-safe manifest above
                 is uploaded — no secret values ever leave your machine.
               </Typography>
               {publishResult?.ok ? (

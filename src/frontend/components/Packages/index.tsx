@@ -14,6 +14,7 @@ import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import PackageWizard from './PackageWizard';
 import InstalledPackagesList from './InstalledPackagesList';
 import InstallPackageCard from './InstallPackageCard';
+import RegistryAccountSettings from './RegistryAccountSettings';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages');
@@ -81,6 +82,21 @@ export default function PackagesManager() {
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setWizardOpen(true)}>
             Create package
           </Button>
+        </Paper>
+
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 3,
+            mt: 3,
+            maxWidth: { xs: '100%', md: 1100 },
+            mx: 'auto',
+          }}
+        >
+          <Typography variant="h6" gutterBottom>
+            Package registry account
+          </Typography>
+          <RegistryAccountSettings />
         </Paper>
 
         <InstallPackageCard onInstalled={() => setInstalledRefreshKey((k) => k + 1)} />

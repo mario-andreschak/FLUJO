@@ -391,7 +391,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 
   // 4. MCP servers (before flows so name-based boundServer references resolve).
   for (const server of manifest.mcpServers ?? []) {
-    await installServer(server, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
+    await installServer(server, {
+      packageFolder: manifest.name,
+      secrets,
+      secretProvided,
+      secretRequired,
+      summary,
+      ledgerEntities,
+      ledgerCreated,
+      existingServerNames,
+      existingServerConfigs,
+    });
   }
 
   // 5. Models (before flows so id-based boundModel references resolve).
@@ -413,7 +423,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       });
       continue;
     }
-    const installed = await installModel(model, { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated, existingServerNames, existingServerConfigs });
+    const installed = await installModel(model, {
+      packageFolder: manifest.name,
+      secrets,
+      secretProvided,
+      secretRequired,
+      summary,
+      ledgerEntities,
+      ledgerCreated,
+      existingServerNames,
+      existingServerConfigs,
+    });
     if (installed) modelIdMap[model.id] = installed;
   }
 
@@ -665,6 +685,8 @@ async function buildPreview(manifest: FlujoPackage, secretProvided: (name: strin
 // ---------------------------------------------------------------------------
 
 interface InstallCtx {
+  /** All entities owned by this install are organized under the package name. */
+  packageFolder: string;
   secrets: Record<string, string>;
   secretProvided: (name: string) => boolean;
   secretRequired: (name: string) => boolean;
@@ -718,7 +740,7 @@ async function adoptAndConfigureServer(
   resolvedEnv: Record<string, string>,
   secretEnvNames: Set<string>,
 ): Promise<void> {
-  const { summary, ledgerEntities, existingServerConfigs } = ctx;
+  const { packageFolder, summary, ledgerEntities, existingServerConfigs } = ctx;
   const source = serverSource(server);
 
   const existingConfig = existingServerConfigs.get(server.name);
@@ -740,7 +762,7 @@ async function adoptAndConfigureServer(
 
   const saved = await mcpService.updateServerConfig(
     server.name,
-    { env: mergedEnv } as Partial<MCPServerConfig>,
+    { env: mergedEnv, folder: packageFolder } as Partial<MCPServerConfig>,
   );
   const failed =
     !Array.isArray(saved) &&
@@ -832,6 +854,9 @@ async function installServer(
     };
     summary.servers.push(entry);
     if (result.installed) {
+      if (result.serverName) {
+        await assignServerPackageFolder(result.serverName, ctx.packageFolder);
+      }
       if (result.serverName) ledgerEntities.servers.push(result.serverName);
       const ref: InstallEntityRef = { type: 'server', name: server.name, ...(result.serverName ? { id: result.serverName } : {}) };
       if (result.alreadyExisted) summary.updated.push(ref);
@@ -853,7 +878,14 @@ async function installServer(
   // DISABLED when a required secret is missing (rather than dropping it).
   const disabled = missingRequired.length > 0;
   try {
-    const config = buildRemoteServerConfig(server, env.values, disabled, resolvedHeaders, env.secretNames);
+    const config = buildRemoteServerConfig(
+      server,
+      ctx.packageFolder,
+      env.values,
+      disabled,
+      resolvedHeaders,
+      env.secretNames,
+    );
     const saved = await mcpService.updateServerConfig(server.name, config);
     const failed = !Array.isArray(saved) && saved && 'success' in saved && (saved as { success?: boolean }).success === false;
     if (failed) {
@@ -874,6 +906,32 @@ async function installServer(
     const error = err instanceof Error ? err.message : String(err);
     summary.servers.push({ localName: server.name, source, installed: false, error });
     summary.skipped.push({ type: 'server', name: server.name, note: error });
+  }
+}
+
+/**
+ * Registry installs build the server config in a lower-level service that has
+ * no package context. Apply the package folder immediately afterwards.
+ * Fail-soft like secret re-tagging: the server itself is already installed.
+ */
+async function assignServerPackageFolder(serverName: string, packageFolder: string): Promise<void> {
+  try {
+    const saved = await mcpService.updateServerConfig(
+      serverName,
+      { folder: packageFolder } as Partial<MCPServerConfig>,
+    );
+    if (
+      !Array.isArray(saved) &&
+      saved &&
+      'success' in saved &&
+      (saved as { success?: boolean }).success === false
+    ) {
+      log.warn(
+        `assignServerPackageFolder: failed to assign "${serverName}" to "${packageFolder}": ${(saved as { error?: string }).error ?? 'unknown error'}`,
+      );
+    }
+  } catch (err) {
+    log.warn(`assignServerPackageFolder: failed to assign "${serverName}" to "${packageFolder}"`, err);
   }
 }
 
@@ -910,6 +968,7 @@ async function tagSecretEnvKeys(
 
 function buildRemoteServerConfig(
   server: PackagedMcpServer,
+  packageFolder: string,
   env: Record<string, string>,
   disabled: boolean,
   headers: Record<string, MCPHeaderValue>,
@@ -924,6 +983,7 @@ function buildRemoteServerConfig(
     : 'streamable';
   const base = {
     name: server.name,
+    folder: packageFolder,
     disabled,
     autoApprove: server.autoApprove ?? [],
     rootPath: '',
@@ -953,7 +1013,15 @@ async function installModel(
   model: PackagedModel,
   ctx: InstallCtx,
 ): Promise<{ id: string; name: string } | undefined> {
-  const { secrets, secretProvided, secretRequired, summary, ledgerEntities, ledgerCreated } = ctx;
+  const {
+    packageFolder,
+    secrets,
+    secretProvided,
+    secretRequired,
+    summary,
+    ledgerEntities,
+    ledgerCreated,
+  } = ctx;
 
   // Resolve the API key: global-var binding, provided secret, or empty (a
   // missing REQUIRED secret installs the model DISABLED, i.e. keyless).
@@ -989,6 +1057,7 @@ async function installModel(
     ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
     ...(model.maxTurns !== undefined ? { maxTurns: model.maxTurns } : {}),
     ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+    folder: packageFolder,
     ApiKey: apiKey,
   };
 
@@ -1044,6 +1113,7 @@ async function installFlows(
     const localId = packagedFlow.flow.id;
     const newId = idMap[localId];
     const flow = remapFlow(packagedFlow, newId, idMap, modelIdMap);
+    flow.folder = packageName;
     const wasPresent = existingIds.has(newId);
     const res = await flowService.saveFlow(flow);
     if (res.success) {

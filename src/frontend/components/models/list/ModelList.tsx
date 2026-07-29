@@ -24,7 +24,12 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ModelCard from './ModelCard';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
-import { groupByFolder, groupItems, CardGroup } from '@/utils/shared/cardGrouping';
+import {
+  groupByFolder,
+  groupItems,
+  CardGroup,
+  DEFAULT_CARD_GROUP_MODE,
+} from '@/utils/shared/cardGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   ModelSortOption,
@@ -59,7 +64,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
     const theme = useTheme();
     // Persisted view preferences (#93): retained across navigation.
     const [sortOption, setSortOption] = useUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
-    const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:models:group', 'none');
+    const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:models:group', DEFAULT_CARD_GROUP_MODE);
     const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
     const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
     // Keys of the sections the user has collapsed; everything defaults to expanded.
