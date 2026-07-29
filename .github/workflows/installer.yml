@@ -1,0 +1,36 @@
+# Builds flujo-setup.exe (installer/flujo-setup.iss) on every version tag and
+# attaches it to the GitHub release. Inno Setup 6 is preinstalled on the
+# windows-latest runner image. Run manually via workflow_dispatch to get the
+# exe as a build artifact without cutting a release.
+name: Build setup.exe
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_NAME -match '^v(.+)$') { $Matches[1] } else { '0.0.0' }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer\flujo-setup.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flujo-setup
+          path: installer/Output/flujo-setup.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/flujo-setup.exe
+          generate_release_notes: true

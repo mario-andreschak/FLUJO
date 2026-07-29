@@ -306,6 +306,11 @@ $env:FLUJO_DIR = "D:\Apps\FLUJO"; $env:FLUJO_START = "1"; irm https://raw.github
 
 See [`scripts/install.ps1`](scripts/install.ps1) for all options.
 
+Prefer a graphical installer? Download `flujo-setup.exe` from the
+[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) — it's a
+wizard around the same `install.ps1` script above (see
+[`installer/flujo-setup.iss`](installer/flujo-setup.iss)).
+
 ### One-line install (Linux / macOS)
 
 The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
