@@ -1,7 +1,7 @@
 /**
  * Issue #216 — Docked, tabbed MCP Apps canvas surface (`pip` display mode).
  *
- * Pure, dependency-free state helpers for the conversation-level canvas (the
+ * Pure, framework-free state helpers for the conversation-level canvas (the
  * docked surface rendered by `DevCanvasDock`). Kept side-effect-free and
  * framework-agnostic so the tab/LRU/cap logic is exhaustively unit-testable in
  * isolation (see `__tests__/chat/canvasState.test.ts`), mirroring the pattern of
@@ -11,6 +11,8 @@
  * required (design principle #1 of the issue). Updates for an already-open key
  * feed the SAME live tab (`updateCanvasApp`); they never spawn a second entry.
  */
+
+import { isBuiltInServerName } from '@/utils/shared/mcpConstants';
 
 /** Default number of concurrently-live canvas tabs before LRU eviction. */
 export const DEFAULT_CANVAS_TAB_CAP = 16;
@@ -141,10 +143,11 @@ export function enforceCap(
 }
 
 /**
- * Open (or re-open) a canvas app and FOCUS it. This is the click-to-mount
- * consent action: it adds the entry if new, refreshes its payload, marks it
- * read (it is now visible), bumps its recency, and enforces the tab cap while
- * protecting the just-opened tab.
+ * Open (or re-open) a canvas app and FOCUS it. For external apps this is the
+ * click-to-mount consent action; trusted first-party apps may reach it through
+ * `syncCanvasAppResult`. It adds the entry if new, refreshes its payload, marks
+ * it read, bumps its recency, and enforces the tab cap while protecting the
+ * just-opened tab.
  */
 export function openCanvasApp(
   state: CanvasState,
@@ -199,6 +202,31 @@ export function updateCanvasApp(
     lastActiveAt: isActive ? now : existing.lastActiveAt,
   };
   return { ...state, entries: { ...state.entries, [key]: entry } };
+}
+
+/**
+ * Route an observed tool result into the canvas.
+ *
+ * First-party apps shipped by FLUJO are trusted to mount directly in the PiP
+ * canvas (#331), so their first result opens a tab without the click-to-mount
+ * gate. Third-party apps remain consent-gated and are ignored until the user
+ * explicitly opens them. Once any app is open, later results re-feed its
+ * existing bridge as before.
+ */
+export function syncCanvasAppResult(
+  state: CanvasState,
+  input: CanvasAppInput,
+  now: number = Date.now(),
+  cap: number = DEFAULT_CANVAS_TAB_CAP,
+): CanvasMutationResult {
+  const key = canvasKey(input.serverName, input.uri);
+  if (state.entries[key]) {
+    return { state: updateCanvasApp(state, input, now), evicted: [] };
+  }
+  if (!isBuiltInServerName(input.serverName)) {
+    return { state, evicted: [] };
+  }
+  return openCanvasApp(state, input, now, cap);
 }
 
 /** Focus a tab: mark it read and bump its recency (LRU). No-op if absent. */

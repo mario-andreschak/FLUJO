@@ -30,6 +30,7 @@ import {
   ModelProvider,
   ModelAdapter,
   PROVIDER_PROFILES,
+  getModelConfigurationCapabilities,
   getProviderProfile,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
@@ -210,6 +211,11 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   // longer inferred from the base URL). The currently-selected profile is
   // derived from the stored provider + adapter.
   const currentProfile = getProviderProfile(formState.provider, formState.adapter);
+  const configurationCapabilities = getModelConfigurationCapabilities(
+    formState.provider,
+    formState.adapter,
+    formState.name,
+  );
 
   // Apply a provider profile: pins the vendor (provider) and SDK (adapter) and
   // prefills the default base URL (empty for native SDK / CLI providers).
@@ -261,6 +267,17 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     if (!formState.displayName?.trim()) {
       newErrors.displayName = 'Display Name is required';
     }
+    if (configurationCapabilities.creativity && formState.temperature?.trim()) {
+      const creativity = Number(formState.temperature);
+      if (
+        !Number.isFinite(creativity) ||
+        creativity < configurationCapabilities.creativity.min ||
+        creativity > configurationCapabilities.creativity.max
+      ) {
+        newErrors.temperature =
+          `Creativity must be between ${configurationCapabilities.creativity.min} and ${configurationCapabilities.creativity.max}`;
+      }
+    }
     // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
     if (!isApiKeyBound && !formState.ApiKey?.trim() && currentProfile.adapter !== 'codex-cli') {
       newErrors.ApiKey = 'API key is required';
@@ -286,10 +303,22 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         provider: formState.provider!,
         adapter: formState.adapter || 'openai',
         promptTemplate: formState.promptTemplate,
-        temperature: formState.temperature,
+        temperature: configurationCapabilities.creativity ? formState.temperature : undefined,
+        reasoningEffort: configurationCapabilities.effortLevels?.includes(formState.reasoningEffort!)
+          ? formState.reasoningEffort
+          : undefined,
+        thinkingLevel: configurationCapabilities.thinkingLevels?.includes(formState.thinkingLevel!)
+          ? formState.thinkingLevel
+          : undefined,
+        thinkingBudget: configurationCapabilities.thinkingBudget
+          ? formState.thinkingBudget
+          : undefined,
+        serviceTier: configurationCapabilities.priority
+          ? (formState.serviceTier || 'default')
+          : undefined,
         contextWindow: formState.contextWindow,
         maxTurns: formState.maxTurns,
-        maxTokens: formState.maxTokens,
+        maxTokens: configurationCapabilities.maxOutputTokens ? formState.maxTokens : undefined,
       } as Model);
 
       if (result.success) {
@@ -341,7 +370,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
           <Grid container spacing={2} sx={{ flexGrow: 1 }}>
             {/* Left Column - Model Configuration */}
             <Grid item xs={6} sx={{ height: '100%' }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2 }}>
+              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2, overflowY: 'auto' }}>
                 <Typography variant="h6" gutterBottom>
                   Model Configuration
                 </Typography>
@@ -534,6 +563,114 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   onChange={(e) => handleChange('description', e.target.value)}
                 />
 
+                {configurationCapabilities.creativity && (
+                  <TextField
+                    margin="dense"
+                    label="Creativity"
+                    fullWidth
+                    type="number"
+                    value={formState.temperature ?? ''}
+                    onChange={(e) => handleChange('temperature', e.target.value)}
+                    error={!!errors.temperature}
+                    inputProps={configurationCapabilities.creativity}
+                    helperText={errors.temperature || `Sampling temperature (${configurationCapabilities.creativity.min}–${configurationCapabilities.creativity.max}). Blank uses FLUJO's deterministic default (0).`}
+                  />
+                )}
+
+                {configurationCapabilities.effortLevels && (
+                  <FormControl fullWidth margin="dense">
+                    <InputLabel id="reasoning-effort-label">Effort</InputLabel>
+                    <Select
+                      labelId="reasoning-effort-label"
+                      label="Effort"
+                      value={formState.reasoningEffort || ''}
+                      onChange={(e) => setFormState(prev => ({
+                        ...prev,
+                        reasoningEffort: e.target.value
+                          ? e.target.value as Model['reasoningEffort']
+                          : undefined,
+                      }))}
+                    >
+                      <MenuItem value=""><em>Provider default</em></MenuItem>
+                      {configurationCapabilities.effortLevels.map(level => (
+                        <MenuItem key={level} value={level}>
+                          {level === 'xhigh' ? 'Extra high' : level.charAt(0).toUpperCase() + level.slice(1)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.75 }}>
+                      Controls how much reasoning the model performs.
+                    </Typography>
+                  </FormControl>
+                )}
+
+                {configurationCapabilities.thinkingLevels && (
+                  <FormControl fullWidth margin="dense">
+                    <InputLabel id="thinking-level-label">Thinking Level</InputLabel>
+                    <Select
+                      labelId="thinking-level-label"
+                      label="Thinking Level"
+                      value={formState.thinkingLevel || ''}
+                      onChange={(e) => setFormState(prev => ({
+                        ...prev,
+                        thinkingLevel: e.target.value
+                          ? e.target.value as Model['thinkingLevel']
+                          : undefined,
+                      }))}
+                    >
+                      <MenuItem value=""><em>Provider default</em></MenuItem>
+                      {configurationCapabilities.thinkingLevels.map(level => (
+                        <MenuItem key={level} value={level}>
+                          {level.charAt(0).toUpperCase() + level.slice(1)}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+
+                {configurationCapabilities.thinkingBudget && (
+                  <TextField
+                    margin="dense"
+                    label="Thinking Budget"
+                    fullWidth
+                    type="number"
+                    value={formState.thinkingBudget ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const parsed = raw === '' ? undefined : Number(raw);
+                      setFormState(prev => ({
+                        ...prev,
+                        thinkingBudget: parsed !== undefined && Number.isFinite(parsed) && parsed >= -1
+                          ? Math.floor(parsed)
+                          : undefined,
+                      }));
+                    }}
+                    inputProps={{ min: -1, step: 1 }}
+                    helperText="Gemini 2.5 thinking tokens. -1 = adaptive, 0 = disabled where supported, blank = provider default."
+                  />
+                )}
+
+                {configurationCapabilities.priority && (
+                  <FormControl fullWidth margin="dense">
+                    <InputLabel id="service-tier-label">Priority</InputLabel>
+                    <Select
+                      labelId="service-tier-label"
+                      label="Priority"
+                      value={formState.serviceTier || 'default'}
+                      onChange={(e) => setFormState(prev => ({
+                        ...prev,
+                        serviceTier: e.target.value as Model['serviceTier'],
+                      }))}
+                    >
+                      <MenuItem value="default">Standard</MenuItem>
+                      <MenuItem value="priority">Priority (faster)</MenuItem>
+                    </Select>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.75 }}>
+                      Priority uses Codex Fast mode and may consume more plan usage.
+                    </Typography>
+                  </FormControl>
+                )}
+
                 <TextField
                   margin="dense"
                   label="Context Window (tokens)"
@@ -569,23 +706,25 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   helperText="Max agentic turns before a run stops (default 50). Process nodes can override this per-node."
                 />
 
-                <TextField
-                  margin="dense"
-                  label="Max Output Tokens (optional)"
-                  fullWidth
-                  type="number"
-                  value={formState.maxTokens ?? ''}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    const parsed = raw === '' ? undefined : Number(raw);
-                    setFormState(prev => ({
-                      ...prev,
-                      maxTokens: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
-                    }));
-                  }}
-                  inputProps={{ min: 1 }}
-                  helperText="Optional. Default cap on generated tokens. A request's max_tokens overrides this. Anthropic uses 8192 when unset."
-                />
+                {configurationCapabilities.maxOutputTokens && (
+                  <TextField
+                    margin="dense"
+                    label="Max Output Tokens (optional)"
+                    fullWidth
+                    type="number"
+                    value={formState.maxTokens ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const parsed = raw === '' ? undefined : Number(raw);
+                      setFormState(prev => ({
+                        ...prev,
+                        maxTokens: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
+                      }));
+                    }}
+                    inputProps={{ min: 1 }}
+                    helperText="Optional. Default cap on generated tokens. A request's max_tokens overrides this. Anthropic uses 8192 when unset."
+                  />
+                )}
               </Box>
             </Grid>
             

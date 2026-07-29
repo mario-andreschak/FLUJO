@@ -54,10 +54,11 @@ interface McpAppFrameProps {
   onDockable?: (dockable: boolean) => void;
   /**
    * #216: render as a persistent host inside the DevCanvasDock. The frame
-   * auto-mounts (the click-to-mount consent gate already happened in the
-   * bubble), drops its own collapse chrome, and fills its container. It is
-   * shown/hidden via CSS only (`visible`) — NEVER unmounted on tab switch — so
-   * the live iframe/bridge is never reparented (the load-bearing invariant).
+   * auto-mounts after the trust/consent decision (a bubble click for external
+   * apps, or the first-party policy for built-ins), drops its own collapse
+   * chrome, and fills its container. It is shown/hidden via CSS only (`visible`)
+   * — NEVER unmounted on tab switch — so the live iframe/bridge is never
+   * reparented (the load-bearing invariant).
    */
   docked?: boolean;
   /** #216: CSS-only visibility for a docked host (tab switch / collapse). */
@@ -409,9 +410,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({ serverName, uri, toolName, to
     }
   }, [expanded, mount]);
 
-  // #216: a docked host auto-mounts (the launcher click already served as the
-  // consent gate) and then stays mounted for the life of the tab — visibility is
-  // CSS-only, so the live iframe/bridge is never reparented.
+  // #216: a docked host auto-mounts after the upstream trust/consent decision
+  // and then stays mounted for the life of the tab — visibility is CSS-only,
+  // so the live iframe/bridge is never reparented.
   useEffect(() => {
     if (docked && !mountedRef.current) void mount();
   }, [docked, mount]);

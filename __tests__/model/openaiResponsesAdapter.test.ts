@@ -297,6 +297,14 @@ describe('request shape', () => {
     expect(bodyOf()).not.toHaveProperty('max_tokens');
   });
 
+  it('maps configured effort to Responses reasoning.effort', async () => {
+    await call(
+      { ...model(), reasoningEffort: 'high' },
+      [{ role: 'user', content: 'hi' }],
+    );
+    expect(bodyOf().reasoning).toEqual({ effort: 'high' });
+  });
+
   it('forwards the prompt cache key', async () => {
     await call(model(), [{ role: 'user', content: 'hi' }], { promptCacheKey: 'flujo-tabc' });
     expect(bodyOf().prompt_cache_key).toBe('flujo-tabc');

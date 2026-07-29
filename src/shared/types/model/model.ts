@@ -1,4 +1,10 @@
-import { ModelProvider, ModelAdapter } from './provider';
+import {
+    GeminiThinkingLevel,
+    ModelProvider,
+    ModelAdapter,
+    ModelReasoningEffort,
+    ModelServiceTier,
+} from './provider';
 
 /**
  * System default upper bound on agentic turns for self-orchestrating adapters
@@ -40,6 +46,20 @@ export interface Model {
     // New fields
     reasoningSchema?: string;
     temperature?: string;
+    /**
+     * Provider-specific reasoning depth. Mapped to OpenAI `reasoning_effort`,
+     * Anthropic/Claude `effort`, or Codex `modelReasoningEffort`.
+     */
+    reasoningEffort?: ModelReasoningEffort;
+    /** Gemini 3+ qualitative thinking depth. */
+    thinkingLevel?: GeminiThinkingLevel;
+    /**
+     * Gemini 2.5 thinking-token budget. -1 asks Gemini to choose dynamically;
+     * 0 disables thinking where that model allows it.
+     */
+    thinkingBudget?: number;
+    /** Codex processing tier (standard/default or priority/Fast). */
+    serviceTier?: ModelServiceTier;
     functionCallingSchema?: string;
     /**
      * The model's context window in tokens (as advertised by the provider).

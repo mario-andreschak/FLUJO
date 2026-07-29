@@ -10,6 +10,7 @@ const authenticateMock = jest.fn();
 const getAccountStatusMock = jest.fn();
 const logoutMock = jest.fn();
 const publishMock = jest.fn();
+const deletePublishedPackageMock = jest.fn();
 const requestPasswordResetMock = jest.fn();
 const beginOAuthMock = jest.fn();
 const completeOAuthMock = jest.fn();
@@ -18,6 +19,7 @@ jest.mock('@/backend/services/registry', () => ({
   getAccountStatus: (...a: unknown[]) => getAccountStatusMock(...a),
   logout: (...a: unknown[]) => logoutMock(...a),
   publish: (...a: unknown[]) => publishMock(...a),
+  deletePublishedPackage: (...a: unknown[]) => deletePublishedPackageMock(...a),
   requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
   beginOAuth: (...a: unknown[]) => beginOAuthMock(...a),
   completeOAuth: (...a: unknown[]) => completeOAuthMock(...a),
@@ -32,6 +34,7 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { POST as authPost } from '@/app/api/registry/auth/route';
 import { POST as publishPost } from '@/app/api/registry/publish/route';
+import { DELETE as packageDelete } from '@/app/api/registry/packages/route';
 import { POST as resetPost } from '@/app/api/registry/auth/reset/route';
 import { POST as oauthInitiatePost } from '@/app/api/registry/oauth/initiate/route';
 import { GET as oauthCallbackGet } from '@/app/api/registry/oauth/callback/route';
@@ -48,6 +51,14 @@ const locked = () =>
 function req(url: string, body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) {
   return new Request(url, {
     method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  }) as unknown as NextRequest;
+}
+
+function deleteReq(url: string, body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) {
+  return new Request(url, {
+    method: 'DELETE',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
   }) as unknown as NextRequest;
@@ -129,6 +140,52 @@ describe('POST /api/registry/publish (#197)', () => {
     const res = await publishPost(req('http://localhost:4200/api/registry/publish', { manifest: { id: 'p' } }, { host: 'evil.example.com' }));
     expect(res.status).toBe(403);
     expect(publishMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/registry/packages', () => {
+  it('deletes a package through the authenticated registry service', async () => {
+    deletePublishedPackageMock.mockResolvedValue({ ok: true });
+    const res = await packageDelete(
+      deleteReq('http://localhost:4200/api/registry/packages', { packageId: 'publisher/package' }),
+    );
+    expect(res.status).toBe(200);
+    expect(deletePublishedPackageMock).toHaveBeenCalledWith('publisher/package');
+  });
+
+  it('rejects a missing package id', async () => {
+    const res = await packageDelete(
+      deleteReq('http://localhost:4200/api/registry/packages', {}),
+    );
+    expect(res.status).toBe(400);
+    expect(deletePublishedPackageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not_authenticated', 401],
+    ['unauthorized', 401],
+    ['forbidden', 403],
+    ['not_found', 404],
+    ['validation', 400],
+    ['error', 502],
+  ])('maps deletion code %s to HTTP %s', async (code, status) => {
+    deletePublishedPackageMock.mockResolvedValue({ ok: false, code, error: 'x' });
+    const res = await packageDelete(
+      deleteReq('http://localhost:4200/api/registry/packages', { packageId: 'publisher/package' }),
+    );
+    expect(res.status).toBe(status);
+  });
+
+  it('rejects a cross-origin request before deleting', async () => {
+    const res = await packageDelete(
+      deleteReq(
+        'http://localhost:4200/api/registry/packages',
+        { packageId: 'publisher/package' },
+        { host: 'localhost:4200', origin: 'https://evil.example.com' },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(deletePublishedPackageMock).not.toHaveBeenCalled();
   });
 });
 

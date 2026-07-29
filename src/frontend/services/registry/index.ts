@@ -11,6 +11,7 @@ import type {
   RegistryAuthAction,
   RegistryAuthResult,
   RegistryPublishResult,
+  RegistryDeleteResult,
   RegistryOAuthProvider,
 } from '@/shared/types/registry';
 
@@ -130,6 +131,21 @@ class RegistryService {
     }
     return body;
   }
+
+  /** Permanently delete one of the signed-in publisher's packages. */
+  async deletePackage(packageId: string): Promise<RegistryDeleteResult> {
+    const response = await fetch('/api/registry/packages', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packageId }),
+    });
+    const body = await parse<RegistryDeleteResult & { error?: string }>(response);
+    if (body?.ok === undefined) {
+      log.warn('Unexpected package deletion response shape', { status: response.status });
+      return { ok: false, code: 'error', error: body?.error || `HTTP ${response.status}` };
+    }
+    return body;
+  }
 }
 
 let _registryService: RegistryService | null = null;
@@ -153,4 +169,4 @@ export const registryService: RegistryService = new Proxy({} as RegistryService,
   },
 });
 
-export type { RegistryAccountStatus, RegistryAuthResult, RegistryPublishResult };
+export type { RegistryAccountStatus, RegistryAuthResult, RegistryPublishResult, RegistryDeleteResult };

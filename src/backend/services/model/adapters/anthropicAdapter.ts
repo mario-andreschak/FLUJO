@@ -578,6 +578,13 @@ export class AnthropicAdapter implements CompletionAdapter {
         model: model.name,
         max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
         ...(opts.temperature ? { temperature } : {}),
+        ...(model.reasoningEffort
+          ? {
+              output_config: {
+                effort: model.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+              },
+            }
+          : {}),
         messages: shaped.messages,
         ...(shaped.system ? { system: shaped.system } : {}),
         ...(shaped.tools ? { tools: shaped.tools } : {}),

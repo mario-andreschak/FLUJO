@@ -46,6 +46,10 @@ export interface PackagedModel {
   promptTemplate?: string;
   reasoningSchema?: string;
   temperature?: string;
+  reasoningEffort?: string;
+  thinkingLevel?: string;
+  thinkingBudget?: number;
+  serviceTier?: string;
   functionCallingSchema?: string;
   contextWindow?: number;
   maxTurns?: number;

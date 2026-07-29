@@ -37,11 +37,11 @@ export const MCP_APP_IFRAME_SANDBOX = 'allow-scripts';
 export const MAX_UI_RESOURCE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
 /**
- * The `_meta.ui` security/render block a UI resource (or an app tool) may carry
- * per SEP-1865. Every domain list maps to a CSP directive; an omitted/empty
- * list yields the secure default (no external connections/resources).
+ * The `_meta.ui.csp` block a UI resource may carry per SEP-1865. Every domain
+ * list maps to a CSP directive; an omitted/empty list yields the secure default
+ * (no external connections/resources).
  */
-export interface UIResourceMeta {
+export interface UIResourceCsp {
   /** CSP `connect-src` — fetch/XHR/WebSocket targets the app may reach. */
   connectDomains?: string[];
   /** CSP `img-src`/`script-src`/`style-src`/`font-src`/`media-src` origins. */
@@ -52,6 +52,19 @@ export interface UIResourceMeta {
   baseUriDomains?: string[];
 }
 
+/** The complete resource metadata block declared under `_meta.ui`. */
+export interface UIResourceMeta {
+  csp?: UIResourceCsp;
+  permissions?: {
+    camera?: Record<string, never>;
+    microphone?: Record<string, never>;
+    geolocation?: Record<string, never>;
+    clipboardWrite?: Record<string, never>;
+  };
+  domain?: string;
+  prefersBorder?: boolean;
+}
+
 /** A tool/result carries its UI link under this key per SEP-1865. */
 export interface ToolUiLink {
   resourceUri?: string;
@@ -59,14 +72,18 @@ export interface ToolUiLink {
 
 /** True when `uri` is a UI resource URI (`ui://…`). */
 export function isUiResourceUri(uri: unknown): uri is string {
-  return typeof uri === 'string' && uri.trim().toLowerCase().startsWith(UI_RESOURCE_SCHEME);
+  return typeof uri === 'string' && /^ui:\/\//i.test(uri);
 }
 
 /** True when `mimeType` denotes an MCP-app HTML resource (`text/html;profile=mcp-app`). */
 export function isMcpAppMimeType(mimeType: unknown): boolean {
   if (typeof mimeType !== 'string') return false;
-  const normalized = mimeType.toLowerCase().replace(/\s+/g, '');
-  return normalized.startsWith('text/html') && normalized.includes(MCP_APP_MIME_PROFILE);
+  const [essence, ...rawParameters] = mimeType.toLowerCase().split(';');
+  if (essence.trim() !== 'text/html') return false;
+  return rawParameters.some((parameter) => {
+    const [name, value, ...extra] = parameter.split('=');
+    return extra.length === 0 && name.trim() === 'profile' && value?.trim() === 'mcp-app';
+  });
 }
 
 /**
@@ -80,6 +97,9 @@ export function isMcpAppMimeType(mimeType: unknown): boolean {
 export function extractUiResourceUri(meta: unknown): string | undefined {
   if (!meta || typeof meta !== 'object') return undefined;
   const record = meta as Record<string, unknown>;
+  const flatUri = record['ui/resourceUri'];
+  if (isUiResourceUri(flatUri)) return flatUri;
+
   const candidates: unknown[] = [record['ui'], record['io.modelcontextprotocol/ui']];
   for (const candidate of candidates) {
     if (candidate && typeof candidate === 'object') {
@@ -132,7 +152,7 @@ export function isValidCspSourceToken(token: unknown): boolean {
  * is injected as a `<meta http-equiv="Content-Security-Policy">` inside the
  * iframe document (belt-and-suspenders alongside the `sandbox` attribute).
  */
-export function buildAppCsp(meta?: UIResourceMeta | null): string {
+export function buildAppCsp(meta?: UIResourceCsp | null): string {
   const cleanDomains = (domains?: string[]): string =>
     (domains || [])
       .map((d) => (typeof d === 'string' ? d.trim() : ''))
@@ -166,7 +186,7 @@ export function buildAppCsp(meta?: UIResourceMeta | null): string {
  * If the HTML already declares `<head>`, the meta is injected right after it;
  * otherwise a minimal document scaffold is added.
  */
-export function buildAppSrcDoc(html: string, meta?: UIResourceMeta | null): string {
+export function buildAppSrcDoc(html: string, meta?: UIResourceCsp | null): string {
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${buildAppCsp(meta)}">`;
   if (/<head[\s>]/i.test(html)) {
     // Use a FUNCTION replacer so the (server-derived) `cspMeta` is inserted
@@ -185,6 +205,9 @@ interface ResourceContentEntry {
   mimeType?: string;
   text?: string;
   blob?: string;
+  _meta?: {
+    ui?: UIResourceMeta;
+  };
 }
 
 /**
@@ -195,26 +218,50 @@ interface ResourceContentEntry {
  */
 export function extractAppHtml(
   result: unknown,
-  maxBytes: number = MAX_UI_RESOURCE_BYTES
+  maxBytes: number = MAX_UI_RESOURCE_BYTES,
+  requestedUri?: string,
 ): { html: string; meta?: UIResourceMeta } | { error: string } {
   const contents = (result as { contents?: ResourceContentEntry[] } | null | undefined)?.contents;
   if (!Array.isArray(contents) || contents.length === 0) {
     return { error: 'Resource has no contents' };
   }
-  const appEntry =
-    contents.find((c) => isMcpAppMimeType(c.mimeType) && typeof c.text === 'string') ||
-    contents.find((c) => typeof c.text === 'string');
+  const appEntry = contents.find((entry) => {
+    if (!isMcpAppMimeType(entry.mimeType)) return false;
+    if (requestedUri !== undefined && entry.uri !== requestedUri) return false;
+    return typeof entry.text === 'string' || typeof entry.blob === 'string';
+  });
 
-  if (!appEntry || typeof appEntry.text !== 'string') {
-    return { error: 'Resource has no HTML text body' };
+  if (!appEntry) {
+    return {
+      error: requestedUri === undefined
+        ? 'Resource has no MCP App HTML body'
+        : `Resource has no MCP App HTML body matching ${requestedUri}`,
+    };
   }
+
+  let html: string;
+  if (typeof appEntry.text === 'string') {
+    html = appEntry.text;
+  } else {
+    try {
+      if (typeof Buffer !== 'undefined') {
+        html = Buffer.from(appEntry.blob as string, 'base64').toString('utf8');
+      } else {
+        const binary = atob(appEntry.blob as string);
+        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        html = new TextDecoder().decode(bytes);
+      }
+    } catch {
+      return { error: 'Resource contains invalid base64 HTML' };
+    }
+  }
+
   const byteLength =
     typeof Buffer !== 'undefined'
-      ? Buffer.byteLength(appEntry.text, 'utf8')
-      : new TextEncoder().encode(appEntry.text).length;
+      ? Buffer.byteLength(html, 'utf8')
+      : new TextEncoder().encode(html).length;
   if (byteLength > maxBytes) {
     return { error: `Resource exceeds the ${Math.round(maxBytes / 1024)} KiB size cap` };
   }
-  const meta = (appEntry as { _meta?: { ui?: UIResourceMeta } })._meta?.ui;
-  return { html: appEntry.text, meta };
+  return { html, meta: appEntry._meta?.ui };
 }

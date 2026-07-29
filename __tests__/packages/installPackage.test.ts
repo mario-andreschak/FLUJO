@@ -87,7 +87,16 @@ const manifest = () => ({
       envDeclarations: [{ name: 'WEB_KEY', isSecret: true, secretRef: 'API_KEY' }],
     },
   ],
-  models: [{ id: 'model-1', name: 'gpt-4o', displayName: 'My GPT', provider: 'openai', apiKeyRef: { kind: 'secret', secret: 'API_KEY' } }],
+  models: [{
+    id: 'model-1',
+    name: 'gpt-5',
+    displayName: 'My GPT',
+    provider: 'openai',
+    adapter: 'openai-responses',
+    reasoningEffort: 'high',
+    serviceTier: 'priority',
+    apiKeyRef: { kind: 'secret', secret: 'API_KEY' },
+  }],
   flows: [
     {
       flow: {
@@ -134,7 +143,14 @@ describe('installPackage — happy path', () => {
 
     // Model: created with a fresh id and the plaintext key (addModel encrypts).
     expect(addModelMock).toHaveBeenCalledTimes(1);
-    expect(addModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({ displayName: 'My GPT', ApiKey: 'sk-1', provider: 'openai' }));
+    expect(addModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+      displayName: 'My GPT',
+      ApiKey: 'sk-1',
+      provider: 'openai',
+      adapter: 'openai-responses',
+      reasoningEffort: 'high',
+      serviceTier: 'priority',
+    }));
 
     // Flows: saved with fresh deterministic ids.
     expect(saveFlowMock).toHaveBeenCalledTimes(2);

@@ -7,10 +7,12 @@ import {
   Button,
   Card,
   CardActionArea,
+  CardActions,
   CardContent,
   Chip,
   CircularProgress,
   Dialog,
+  DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
@@ -30,12 +32,31 @@ import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined
 import DownloadIcon from '@mui/icons-material/Download';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { packageService, type InstallSummary, type RegistryPackageSearchResult } from '@/frontend/services/packages';
+import { registryService } from '@/frontend/services/registry';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages/InstallPackageCard');
 
 type RegistryPackageSummary = RegistryPackageSearchResult['items'][number];
+
+/** Match the registry's `@publisher/package` display handle to the account handle. */
+export function isPackageOwnedBy(
+  pkg: Pick<RegistryPackageSummary, 'id' | 'handle'>,
+  publisherHandle: string | null,
+): boolean {
+  const owner = publisherHandle?.trim().replace(/^@/, '').toLocaleLowerCase();
+  if (!owner) return false;
+
+  const displayHandle = pkg.handle?.trim().replace(/^@/, '');
+  if (displayHandle) {
+    return displayHandle.split('/')[0].toLocaleLowerCase() === owner;
+  }
+
+  const id = pkg.id.trim().replace(/^@/, '');
+  return id.includes('/') && id.split('/')[0].toLocaleLowerCase() === owner;
+}
 
 /**
  * "Browse registry" card (issue #198 follow-up). Searches the hosted FLUJO
@@ -52,6 +73,10 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  const [publisherHandle, setPublisherHandle] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RegistryPackageSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<RegistryPackageSummary | null>(null);
   const [loading, setLoading] = useState(false);
@@ -81,8 +106,31 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
 
   useEffect(() => {
     void runSearch('');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void registryService.getStatus()
+      .then((status) => setPublisherHandle(status.signedIn ? status.publisherHandle : null))
+      .catch((err) => log.debug('Registry account status unavailable', err));
+  }, [runSearch]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const deletion = await registryService.deletePackage(deleteTarget.id);
+      if (!deletion.ok) {
+        setDeleteError(deletion.error || 'Failed to delete package.');
+        return;
+      }
+      setResults((current) => current.filter((pkg) => pkg.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      await runSearch(query);
+    } catch (err) {
+      log.warn('Package deletion failed', err);
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, query, runSearch]);
 
   const openPackage = useCallback(async (pkg: RegistryPackageSummary) => {
     setSelected(pkg);
@@ -193,8 +241,8 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
       <Grid container spacing={2}>
         {results.map((pkg) => (
           <Grid item xs={12} sm={6} md={4} key={pkg.id}>
-            <Card variant="outlined">
-              <CardActionArea onClick={() => void openPackage(pkg)} sx={{ height: '100%' }}>
+            <Card variant="outlined" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <CardActionArea onClick={() => void openPackage(pkg)} sx={{ flex: 1 }}>
                 <CardContent>
                   <Stack direction="row" spacing={1} alignItems="baseline" justifyContent="space-between">
                     <Typography variant="subtitle1" noWrap>{pkg.name}</Typography>
@@ -217,10 +265,53 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   </Stack>
                 </CardContent>
               </CardActionArea>
+              {isPackageOwnedBy(pkg, publisherHandle) && (
+                <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    aria-label={`Delete ${pkg.name}`}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteTarget(pkg);
+                    }}
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </CardActions>
+              )}
             </Card>
           </Grid>
         ))}
       </Grid>
+
+      <Dialog
+        open={deleteTarget !== null}
+        onClose={deleting ? undefined : () => setDeleteTarget(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Delete package?</DialogTitle>
+        <DialogContent>
+          {deleteError && <Alert severity="error" sx={{ mb: 2 }}>{deleteError}</Alert>}
+          <Typography variant="body2">
+            This permanently deletes <strong>{deleteTarget?.name}</strong> and all of its published
+            versions from the registry. This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => void confirmDelete()}
+            disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={16} color="inherit" /> : <DeleteOutlineIcon />}
+          >
+            Delete package
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={selected !== null} onClose={loading ? undefined : closeDialog} maxWidth="sm" fullWidth>
         <DialogTitle>{selected?.name}</DialogTitle>

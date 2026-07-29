@@ -27,6 +27,7 @@ const loginMock = jest.fn();
 const refreshMock = jest.fn();
 const resendMock = jest.fn();
 const publishPackageMock = jest.fn();
+const deletePackageMock = jest.fn();
 const requestPasswordResetMock = jest.fn();
 jest.mock('@/backend/utils/packageRegistryClient', () => ({
   signup: (...a: unknown[]) => signupMock(...a),
@@ -34,6 +35,7 @@ jest.mock('@/backend/utils/packageRegistryClient', () => ({
   refresh: (...a: unknown[]) => refreshMock(...a),
   resendConfirmation: (...a: unknown[]) => resendMock(...a),
   publishPackage: (...a: unknown[]) => publishPackageMock(...a),
+  deletePackage: (...a: unknown[]) => deletePackageMock(...a),
   requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
 }));
 
@@ -42,6 +44,7 @@ import {
   getAccountStatus,
   logout,
   publish,
+  deletePublishedPackage,
   requestPasswordReset,
 } from '@/backend/services/registry';
 
@@ -170,6 +173,64 @@ describe('publish (#197)', () => {
     await signIn();
     publishPackageMock.mockResolvedValue({ status: httpStatus, body: { message: 'x' } });
     const result = await publish({ id: 'pkg1' });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(code);
+  });
+});
+
+describe('deletePublishedPackage', () => {
+  async function signIn() {
+    loginMock.mockResolvedValue({
+      status: 200,
+      body: {
+        access_token: 'access-1',
+        refresh_token: 'refresh-1',
+        publisher_handle: 'publisher',
+        is_confirmed: true,
+      },
+    });
+    await authenticate('me@example.com', 'pw', 'login');
+    loginMock.mockReset();
+  }
+
+  it('requires an authenticated registry account', async () => {
+    const result = await deletePublishedPackage('publisher/package');
+    expect(result).toEqual({
+      ok: false,
+      code: 'not_authenticated',
+      error: 'Sign in to the package registry before deleting a package.',
+    });
+    expect(deletePackageMock).not.toHaveBeenCalled();
+  });
+
+  it('deletes with the decrypted token', async () => {
+    await signIn();
+    deletePackageMock.mockResolvedValue({ status: 204, body: null });
+
+    await expect(deletePublishedPackage('publisher/package')).resolves.toEqual({ ok: true });
+    expect(deletePackageMock).toHaveBeenCalledWith('publisher/package', 'access-1');
+  });
+
+  it('rejects another publisher’s package without contacting the registry', async () => {
+    await signIn();
+
+    await expect(deletePublishedPackage('someone-else/package')).resolves.toEqual({
+      ok: false,
+      code: 'forbidden',
+      error: 'You can only delete packages you own.',
+    });
+    expect(deletePackageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, 'forbidden'],
+    [404, 'not_found'],
+    [400, 'validation'],
+  ])('maps deletion status %s to code %s', async (httpStatus, code) => {
+    await signIn();
+    deletePackageMock.mockResolvedValue({ status: httpStatus, body: { message: 'registry message' } });
+
+    const result = await deletePublishedPackage('publisher/package');
     expect(result.ok).toBe(false);
     expect(result.code).toBe(code);
   });

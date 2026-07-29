@@ -163,6 +163,31 @@ describe('CodexAdapter — thread setup', () => {
     expect(capturedBridgeTools).toEqual([]);
   });
 
+  it('maps configured effort and priority to Codex SDK options', async () => {
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        model: {
+          id: 'm1',
+          name: 'gpt-5.6-sol',
+          ApiKey: 'sk-test',
+          provider: 'codex',
+          adapter: 'codex-cli',
+          reasoningEffort: 'max',
+          serviceTier: 'priority',
+        },
+      }),
+    );
+
+    expect(startThreadMock.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ modelReasoningEffort: 'max' }),
+    );
+    expect(codexCtorMock.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({ service_tier: 'priority' }),
+      }),
+    );
+  });
+
   it('passes the dynamic system prompt through stdin and keeps only the fixed contract in config', async () => {
     await new CodexAdapter().createCompletion(
       baseInput({

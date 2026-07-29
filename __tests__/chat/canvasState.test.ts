@@ -15,6 +15,7 @@ import {
   emptyCanvasState,
   openCanvasApp,
   updateCanvasApp,
+  syncCanvasAppResult,
   setActiveCanvasTab,
   markRead,
   closeCanvasApp,
@@ -94,6 +95,52 @@ describe('updateCanvasApp (live re-feed)', () => {
     expect(s.entries['fs::ui://a'].lastActiveAt).toBe(1); // recency NOT bumped for background
     expect(s.entries['fs::ui://b'].unread).toBe(false);
     expect(hasUnread(s)).toBe(true);
+  });
+});
+
+describe('syncCanvasAppResult (issue #331)', () => {
+  it.each(['flujo', 'filesystem', 'bash'])(
+    'auto-opens an app shipped by the built-in %s server in the PiP canvas',
+    (serverName) => {
+      const { state, evicted } = syncCanvasAppResult(
+        emptyCanvasState,
+        { serverName, uri: 'ui://internal/app', resultContent: 'ready' },
+        10,
+      );
+
+      expect(evicted).toEqual([]);
+      expect(state.activeKey).toBe(`${serverName}::ui://internal/app`);
+      expect(state.entries[state.activeKey!].latestResultContent).toBe('ready');
+    },
+  );
+
+  it('keeps an external app behind the explicit click-to-mount consent gate', () => {
+    const result = syncCanvasAppResult(
+      emptyCanvasState,
+      { serverName: 'github', uri: 'ui://github/app', resultContent: 'untrusted' },
+      10,
+    );
+
+    expect(result.state).toBe(emptyCanvasState);
+    expect(result.evicted).toEqual([]);
+  });
+
+  it('re-feeds an external app after the user has explicitly opened it', () => {
+    let state = open(
+      emptyCanvasState,
+      'github',
+      'ui://github/app',
+      1,
+      { resultContent: 'old' },
+    );
+
+    state = syncCanvasAppResult(
+      state,
+      { serverName: 'github', uri: 'ui://github/app', resultContent: 'new' },
+      20,
+    ).state;
+
+    expect(state.entries['github::ui://github/app'].latestResultContent).toBe('new');
   });
 });
 

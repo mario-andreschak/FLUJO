@@ -690,6 +690,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         env: childEnv,
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
+        ...(model.reasoningEffort && model.reasoningEffort !== 'minimal' && model.reasoningEffort !== 'ultra'
+          ? {
+              effort: model.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+            }
+          : {}),
         // #154: resume the persisted session so its prior turns are loaded
         // NATIVELY and only the delta (userContent above) is sent this turn.
         // forkSession is left unset ⇒ the resumed session CONTINUES (same id,

@@ -53,7 +53,7 @@ import { flowService } from '@/backend/services/flow';
 import { mcpService } from '@/backend/services/mcp';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import type { Model } from '@/shared/types/model';
-import type { ModelProvider } from '@/shared/types/model/provider';
+import type { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 
@@ -975,10 +975,15 @@ async function installModel(
     name: model.name,
     displayName,
     ...(model.provider ? { provider: model.provider as ModelProvider } : {}),
+    ...(model.adapter ? { adapter: model.adapter as ModelAdapter } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     ...(model.description ? { description: model.description } : {}),
     ...(model.promptTemplate ? { promptTemplate: model.promptTemplate } : {}),
     ...(model.temperature ? { temperature: model.temperature } : {}),
+    ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort as Model['reasoningEffort'] } : {}),
+    ...(model.thinkingLevel ? { thinkingLevel: model.thinkingLevel as Model['thinkingLevel'] } : {}),
+    ...(model.thinkingBudget !== undefined ? { thinkingBudget: model.thinkingBudget } : {}),
+    ...(model.serviceTier ? { serviceTier: model.serviceTier as Model['serviceTier'] } : {}),
     ...(model.reasoningSchema ? { reasoningSchema: model.reasoningSchema } : {}),
     ...(model.functionCallingSchema ? { functionCallingSchema: model.functionCallingSchema } : {}),
     ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),

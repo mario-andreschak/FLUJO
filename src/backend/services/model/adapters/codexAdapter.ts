@@ -436,7 +436,7 @@ export class CodexAdapter implements CompletionAdapter {
         // personal `service_tier = "priority"` leak into FLUJO when its selected
         // model (for example gpt-5.4-mini) does not advertise that tier: the CLI
         // completes the turn but exits non-zero after printing the warning.
-        service_tier: 'default',
+        service_tier: model.serviceTier ?? 'default',
         developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
         // Do not expose Codex's built-in shell. FLUJO filesystem operations
         // must go through the bridged MCP tools so they remain observable and
@@ -467,6 +467,18 @@ export class CodexAdapter implements CompletionAdapter {
 
       const threadOptions = {
         model: model.name,
+        ...(model.reasoningEffort
+          ? {
+              // The bundled SDK type currently ends at xhigh, while newer Codex
+              // catalogs also advertise max/ultra; the CLI accepts the catalog value.
+              modelReasoningEffort: model.reasoningEffort as
+                | 'minimal'
+                | 'low'
+                | 'medium'
+                | 'high'
+                | 'xhigh',
+            }
+          : {}),
         sandboxMode: 'read-only',
         workingDirectory: runtime.workingDirectory,
         skipGitRepoCheck: true,

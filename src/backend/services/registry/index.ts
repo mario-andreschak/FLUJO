@@ -23,6 +23,7 @@ import {
   type RegistryAuthAction,
   type RegistryAuthResult,
   type RegistryPublishResult,
+  type RegistryDeleteResult,
   type RegistryOAuthProvider,
 } from '@/shared/types/registry';
 import * as client from '@/backend/utils/packageRegistryClient';
@@ -396,6 +397,52 @@ export async function publish(manifest: unknown): Promise<RegistryPublishResult>
     }
     log.error('Unexpected error publishing package', err instanceof Error ? err.message : err);
     return { ok: false, code: 'error', error: 'Unexpected error publishing package.' };
+  }
+}
+
+/** Delete a published package; the hosted registry verifies token ownership. */
+export async function deletePublishedPackage(packageId: string): Promise<RegistryDeleteResult> {
+  const id = packageId.trim();
+  if (!id) {
+    return { ok: false, code: 'validation', error: 'A package id is required.' };
+  }
+
+  try {
+    // Fail locally as defense-in-depth; the hosted registry performs the same
+    // ownership check against the JWT and remains authoritative.
+    const account = await loadStored();
+    const idOwner = id.split('/')[0]?.replace(/^@/, '').toLowerCase();
+    const accountOwner = account.publisherHandle?.replace(/^@/, '').toLowerCase();
+    if (accountOwner && idOwner !== accountOwner) {
+      return { ok: false, code: 'forbidden', error: 'You can only delete packages you own.' };
+    }
+
+    const { status, body } = await withAccessToken((token) => client.deletePackage(id, token));
+    if (status >= 200 && status < 300) return { ok: true };
+
+    const message = body?.error || body?.message || '';
+    if (status === 401) {
+      return { ok: false, code: 'unauthorized', error: 'Your registry session expired. Please log in again.' };
+    }
+    if (status === 403) {
+      return { ok: false, code: 'forbidden', error: 'You can only delete packages you own.' };
+    }
+    if (status === 404) {
+      return { ok: false, code: 'not_found', error: message || 'The package no longer exists.' };
+    }
+    if (status === 400 || status === 422) {
+      return { ok: false, code: 'validation', error: message || 'The registry rejected the package id.' };
+    }
+    if (status === 0) {
+      return { ok: false, code: 'error', error: 'Could not reach the package registry.' };
+    }
+    return { ok: false, code: 'error', error: message || `Registry responded with status ${status}.` };
+  } catch (err) {
+    if (err instanceof NotAuthenticatedError) {
+      return { ok: false, code: 'not_authenticated', error: 'Sign in to the package registry before deleting a package.' };
+    }
+    log.error('Unexpected error deleting package', err instanceof Error ? err.message : err);
+    return { ok: false, code: 'error', error: 'Unexpected error deleting package.' };
   }
 }
 

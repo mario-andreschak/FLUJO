@@ -14,13 +14,13 @@ import {
 // MCP Apps (SEP-1865, #97) — pure helpers for Phase 1 read-only rendering.
 
 describe('isUiResourceUri', () => {
-  it('accepts ui:// URIs (case-insensitive, tolerant of leading space)', () => {
+  it('accepts ui:// URIs with a case-insensitive scheme', () => {
     expect(isUiResourceUri('ui://weather-dashboard')).toBe(true);
     expect(isUiResourceUri('UI://Thing')).toBe(true);
-    expect(isUiResourceUri('  ui://x')).toBe(true);
   });
 
-  it('rejects non-ui schemes and non-strings', () => {
+  it('rejects malformed/non-ui schemes and non-strings', () => {
+    expect(isUiResourceUri('  ui://x')).toBe(false);
     expect(isUiResourceUri('https://example.com')).toBe(false);
     expect(isUiResourceUri('file:///tmp/x')).toBe(false);
     expect(isUiResourceUri(undefined)).toBe(false);
@@ -39,6 +39,8 @@ describe('isMcpAppMimeType', () => {
 
   it('rejects plain html and other types', () => {
     expect(isMcpAppMimeType('text/html')).toBe(false);
+    expect(isMcpAppMimeType('text/htmlish;profile=mcp-app')).toBe(false);
+    expect(isMcpAppMimeType('text/html;profile=mcp-app-extra')).toBe(false);
     expect(isMcpAppMimeType('application/json')).toBe(false);
     expect(isMcpAppMimeType(undefined)).toBe(false);
   });
@@ -53,6 +55,10 @@ describe('extractUiResourceUri', () => {
     expect(
       extractUiResourceUri({ 'io.modelcontextprotocol/ui': { resourceUri: 'ui://x' } })
     ).toBe('ui://x');
+  });
+
+  it('reads the stable specification’s deprecated flat ui/resourceUri key', () => {
+    expect(extractUiResourceUri({ 'ui/resourceUri': 'ui://legacy' })).toBe('ui://legacy');
   });
 
   it('ignores links that are not ui:// URIs', () => {
@@ -214,9 +220,9 @@ describe('extractAppHtml', () => {
     expect('html' in result && result.html).toBe('<h1>App</h1>');
   });
 
-  it('falls back to the first text entry when no mcp-app entry is present', () => {
+  it('rejects text that is not declared as MCP App HTML', () => {
     const result = extractAppHtml({ contents: [{ text: '<p>plain</p>' }] });
-    expect('html' in result && result.html).toBe('<p>plain</p>');
+    expect('error' in result && result.error).toMatch(/no MCP App HTML body/);
   });
 
   it('surfaces the resource _meta.ui block', () => {
@@ -225,11 +231,36 @@ describe('extractAppHtml', () => {
         {
           mimeType: 'text/html;profile=mcp-app',
           text: '<h1>A</h1>',
-          _meta: { ui: { connectDomains: ['https://api.example.com'] } },
+          _meta: { ui: { csp: { connectDomains: ['https://api.example.com'] } } },
         } as never,
       ],
     });
-    expect('html' in result && result.meta?.connectDomains).toEqual(['https://api.example.com']);
+    expect('html' in result && result.meta?.csp?.connectDomains).toEqual(['https://api.example.com']);
+  });
+
+  it('decodes blob content and enforces the requested resource URI', () => {
+    const encoded = Buffer.from('<h1>Blob app</h1>', 'utf8').toString('base64');
+    const result = extractAppHtml({
+      contents: [
+        {
+          uri: 'ui://expected',
+          mimeType: 'text/html;profile=mcp-app',
+          blob: encoded,
+        },
+      ],
+    }, MAX_UI_RESOURCE_BYTES, 'ui://expected');
+    expect('html' in result && result.html).toBe('<h1>Blob app</h1>');
+
+    const mismatch = extractAppHtml({
+      contents: [
+        {
+          uri: 'ui://different',
+          mimeType: 'text/html;profile=mcp-app',
+          text: '<h1>Wrong app</h1>',
+        },
+      ],
+    }, MAX_UI_RESOURCE_BYTES, 'ui://expected');
+    expect('error' in mismatch && mismatch.error).toMatch(/matching ui:\/\/expected/);
   });
 
   it('errors on missing contents / no text body', () => {
@@ -240,7 +271,9 @@ describe('extractAppHtml', () => {
 
   it('enforces the size cap', () => {
     const big = 'a'.repeat(100);
-    const result = extractAppHtml({ contents: [{ text: big }] }, 10);
+    const result = extractAppHtml({
+      contents: [{ mimeType: 'text/html;profile=mcp-app', text: big }],
+    }, 10);
     expect('error' in result && result.error).toMatch(/size cap/);
   });
 });

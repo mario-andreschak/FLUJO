@@ -87,6 +87,10 @@ export class OpenAiAdapter implements CompletionAdapter {
       messages,
       temperature,
     };
+    if (model.reasoningEffort) {
+      requestParams.reasoning_effort =
+        model.reasoningEffort as 'low' | 'medium' | 'high';
+    }
     // Only send a cap when one was resolved; omitting it preserves the previous
     // "no max_tokens" default behavior.
     if (typeof maxTokens === 'number') {

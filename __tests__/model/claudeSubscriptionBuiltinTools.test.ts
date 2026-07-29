@@ -91,6 +91,24 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     expect(options.allowedTools).toBeUndefined();
   });
 
+  it('passes the configured reasoning effort to the Agent SDK', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    await adapter.createCompletion(
+      baseInput({
+        model: {
+          id: 'm1',
+          name: 'sonnet',
+          ApiKey: 'oauth-token',
+          provider: 'claude-subscription',
+          adapter: 'claude-cli',
+          reasoningEffort: 'high',
+        },
+      }),
+    );
+
+    expect(capturedOptions().effort).toBe('high');
+  });
+
   it('canUseTool DENIES an arbitrary built-in tool with the #166 message', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     await adapter.createCompletion(baseInput({ tools: [] }));

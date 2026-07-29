@@ -119,8 +119,10 @@ interface ChatMessagesProps {
   onAppMessage?: (text: string) => void;
   /**
    * #216: route a tool result's `ui://` app into the docked canvas surface
-   * instead of rendering it inline. Clicking the bubble launcher is the
-   * click-to-mount consent gate. When omitted, apps render inline as before.
+   * instead of rendering it inline. For external apps, clicking the bubble
+   * launcher is the click-to-mount consent gate. FLUJO's built-in apps may
+   * already be open under the first-party trust policy (#331). When omitted,
+   * apps render inline as before.
    */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   /** #216: identities (`serverName::uri`) already open in the canvas. */
@@ -501,9 +503,10 @@ const ToolCallTimeline: React.FC<{ pairs: ToolCallPair<ChatMessage>[]; messageId
                   server has the MCP Apps opt-in enabled (gated server-side). */}
               {pair.result?.ui?.uri && pair.result.ui.serverName && (
                 onOpenInCanvas ? (
-                  // #216: route to the docked canvas. The launcher click is the
-                  // click-to-mount consent gate — nothing untrusted runs until
-                  // the user opens it. No live iframe is mounted inline.
+                  // #216: route to the docked canvas. For external apps the
+                  // launcher click is the click-to-mount consent gate — nothing
+                  // untrusted runs until the user opens it. Built-in apps may
+                  // already be open under #331. No live iframe mounts inline.
                   (() => {
                     const ui = pair.result.ui;
                     const isOpen = !!canvasKeys?.has(`${ui.serverName}::${ui.uri}`);

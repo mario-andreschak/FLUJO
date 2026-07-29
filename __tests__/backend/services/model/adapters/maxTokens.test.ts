@@ -81,6 +81,16 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       await new OpenAiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0 });
       expect(openaiCreate.mock.calls[0][0]).not.toHaveProperty('max_tokens');
     });
+
+    test('maps configured effort to reasoning_effort', async () => {
+      await new OpenAiAdapter().createCompletion({
+        model: { ...MODEL, reasoningEffort: 'high' },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+      expect(openaiCreate.mock.calls[0][0]).toHaveProperty('reasoning_effort', 'high');
+    });
   });
 
   describe('Anthropic (native) adapter', () => {
@@ -92,6 +102,19 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
     test('falls back to the documented 8192 default when nothing is resolved', async () => {
       await new AnthropicAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0 });
       expect(anthropicCreate).toHaveBeenCalledWith(expect.objectContaining({ max_tokens: 8192 }), undefined);
+    });
+
+    test('maps configured effort to output_config.effort', async () => {
+      await new AnthropicAdapter().createCompletion({
+        model: { ...MODEL, reasoningEffort: 'xhigh' },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+      expect(anthropicCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ output_config: { effort: 'xhigh' } }),
+        undefined,
+      );
     });
   });
 
@@ -106,6 +129,33 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
     test('omits config.maxOutputTokens when nothing is resolved (no regression)', async () => {
       await new GeminiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0 });
       expect((geminiGenerate.mock.calls[0][0] as { config: Record<string, unknown> }).config).not.toHaveProperty('maxOutputTokens');
+    });
+
+    test('maps Gemini thinking level and token-budget controls', async () => {
+      await new GeminiAdapter().createCompletion({
+        model: { ...MODEL, thinkingLevel: 'high' },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+      expect(geminiGenerate.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          config: expect.objectContaining({ thinkingConfig: { thinkingLevel: 'HIGH' } }),
+        }),
+      );
+
+      geminiGenerate.mockClear();
+      await new GeminiAdapter().createCompletion({
+        model: { ...MODEL, thinkingBudget: -1 },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+      expect(geminiGenerate.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          config: expect.objectContaining({ thinkingConfig: { thinkingBudget: -1 } }),
+        }),
+      );
     });
   });
 

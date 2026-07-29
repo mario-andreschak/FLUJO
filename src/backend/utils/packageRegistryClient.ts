@@ -16,6 +16,7 @@
  *   GET  /v1/packages?q=&tag=&page=&pageSize=          (search/browse, anonymous)
  *   GET  /v1/packages/:id                              (metadata + version list, anonymous)
  *   GET  /v1/packages/:id/versions/:version/manifest    (manifest content, anonymous)
+ *   DELETE /v1/packages/:id                             (Authorization: Bearer; owner only)
  *
  * Node-only: never import from client code. Never logs passwords, tokens, or
  * full response bodies that may contain secrets.
@@ -132,6 +133,44 @@ async function getJson<T = unknown>(pathname: string): Promise<RegistryHttpRespo
   }
 }
 
+/** DELETE a JSON endpoint; accepts both JSON responses and an empty 204 body. */
+async function deleteJson<T = unknown>(
+  pathname: string,
+  accessToken: string,
+): Promise<RegistryHttpResponse<T>> {
+  const baseUrl = await resolveRegistryBaseUrl();
+  const url = `${baseUrl}${pathname}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    log.info(`DELETE ${pathname}`);
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    const text = await response.text();
+    let body: unknown = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { message: text };
+      }
+    }
+    return { status: response.status, body: body as T };
+  } catch (err) {
+    log.warn(`DELETE ${pathname} failed at transport level`, err instanceof Error ? err.message : err);
+    return { status: 0, body: { message: 'Could not reach the package registry.' } as T };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export interface RegistryPackageSummary {
   id: string;
   handle: string;
@@ -235,6 +274,14 @@ export function requestPasswordReset(email: string) {
 /** Publish a package manifest. `manifest` is the canonical JSON object (#192). */
 export function publishPackage(manifest: unknown, accessToken: string) {
   return postJson<RegistryPublishPayload>('/v1/packages', manifest, accessToken);
+}
+
+/** Delete a published package and all of its versions. Ownership is enforced by the registry. */
+export function deletePackage(packageId: string, accessToken: string) {
+  return deleteJson<{ message?: string; error?: string }>(
+    `/v1/packages/${encodeURIComponent(packageId)}`,
+    accessToken,
+  );
 }
 
 /**

@@ -316,6 +316,15 @@ export class GeminiAdapter implements CompletionAdapter {
 
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);
     const functionDeclarations = toGeminiTools(tools);
+    const thinkingConfig =
+      typeof model.thinkingBudget === 'number'
+        ? { thinkingBudget: model.thinkingBudget }
+        : model.thinkingLevel
+          ? {
+              thinkingLevel: model.thinkingLevel.toUpperCase() as unknown as
+                import('@google/genai').ThinkingLevel,
+            }
+          : undefined;
 
     log.debug('createCompletion via Gemini GenAI SDK', {
       model: model.name,
@@ -331,6 +340,7 @@ export class GeminiAdapter implements CompletionAdapter {
         // Only set an output cap when one was resolved; omitting it preserves
         // the previous default behavior.
         ...(typeof maxTokens === 'number' ? { maxOutputTokens: maxTokens } : {}),
+        ...(thinkingConfig ? { thinkingConfig } : {}),
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
         // The abort signal (Stop button) cancels the in-flight HTTP request.

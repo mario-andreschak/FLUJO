@@ -26,6 +26,8 @@ const model: Model = {
   ApiKey: 'encrypted:DEADBEEF', // must be stripped, never serialized
   provider: 'openai',
   baseUrl: 'https://api.openai.com/v1',
+  reasoningEffort: 'high',
+  serviceTier: 'priority',
 };
 
 const flowMain: Flow = {
@@ -104,6 +106,16 @@ describe('serializePackage / parsePackage round-trip', () => {
     expect(pkg.models[0].apiKeyRef).toEqual({ kind: 'secret', secret: 'OPENAI_KEY' });
     expect(json).not.toContain('encrypted:');
     expect(json).not.toContain('DEADBEEF');
+  });
+
+  it('preserves provider-specific model controls', () => {
+    const { package: pkg } = serializePackage(baseInput);
+    expect(pkg.models[0]).toEqual(
+      expect.objectContaining({
+        reasoningEffort: 'high',
+        serviceTier: 'priority',
+      }),
+    );
   });
 
   it('strips the webhook token from serialized output', () => {

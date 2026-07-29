@@ -106,3 +106,19 @@ export interface RegistryPublishResult {
   error?: string;
   code?: RegistryPublishErrorCode;
 }
+
+/** Machine-readable package-deletion failure reasons. */
+export type RegistryDeleteErrorCode =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'validation'
+  | 'not_authenticated'
+  | 'error';
+
+/** Result of deleting one of the signed-in publisher's packages. */
+export interface RegistryDeleteResult {
+  ok: boolean;
+  error?: string;
+  code?: RegistryDeleteErrorCode;
+}

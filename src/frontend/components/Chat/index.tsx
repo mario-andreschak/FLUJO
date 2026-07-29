@@ -25,6 +25,7 @@ import {
   emptyCanvasState,
   openCanvasApp,
   updateCanvasApp,
+  syncCanvasAppResult,
   setActiveCanvasTab,
   closeCanvasApp,
   canvasEntries,
@@ -51,6 +52,7 @@ import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import { isBuiltInServerName } from '@/utils/shared/mcpConstants';
 import { getStartNode } from '@/utils/shared/getStartNode';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
@@ -2315,11 +2317,19 @@ const Chat: React.FC = () => {
 
   // --- #216: conversation-level docked MCP Apps canvas ---------------------
   const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
+  // Built-in app results already considered for #331 auto-mounting. Tracking
+  // message ids makes closing a tab stick until a NEW result for that app
+  // arrives; old conversation history must not immediately reopen it.
+  const observedBuiltInAppResultsRef = useRef<{ conversationId: string | null; ids: Set<string> }>({
+    conversationId: null,
+    ids: new Set(),
+  });
   // Identities currently open in the canvas (drives the bubble launcher label).
   const canvasKeys = useMemo(() => new Set(canvasState.order), [canvasState.order]);
 
-  // Launcher click = click-to-mount consent gate: open (or focus) the app in the
-  // docked canvas. LRU eviction beyond the cap is logged, never silent.
+  // External-app launcher click = click-to-mount consent gate: open (or focus)
+  // the app in the docked canvas. Built-ins can arrive through #331 below.
+  // LRU eviction beyond the cap is logged, never silent.
   const handleOpenInCanvas = useCallback((info: CanvasLaunchInfo) => {
     setCanvasState((prev) => {
       const { state, evicted } = openCanvasApp(prev, info);
@@ -2337,35 +2347,87 @@ const Chat: React.FC = () => {
   // Reset the canvas when switching conversations (per-conversation surface).
   useEffect(() => {
     setCanvasState(emptyCanvasState);
+    observedBuiltInAppResultsRef.current = {
+      conversationId: currentConversationId,
+      ids: new Set(),
+    };
   }, [currentConversationId]);
 
-  // Phase 6 live update-in-place: when a later tool result for an ALREADY-OPEN
-  // canvas app arrives, re-feed the existing tab (badge if backgrounded). Only
-  // touches keys already docked; never auto-opens a new tab.
+  // #216 live update-in-place plus #331's first-party trust policy. Later tool
+  // results re-feed existing tabs. A previously unseen result from one of
+  // FLUJO's built-in servers may also create its PiP tab automatically; all
+  // external apps still require the bubble launcher's explicit click.
   const canvasOrderKey = canvasState.order.join('|');
   useEffect(() => {
     const msgs = detailedConversation?.messages;
-    if (!msgs || canvasState.order.length === 0) return;
-    const latest = new Map<string, string>();
+    if (
+      !msgs ||
+      !detailedConversation ||
+      detailedConversation.id !== currentConversationId
+    ) return;
+
+    if (observedBuiltInAppResultsRef.current.conversationId !== detailedConversation.id) {
+      observedBuiltInAppResultsRef.current = {
+        conversationId: detailedConversation.id,
+        ids: new Set(),
+      };
+    }
+
+    const toolCalls = new Map<string, OpenAI.ChatCompletionMessageToolCall>();
+    for (const m of msgs) {
+      if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
+      for (const call of m.tool_calls) {
+        if (call.type === 'function' && call.id) toolCalls.set(call.id, call);
+      }
+    }
+
+    const latest = new Map<string, CanvasLaunchInfo>();
+    const unseenBuiltIn: CanvasLaunchInfo[] = [];
     for (const m of msgs) {
       const ui = (m as FlujoChatMessage).ui;
       if (m.role === 'tool' && ui?.uri && ui?.serverName && typeof m.content === 'string') {
-        latest.set(`${ui.serverName}::${ui.uri}`, m.content);
+        const call = typeof m.tool_call_id === 'string' ? toolCalls.get(m.tool_call_id) : undefined;
+        const input: CanvasLaunchInfo = {
+          serverName: ui.serverName,
+          uri: ui.uri,
+          toolName: call?.type === 'function' ? call.function.name : undefined,
+          toolArgs: call?.type === 'function' ? call.function.arguments : undefined,
+          resultContent: m.content,
+        };
+        latest.set(`${ui.serverName}::${ui.uri}`, input);
+
+        // Record each first-party result once so a manually closed tab stays
+        // closed until fresh data arrives. syncCanvasAppResult repeats the
+        // trust check at the state boundary as a fail-closed safeguard.
+        if (
+          isBuiltInServerName(ui.serverName) &&
+          !observedBuiltInAppResultsRef.current.ids.has(m.id)
+        ) {
+          observedBuiltInAppResultsRef.current.ids.add(m.id);
+          unseenBuiltIn.push(input);
+        }
       }
     }
+
     setCanvasState((prev) => {
       let next = prev;
-      for (const key of prev.order) {
-        const entry = prev.entries[key];
-        const content = latest.get(key);
-        if (entry && content !== undefined && content !== entry.latestResultContent) {
-          next = updateCanvasApp(next, { serverName: entry.serverName, uri: entry.uri, resultContent: content });
+      for (const input of unseenBuiltIn) {
+        const result = syncCanvasAppResult(next, input);
+        if (result.evicted.length) {
+          log.info(`Canvas tab cap reached — evicted (LRU): ${result.evicted.join(', ')}`);
+        }
+        next = result.state;
+      }
+      for (const key of next.order) {
+        const entry = next.entries[key];
+        const input = latest.get(key);
+        if (entry && input?.resultContent !== undefined && input.resultContent !== entry.latestResultContent) {
+          next = updateCanvasApp(next, input);
         }
       }
       return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailedConversation?.messages, canvasOrderKey]);
+  }, [currentConversationId, detailedConversation?.id, detailedConversation?.messages, canvasOrderKey]);
 
   // Edit a message and re-send the conversation (operates on detailedConversation)
   const handleEditMessage = async (messageId: string, newContent: string, processNodeId?: string | null) => {

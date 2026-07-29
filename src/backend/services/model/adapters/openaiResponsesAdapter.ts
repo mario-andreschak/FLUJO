@@ -469,6 +469,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       ...(responsesTools ? { tools: responsesTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
+      ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
       // The point of this adapter: get the reasoning trace back so the next turn
       // of the loop doesn't re-derive it.
       ...(omit.has('include') ? {} : { include: ['reasoning.encrypted_content'] }),

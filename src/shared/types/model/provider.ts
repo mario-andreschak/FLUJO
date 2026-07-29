@@ -42,6 +42,119 @@ export type ModelAdapter =
   | 'claude-cli'
   | 'codex-cli';
 
+/** Provider-neutral reasoning effort stored on a configured model. */
+export type ModelReasoningEffort =
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+  | 'ultra';
+
+/** Gemini's qualitative thinking control (Gemini 3+). */
+export type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
+
+/** Processing tier exposed by the Codex runtime. */
+export type ModelServiceTier = 'default' | 'priority';
+
+export interface ModelConfigurationCapabilities {
+  /** Temperature, presented to users as Creativity. */
+  creativity?: { min: number; max: number; step: number };
+  /** Provider-supported qualitative reasoning values. */
+  effortLevels?: ModelReasoningEffort[];
+  /** Gemini 3+ qualitative thinking levels. */
+  thinkingLevels?: GeminiThinkingLevel[];
+  /** Gemini 2.5 token-budget thinking control. */
+  thinkingBudget?: boolean;
+  /** Codex fast/priority processing tier. */
+  priority?: boolean;
+  /** Whether a single-call output-token cap reaches the selected adapter. */
+  maxOutputTokens: boolean;
+}
+
+const OPENAI_REASONING_MODEL = /(^|[/_-])(o[1-9]|gpt-5)(?:[./_-]|$)/i;
+const ANTHROPIC_ADAPTIVE_MODEL =
+  /claude-(?:fable|mythos)-5|claude-opus-4-(?:[7-9]|\d{2,})|claude-sonnet-5/i;
+const ANTHROPIC_EFFORT_MODEL =
+  /^(?:opus|sonnet|fable)$|claude-(?:fable|mythos)-5|claude-opus-4-(?:[6-9]|\d{2,})|claude-sonnet-4-6/i;
+
+/**
+ * Resolve the controls that have a real request/runtime mapping for a selected
+ * provider profile and technical model name. Unknown OpenAI-compatible
+ * endpoints deliberately get only Creativity: vendor-specific reasoning fields
+ * are not portable across those proxies.
+ */
+export function getModelConfigurationCapabilities(
+  provider?: ModelProvider,
+  adapter?: ModelAdapter,
+  modelName = ''
+): ModelConfigurationCapabilities {
+  const resolvedAdapter = adapter || 'openai';
+  const resolvedProvider = provider || 'openai';
+  const name = modelName.trim();
+
+  if (resolvedAdapter === 'codex-cli') {
+    const effortLevels: ModelReasoningEffort[] =
+      /^gpt-5\.6-(?:sol|terra)$/i.test(name)
+        ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+        : /^gpt-5\.6-/i.test(name)
+          ? ['low', 'medium', 'high', 'xhigh', 'max']
+          : ['low', 'medium', 'high', 'xhigh'];
+    return {
+      effortLevels,
+      // Current mini/spark/review catalog entries do not advertise Fast mode.
+      priority: !/(?:mini|spark|review)/i.test(name),
+      maxOutputTokens: false,
+    };
+  }
+
+  if (resolvedAdapter === 'claude-cli') {
+    return {
+      ...(ANTHROPIC_EFFORT_MODEL.test(name)
+        ? { effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] as ModelReasoningEffort[] }
+        : {}),
+      maxOutputTokens: false,
+    };
+  }
+
+  if (resolvedAdapter === 'anthropic') {
+    return {
+      ...(!ANTHROPIC_ADAPTIVE_MODEL.test(name)
+        ? { creativity: { min: 0, max: 1, step: 0.1 } }
+        : {}),
+      ...(ANTHROPIC_EFFORT_MODEL.test(name)
+        ? { effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] as ModelReasoningEffort[] }
+        : {}),
+      maxOutputTokens: true,
+    };
+  }
+
+  if (resolvedAdapter === 'gemini') {
+    return {
+      creativity: { min: 0, max: 2, step: 0.1 },
+      ...(/^gemini-2\.5/i.test(name)
+        ? { thinkingBudget: true }
+        : !/^gemini-2\.0/i.test(name)
+          ? { thinkingLevels: ['minimal', 'low', 'medium', 'high'] as GeminiThinkingLevel[] }
+          : {}),
+      maxOutputTokens: true,
+    };
+  }
+
+  const isOpenAIReasoningModel =
+    resolvedProvider === 'openai' && OPENAI_REASONING_MODEL.test(name);
+  return {
+    ...(!isOpenAIReasoningModel
+      ? { creativity: { min: 0, max: 2, step: 0.1 } }
+      : {}),
+    ...(isOpenAIReasoningModel
+      ? { effortLevels: ['low', 'medium', 'high'] as ModelReasoningEffort[] }
+      : {}),
+    maxOutputTokens: true,
+  };
+}
+
 /**
  * Adapters that run their OWN agentic tool loop inside a single
  * `createCompletion` call (Claude subscription / Codex), instead of the
