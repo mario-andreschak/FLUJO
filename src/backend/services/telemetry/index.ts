@@ -45,6 +45,11 @@ export interface DailyTelemetryResult {
   shouldNotify: boolean;
 }
 
+export interface DailyActivityCount {
+  date: string;
+  count: number;
+}
+
 let checkInFlight: Promise<DailyTelemetryResult> | null = null;
 
 export function utcDateKey(now: Date = new Date()): string {
@@ -54,6 +59,42 @@ export function utcDateKey(now: Date = new Date()): string {
 export function resolveTelemetryUrl(): string {
   const override = process.env.FLUJO_TELEMETRY_URL?.trim();
   return override || `${DEFAULT_REGISTRY_URL}${TELEMETRY_PATH}`;
+}
+
+/** Fetch the collector's public aggregate without exposing collector details to the browser. */
+export async function fetchDailyActivityCount(
+  date: string = utcDateKey(),
+): Promise<DailyActivityCount | null> {
+  const url = new URL(resolveTelemetryUrl());
+  url.searchParams.set('date', date);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as Partial<DailyActivityCount>;
+    if (
+      body.date !== date ||
+      typeof body.count !== 'number' ||
+      !Number.isSafeInteger(body.count) ||
+      body.count < 0
+    ) {
+      return null;
+    }
+    return { date: body.date, count: body.count };
+  } catch (error) {
+    log.debug(
+      'Daily activity count could not be read from the collector',
+      error instanceof Error ? error.message : String(error),
+    );
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function normalizeSettings(settings: Settings): TelemetrySettings {

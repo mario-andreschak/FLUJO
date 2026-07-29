@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { checkDailyActivity } from '@/backend/services/telemetry';
+import {
+  checkDailyActivity,
+  fetchDailyActivityCount,
+} from '@/backend/services/telemetry';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
@@ -7,6 +10,23 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('app/api/telemetry/daily-active/route');
 
 export const dynamic = 'force-dynamic';
+
+/** Returns today's collector-wide aggregate to the local UI. */
+export async function GET(request: NextRequest) {
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+  const lock = await assertUnlocked();
+  if (lock) return lock;
+
+  const aggregate = await fetchDailyActivityCount();
+  if (!aggregate) {
+    return NextResponse.json(
+      { error: 'Daily activity count is unavailable.' },
+      { status: 503 },
+    );
+  }
+  return NextResponse.json(aggregate);
+}
 
 /**
  * Runs the local daily check. This route never accepts telemetry fields from

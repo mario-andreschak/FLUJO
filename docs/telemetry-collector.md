@@ -36,3 +36,14 @@ https://registry.flujo.com.co/v1/telemetry/daily-active
 Self-hosted builds can override the complete URL with
 `FLUJO_TELEMETRY_URL`. A collector failure is intentionally not retried until
 the next UTC day and never blocks FLUJO.
+
+The same endpoint exposes only the aggregate used by **Settings → Privacy &
+Usage**:
+
+```http
+GET /v1/telemetry/daily-active?date=2026-07-29
+```
+
+```json
+{ "date": "2026-07-29", "count": 42 }
+```

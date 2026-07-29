@@ -25,6 +25,7 @@ import { StorageKey } from '@/shared/types/storage';
 import {
   _resetTelemetrySingleFlight,
   checkDailyActivity,
+  fetchDailyActivityCount,
   resolveTelemetryUrl,
 } from '@/backend/services/telemetry';
 import { DEFAULT_REGISTRY_URL } from '@/shared/types/registry';
@@ -137,5 +138,33 @@ describe('anonymous daily activity telemetry', () => {
     expect(resolveTelemetryUrl()).toBe(
       `${DEFAULT_REGISTRY_URL}/v1/telemetry/daily-active`,
     );
+  });
+
+  it('reads a validated daily-active aggregate from the collector', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      new Response(JSON.stringify({ date: '2026-07-29', count: 42 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(fetchDailyActivityCount('2026-07-29')).resolves.toEqual({
+      date: '2026-07-29',
+      count: 42,
+    });
+    const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(String(url)).toContain('date=2026-07-29');
+    expect(options.method).toBeUndefined();
+  });
+
+  it('rejects malformed daily-active aggregates', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      new Response(JSON.stringify({ date: '2026-07-29', count: -1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(fetchDailyActivityCount('2026-07-29')).resolves.toBeNull();
   });
 });
