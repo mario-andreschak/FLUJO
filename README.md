@@ -16,6 +16,9 @@ One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones F
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
 ```
 
+Prefer a graphical installer? Download `flujo-setup.exe` from the
+[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) instead.
+
 **Linux / macOS** — paste into a terminal:
 
 ```bash
