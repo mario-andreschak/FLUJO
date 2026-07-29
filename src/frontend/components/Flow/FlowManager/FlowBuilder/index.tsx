@@ -80,6 +80,11 @@ import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { Collapse } from '@mui/material';
+import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import {
+  flowUsesAdvancedFeatures,
+  type FlowAuthoringMode,
+} from '@/utils/shared/flowAuthoringProfile';
 
 /** Pre-filled instruction for AI-supported repair (mirrors the backend repairFlowWithAI). */
 const AI_REPAIR_DESCRIPTION =
@@ -161,6 +166,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // text is driven forward to its single next step instead of silently ending
   // the run. `undefined` = follow the source default (scheduled ON, chat OFF).
   const [flowUnattended, setFlowUnattended] = useState<boolean>(initialFlow?.unattended ?? false);
+  const [authoringMode, setAuthoringMode] = useUiPreference<FlowAuthoringMode>(
+    'flujo-ui:flow-builder:mode',
+    'guided',
+  );
   // Rule IDs are editor-only. PermissionRule has no persisted ID, so keep a
   // stable key separately while still saving the shared rule shape unchanged.
   const permissionRuleIdRef = useRef(0);
@@ -178,6 +187,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   );
   const [permissionRulesDialogOpen, setPermissionRulesDialogOpen] = useState(false);
   const [permissionRulesError, setPermissionRulesError] = useState<string | null>(null);
+  const hasHiddenAdvancedFeatures = flowUsesAdvancedFeatures({
+    nodes,
+    edges,
+    unattended: initialFlow?.unattended,
+    permissionRules: initialFlow?.permissionRules,
+  });
 
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
@@ -1040,7 +1055,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   return (
     <FlowBuilderContainer>
-      <NodePalette />
+      <NodePalette authoringMode={authoringMode} />
       <ReactFlowProvider>
         <MainContent>
           <ToolbarContainer elevation={1}>
@@ -1066,6 +1081,24 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             />
 
             <Tooltip
+              describeChild
+              title="Guided shows the common flow controls. Advanced reveals runtime, routing, resource, fan-out, and scheduling controls."
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={authoringMode === 'advanced'}
+                    onChange={(event) => setAuthoringMode(event.target.checked ? 'advanced' : 'guided')}
+                  />
+                }
+                label={authoringMode === 'advanced' ? 'Advanced' : 'Guided'}
+                sx={{ whiteSpace: 'nowrap' }}
+              />
+            </Tooltip>
+
+            {authoringMode === 'advanced' && <>
+            <Tooltip
               arrow
               title="Unattended: if a step's model stops without handing off, the engine drives the conversation forward to the next step instead of silently ending the run. Recommended for scheduled/headless flows; leave off for interactive chat."
             >
@@ -1089,6 +1122,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             >
               Permission Rules{permissionRules.length ? ` (${permissionRules.length})` : ''}
             </Button>
+            </>}
 
             <Button
               variant="contained"
@@ -1203,6 +1237,20 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             <Box sx={{ flex: 1 }} />
           </ToolbarContainer>
 
+          <Collapse in={authoringMode === 'guided' && hasHiddenAdvancedFeatures} unmountOnExit>
+            <Alert
+              severity="info"
+              action={
+                <Button color="inherit" size="small" onClick={() => setAuthoringMode('advanced')}>
+                  Switch to Advanced
+                </Button>
+              }
+              sx={{ mb: 1 }}
+            >
+              This flow contains advanced settings. Guided mode preserves them but hides their editors.
+            </Alert>
+          </Collapse>
+
           {/* One-per-flow Trigger drop notice (issue #241). */}
           <Collapse in={!!triggerDropNotice} unmountOnExit>
             {triggerDropNotice && (
@@ -1261,6 +1309,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             handleConnectMcpServer(nodeToEdit.id, serverName);
           }
         }}
+        authoringMode={authoringMode}
       />
       
       <MCPNodePropertiesModal 
@@ -1290,6 +1339,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         onClose={() => setSubflowModalOpen(false)}
         onSave={handleNodeUpdate}
         flowId={initialFlow?.id}
+        authoringMode={authoringMode}
       />
 
       <ResourceNodePropertiesModal

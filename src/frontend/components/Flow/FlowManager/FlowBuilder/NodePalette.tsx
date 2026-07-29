@@ -12,6 +12,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
 import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT } from './CustomNodes';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -170,7 +171,9 @@ const getNodeIcon = (type: NodeType) => {
   }
 };
 
-export const NodePalette: React.FC = () => {
+export const NodePalette: React.FC<{ authoringMode?: FlowAuthoringMode }> = ({
+  authoringMode = 'guided',
+}) => {
   log.debug(`${COMPONENT_NAME}: Entering component`);
   const theme = useTheme();
   
@@ -230,7 +233,9 @@ export const NodePalette: React.FC = () => {
         Node Types
       </Typography>
       <Box display="flex" flexDirection="column" gap={2}>
-        {nodeTypes.map((node) => (
+        {nodeTypes
+          .filter((node) => authoringMode === 'advanced' || ['process', 'finish', 'subflow'].includes(node.type))
+          .map((node) => (
           <NodeItem
             key={node.type}
             nodeType={node.type}

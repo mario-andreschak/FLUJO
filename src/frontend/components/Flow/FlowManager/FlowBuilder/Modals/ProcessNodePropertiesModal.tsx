@@ -52,7 +52,17 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: 'advanced', label: 'Advanced' },
 ];
 
-export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEdges = [], flowNodes = [], flowId, onConnectMcpServer }: ProcessNodePropertiesModalProps) => {
+export const ProcessNodePropertiesModal = ({
+  open,
+  node,
+  onClose,
+  onSave,
+  flowEdges = [],
+  flowNodes = [],
+  flowId,
+  onConnectMcpServer,
+  authoringMode = 'advanced',
+}: ProcessNodePropertiesModalProps) => {
   log.debug('ProcessNodePropertiesModal rendered with:', { node: node, flowId: flowId });
   const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
   const [promptTemplate, setPromptTemplate] = useState('');
@@ -78,6 +88,9 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   const [activeTab, setActiveTab] = useState<string>('server');
   // Issue #300: the currently active top-level section tab.
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
+  const visibleSections = authoringMode === 'advanced'
+    ? SECTIONS
+    : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section.key));
 
   // Refs for each section, used both for tab-click scroll-into-view and for the
   // IntersectionObserver that keeps the tab bar in sync while the user scrolls.
@@ -97,6 +110,13 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   // While a programmatic (tab-click) smooth scroll is in flight, ignore the
   // IntersectionObserver so it doesn't flicker the active tab through sections.
   const isProgrammaticScroll = useRef(false);
+
+  useEffect(() => {
+    if (authoringMode === 'guided' && (activeSection === 'io' || activeSection === 'advanced')) {
+      setActiveSection('basic');
+    }
+    if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
+  }, [activeSection, activeTab, authoringMode]);
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
     open,
@@ -304,32 +324,36 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
 
   const handleSave = () => {
     if (node && nodeData) {
-      // Make sure to include the prompt template and toggle states in the saved data
       const properties: Record<string, any> = {
         ...nodeData.properties,
         promptTemplate: promptTemplate,
-        excludeModelPrompt: excludeModelPrompt,
-        excludeStartNodePrompt: excludeStartNodePrompt,
-        excludeSystemPrompt: excludeSystemPrompt,
-        inputMode: inputMode,
-        isolatedPrompt: isolatedPrompt,
-        allowCallerPrompt: allowCallerPrompt,
-        outputMode: outputMode,
       };
 
-      // Issue #259: only persist enableTodoTool when ON, so flows that don't use
-      // it stay byte-identical (same delete-when-false convention as captureX).
-      if (enableTodoTool) properties.enableTodoTool = true; else delete properties.enableTodoTool;
+      if (authoringMode === 'advanced') {
+        Object.assign(properties, {
+          excludeModelPrompt,
+          excludeStartNodePrompt,
+          excludeSystemPrompt,
+          inputMode,
+          isolatedPrompt,
+          allowCallerPrompt,
+          outputMode,
+        });
 
-      // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
-      // when empty, so flowToSpec never emits an empty captureX and existing
-      // flows without these fields stay byte-identical.
-      const cv = captureVariable.trim();
-      if (cv) properties.captureVariable = cv; else delete properties.captureVariable;
-      const cr = captureResource.trim();
-      if (cr) properties.captureResource = cr; else delete properties.captureResource;
-      const ckv = buildKvRef(captureKvScope, captureKvKey);
-      if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
+        // Issue #259: only persist enableTodoTool when ON, so flows that don't use
+        // it stay byte-identical (same delete-when-false convention as captureX).
+        if (enableTodoTool) properties.enableTodoTool = true; else delete properties.enableTodoTool;
+
+        // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
+        // when empty, so flowToSpec never emits an empty captureX and existing
+        // flows without these fields stay byte-identical.
+        const cv = captureVariable.trim();
+        if (cv) properties.captureVariable = cv; else delete properties.captureVariable;
+        const cr = captureResource.trim();
+        if (cr) properties.captureResource = cr; else delete properties.captureResource;
+        const ckv = buildKvRef(captureKvScope, captureKvKey);
+        if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
+      }
 
       onSave(node.id, { ...nodeData, properties });
       onClose();
@@ -374,7 +398,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
   // tool bindings share the one mounted promptBuilderRef.
   const toolPanels = (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+      {authoringMode === 'advanced' && <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
         <Tabs
           value={activeTab}
           onChange={(_, newValue: string) => setActiveTab(newValue)}
@@ -385,7 +409,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           <Tab label="Resources" value="resources" />
           <Tab label="Agent Tools" value="agent" />
         </Tabs>
-      </Box>
+      </Box>}
 
       <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
         {/* Show Server Tools tab content */}
@@ -410,7 +434,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         )}
 
         {/* Show Resources tab content */}
-        {activeTab === 'resources' && (
+        {authoringMode === 'advanced' && activeTab === 'resources' && (
           <>
             <WiredResources
               wiredResources={wiredResources}
@@ -425,7 +449,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
         )}
 
         {/* Show Agent Tools tab content */}
-        {activeTab === 'agent' && (
+        {authoringMode === 'advanced' && activeTab === 'agent' && (
           <AgentTools
             handoffTools={handoffTools}
             isLoadingHandoffTools={isLoadingHandoffTools}
@@ -441,16 +465,16 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth="xl"
+      maxWidth={authoringMode === 'advanced' ? 'xl' : 'md'}
       fullWidth
       PaperProps={{
         sx: {
           borderTop: 5,
           borderColor: 'secondary.main',
-          width: '95vw',
-          height: '90vh',
-          maxWidth: '95vw',
-          maxHeight: '90vh',
+          width: authoringMode === 'advanced' ? '95vw' : '80vw',
+          height: authoringMode === 'advanced' ? '90vh' : '85vh',
+          maxWidth: authoringMode === 'advanced' ? '95vw' : '900px',
+          maxHeight: authoringMode === 'advanced' ? '90vh' : '85vh',
         }
       }}
     >
@@ -467,7 +491,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
 
       <Divider />
 
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', height: 'calc(90vh - 130px)' }}>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', height: authoringMode === 'advanced' ? 'calc(90vh - 130px)' : 'calc(85vh - 130px)' }}>
         {/* Section tab bar — click to scroll a section into view (issue #300). */}
         <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2, flexShrink: 0 }}>
           <Tabs
@@ -476,7 +500,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
             variant="scrollable"
             scrollButtons="auto"
           >
-            {SECTIONS.map((s) => (
+            {visibleSections.map((s) => (
               <Tab key={s.key} label={s.label} value={s.key} />
             ))}
           </Tabs>
@@ -506,7 +530,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           </Box>
 
           {/* Input/Output */}
-          <Box ref={ioRef} data-section="io" sx={sectionSx}>
+          {authoringMode === 'advanced' && <Box ref={ioRef} data-section="io" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>Input / Output</Typography>
             <PromptIOControls
               excludeModelPrompt={excludeModelPrompt}
@@ -538,7 +562,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
               }
               label="Enable todo tool (run-scoped task list)"
             />
-          </Box>
+          </Box>}
 
           {/* Task — tool panels on the LEFT, editor on the RIGHT (as big as
               possible), single mounted editor (issue #300 feedback). */}
@@ -564,7 +588,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
           </Box>
 
           {/* Advanced */}
-          <Box ref={advancedRef} data-section="advanced" sx={sectionSx}>
+          {authoringMode === 'advanced' && <Box ref={advancedRef} data-section="advanced" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>Advanced</Typography>
             <Box sx={{ mb: 3 }}>
               <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
@@ -581,7 +605,7 @@ export const ProcessNodePropertiesModal = ({ open, node, onClose, onSave, flowEd
                 onInsertRef={handleInsertCaptureRef}
               />
             </Box>
-          </Box>
+          </Box>}
         </Box>
       </DialogContent>
 
