@@ -177,12 +177,14 @@ export class CodexAdapter implements CompletionAdapter {
       transcript.push(full);
       onTranscriptMessage?.(full);
     };
-    const recordToolPair = (ti: ToolInteraction): void => {
+    const recordToolCall = (ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>): void => {
       recordMessage({
         role: 'assistant',
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
       });
+    };
+    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
       recordMessage({
         role: 'tool',
         tool_call_id: ti.id,
@@ -190,14 +192,19 @@ export class CodexAdapter implements CompletionAdapter {
         ...(ti.ui ? { ui: ti.ui } : {}),
       });
     };
+    const recordToolPair = (ti: ToolInteraction): void => {
+      recordToolCall(ti);
+      recordToolResult(ti);
+    };
 
     // Spawn-with-brief bookkeeping (issue #156), mirroring the Claude adapter.
     const handoffCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
     let endSpawning = false;
 
-    // Approval gate, applied inside every bridge handler before dispatch. On
-    // rejection the pair is recorded here (the tool never runs), and the model
-    // sees the rejection text as the tool's error result (#247 semantics).
+    // Approval gate, applied inside every bridge handler before dispatch. The
+    // caller has already recorded the assistant(tool_call), so a pending card is
+    // visible while approval is open. On rejection only the terminal tool result
+    // is appended here (the tool never runs).
     const gate = async (
       callId: string,
       name: string,
@@ -211,10 +218,8 @@ export class CodexAdapter implements CompletionAdapter {
         ? `User rejected this tool call: ${feedback}`
         : 'Tool call rejected by the user.';
       const ui = await resolveRejectedUi?.(rejectionText);
-      recordToolPair({
+      recordToolResult({
         id: callId,
-        name,
-        argsJson: JSON.stringify(args),
         resultContent: rejectionText,
         ...(ui ? { ui } : {}),
       });
@@ -269,6 +274,11 @@ export class CodexAdapter implements CompletionAdapter {
             inputSchema,
             handler: async (args) => {
               const callId = `call_${uuidv4()}`;
+              const argsJson = JSON.stringify(args ?? {});
+              // The bridge receives a call only after Codex has assembled its
+              // arguments. Surface it immediately, before approval or execution,
+              // so the existing UI renders a live pending tool card.
+              recordToolCall({ id: callId, name: fnName, argsJson });
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
               log.debug('Codex local tool call', { tool: fnName });
@@ -280,7 +290,7 @@ export class CodexAdapter implements CompletionAdapter {
                 resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
                 isError = true;
               }
-              recordToolPair({ id: callId, name: fnName, argsJson: JSON.stringify(args ?? {}), resultContent });
+              recordToolResult({ id: callId, resultContent });
               return isError
                 ? { content: [{ type: 'text', text: resultContent }], isError: true }
                 : { content: [{ type: 'text', text: resultContent }] };
@@ -304,6 +314,11 @@ export class CodexAdapter implements CompletionAdapter {
           ...(annotations ? { annotations } : {}),
           handler: async (args) => {
             const callId = `call_${uuidv4()}`;
+            const argsJson = JSON.stringify(args ?? {});
+            // Emit before the approval gate and mcpService call. Large/slow tools
+            // therefore appear in chat as pending as soon as the MCP request
+            // reaches FLUJO instead of after their result is available.
+            recordToolCall({ id: callId, name: readableName, argsJson });
             const denied = await gate(
               callId,
               readableName,
@@ -377,10 +392,8 @@ export class CodexAdapter implements CompletionAdapter {
                   ...(cancelledReason ? { cancelledReason } : {}),
                 }
               : undefined;
-            recordToolPair({
+            recordToolResult({
               id: callId,
-              name: readableName,
-              argsJson: JSON.stringify(args ?? {}),
               resultContent,
               ...(ui ? { ui } : {}),
             });

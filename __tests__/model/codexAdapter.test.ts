@@ -14,6 +14,7 @@
 import type OpenAI from 'openai';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
+import type { FlujoChatMessage } from '@/shared/types/chat';
 
 const codexCtorMock = jest.fn();
 const startThreadMock = jest.fn();
@@ -433,6 +434,50 @@ describe('CodexAdapter — tool bridging', () => {
     expect(roles).toEqual(['assistant', 'tool', 'assistant']);
   });
 
+  it('streams a pending tool call before the bridge result resolves', async () => {
+    let resolveTool!: (value: { success: true; data: { content: Array<{ type: 'text'; text: string }> } }) => void;
+    const toolResult = new Promise<{ success: true; data: { content: Array<{ type: 'text'; text: string }> } }>(
+      resolve => { resolveTool = resolve; },
+    );
+    let notifyToolStarted!: () => void;
+    const toolStarted = new Promise<void>(resolve => { notifyToolStarted = resolve; });
+    callToolMock.mockImplementationOnce(async () => {
+      notifyToolStarted();
+      return toolResult;
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ payload: 'large value' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+    const streamed: FlujoChatMessage[] = [];
+
+    const completionPromise = new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+        onTranscriptMessage: message => streamed.push(message),
+      }),
+    );
+
+    await toolStarted;
+    expect(streamed.map(message => message.role)).toEqual(['assistant']);
+    const pendingCall = streamed[0] as FlujoChatMessage & {
+      tool_calls: OpenAI.ChatCompletionMessageToolCall[];
+    };
+    expect(pendingCall.tool_calls[0].function.arguments).toBe('{"payload":"large value"}');
+
+    resolveTool({ success: true, data: { content: [{ type: 'text', text: 'ok' }] } });
+    const { transcript } = await completionPromise;
+    expect(streamed.map(message => message.role)).toEqual(['assistant', 'tool', 'assistant']);
+    expect(transcript?.[1].role).toBe('tool');
+    if (transcript?.[1].role === 'tool') {
+      expect(transcript[1].tool_call_id).toBe(pendingCall.tool_calls[0].id);
+    }
+  });
+
   it('records the definition-advertised MCP App UI and ignores a result redirect', async () => {
     callToolMock.mockResolvedValueOnce({
       success: true,
@@ -588,7 +633,15 @@ describe('CodexAdapter — tool bridging', () => {
     );
 
     expect(callToolMock).not.toHaveBeenCalled();
+    const callMsg = transcript!.find(
+      m => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
+    ) as (FlujoChatMessage & {
+      role: 'assistant';
+      tool_calls: OpenAI.ChatCompletionMessageToolCall[];
+    }) | undefined;
     const toolMsg = transcript!.find(m => m.role === 'tool')!;
+    expect(callMsg?.tool_calls).toHaveLength(1);
+    expect(toolMsg.role === 'tool' ? toolMsg.tool_call_id : undefined).toBe(callMsg?.tool_calls?.[0].id);
     expect(toolMsg.content).toContain('User rejected this tool call: wrong target');
     expect(toolMsg.ui).toEqual({
       uri: 'ui://advertised-dashboard',
