@@ -151,11 +151,21 @@ class PackageService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ selection, metadata, acceptedSecrets }),
     });
-    const body = await response.json();
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      const text = await response.text();
+      log.error('Package build returned a non-JSON response', {
+        status: response.status,
+        contentType,
+        preview: text.slice(0, 200),
+      });
+      throw new Error(`Package build failed: HTTP ${response.status} returned a non-JSON response`);
+    }
+    const body = (await response.json()) as BuildManifestResult & { error?: string };
     if (!response.ok && body?.ok === undefined) {
       throw new Error(body?.error || `HTTP ${response.status}`);
     }
-    return body as BuildManifestResult;
+    return body;
   }
 }
 

@@ -36,6 +36,7 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import OpenAI from 'openai';
@@ -262,18 +263,18 @@ export class ProcessNode extends BaseNode {
     });
 
     // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
-    // scratchpad AFTER rendering. PromptRenderer is state-agnostic by design
-    // (it has no SharedState), so the substitution happens here where the vars
-    // are in scope. This is plaintext map lookup — NOT resolveGlobalVars (which
-    // decrypts `${global:VAR}` for tool args / API keys and never touches prompts).
-    // Tier 3: then inject `${res:NAME}` named run resources (after vars, no
-    // recursion — see resolveRunResourceRefs).
+    // scratchpad AFTER rendering. Tier 3 then injects `${res:NAME}` resources.
     let completePrompt = await resolveRunResourceRefs(
       resolveRunVars(renderedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
       { nodeId }
     );
+
+    // Resolve configuration globals at execution time. The prompt-safe resolver
+    // deliberately leaves secret globals as `${global:NAME}` so their values are
+    // never sent to the model.
+    completePrompt = await resolveNonSecretGlobalVars(completePrompt) as string;
 
     // Tier 4 (persistent kv): inject `${kv:NAME}` cross-run values AFTER vars
     // and resources. Scope needs the flow's folder, fetched once (lazily) and
@@ -586,6 +587,9 @@ export class ProcessNode extends BaseNode {
             { nodeId }
           )
         : isolatedPrompt;
+      if (typeof resolvedIsolatedPrompt === 'string') {
+        resolvedIsolatedPrompt = await resolveNonSecretGlobalVars(resolvedIsolatedPrompt) as string;
+      }
       // Tier 4: `${kv:NAME}` in the isolated prompt too (wire-only text).
       if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
         resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());

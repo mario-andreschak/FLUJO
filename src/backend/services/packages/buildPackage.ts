@@ -46,6 +46,40 @@ import type { PlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('backend/services/packages/buildPackage');
 
+const FLOW_GLOBAL_VAR_REGEX = /\$\{global:([A-Za-z0-9_.-]+)\}/g;
+
+/** Convert globals referenced anywhere in packaged flows into package secrets. */
+function convertFlowGlobalsToSecrets(flows: Flow[]): {
+  flows: Flow[];
+  secrets: PackageSecret[];
+} {
+  const names = new Set<string>();
+  const visit = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return value.replace(FLOW_GLOBAL_VAR_REGEX, (_match, name: string) => {
+        names.add(name);
+        return `{{secret.${name}}}`;
+      });
+    }
+    if (Array.isArray(value)) return value.map(visit);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, child]) => [key, visit(child)]),
+      );
+    }
+    return value;
+  };
+
+  return {
+    flows: flows.map((flow) => visit(flow) as Flow),
+    secrets: Array.from(names, (name) => ({
+      name,
+      description: `Global variable ${name} referenced by a packaged flow`,
+      required: true,
+    })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public shapes
 // ---------------------------------------------------------------------------
@@ -477,11 +511,13 @@ export function buildManifestFromEntities(
   // deep-clones the entities (inputs untouched) and adds one required
   // `secrets[]` entry per distinct placeholder.
   let models = modelsRaw;
-  let flows = flowsRaw;
+  const flowGlobals = convertFlowGlobalsToSecrets(flowsRaw);
+  let flows = flowGlobals.flows;
   let plannedExecutions = plannedExecutionsRaw;
+  for (const secret of flowGlobals.secrets) pushSecret(secret);
   if (substitutions.length > 0) {
     const sub = applySecretSubstitutions(
-      { flows: flowsRaw, models: modelsRaw, plannedExecutions: plannedExecutionsRaw },
+      { flows, models: modelsRaw, plannedExecutions: plannedExecutionsRaw },
       substitutions,
     );
     models = sub.entities.models;

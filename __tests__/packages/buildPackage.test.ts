@@ -259,6 +259,43 @@ describe('buildManifestFromEntities', () => {
     expect(result.package!.secrets.some((s) => s.name === (pkgModel.apiKeyRef as { secret: string }).secret)).toBe(true);
   });
 
+  it('turns globals used in packaged flows into required package secrets', () => {
+    const flowWithGlobals = flow('f', 'F', [
+      {
+        id: 'prompt',
+        type: 'process',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'process',
+          properties: {
+            promptTemplate: 'Use ${global:API_TOKEN} at ${global:API_BASE}; again ${global:API_TOKEN}',
+          },
+        },
+      } as unknown as FlowNode,
+    ]);
+    const ents: PackageEntities = {
+      flows: [flowWithGlobals],
+      models: [],
+      mcpServers: [],
+      plannedExecutions: [],
+    };
+
+    const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.secrets).toEqual([
+      expect.objectContaining({ name: 'API_TOKEN', required: true }),
+      expect.objectContaining({ name: 'API_BASE', required: true }),
+    ]);
+    expect(result.package!.requiredGlobals).toBeUndefined();
+    expect(JSON.stringify(result.package!.flows)).toContain(
+      'Use {{secret.API_TOKEN}} at {{secret.API_BASE}}; again {{secret.API_TOKEN}}',
+    );
+    expect(JSON.stringify(result.package!.flows)).not.toContain('${global:');
+    expect(JSON.stringify(flowWithGlobals)).toContain('${global:API_TOKEN}');
+  });
+
   it('records a global-var-bound model API key in requiredGlobals (not silently dropped)', () => {
     const ents: PackageEntities = {
       flows: [flow('f', 'F', [processNode('m1')])],

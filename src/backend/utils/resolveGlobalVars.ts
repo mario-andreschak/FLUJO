@@ -45,8 +45,12 @@ function isNewFormat(data: any): data is Record<string, EnvVarWithMetadata> {
  * 
  * Handles encrypted global variables by decrypting them when needed.
  */
-export async function resolveGlobalVars(value: unknown): Promise<unknown> {
+export async function resolveGlobalVars(
+  value: unknown,
+  options: { resolveSecrets?: boolean } = {}
+): Promise<unknown> {
   log.debug('Entering resolveGlobalVars method');
+  const resolveSecrets = options.resolveSecrets !== false;
 
   // Load global environment variables
   const rawEnvVars = await loadItem<Record<string, string> | Record<string, EnvVarWithMetadata>>(
@@ -60,12 +64,14 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
   
   // Extract values from the environment variables
   let globalEnvVars: Record<string, string> = {};
+  const secretGlobalVars = new Set<string>();
   
   if (isNewFormatData) {
     // New format with metadata
     const typedEnvVars = rawEnvVars as Record<string, EnvVarWithMetadata>;
     for (const [key, data] of Object.entries(typedEnvVars)) {
       globalEnvVars[key] = data.value;
+      if (data.metadata.isSecret) secretGlobalVars.add(key);
     }
   } else {
     // Old format (simple key-value pairs)
@@ -89,6 +95,18 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
       
       if (globalEnvVars[globalVarKey] !== undefined) {
         let value = globalEnvVars[globalVarKey];
+
+        // Prompt interpolation may resolve configuration globals, but must never
+        // expose secrets to the model. Old-format encrypted values are treated
+        // as secrets even though they do not carry metadata.
+        if (!resolveSecrets && (
+          secretGlobalVars.has(globalVarKey) ||
+          value.startsWith('encrypted:') ||
+          value.startsWith('encrypted_failed:')
+        )) {
+          log.debug(`Keeping secret global variable unresolved: ${globalVarKey}`);
+          continue;
+        }
         
         // Check if the value is encrypted
         if (value.startsWith('encrypted:')) {
@@ -155,6 +173,11 @@ export async function resolveGlobalVars(value: unknown): Promise<unknown> {
   
   log.debug('Completed global variable resolution');
   return result;
+}
+
+/** Resolve only globals safe to expose in model prompts. Secret references remain literal. */
+export async function resolveNonSecretGlobalVars(value: unknown): Promise<unknown> {
+  return resolveGlobalVars(value, { resolveSecrets: false });
 }
 
 /**
