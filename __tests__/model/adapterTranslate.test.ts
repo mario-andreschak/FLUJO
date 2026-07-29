@@ -1,7 +1,10 @@
 import OpenAI from 'openai';
 import { toAnthropicMessages, toAnthropicTools } from '@/backend/services/model/adapters/anthropicAdapter';
 import { toGeminiContents, toGeminiTools } from '@/backend/services/model/adapters/geminiAdapter';
-import { buildUserMessage } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
+import {
+  buildUserMessage,
+  isMalformedClaudeToolCallProse,
+} from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
 
 // A single shared logger mock so tests can assert `log.warn` was emitted when a
 // remote image fetch fails. The factory builds the object internally (no outer
@@ -276,6 +279,42 @@ describe('gemini translation', () => {
       expect(contents[0].parts!.some(p => 'inlineData' in p)).toBe(false);
       expect(mockLog.warn).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('claude subscription malformed tool-call prose quarantine (#298)', () => {
+  const malformed =
+    'Assistant [tool call] mcp__flujo__filesystem__read_file {"path":"secret"}\n' +
+    "The model's tool call could not be parsed (retry also failed)";
+
+  it('requires parse-failure wording plus invocation-like syntax', () => {
+    expect(isMalformedClaudeToolCallProse(malformed)).toBe(true);
+    expect(isMalformedClaudeToolCallProse(
+      "The model's tool call could not be parsed (retry also failed): <invoke name=filesystem.read>",
+    )).toBe(true);
+    expect(isMalformedClaudeToolCallProse('We should discuss how [tool call] notation works.')).toBe(false);
+    expect(isMalformedClaudeToolCallProse("The model's tool call could not be parsed after a network error.")).toBe(false);
+  });
+
+  it('omits malformed legacy assistant history without leaking invocation details', () => {
+    const { content } = buildUserMessage([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: malformed },
+      { role: 'user', content: 'continue' },
+    ]);
+
+    expect(content).toBe('Human: first\n\nHuman: continue');
+    expect(content).not.toContain('mcp__flujo__');
+    expect(content).not.toContain('retry also failed');
+  });
+
+  it('preserves benign assistant discussion of tools byte-for-byte', () => {
+    const benign = 'The [tool call] label is documentation, not an invocation.';
+    const { content } = buildUserMessage([
+      { role: 'user', content: 'Explain it' },
+      { role: 'assistant', content: benign },
+    ]);
+    expect(content).toBe(`Human: Explain it\n\nAssistant: ${benign}`);
   });
 });
 

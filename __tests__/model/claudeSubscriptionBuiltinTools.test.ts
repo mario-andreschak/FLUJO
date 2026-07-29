@@ -73,6 +73,46 @@ beforeEach(() => {
   queryMock.mockImplementation(() => successStream());
 });
 
+describe('ClaudeSubscriptionAdapter — malformed tool-call prose quarantine (#298)', () => {
+  it('keeps a contaminated SDK turn out of the transcript and live callback', async () => {
+    const malformed =
+      'Assistant [tool call] mcp__flujo__filesystem__read_file {"path":"secret"}\n' +
+      "The model's tool call could not be parsed (retry also failed)";
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'assistant',
+        session_id: 'sess-1',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: malformed }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'safe terminal fallback',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      };
+    })());
+    const onTranscriptMessage = jest.fn();
+
+    const result = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({ onTranscriptMessage }),
+    );
+
+    expect(result.transcript).toHaveLength(1);
+    expect(result.transcript[0]).toMatchObject({ role: 'assistant', content: 'safe terminal fallback' });
+    expect(onTranscriptMessage).toHaveBeenCalledTimes(1);
+    expect(onTranscriptMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'safe terminal fallback' }),
+    );
+    expect(JSON.stringify(result.transcript)).not.toContain('mcp__flujo__');
+    expect(JSON.stringify(onTranscriptMessage.mock.calls)).not.toContain('retry also failed');
+  });
+});
+
 describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () => {
   it('disables all built-in tools on the query options for a tools-less node', async () => {
     const adapter = new ClaudeSubscriptionAdapter();

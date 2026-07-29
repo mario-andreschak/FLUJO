@@ -110,6 +110,23 @@ function wrapHistory(body: string): string {
   return `${HISTORY_OPEN}\n${HISTORY_PREAMBLE}\n\n${body}\n${HISTORY_CLOSE}`;
 }
 
+/**
+ * Identify the narrow Claude CLI failure shape from issue #298. Requiring both
+ * parse-failure wording and invocation-like syntax avoids hiding ordinary prose
+ * that merely discusses tool calls or reports an unrelated error.
+ */
+export function isMalformedClaudeToolCallProse(text: string): boolean {
+  const parseFailure = /(?:tool call could not be parsed|failed to parse (?:the )?tool call)/i.test(text);
+  if (!parseFailure) return false;
+
+  return (
+    /\[tool call\]/i.test(text) ||
+    /\bmcp__flujo__[a-z0-9_-]+\b/i.test(text) ||
+    /<(?:invoke|function_calls?|tool_use)\b/i.test(text) ||
+    /\b(?:assistant\s+to|invoke)\s*=\s*[a-z0-9_.:-]+/i.test(text)
+  );
+}
+
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -264,10 +281,14 @@ export function buildUserMessage(
     if (msg.role !== 'user' && msg.role !== 'assistant') continue;
 
     const text = extractText(msg.content ?? '');
-    if (text) {
+    // Defence in depth for conversations persisted before #298: omit the whole
+    // unsafe assistant entry so no tool name, arguments, delimiters, or failure
+    // prose can become a future few-shot example.
+    const safeText = msg.role === 'assistant' && isMalformedClaudeToolCallProse(text) ? '' : text;
+    if (safeText) {
       plainTurns++;
-      if (plainTurns === 1) firstPlainText = text;
-      lines.push(`${msg.role === 'assistant' ? 'Assistant' : 'Human'}: ${text}`);
+      if (plainTurns === 1) firstPlainText = safeText;
+      lines.push(`${msg.role === 'assistant' ? 'Assistant' : 'Human'}: ${safeText}`);
     }
     // A prior assistant TOOL-CALL turn (content is typically '' so it produced
     // no text line above): render each call so the model sees the actions its
@@ -825,15 +846,24 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // plumbing, not the node's answer — the routing turn's own prose
           // (before any handoff was recorded) is still preserved below.
           if (turnText && handoffCalls.length === 0) {
-            accumulatedText += turnText;
-            // Stream THIS turn's narration live as its own assistant message, so
-            // the UI shows Claude's step-by-step reasoning interleaved with the
-            // tool calls (which already stream via recordToolPair) instead of
-            // arriving as one block after the whole (possibly long) run. Text
-            // blocks precede tool_use within a turn, so this lands in the right
-            // order: turn text -> tool pair -> next turn text -> ...
-            recordMessage({ role: 'assistant', content: turnText });
-            streamedText = true;
+            if (isMalformedClaudeToolCallProse(turnText)) {
+              // Quarantine the complete contaminated SDK turn. Keeping adjacent
+              // prose would require guessing a safe boundary; skipping it keeps
+              // the text out of transcript, live callbacks, persistence and
+              // later prompt replay while the terminal SDK result still follows
+              // the adapter's existing success/error path.
+              log.warn('Quarantined malformed Claude tool-call prose (#298)');
+            } else {
+              accumulatedText += turnText;
+              // Stream THIS turn's narration live as its own assistant message, so
+              // the UI shows Claude's step-by-step reasoning interleaved with the
+              // tool calls (which already stream via recordToolPair) instead of
+              // arriving as one block after the whole (possibly long) run. Text
+              // blocks precede tool_use within a turn, so this lands in the right
+              // order: turn text -> tool pair -> next turn text -> ...
+              recordMessage({ role: 'assistant', content: turnText });
+              streamedText = true;
+            }
           }
           if (assistant?.usage) {
             lastTurnUsage = assistant.usage;
