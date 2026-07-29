@@ -17,6 +17,7 @@
  *   GET  /v1/packages/:id                              (metadata + version list, anonymous)
  *   GET  /v1/packages/:id/versions/:version/manifest    (manifest content, anonymous)
  *   DELETE /v1/packages/:id                             (Authorization: Bearer; owner only)
+ *   POST /v1/feedback              { notice, rating }   (anonymous)
  *
  * Node-only: never import from client code. Never logs passwords, tokens, or
  * full response bodies that may contain secrets.
@@ -281,6 +282,14 @@ export function deletePackage(packageId: string, accessToken: string) {
   return deleteJson<{ message?: string; error?: string }>(
     `/v1/packages/${encodeURIComponent(packageId)}`,
     accessToken,
+  );
+}
+
+/** Submit anonymous product feedback. The registry validates and stores both values. */
+export function submitFeedback(notice: string, rating: number) {
+  return postJson<{ accepted?: boolean; error?: string }>(
+    '/v1/feedback',
+    { notice, rating },
   );
 }
 

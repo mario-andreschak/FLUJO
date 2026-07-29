@@ -7,6 +7,7 @@ import { useState, useEffect, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTour } from '@/frontend/contexts/TourContext';
+import FeedbackBanner from '@/frontend/components/FeedbackBanner';
 
 const log = createLogger('app/page');
 
@@ -198,6 +199,7 @@ export default function HomePage() {
           Your data is protected with default encryption. For enhanced security, set a custom encryption password in the <Link href="/settings">settings</Link>.
         </Alert>
       ) : null}
+      <FeedbackBanner />
       <Box sx={{ textAlign: 'center', mb: 8 }}>
         <Typography variant="h2" component="h1" gutterBottom>
           FLUJO
