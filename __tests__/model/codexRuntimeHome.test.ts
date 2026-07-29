@@ -37,6 +37,8 @@ describe('Codex runtime home isolation', () => {
     const runtime = await prepareCodexRuntimeEnvironment(true);
 
     expect(runtime.home).toBe(path.join(process.env.FLUJO_CODEX_TEST_DATA_DIR!, 'db', 'codex-runtime'));
+    expect(runtime.workingDirectory).toBe(path.join(runtime.home, 'workspace'));
+    await expect(fs.stat(runtime.workingDirectory)).resolves.toMatchObject({});
     expect(runtime.env.CODEX_HOME).toBe(runtime.home);
     await expect(fs.readFile(path.join(runtime.home, 'auth.json'), 'utf8')).resolves.toBe('{"token":"test"}');
     await expect(fs.readFile(path.join(runtime.home, 'config.toml'), 'utf8')).resolves.not.toContain(

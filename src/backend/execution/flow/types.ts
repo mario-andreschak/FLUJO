@@ -4,6 +4,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import OpenAI from 'openai';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
@@ -765,7 +766,7 @@ export interface SharedState {
      * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
      * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations }>;
 
     /**
      * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
@@ -890,6 +891,8 @@ export interface ToolDefinition {
     originalName?: string;
     /** Source MCP server, used to decode the model-facing name back to (server, tool). */
     server?: string;
+    /** MCP node that advertised this tool, for per-node confinement. */
+    nodeId?: string;
     /** Per-call timeout in seconds from the tool's MCP node (-1 = no timeout;
      *  unset = 5-minute default). Carried into SharedState.toolNameMap. */
     timeout?: number;
@@ -899,6 +902,8 @@ export interface ToolDefinition {
      *  SharedState.toolNameMap so a stale dispatch can be detected. */
     clientGeneration?: number;
     schemaHash?: string;
+    /** Server-declared MCP safety hints, preserved for agentic adapters. */
+    annotations?: ToolAnnotations;
 }
 
 // MCP Context

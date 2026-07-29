@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
@@ -30,8 +31,8 @@ export interface CompletionInput {
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
    * Optional identity of the conversation + process node this call belongs to.
-   * Self-orchestrating adapters (Claude subscription) use the pair to key a
-   * reusable Agent SDK session per `(conversationId, nodeId)` (issue #154), so
+   * Self-orchestrating adapters (Claude subscription and Codex) use the pair to
+   * key a reusable agent session per `(conversationId, nodeId)`, so
    * turns of the same single-node Flow can resume one session instead of
    * re-sending the whole flattened history each turn. Request/response adapters
    * ignore these (matching the existing pattern for `maxTurns` /
@@ -40,14 +41,15 @@ export interface CompletionInput {
   conversationId?: string;
   nodeId?: string;
   /**
-   * Opt-in to Agent SDK session REUSE for self-orchestrating adapters (Claude
-   * subscription) — issue #154. When true (and `conversationId`+`nodeId` are
+   * Opt-in to native session reuse for self-orchestrating adapters (Claude
+   * subscription and Codex). When true (and `conversationId`+`nodeId` are
    * present and a reusable session exists for this node), the adapter resumes
    * the persisted SDK session and sends only the per-turn delta instead of
    * re-flattening the whole history. When false/omitted the adapter always
-   * re-flattens (the always-correct fallback). Gated by the experimental
-   * `claudeSessionResume` setting and only set for full-history nodes (a
-   * wire-scoped view can't be reconciled against the session's watermark).
+   * re-flattens (the always-correct fallback). Claude reuse is gated by the
+   * experimental `claudeSessionResume` setting; Codex reuse is enabled by
+   * default. Both are only set for full-history nodes (a wire-scoped view can't
+   * be reconciled against the session's watermark).
    * Request/response adapters ignore it.
    */
   sessionResume?: boolean;
@@ -71,7 +73,15 @@ export interface CompletionInput {
    * `timeout` is the tool's per-call timeout in seconds (-1 = none; unset = the
    * 5-minute default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string }>;
+  toolNameMap?: Record<string, {
+    server: string;
+    tool: string;
+    timeout?: number;
+    nodeId?: string;
+    clientGeneration?: number;
+    schemaHash?: string;
+    annotations?: ToolAnnotations;
+  }>;
   /**
    * Executors for caller-defined "virtual" tools (entries in `tools` that are
    * neither handoffs nor MCP tools), keyed by function name — e.g. the flow

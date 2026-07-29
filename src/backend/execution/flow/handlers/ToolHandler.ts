@@ -288,10 +288,12 @@ export class ToolHandler {
               return {
                 originalName: tool.name,
                 server: boundServer,
+                nodeId: mcpNode.id,
                 name: encodeToolName(boundServer, tool.name),
                 timeout: toolTimeout,
                 description: tool.description,
                 inputSchema: tool.inputSchema,
+                annotations: tool.annotations,
                 clientGeneration: mcpService.getClientGeneration(boundServer),
                 schemaHash,
               };

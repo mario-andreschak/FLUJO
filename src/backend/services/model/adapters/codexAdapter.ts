@@ -15,6 +15,14 @@ import { buildUserMessage } from './claudeSubscriptionAdapter';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
+import {
+  codexSessionKey,
+  computeCodexPrefixHash,
+  computeCodexHistoryHash,
+  findReusableCodexSession,
+  recordCodexSession,
+  invalidateCodexSession,
+} from './codexSessionStore';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -26,6 +34,16 @@ const MAX_TOOL_NAME_LEN = 110;
 // Local mirror of MAX_DYNAMIC_FANOUT_LANES (SubflowNode) — prep re-caps the
 // briefs anyway; this only stops a runaway spawn loop from burning turns.
 const MAX_SPAWN_CALLS = 32;
+
+// Fixed, short developer-level contract for the SDK integration. The flow's
+// potentially-large dynamic system prompt still travels over stdin, avoiding
+// Windows command-line limits; this invariant is small enough for `--config`
+// and prevents Codex from confusing its neutral runtime cwd/sandbox with the
+// separate filesystem authority exposed by FLUJO's MCP bridge.
+export const CODEX_FLUJO_INSTRUCTIONS =
+  'FLUJO MCP tools are the authoritative interface for the operations they expose. ' +
+  'When filesystem__ tools are available, use them for all file operations; they run outside the Codex sandbox under FLUJO-managed roots and approvals, so a path may be valid even when it is outside the Codex working directory. ' +
+  'Call filesystem__get_allowed_directories before guessing roots, and do not inspect the Codex runtime working directory unless the user explicitly asks.';
 
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -84,7 +102,7 @@ interface CodexUsage {
  *
  * Disable Codex's default shell tool with `features.shell_tool = false`. A
  * complete internal-tool allowlist is not available in the SDK, so the thread
- * also runs with `sandboxMode: 'read-only'` in a fresh empty scratch
+ * also runs with `sandboxMode: 'read-only'` in a stable neutral runtime
  * directory; this prevents any remaining built-in edit capability from
  * writing or reaching the network. The loopback MCP bridge is hosted by
  * FLUJO's Node process, so its filesystem tools retain their own FLUJO
@@ -96,9 +114,9 @@ interface CodexUsage {
  *
  * Like the Claude adapter, `temperature`/`maxTokens` are not applicable (the
  * CLI owns sampling), and `maxTurns` has no SDK knob — the run is bounded by
- * Codex's own turn management. History is always re-flattened per call via
- * buildUserMessage (no session-resume analog of #154 yet; codex threads would
- * support it via thread ids — a future optimization).
+ * Codex's own turn management. Full-history nodes reuse the SDK thread per
+ * `(conversationId, nodeId)` and send only messages beyond its watermark;
+ * scoped views and prefix/history divergence fall back to a fresh full flatten.
  */
 export class CodexAdapter implements CompletionAdapter {
   async createCompletion({
@@ -112,14 +130,16 @@ export class CodexAdapter implements CompletionAdapter {
     onTranscriptMessage,
     signal,
     conversationId,
+    nodeId,
     runResourceMarkers,
+    sessionResume,
   }: CompletionInput): Promise<CompletionResult> {
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
     // the CommonJS Jest transform for every module referencing the adapter
     // factory (same reason the Agent SDK is imported lazily).
     const { Codex } = await import('@openai/codex-sdk');
 
-    const { systemPrompt, content } = buildUserMessage(messages, runResourceMarkers);
+    const { systemPrompt, content: fullContent } = buildUserMessage(messages, runResourceMarkers);
 
     const abortController = new AbortController();
     const onExternalAbort = () => abortController.abort();
@@ -237,12 +257,19 @@ export class CodexAdapter implements CompletionAdapter {
           };
         }
 
-        const { server, tool: originalTool, timeout, nodeId: callerNodeId } = decoded!;
+        const {
+          server,
+          tool: originalTool,
+          timeout,
+          nodeId: callerNodeId,
+          annotations,
+        } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         return {
           name: readableName,
           description,
           inputSchema,
+          ...(annotations ? { annotations } : {}),
           handler: async (args) => {
             const callId = `call_${uuidv4()}`;
             const denied = await gate(callId, readableName, args ?? {});
@@ -288,11 +315,59 @@ export class CodexAdapter implements CompletionAdapter {
       })
       .filter((t): t is BridgeTool => t !== null);
 
-    // Flattened history → Codex stdin input. Keep the system prompt out of
+    // Full-history session reuse. Prefix drift, a shortened history, a scoped
+    // input view (`sessionResume` false), or an empty delta all take the
+    // always-correct fresh/full-flatten path.
+    const sessionRegistryKey =
+      conversationId && nodeId ? codexSessionKey(conversationId, nodeId) : undefined;
+    if (!sessionResume && sessionRegistryKey) {
+      // Scoped/isolated history cannot be reconciled with a previously persisted
+      // full-history thread. Drop it now so a later full-history turn never
+      // resumes across this divergence.
+      invalidateCodexSession(sessionRegistryKey);
+    }
+    const sessionTracking =
+      sessionResume && conversationId && nodeId
+        ? {
+            key: sessionRegistryKey!,
+            prefixHash: computeCodexPrefixHash(model.name, systemPrompt, bridgeTools),
+          }
+        : undefined;
+    let resumeThreadId: string | undefined;
+    let content = fullContent;
+    let inputSystemPrompt = systemPrompt;
+    if (sessionTracking) {
+      const reusable = findReusableCodexSession(
+        sessionTracking.key,
+        sessionTracking.prefixHash,
+        messages,
+      );
+      if (reusable && messages.length > reusable.seenMessageCount) {
+        const delta = buildUserMessage(
+          messages.slice(reusable.seenMessageCount),
+          runResourceMarkers,
+        );
+        if (delta.content.length > 0) {
+          resumeThreadId = reusable.threadId;
+          content = delta.content;
+          // The original system prompt is already in the persisted Codex thread.
+          inputSystemPrompt = undefined;
+          log.debug('Codex resuming SDK thread', {
+            conversationId,
+            nodeId,
+            threadId: resumeThreadId,
+            seenMessageCount: reusable.seenMessageCount,
+            deltaMessages: messages.length - reusable.seenMessageCount,
+          });
+        }
+      }
+    }
+
+    // Flattened history → Codex stdin input. Keep the dynamic system prompt out of
     // Codex SDK config: the SDK serializes config values into CLI arguments,
     // which can exceed Windows' command-line limit for flow-generation prompts.
-    // Base64 images from the history are written to scratch files so they can
-    // ride along as `local_image` entries (the CLI only takes paths).
+    // Base64 images alone use an ephemeral scratch directory; ordinary turns use
+    // the stable neutral runtime cwd prepared below.
     const tempFiles: string[] = [];
     let scratchDir: string | undefined;
     const ensureScratchDir = async (): Promise<string> => {
@@ -302,10 +377,10 @@ export class CodexAdapter implements CompletionAdapter {
 
     type CodexInputItem = { type: 'text'; text: string } | { type: 'local_image'; path: string };
     const inputItems: CodexInputItem[] = [];
-    if (systemPrompt) {
+    if (inputSystemPrompt) {
       inputItems.push({
         type: 'text',
-        text: `<system_instructions>\n${systemPrompt}\n</system_instructions>`,
+        text: `<system_instructions>\n${inputSystemPrompt}\n</system_instructions>`,
       });
     }
     if (typeof content === 'string') {
@@ -331,19 +406,17 @@ export class CodexAdapter implements CompletionAdapter {
       }
     }
 
-    // The working directory for the run: a fresh empty scratch dir, so Codex's
-    // built-in read-only shell has nothing project-local to wander through.
-    const workingDirectory = await ensureScratchDir();
-
     let bridge: Awaited<ReturnType<typeof startCodexToolBridge>> | undefined;
     let resultText = '';
     let usage: CodexUsage | undefined;
     let streamedText = false;
     let failure: string | undefined;
+    let completedTurn = false;
+    let capturedThreadId = resumeThreadId;
 
     try {
       if (bridgeTools.length > 0) {
-        bridge = await startCodexToolBridge(bridgeTools);
+        bridge = await startCodexToolBridge(bridgeTools, CODEX_FLUJO_INSTRUCTIONS);
       }
 
       const modelCatalogPath = await resolveCodexModelCatalogPath();
@@ -354,6 +427,7 @@ export class CodexAdapter implements CompletionAdapter {
         // model (for example gpt-5.4-mini) does not advertise that tier: the CLI
         // completes the turn but exits non-zero after printing the warning.
         service_tier: 'default',
+        developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
         // Do not expose Codex's built-in shell. FLUJO filesystem operations
         // must go through the bridged MCP tools so they remain observable and
         // subject to FLUJO's approval and protected-path policies.
@@ -381,19 +455,24 @@ export class CodexAdapter implements CompletionAdapter {
         ...(Object.keys(config).length > 0 ? { config } : {}),
       });
 
-      const thread = codex.startThread({
+      const threadOptions = {
         model: model.name,
         sandboxMode: 'read-only',
-        workingDirectory,
+        workingDirectory: runtime.workingDirectory,
         skipGitRepoCheck: true,
         approvalPolicy: 'never',
-      });
+      } as const;
+      const thread = resumeThreadId
+        ? codex.resumeThread(resumeThreadId, threadOptions)
+        : codex.startThread(threadOptions);
 
       log.debug('createCompletion via Codex SDK', {
         model: model.name,
         toolCount: bridgeTools.length,
         hasSystem: Boolean(systemPrompt),
         bridged: Boolean(bridge),
+        resumed: Boolean(resumeThreadId),
+        workingDirectory: runtime.workingDirectory,
         usingLocalModelCatalog: Boolean(modelCatalogPath),
       });
 
@@ -404,6 +483,10 @@ export class CodexAdapter implements CompletionAdapter {
 
       for await (const event of events) {
         if (signal?.aborted) break;
+        if (event.type === 'thread.started') {
+          capturedThreadId = event.thread_id;
+          continue;
+        }
         // Handoff end conditions (issue #156), mirroring the Claude adapter: a
         // PLAIN handoff ends the run at the next streamed event; SPAWN handoffs
         // end when the model produces a message without another call — or at
@@ -447,6 +530,7 @@ export class CodexAdapter implements CompletionAdapter {
           // bounding applied), so mirroring the item would duplicate them.
         } else if (event.type === 'turn.completed') {
           usage = event.usage as CodexUsage;
+          completedTurn = true;
         } else if (event.type === 'turn.failed') {
           failure = (event as { error?: { message?: string } }).error?.message ?? 'unknown error';
         }
@@ -459,6 +543,7 @@ export class CodexAdapter implements CompletionAdapter {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
+      if (sessionTracking) invalidateCodexSession(sessionTracking.key);
       // A handoff aborts the stream on purpose; only genuine errors propagate.
       if (handoffCalls.length === 0) throw err;
     } finally {
@@ -482,6 +567,37 @@ export class CodexAdapter implements CompletionAdapter {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
     } else if (!streamedText) {
       recordMessage({ role: 'assistant', content: resultText || '' });
+    }
+
+    if (sessionTracking) {
+      const reusable =
+        completedTurn &&
+        !failure &&
+        !signal?.aborted &&
+        handoffCalls.length === 0 &&
+        capturedThreadId;
+      if (reusable) {
+        recordCodexSession(sessionTracking.key, {
+          threadId: capturedThreadId!,
+          prefixHash: sessionTracking.prefixHash,
+          seenMessageCount: messages.length + transcript.length,
+          historyHash: computeCodexHistoryHash([...messages, ...transcript]),
+        });
+      } else {
+        invalidateCodexSession(sessionTracking.key);
+      }
+      log.debug('Codex SDK thread usage', {
+        conversationId,
+        nodeId,
+        sessionResume: Boolean(sessionResume),
+        resumedThisTurn: Boolean(resumeThreadId),
+        capturedThread: Boolean(capturedThreadId),
+        completedTurn,
+        inputMessages: messages.length,
+        transcriptMessages: transcript.length,
+        watermark: messages.length + transcript.length,
+        endedByHandoff: handoffCalls.length > 0,
+      });
     }
 
     const promptTokens = usage?.input_tokens ?? 0;

@@ -14,10 +14,10 @@
  *    as a HARD CEILING an operator sets — no path may ever escape it, and
  *  - user-configured roots persisted via the MCP manager UI (issue #170), which
  *    may only narrow WITHIN the env ceiling (never widen it).
- * When neither is set the server has full host access. A separate, always-applied
- * deny layer (issue #260, see protectedPaths.ts) additionally blocks a hardcoded
- * set of sensitive home locations regardless of the configured roots, unless the
- * operator sets FLUJO_ALLOW_PROTECTED_PATHS=1.
+ * When neither is set the server has full host access. An optional experimental
+ * deny layer (issue #260, see protectedPaths.ts) can additionally block a
+ * hardcoded set of sensitive home locations regardless of configured roots. It
+ * is disabled by default.
  *
  * Every tool returns a machine-readable JSON envelope both as MCP
  * `structuredContent` and as a single text content block (for backward-compat
@@ -27,12 +27,16 @@ import path from 'path';
 import { promises as fs, createReadStream } from 'fs';
 import { createHash } from 'crypto';
 import readline from 'readline';
-import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { FILESYSTEM_SERVER_NAME } from './registry';
 import { isInside, loadEffectiveRoots } from './confinement';
-import { isProtected, ALLOW_PROTECTED_PATHS_ENV } from './protectedPaths';
+import {
+  isProtected,
+  isProtectedPathsEnabled,
+  ALLOW_PROTECTED_PATHS_ENV,
+} from './protectedPaths';
 import { recordTouchedFile } from './filesystemResources';
 
 const log = createLogger('backend/services/mcp/internal/filesystemTools');
@@ -43,6 +47,26 @@ const MAX_SEARCH_RESULTS = 1_000;
 const DEFAULT_TREE_DEPTH = 3;
 const MAX_TREE_DEPTH = 10;
 const MAX_TREE_ENTRIES = 5_000;
+
+// Advertise the real side-effect profile to MCP clients. Codex in particular
+// uses these hints to distinguish safe discovery/reads from mutations instead
+// of treating every FLUJO filesystem operation as an unknown-risk action.
+const READ_ONLY_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+const WRITE_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  openWorldHint: false,
+};
+const DESTRUCTIVE_WRITE_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  openWorldHint: false,
+};
 
 /**
  * #287: files at/above this size may not be read whole without an explicit
@@ -91,20 +115,22 @@ function errorResult(message: string): CallToolResult {
  * enforce the effective confinement roots. An empty roots array blocks all access.
  * Throws on a confinement violation so callers surface a precise error.
  */
-function resolvePath(input: unknown, roots: string[]): string {
+async function resolvePath(input: unknown, roots: string[]): Promise<string> {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('Provide "path".');
   const dataDir = getDataDir();
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw);
 
-  // Deny layer (issue #260): always-applied, runs BEFORE the allow-list and
-  // cannot be widened by a configured root, flow, node, tool arg, or the model.
-  const prot = isProtected(resolved);
-  if (prot.denied) {
-    throw new Error(
-      `Path "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
-        `Set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override (operator only).`
-    );
+  // Optional defense-in-depth layer (issue #260). Configured roots win by
+  // default; users can opt into this stricter policy under Experimental Features.
+  if (await isProtectedPathsEnabled()) {
+    const prot = isProtected(resolved);
+    if (prot.denied) {
+      throw new Error(
+        `Path "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
+          `Disable "Protect sensitive home-directory paths" in Experimental Features or set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override.`
+      );
+    }
   }
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
@@ -118,6 +144,7 @@ export function filesystemToolDefinitions(): Tool[] {
   return [
     {
       name: 'read_file',
+      annotations: READ_ONLY_ANNOTATIONS,
       description:
         'Read a text file and return its content. Optionally read only a line range with "from"/"to" (1-based, inclusive). ' +
         `For large files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
@@ -156,6 +183,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'write_file',
+      annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description:
         'Create or write a text file (parent directories are created). "mode": "overwrite" (default) replaces the whole file, or a line range when "startLine"/"endLine" (1-based inclusive) are given; "append" adds content at the end; "insert" inserts content before "startLine". Optionally pass "expectedHash" (the contentHash from a prior read_file) to reject the write if the file changed on disk since it was read (TOCTOU guard); ignored for a whole-file overwrite. Returns { path, bytesWritten, mode, ... }.',
       // #216: feed the docked diff canvas (ui://devcanvas/diff) so successive
@@ -189,6 +217,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'edit_file',
+      annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description:
         'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the unique occurrence of oldText. startLine/endLine are an optional disambiguation HINT (if exactly one match starts in that range it wins); a wrong/missing range still works as long as oldText is unique in the file. Include enough surrounding context to make oldText unique. Or (2) "diff": a unified diff string ("@@ -a,b +c,d @@" hunks) applied atomically — hunks are relocated to where their context actually matches, so slightly-off @@ line numbers still apply, and CRLF files are handled. Fails with no partial write only when text is missing/ambiguous or a hunk context is not found. Optionally pass "expectedHash" (the contentHash from a prior read_file) to reject the edit if the file changed on disk since it was read (TOCTOU guard). Returns { path, editsApplied|applied, diff:{added,removed} }.',
       // #216: also feed the docked diff canvas so edits show live in the canvas.
@@ -236,6 +265,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'list_dir',
+      annotations: READ_ONLY_ANNOTATIONS,
       description: 'List the entries of a directory. Returns { path, entries: [{ name, type, size }] } where type is "file" | "directory" | "other".',
       inputSchema: {
         type: 'object',
@@ -260,6 +290,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'file_browser_ui',
+      annotations: READ_ONLY_ANNOTATIONS,
       description:
         'Open an interactive file browser in the chat so the USER can pick a file. This returns IMMEDIATELY without a selection — the browser is shown to the user and the file they choose arrives afterwards as a follow-up user message (e.g. "Selected file: <path>"). After calling this tool you MUST stop and wait for that message; do not guess a path or continue until the user has selected.',
       // MCP Apps (#97): this tool exists solely to surface the file-browser app
@@ -275,6 +306,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'dir_tree',
+      annotations: READ_ONLY_ANNOTATIONS,
       description: 'Return a recursive, depth-limited directory tree as nested JSON. Returns { path, depth, tree }.',
       inputSchema: {
         type: 'object',
@@ -297,6 +329,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'search',
+      annotations: READ_ONLY_ANNOTATIONS,
       description:
         'Search a directory tree. Match file/dir NAMES against "namePattern" (substring, case-insensitive) and/or file CONTENT against "content" (substring, case-insensitive). Content search DOES look inside every text file, returning each matching line with its 1-based line number; likely-binary and very large files are skipped for speed. Returns { matches: [{ path, line?, text? }], truncated }.',
       inputSchema: {
@@ -326,6 +359,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'get_file_info',
+      annotations: READ_ONLY_ANNOTATIONS,
       description: 'Stat a path. Returns { path, type, size, isFile, isDirectory, createdAt, modifiedAt }.',
       inputSchema: {
         type: 'object',
@@ -348,6 +382,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'create_directory',
+      annotations: WRITE_ANNOTATIONS,
       description: 'Create a directory (recursively). Succeeds if it already exists. Returns { path, created }.',
       inputSchema: {
         type: 'object',
@@ -362,6 +397,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'move',
+      annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description: 'Move or rename a file/directory from "source" to "destination". Returns { source, destination }.',
       inputSchema: {
         type: 'object',
@@ -379,6 +415,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'delete',
+      annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description: 'Delete a file or directory. Pass "recursive": true to remove a non-empty directory. Returns { path, deleted }.',
       inputSchema: {
         type: 'object',
@@ -396,6 +433,7 @@ export function filesystemToolDefinitions(): Tool[] {
     },
     {
       name: 'get_allowed_directories',
+      annotations: READ_ONLY_ANNOTATIONS,
       description:
         'Returns the list of directories that this filesystem MCP server is ' +
         'currently allowed to access. The list is the merged result of ' +
@@ -497,7 +535,7 @@ async function grepFileLines(
 }
 
 async function readFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const filePath = resolvePath(args.path, roots);
+  const filePath = await resolvePath(args.path, roots);
 
   const hasRange = typeof args.from === 'number' || typeof args.to === 'number';
   const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : '';
@@ -590,7 +628,7 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
 }
 
 async function writeFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const filePath = resolvePath(args.path, roots);
+  const filePath = await resolvePath(args.path, roots);
   const content = typeof args.content === 'string' ? args.content : '';
   const mode = args.mode === 'append' || args.mode === 'insert' ? args.mode : 'overwrite';
   const hasRange = typeof args.startLine === 'number' || typeof args.endLine === 'number';
@@ -677,7 +715,7 @@ function regionOffsets(text: string, start?: number, end?: number): { lo: number
 }
 
 async function editFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const filePath = resolvePath(args.path, roots);
+  const filePath = await resolvePath(args.path, roots);
   const hasDiff = typeof args.diff === 'string' && args.diff.trim().length > 0;
   const hasEdits = Array.isArray(args.edits) && args.edits.length > 0;
 
@@ -928,7 +966,7 @@ async function entryType(full: string): Promise<'file' | 'directory' | 'other'> 
 }
 
 async function listDirTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const dirPath = resolvePath(args.path, roots);
+  const dirPath = await resolvePath(args.path, roots);
   const names = await fs.readdir(dirPath);
   const entries = await Promise.all(
     names.map(async (name) => {
@@ -954,7 +992,7 @@ interface TreeNode {
 }
 
 async function dirTreeTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const rootPath = resolvePath(args.path, roots);
+  const rootPath = await resolvePath(args.path, roots);
   const depth = Math.min(typeof args.depth === 'number' ? Math.max(1, Math.floor(args.depth)) : DEFAULT_TREE_DEPTH, MAX_TREE_DEPTH);
   let count = 0;
   let truncated = false;
@@ -1024,7 +1062,7 @@ async function scanFileContent(
 }
 
 async function searchTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const rootPath = resolvePath(args.path, roots);
+  const rootPath = await resolvePath(args.path, roots);
   const namePattern = typeof args.namePattern === 'string' ? args.namePattern.toLowerCase() : '';
   const contentPattern = typeof args.content === 'string' ? args.content : '';
   if (!namePattern && !contentPattern) {
@@ -1082,7 +1120,7 @@ async function searchTool(args: Record<string, unknown>, roots: string[]): Promi
 }
 
 async function getFileInfoTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const target = resolvePath(args.path, roots);
+  const target = await resolvePath(args.path, roots);
   const st = await fs.stat(target);
   return dualResult({
     path: target,
@@ -1096,21 +1134,21 @@ async function getFileInfoTool(args: Record<string, unknown>, roots: string[]): 
 }
 
 async function createDirectoryTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const dirPath = resolvePath(args.path, roots);
+  const dirPath = await resolvePath(args.path, roots);
   await fs.mkdir(dirPath, { recursive: true });
   return dualResult({ path: dirPath, created: true });
 }
 
 async function moveTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const source = resolvePath(args.source, roots);
-  const destination = resolvePath(args.destination, roots);
+  const source = await resolvePath(args.source, roots);
+  const destination = await resolvePath(args.destination, roots);
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.rename(source, destination);
   return dualResult({ source, destination });
 }
 
 async function deleteTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
-  const target = resolvePath(args.path, roots);
+  const target = await resolvePath(args.path, roots);
   const recursive = args.recursive === true;
   await fs.rm(target, { recursive, force: false });
   return dualResult({ path: target, deleted: true });

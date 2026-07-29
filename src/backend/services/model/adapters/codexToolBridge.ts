@@ -44,14 +44,17 @@ export interface CodexToolBridge {
  * unguessable token (128-bit) scopes the endpoint to this run so another local
  * process can't stumble into a different conversation's tools.
  */
-export async function startCodexToolBridge(tools: BridgeTool[]): Promise<CodexToolBridge> {
+export async function startCodexToolBridge(
+  tools: BridgeTool[],
+  instructions?: string,
+): Promise<CodexToolBridge> {
   const token = randomBytes(16).toString('hex');
   const path = `/mcp/${token}`;
 
   const buildServer = (): Server => {
     const server = new Server(
       { name: 'flujo', version: '1.0.0' },
-      { capabilities: { tools: {} } },
+      { capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) },
     );
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: tools.map(t => ({

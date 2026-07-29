@@ -47,7 +47,7 @@ describe('Navigation experimental gating (#184)', () => {
     render(<Navigation />);
     expect(screen.queryByText('Waves')).not.toBeInTheDocument();
     // Non-experimental items still render.
-    expect(screen.getByText('Flows')).toBeInTheDocument();
+    expect(screen.getAllByText('Flows').length).toBeGreaterThan(0);
   });
 
   it('hides the Waves entry while settings are not yet hydrated even if enabled', () => {
@@ -67,7 +67,7 @@ describe('Navigation experimental gating (#184)', () => {
       updateSettings: mockUpdateSettings,
     };
     render(<Navigation />);
-    expect(screen.getByText('Waves')).toBeInTheDocument();
+    expect(screen.getAllByText('Waves').length).toBeGreaterThan(0);
   });
 });
 
@@ -91,6 +91,43 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     expect(mockUpdateSettings).toHaveBeenCalledWith({
       speech: { enabled: true },
       experimental: { enabled: true },
+    });
+  });
+
+  it('defaults protected paths to off', () => {
+    mockStorageValue = {
+      settings: { speech: { enabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+    expect(
+      screen.getByRole('checkbox', { name: /Protect sensitive home-directory paths/i })
+    ).not.toBeChecked();
+  });
+
+  it('persists the protected-path opt-in without dropping other settings', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, mcpBetaProtocol: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: /Protect sensitive home-directory paths/i })
+    );
+
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        protectedPathsEnabled: true,
+      },
     });
   });
 });

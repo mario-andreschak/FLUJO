@@ -3,7 +3,7 @@
  * Claude Subscription adapter. The SDK and the loopback tool bridge are mocked;
  * these tests pin down the adapter's contract:
  *   - thread options harden the run (read-only sandbox, never-ask approvals,
- *     scratch working dir) and the API key is omitted when empty (codex login).
+ *     stable neutral working dir) and the API key is omitted when empty (codex login).
  *   - agent messages stream into the transcript exactly once (no duplicate
  *     final answer) and usage maps into the OpenAI shape with the cached split.
  *   - FLUJO tools are exposed through the bridge; an MCP dispatch records the
@@ -17,6 +17,7 @@ import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBrid
 
 const codexCtorMock = jest.fn();
 const startThreadMock = jest.fn();
+const resumeThreadMock = jest.fn();
 const runStreamedMock = jest.fn();
 
 // `virtual: true` because the SDK is ESM-only (its exports map has no
@@ -33,6 +34,10 @@ jest.mock(
         startThreadMock(opts);
         return { runStreamed: runStreamedMock };
       }
+      resumeThread(id: string, opts: unknown) {
+        resumeThreadMock(id, opts);
+        return { runStreamed: runStreamedMock };
+      }
     },
   }),
   { virtual: true },
@@ -41,9 +46,11 @@ jest.mock(
 // Capture the tools handed to the bridge instead of opening a real socket.
 const bridgeCloseMock = jest.fn(async () => undefined);
 let capturedBridgeTools: BridgeTool[] = [];
+let capturedBridgeInstructions: string | undefined;
 jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({
-  startCodexToolBridge: jest.fn(async (tools: BridgeTool[]) => {
+  startCodexToolBridge: jest.fn(async (tools: BridgeTool[], instructions?: string) => {
     capturedBridgeTools = tools;
+    capturedBridgeInstructions = instructions;
     return { url: 'http://127.0.0.1:1234/mcp/testtoken', close: bridgeCloseMock };
   }),
 }));
@@ -64,11 +71,16 @@ jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({
 jest.mock('@/backend/services/model/adapters/codexRuntimeHome', () => ({
   prepareCodexRuntimeEnvironment: jest.fn(async () => ({
     home: 'C:\\flujo\\db\\codex-runtime',
+    workingDirectory: 'C:\\flujo\\db\\codex-runtime\\workspace',
     env: { PATH: 'C:\\Windows', CODEX_HOME: 'C:\\flujo\\db\\codex-runtime' },
   })),
 }));
 
-import { CodexAdapter } from '@/backend/services/model/adapters/codexAdapter';
+import {
+  CodexAdapter,
+  CODEX_FLUJO_INSTRUCTIONS,
+} from '@/backend/services/model/adapters/codexAdapter';
+import { _clearCodexSessionsForTests } from '@/backend/services/model/adapters/codexSessionStore';
 
 type AnyEvent = Record<string, unknown>;
 
@@ -83,6 +95,7 @@ const agentMessage = (text: string): AnyEvent => ({
   item: { id: 'i1', type: 'agent_message', text },
 });
 const turnCompleted = (usage: Record<string, number>): AnyEvent => ({ type: 'turn.completed', usage });
+const threadStarted = (threadId: string): AnyEvent => ({ type: 'thread.started', thread_id: threadId });
 
 const baseInput = (overrides: Partial<CompletionInput> = {}): CompletionInput =>
   ({
@@ -95,10 +108,13 @@ const baseInput = (overrides: Partial<CompletionInput> = {}): CompletionInput =>
 beforeEach(() => {
   codexCtorMock.mockReset();
   startThreadMock.mockReset();
+  resumeThreadMock.mockReset();
   runStreamedMock.mockReset();
   callToolMock.mockReset();
   bridgeCloseMock.mockClear();
   capturedBridgeTools = [];
+  capturedBridgeInstructions = undefined;
+  _clearCodexSessionsForTests();
   runStreamedMock.mockImplementation(async () => ({
     events: eventStream([
       agentMessage('hello from codex'),
@@ -108,7 +124,7 @@ beforeEach(() => {
 });
 
 describe('CodexAdapter — thread setup', () => {
-  it('hardens the thread: read-only sandbox, never-ask approvals, scratch cwd', async () => {
+  it('hardens the thread and uses the stable neutral runtime cwd', async () => {
     await new CodexAdapter().createCompletion(baseInput());
 
     expect(startThreadMock).toHaveBeenCalledTimes(1);
@@ -117,7 +133,8 @@ describe('CodexAdapter — thread setup', () => {
     expect(opts.sandboxMode).toBe('read-only');
     expect(opts.approvalPolicy).toBe('never');
     expect(opts.skipGitRepoCheck).toBe(true);
-    expect(typeof opts.workingDirectory).toBe('string');
+    expect(opts.workingDirectory).toBe('C:\\flujo\\db\\codex-runtime\\workspace');
+    expect(String(opts.workingDirectory)).not.toContain('flujo-codex-');
   });
 
   it('passes the API key when present and omits it when empty (codex login)', async () => {
@@ -139,13 +156,14 @@ describe('CodexAdapter — thread setup', () => {
     const opts = codexCtorMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.config).toEqual({
       service_tier: 'default',
+      developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
       features: { shell_tool: false },
       model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
     });
     expect(capturedBridgeTools).toEqual([]);
   });
 
-  it('passes the system prompt through stdin instead of Codex CLI config', async () => {
+  it('passes the dynamic system prompt through stdin and keeps only the fixed contract in config', async () => {
     await new CodexAdapter().createCompletion(
       baseInput({
         messages: [
@@ -157,7 +175,7 @@ describe('CodexAdapter — thread setup', () => {
     const opts = codexCtorMock.mock.calls[0][0] as {
       config: Record<string, unknown>;
     };
-    expect(opts.config).not.toHaveProperty('developer_instructions');
+    expect(opts.config.developer_instructions).toBe(CODEX_FLUJO_INSTRUCTIONS);
     const input = runStreamedMock.mock.calls[0][0] as Array<{ type: string; text?: string }>;
     expect(input).toEqual([
       { type: 'text', text: '<system_instructions>\nYou are terse.\n</system_instructions>' },
@@ -252,6 +270,7 @@ describe('CodexAdapter — tool bridging', () => {
     const cfg = (codexCtorMock.mock.calls[0][0] as { config: Record<string, unknown> }).config;
     expect(cfg).toEqual({
       service_tier: 'default',
+      developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
       features: { shell_tool: false },
       model_catalog_json: 'C:\\Users\\test\\.codex\\models_cache.json',
       mcp_servers: {
@@ -262,9 +281,33 @@ describe('CodexAdapter — tool bridging', () => {
       },
     });
     expect(capturedBridgeTools.map(t => t.name)).toEqual(['my-server__list_things']);
+    expect(capturedBridgeInstructions).toBe(CODEX_FLUJO_INSTRUCTIONS);
     // Raw JSON Schema passes through untouched (no Zod translation on this path).
     expect(capturedBridgeTools[0].inputSchema).toEqual(mcpTool.function.parameters);
     expect(bridgeCloseMock).toHaveBeenCalled();
+  });
+
+  it('preserves MCP annotations on the bridged tool', async () => {
+    const annotations = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    };
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'filesystem',
+            tool: 'list_things',
+            annotations,
+          },
+        },
+      }),
+    );
+
+    expect(capturedBridgeTools[0].annotations).toEqual(annotations);
   });
 
   it('dispatches a bridge call to mcpService and records the tool pair', async () => {
@@ -334,5 +377,96 @@ describe('CodexAdapter — tool bridging', () => {
     expect(completion.choices[0].finish_reason).toBe('tool_calls');
     expect(completion.choices[0].message.tool_calls?.[0].function.name).toBe('handoff_to_finish');
     expect(completion.choices[0].message.content).toBeNull();
+  });
+});
+
+describe('CodexAdapter — SDK thread reuse', () => {
+  it('resumes the same conversation/node with only the appended message delta', async () => {
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-123'),
+          agentMessage('first answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-123'),
+          agentMessage('second answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }));
+
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conversation-1',
+        nodeId: 'process-1',
+        sessionResume: true,
+      }),
+    );
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conversation-1',
+        nodeId: 'process-1',
+        sessionResume: true,
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'first answer' },
+          { role: 'user', content: 'next' },
+        ] as OpenAI.ChatCompletionMessageParam[],
+      }),
+    );
+
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+    expect(resumeThreadMock).toHaveBeenCalledWith(
+      'thread-123',
+      expect.objectContaining({
+        workingDirectory: 'C:\\flujo\\db\\codex-runtime\\workspace',
+        sandboxMode: 'read-only',
+      }),
+    );
+    expect(runStreamedMock.mock.calls[1][0]).toBe('next');
+  });
+
+  it('starts fresh when FLUJO history diverges from the stored thread watermark', async () => {
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-original'),
+          agentMessage('original answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-rebuilt'),
+          agentMessage('rebuilt answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }));
+
+    const identity = {
+      conversationId: 'conversation-diverged',
+      nodeId: 'process-1',
+      sessionResume: true,
+    };
+    await new CodexAdapter().createCompletion(baseInput(identity));
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        ...identity,
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'rewritten answer' },
+          { role: 'user', content: 'next' },
+        ] as OpenAI.ChatCompletionMessageParam[],
+      }),
+    );
+
+    expect(startThreadMock).toHaveBeenCalledTimes(2);
+    expect(resumeThreadMock).not.toHaveBeenCalled();
+    expect(runStreamedMock.mock.calls[1][0]).toEqual(
+      expect.stringContaining('rewritten answer'),
+    );
   });
 });

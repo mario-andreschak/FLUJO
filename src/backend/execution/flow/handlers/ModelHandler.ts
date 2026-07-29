@@ -9,7 +9,7 @@ import { ToolCallInfo } from '../types'; // Import ToolCallInfo
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path for FlujoChatMessage
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
-import { decodeToolName, assertToolIdentityFresh } from './toolNamespace';
+import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
 import { toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import OpenAI from 'openai';
@@ -789,15 +789,14 @@ export class ModelHandler {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    // #154 session reuse (experimental). Only for the self-orchestrating Claude
-    // subscription adapter, only for FULL-HISTORY nodes (a scoped `wireMessages`
-    // view can't be reconciled against the session's message-count watermark),
-    // and only when the experimental setting is on. When off/ineligible the
-    // adapter always re-flattens the whole history (the correct fallback).
+    // Native session reuse is safe only for FULL-HISTORY nodes (a scoped
+    // `wireMessages` view can't be reconciled against a persisted message-count
+    // watermark). Codex enables it by default; Claude subscription keeps its
+    // existing experimental setting. Ineligible adapters always re-flatten.
     const sessionResume =
-      modelAdapter === 'claude-cli' && !wireMessages
-        ? await ModelHandler.isClaudeSessionResumeEnabled()
-        : false;
+      !wireMessages &&
+      (modelAdapter === 'codex-cli' ||
+        (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
 
     // Resolve the effective agentic-turn cap. Precedence: per-node override →
     // bound-model setting → system default (50). This replaces the former
@@ -1131,7 +1130,7 @@ export class ModelHandler {
     messages: FlujoChatMessage[], // Expect FlujoChatMessage
     tools?: OpenAI.ChatCompletionTool[],
     opts?: {
-      toolNameMap?: Record<string, { server: string; tool: string }>;
+      toolNameMap?: Record<string, DecodedTool>;
       maxTurns?: number;
       /** Effective per-completion output-token cap, already resolved by callModel
        *  (node override → model setting). Undefined ⇒ adapter default (#189). */

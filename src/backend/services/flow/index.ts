@@ -28,6 +28,16 @@ import {
 
 const log = createLogger('backend/services/flow/index');
 
+/** Remove edge-derived runtime data before a flow crosses the persistence boundary. */
+function stripDerivedAttachmentProperties(flow: Flow): void {
+  for (const node of flow.nodes) {
+    if (node.type !== 'process' || !node.data?.properties) continue;
+    const properties = node.data.properties as Record<string, unknown>;
+    delete properties.mcpNodes;
+    delete properties.resourceNodes;
+  }
+}
+
 // The flows snapshot is global-backed so every module instance shares ONE cache.
 // In production (`next start`) the module instance that runs the scheduler/startup
 // hook is NOT the one serving the Flow Builder / API routes; a plain per-instance
@@ -194,6 +204,11 @@ export class FlowService { // Add export keyword here
       // Validate the id before it is used as a file name (path-traversal guard).
       assertSafeCollectionId(flow.id);
       await ensureFlowsMigrated();
+
+      // mcpNodes/resourceNodes are compiled from attachment edges at runtime and
+      // must never become persisted source-of-truth data. This also cleans legacy
+      // files the next time they are saved.
+      stripDerivedAttachmentProperties(flow);
 
       // Version history: when this save OVERWRITES an existing flow, archive
       // the definition being replaced (skipping no-op saves). Best-effort —

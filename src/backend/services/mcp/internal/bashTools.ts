@@ -33,7 +33,11 @@ import { createLogger } from '@/utils/logger';
 import { getDataDir, getHomeDir } from '@/utils/paths';
 import { BASH_SERVER_NAME } from './registry';
 import { isInside, loadEffectiveRoots } from './confinement';
-import { isProtected, ALLOW_PROTECTED_PATHS_ENV } from './protectedPaths';
+import {
+  isProtected,
+  isProtectedPathsEnabled,
+  ALLOW_PROTECTED_PATHS_ENV,
+} from './protectedPaths';
 
 const log = createLogger('backend/services/mcp/internal/bashTools');
 
@@ -186,19 +190,21 @@ const BASH_ROOT_ENV_VARS = ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'];
  * and enforce the effective confinement roots when present. Throws on a
  * confinement violation so callers surface a precise error (issue #175).
  */
-function resolveCwd(input: unknown, roots: string[]): string {
+async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
   const dataDir = getDataDir();
   const raw = typeof input === 'string' ? input.trim() : '';
   const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
 
-  // Deny layer (issue #260): a bash process may not be launched with its working
-  // directory inside a protected location, regardless of configured roots.
-  const prot = isProtected(resolved);
-  if (prot.denied) {
-    throw new Error(
-      `cwd "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
-        `Set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override (operator only).`
-    );
+  // Optional defense-in-depth layer (issue #260). Configured roots win by
+  // default; users can opt into this stricter policy under Experimental Features.
+  if (await isProtectedPathsEnabled()) {
+    const prot = isProtected(resolved);
+    if (prot.denied) {
+      throw new Error(
+        `cwd "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
+          `Disable "Protect sensitive home-directory paths" in Experimental Features or set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override.`
+      );
+    }
   }
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
@@ -215,8 +221,9 @@ function resolveCwd(input: unknown, roots: string[]): string {
  * boundary. Known limitation: shell variable expansions (e.g. `$HOME/AppData`)
  * are not resolved.
  */
-function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): string[] {
+async function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): Promise<string[]> {
   const warnings: string[] = [];
+  const protectedPathsEnabled = await isProtectedPathsEnabled();
   const seen = new Set<string>();
   // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
   // POSIX (/foo), and ~-prefixed home paths.
@@ -240,7 +247,7 @@ function scanCommandForExternalPaths(command: string, cwd: string, roots: string
     }
     if (seen.has(resolved)) continue;
     seen.add(resolved);
-    const prot = isProtected(resolved);
+    const prot = protectedPathsEnabled ? isProtected(resolved) : { denied: false };
     if (prot.denied) {
       warnings.push(`Command references "${rawToken}", which is inside a protected location (${prot.matchedRoot}).`);
     } else if (roots.length > 0 && !roots.some((root) => isInside(root, resolved))) {
@@ -473,8 +480,8 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
-  const cwd = resolveCwd(args.cwd, roots);
-  const warnings = scanCommandForExternalPaths(command, cwd, roots);
+  const cwd = await resolveCwd(args.cwd, roots);
+  const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
   const requestedShell = coerceShell(args.shell);
   const normalize = args.normalizeNewlines === true;
@@ -538,7 +545,7 @@ function scheduleReap(session: BashSession): void {
   session.reapTimer.unref?.();
 }
 
-function startTool(args: Record<string, unknown>, roots: string[]): CallToolResult {
+async function startTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
@@ -556,8 +563,8 @@ function startTool(args: Record<string, unknown>, roots: string[]): CallToolResu
 
   registerExitCleanup();
 
-  const cwd = resolveCwd(args.cwd, roots);
-  const warnings = scanCommandForExternalPaths(command, cwd, roots);
+  const cwd = await resolveCwd(args.cwd, roots);
+  const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
   const requestedShell = coerceShell(args.shell);
   const { child, startError, effectiveShell, fallbackFrom } = startChild(command, cwd, requestedShell);
@@ -684,7 +691,7 @@ export async function bashCallTool(toolName: string, args: Record<string, unknow
       }
       case 'start': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
-        return startTool(args, roots);
+        return await startTool(args, roots);
       }
       case 'status':
         return statusTool(args);

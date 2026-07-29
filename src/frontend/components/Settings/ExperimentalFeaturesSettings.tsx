@@ -65,6 +65,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleProtectedPathsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Protected paths toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        protectedPathsEnabled: event.target.checked,
+      },
+    });
+  };
+
   return (
     <Box sx={{ p: 2 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -145,6 +156,26 @@ export default function ExperimentalFeaturesSettings() {
           release; if a server misbehaves with this on, turn it off and reconnect.
           Websocket servers always use the stable SDK. Changing this rebuilds
           server connections on their next use.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.protectedPathsEnabled ?? false}
+              onChange={handleProtectedPathsChange}
+              name="protectedPathsEnabled"
+            />
+          }
+          label="Protect sensitive home-directory paths"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Add a defense-in-depth deny list to the built-in <strong>filesystem</strong>
+          {' '}and <strong>bash</strong> MCP servers. When enabled, sensitive locations
+          such as Documents, Desktop, Downloads, and credential directories remain
+          blocked even when they are included in a configured root. This is off by
+          default, so configured roots normally grant access to their full contents.
         </Typography>
       </FormControl>
 

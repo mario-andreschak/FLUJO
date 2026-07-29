@@ -1,7 +1,7 @@
 /**
- * Enforcement tests for the protected-path deny layer (issue #260): the layer
- * must fire even when the configured allow-list roots WOULD permit the path
- * (simulating an operator who widened FLUJO_FS_ROOTS to their home directory).
+ * Enforcement tests for the optional protected-path deny layer (issue #260):
+ * configured roots win by default, while opting into the experimental layer
+ * makes it fire even when the allow-list WOULD permit the path.
  *
  * `getHomeDir()` is mocked to a real temp dir that also acts as the configured
  * root, so an unprotected subpath is allowed while a protected subpath (e.g.
@@ -11,6 +11,11 @@ import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+const loadItemMock = jest.fn();
+jest.mock('@/utils/storage/backend', () => ({
+  loadItem: (...args: unknown[]) => loadItemMock(...args),
+}));
 
 jest.mock('@/utils/paths', () => {
   const actual = jest.requireActual('@/utils/paths');
@@ -66,11 +71,15 @@ describe('protected-path enforcement in built-in filesystem/bash servers', () =>
     // Simulate the operator mistake: configure the whole home as a root, so the
     // allow-list alone WOULD permit the protected subpaths.
     mockedRoots.mockResolvedValue([home]);
+    loadItemMock.mockResolvedValue({
+      experimental: { protectedPathsEnabled: true },
+    });
     __resetProtectedPathsCache();
   });
   afterEach(async () => {
     await fsp.rm(home, { recursive: true, force: true });
     mockedRoots.mockReset();
+    loadItemMock.mockReset();
     _resetBashSessionsForTests();
     _resetBashShellCacheForTests();
     __resetProtectedPathsCache();
@@ -81,7 +90,22 @@ describe('protected-path enforcement in built-in filesystem/bash servers', () =>
     expect(r.isError).toBeUndefined();
   });
 
-  it('blocks read/write/list of a protected subpath even when the root permits it', async () => {
+  it('lets configured roots access protected locations by default', async () => {
+    loadItemMock.mockResolvedValue({ speech: { enabled: true } });
+    const protectedDir = path.join(home, PROTECTED_SUBDIR);
+    const target = path.join(protectedDir, 'allowed-by-root.txt');
+
+    const w = await filesystemCallTool('write_file', { path: target, content: 'x' });
+    expect(w.isError).toBeUndefined();
+
+    const ls = await filesystemCallTool('list_dir', { path: protectedDir });
+    expect(ls.isError).toBeUndefined();
+
+    const bash = await bashCallTool('run', { command: 'echo hi', cwd: protectedDir });
+    expect(bash.isError).toBeUndefined();
+  });
+
+  it('blocks read/write/list when the experimental protection is enabled', async () => {
     const target = path.join(home, PROTECTED_SUBDIR, 'secret.txt');
     const w = await filesystemCallTool('write_file', { path: target, content: 'x' });
     expect(w.isError).toBe(true);
@@ -96,7 +120,7 @@ describe('protected-path enforcement in built-in filesystem/bash servers', () =>
     expect(text(ls)).toMatch(/protected location/i);
   });
 
-  it('blocks move when either source or destination is protected', async () => {
+  it('blocks move when protection is enabled and either endpoint is protected', async () => {
     await fsp.writeFile(path.join(home, 'work', 'src.txt'), 'x');
     const toProtected = await filesystemCallTool('move', {
       source: path.join(home, 'work', 'src.txt'),
@@ -113,7 +137,7 @@ describe('protected-path enforcement in built-in filesystem/bash servers', () =>
     expect(text(fromProtected)).toMatch(/protected location/i);
   });
 
-  it('blocks bash cwd inside a protected path', async () => {
+  it('blocks bash cwd inside a protected path when protection is enabled', async () => {
     const r = await bashCallTool('run', { command: 'echo hi', cwd: path.join(home, PROTECTED_SUBDIR) });
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/protected location/i);

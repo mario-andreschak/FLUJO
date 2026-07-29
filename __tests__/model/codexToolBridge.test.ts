@@ -3,6 +3,19 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { startCodexToolBridge } from '@/backend/services/model/adapters/codexToolBridge';
 
 describe('Codex tool bridge', () => {
+  it('advertises host instructions during MCP initialization', async () => {
+    const bridge = await startCodexToolBridge([], 'Use FLUJO tools as the filesystem authority.');
+    const client = new Client({ name: 'codex-bridge-test', version: '1.0.0' });
+
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(bridge.url)));
+      expect(client.getInstructions()).toBe('Use FLUJO tools as the filesystem authority.');
+    } finally {
+      await client.close().catch(() => undefined);
+      await bridge.close();
+    }
+  });
+
   it('does not invent read-only annotations for tools with unknown side effects', async () => {
     const bridge = await startCodexToolBridge([{
       name: 'test__lookup',

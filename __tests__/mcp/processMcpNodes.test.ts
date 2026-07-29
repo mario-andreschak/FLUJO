@@ -23,6 +23,8 @@ jest.mock('@/backend/services/mcp', () => ({
     listServerResourceTemplates: jest.fn(),
     getServerStatus: jest.fn(),
     setNodeRoots: jest.fn(),
+    setToolSchemaHash: jest.fn(),
+    getClientGeneration: jest.fn(() => 1),
   },
 }));
 
@@ -47,6 +49,8 @@ const mockService = mcpService as unknown as {
   listServerResources: jest.Mock;
   listServerResourceTemplates: jest.Mock;
   getServerStatus: jest.Mock;
+  setToolSchemaHash: jest.Mock;
+  getClientGeneration: jest.Mock;
 };
 
 const mcpNode = (boundServer: string, enabledTools: string[]) => ({
@@ -66,7 +70,12 @@ describe('ToolHandler.processMCPNodes', () => {
     mockService.connectServer.mockResolvedValue({ success: true });
     mockService.listServerTools.mockResolvedValue({
       tools: [
-        { name: 'demo_read', description: 'read source', inputSchema: { type: 'object' } },
+        {
+          name: 'demo_read',
+          description: 'read source',
+          inputSchema: { type: 'object' },
+          annotations: { readOnlyHint: true, openWorldHint: false },
+        },
         { name: 'demo_search', description: 'search', inputSchema: { type: 'object' } },
         { name: 'not_enabled', description: 'nope', inputSchema: {} },
       ],
@@ -89,6 +98,10 @@ describe('ToolHandler.processMCPNodes', () => {
       { server: 'demo-mcp-server', originalName: 'demo_read' },
       { server: 'demo-mcp-server', originalName: 'demo_search' },
     ]);
+    expect(result.value.availableTools[0]).toMatchObject({
+      nodeId: 'mcp-node-1',
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    });
     for (const name of names) {
       expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
     }

@@ -39,6 +39,7 @@ import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
+import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -448,7 +449,15 @@ export class ProcessNode extends BaseNode {
       if (tool.server && tool.originalName) {
         // Issue #255: carry the advertise-time identity (client generation +
         // schema hash) so a stale dispatch after a reconnect is rejected.
-        sharedState.toolNameMap[tool.name] = { server: tool.server, tool: tool.originalName, timeout: tool.timeout, clientGeneration: tool.clientGeneration, schemaHash: tool.schemaHash };
+        sharedState.toolNameMap[tool.name] = {
+          server: tool.server,
+          tool: tool.originalName,
+          timeout: tool.timeout,
+          nodeId: tool.nodeId,
+          clientGeneration: tool.clientGeneration,
+          schemaHash: tool.schemaHash,
+          annotations: tool.annotations,
+        };
       }
     }
 
@@ -783,11 +792,19 @@ export class ProcessNode extends BaseNode {
       // Rebuild the model-facing-name -> (server, tool) map from the bound tools
       // (mirrors prep()'s SharedState.toolNameMap) so adapters that run their own
       // agentic tool loop (Claude subscription) can dispatch calls to mcpService.
-      const toolNameMap: Record<string, { server: string; tool: string; timeout?: number; clientGeneration?: number; schemaHash?: string }> = {};
+      const toolNameMap: Record<string, DecodedTool> = {};
       for (const t of prepResult.availableTools ?? []) {
         if (t.server && t.originalName) {
           // Issue #255: preserve the identity token for the adapter dispatch path too.
-          toolNameMap[t.name] = { server: t.server, tool: t.originalName, timeout: t.timeout, clientGeneration: t.clientGeneration, schemaHash: t.schemaHash };
+          toolNameMap[t.name] = {
+            server: t.server,
+            tool: t.originalName,
+            timeout: t.timeout,
+            nodeId: t.nodeId,
+            clientGeneration: t.clientGeneration,
+            schemaHash: t.schemaHash,
+            annotations: t.annotations,
+          };
         }
       }
 

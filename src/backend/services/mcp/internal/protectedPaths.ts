@@ -7,11 +7,11 @@
  * `/`, the built-in servers gain unbounded access to home documents, mail,
  * browser profiles and SSH keys with no backstop.
  *
- * This module adds a second, ALWAYS-APPLIED deny layer that runs BEFORE the
- * allow-list check and cannot be widened by a flow, node config, tool argument,
- * or the model. It fires even when a configured root would otherwise permit the
- * path. It is overridable ONLY by an explicit operator env var
- * (`FLUJO_ALLOW_PROTECTED_PATHS=1`), which is unreachable from a flow or model.
+ * This module provides an OPTIONAL second deny layer that runs BEFORE the
+ * allow-list check. It is disabled by default because configured roots are an
+ * explicit user grant, and can be enabled from Settings > Experimental Features.
+ * The legacy operator env var (`FLUJO_ALLOW_PROTECTED_PATHS=1`) remains a
+ * highest-priority override that disables the layer.
  *
  * The denied set is a hardcoded, platform-specific list derived from the user's
  * home directory. It is intentionally NOT sourced from any configurable roots.
@@ -19,6 +19,8 @@
 import path from 'path';
 import os from 'os';
 import { getHomeDir, getDataDir } from '@/utils/paths';
+import { loadItem } from '@/utils/storage/backend';
+import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { isInside } from './confinement';
 
 /** A truthy operator env flag: "1", "true", "yes", "on" (case-insensitive). */
@@ -31,6 +33,23 @@ function isTruthyEnv(value: string | undefined): boolean {
  * Env-only by design so a flow or the model can never reach it.
  */
 export const ALLOW_PROTECTED_PATHS_ENV = 'FLUJO_ALLOW_PROTECTED_PATHS';
+
+/**
+ * Whether the optional protected-path layer is enabled for built-in MCP tools.
+ *
+ * Configured roots are the default authority, so a missing setting or a storage
+ * failure leaves this layer OFF. The legacy operator override still wins when
+ * set, allowing deployments that already use it to keep their current posture.
+ */
+export async function isProtectedPathsEnabled(): Promise<boolean> {
+  if (isTruthyEnv(process.env[ALLOW_PROTECTED_PATHS_ENV])) return false;
+  try {
+    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+    return settings?.experimental?.protectedPathsEnabled === true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Cache keyed by (home dir + override flag) so tests that mock `getHomeDir()` or

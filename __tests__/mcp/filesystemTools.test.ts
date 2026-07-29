@@ -65,6 +65,30 @@ describe('filesystem tool definitions', () => {
     const names = filesystemToolDefinitions().map((t) => t.name);
     expect(names).toContain('get_allowed_directories');
   });
+
+  it('advertises accurate read and destructive-write annotations', () => {
+    const definitions = new Map(filesystemToolDefinitions().map((tool) => [tool.name, tool]));
+
+    expect(definitions.get('list_dir')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    });
+    expect(definitions.get('get_allowed_directories')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      openWorldHint: false,
+    });
+    expect(definitions.get('create_directory')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    });
+    expect(definitions.get('delete')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+    });
+  });
 });
 
 describe('filesystem operations', () => {

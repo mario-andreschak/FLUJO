@@ -149,6 +149,7 @@ export class MCPNode extends BaseNode {
             ...tool,
             originalName: tool.name,
             server: execResult.server,
+            nodeId: node_params?.id,
             name: encodeToolName(execResult.server!, tool.name),
             timeout: toolTimeout,
             clientGeneration: mcpService.getClientGeneration(execResult.server!),
@@ -182,7 +183,15 @@ export class MCPNode extends BaseNode {
       sharedState.toolNameMap = sharedState.toolNameMap || {};
       for (const tool of availableTools) {
         // Issue #255: carry the advertise-time identity so a stale dispatch is rejected.
-        sharedState.toolNameMap[tool.name] = { server: execResult.server!, tool: tool.originalName, timeout: tool.timeout, nodeId: node_params?.id, clientGeneration: tool.clientGeneration, schemaHash: tool.schemaHash };
+        sharedState.toolNameMap[tool.name] = {
+          server: execResult.server!,
+          tool: tool.originalName,
+          timeout: tool.timeout,
+          nodeId: node_params?.id,
+          clientGeneration: tool.clientGeneration,
+          schemaHash: tool.schemaHash,
+          annotations: tool.annotations,
+        };
       }
 
       // Get tool names for logging

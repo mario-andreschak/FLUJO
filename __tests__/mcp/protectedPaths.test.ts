@@ -6,6 +6,11 @@
 import os from 'os';
 import path from 'path';
 
+const loadItemMock = jest.fn();
+jest.mock('@/utils/storage/backend', () => ({
+  loadItem: (...args: unknown[]) => loadItemMock(...args),
+}));
+
 jest.mock('@/utils/paths', () => {
   const actual = jest.requireActual('@/utils/paths');
   return { ...actual, getHomeDir: jest.fn() };
@@ -14,6 +19,7 @@ jest.mock('@/utils/paths', () => {
 import { getHomeDir } from '@/utils/paths';
 import {
   isProtected,
+  isProtectedPathsEnabled,
   getProtectedPaths,
   __resetProtectedPathsCache,
   ALLOW_PROTECTED_PATHS_ENV,
@@ -30,6 +36,7 @@ describe('protected-path denylist', () => {
 
   beforeEach(() => {
     mockedHome.mockReturnValue(HOME);
+    loadItemMock.mockReset();
     delete process.env[ALLOW_PROTECTED_PATHS_ENV];
     __resetProtectedPathsCache();
   });
@@ -67,5 +74,30 @@ describe('protected-path denylist', () => {
     __resetProtectedPathsCache();
     expect(getProtectedPaths()).toEqual([]);
     expect(isProtected(path.join(HOME, 'Documents')).denied).toBe(false);
+  });
+
+  it('leaves protected paths disabled when the experimental setting is missing', async () => {
+    loadItemMock.mockResolvedValue({ speech: { enabled: true } });
+    expect(await isProtectedPathsEnabled()).toBe(false);
+  });
+
+  it('enables protected paths only when explicitly opted in', async () => {
+    loadItemMock.mockResolvedValue({
+      experimental: { protectedPathsEnabled: true },
+    });
+    expect(await isProtectedPathsEnabled()).toBe(true);
+  });
+
+  it('keeps the legacy environment override authoritative', async () => {
+    process.env[ALLOW_PROTECTED_PATHS_ENV] = '1';
+    loadItemMock.mockResolvedValue({
+      experimental: { protectedPathsEnabled: true },
+    });
+    expect(await isProtectedPathsEnabled()).toBe(false);
+  });
+
+  it('defaults to disabled when settings storage cannot be read', async () => {
+    loadItemMock.mockRejectedValue(new Error('disk unavailable'));
+    expect(await isProtectedPathsEnabled()).toBe(false);
   });
 });

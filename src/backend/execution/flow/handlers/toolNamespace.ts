@@ -19,6 +19,8 @@
  * the legacy `_-_-_SERVER_-_-_TOOL` runtime names so old conversations keep working.
  */
 
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+
 const MAX_NAME_LEN = 64;
 const PREFIX = 'mcp';
 const LEGACY_SEP = '_-_-_';
@@ -87,6 +89,8 @@ export interface DecodedTool {
    *  mismatch at dispatch time means the tool was re-registered with a different
    *  schema. Optional so legacy maps / synthetic tools skip the check. */
   schemaHash?: string;
+  /** MCP safety hints captured with the advertised tool definition. */
+  annotations?: ToolAnnotations;
 }
 
 export type ToolNameMap = Record<string, DecodedTool>;

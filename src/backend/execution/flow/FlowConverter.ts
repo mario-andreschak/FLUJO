@@ -82,11 +82,15 @@ export class FlowConverter {
               processNode.node_params.properties.mcpNodes = [];
             }
             
-            // Store the full MCP node properties
-            processNode.node_params.properties.mcpNodes.push({
-              id: mcpNode.node_params.id,
-              properties: mcpNode.node_params.properties
-            });
+            // Store the full MCP node properties once. Duplicate attachment edges
+            // must not produce duplicate runtime references.
+            const mcpNodes = processNode.node_params.properties.mcpNodes as MCPNodeReference[];
+            if (!mcpNodes.some(({ id }) => id === mcpNode.node_params.id)) {
+              mcpNodes.push({
+                id: mcpNode.node_params.id,
+                properties: mcpNode.node_params.properties
+              });
+            }
             
             log.info(`Stored MCP node in Process node properties`, {
               processNodeId: processNode.node_params.id,
@@ -272,15 +276,24 @@ export class FlowConverter {
           properties: node.data.properties as StartNodeProperties || { name: node.data.label }
         };
         break;
-      case 'process':
+      case 'process': {
         pocketNode = new ProcessNode();
+        const sourceProperties = node.data.properties as ProcessNodeProperties | undefined;
         nodeParams = {
           id: node.id,
           label: node.data.label,
           type: 'process',
-          properties: node.data.properties as ProcessNodeProperties || { name: node.data.label }
+          // Attachment lists are runtime-derived from edges. Always build them on a
+          // fresh properties object so conversion cannot mutate the persisted flow or
+          // retain stale/duplicated entries from an older conversion.
+          properties: {
+            ...(sourceProperties ?? { name: node.data.label }),
+            mcpNodes: [],
+            resourceNodes: [],
+          }
         };
         break;
+      }
       case 'mcp':
         pocketNode = new MCPNode();
         nodeParams = {

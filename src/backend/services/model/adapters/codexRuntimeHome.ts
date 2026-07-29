@@ -8,6 +8,8 @@ const CONFIG_FILE = 'config.toml';
 
 export interface CodexRuntimeEnvironment {
   home: string;
+  /** Stable neutral cwd for Codex; user files remain reachable only through FLUJO tools. */
+  workingDirectory: string;
   env: Record<string, string>;
 }
 
@@ -28,8 +30,8 @@ function inheritedEnvironment(): Record<string, string> {
  * The Codex SDK otherwise inherits ~/.codex/config.toml, including personal
  * MCP servers, plugins, skills, and UI preferences. FLUJO supplies its own
  * runtime policy through SDK config overrides, so the child gets a managed,
- * persistent home instead. Persistence intentionally keeps Codex session files
- * available for a future resumeThread implementation.
+ * persistent home instead. Persistence keeps Codex session files available to
+ * the adapter's per-(conversation, node) resumeThread registry.
  *
  * ChatGPT-plan authentication still comes from the operator's normal Codex
  * login. Only auth.json is synchronized; config.toml is deliberately replaced
@@ -40,6 +42,8 @@ export async function prepareCodexRuntimeEnvironment(
 ): Promise<CodexRuntimeEnvironment> {
   const home = path.join(getDataDir(), 'db', 'codex-runtime');
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
+  const workingDirectory = path.join(home, 'workspace');
+  await fs.mkdir(workingDirectory, { recursive: true, mode: 0o700 });
 
   await fs.writeFile(
     path.join(home, CONFIG_FILE),
@@ -67,6 +71,7 @@ export async function prepareCodexRuntimeEnvironment(
 
   return {
     home,
+    workingDirectory,
     env: {
       ...inheritedEnvironment(),
       CODEX_HOME: home,

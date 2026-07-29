@@ -128,6 +128,13 @@ export interface ExperimentalSettings {
    */
   autoUnloadOllamaModels?: boolean;
   /**
+   * When true, the built-in filesystem and bash MCP servers block sensitive
+   * home-directory locations even when a configured root would otherwise allow
+   * them. Off by default: configured roots are an explicit user grant and take
+   * precedence unless this additional defense-in-depth layer is opted into.
+   */
+  protectedPathsEnabled?: boolean;
+  /**
    * Cap, in characters, on each tool DESCRIPTION sent to the model. 0 / undefined
    * disables capping.
    *
