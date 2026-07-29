@@ -21,12 +21,14 @@
  *      `${var:NAME}` token and force the consumer to `inputMode: "full-history"` so
  *      it actually sees the producer's turn. The producer's `captureVariable` is
  *      dropped (nobody references it anymore).
- *   2. RESOURCE — a provably-earlier node captures NAME but at least one consumer is
- *      `isolated` (history can never carry it): CONVERT the pair to a tracked run
- *      resource (producer `captureVariable → captureResource`, consumer
- *      `${var:NAME} → ${res:NAME}`), which survives isolated/latest-message scoping.
- *   3. DANGLING — no provably-earlier node captures NAME at all: REMOVE the dangling
+ *   2. DANGLING — no provably-earlier node captures NAME at all: REMOVE the dangling
  *      `${var:NAME}` token (it would only ever resolve to `""`).
+ *
+ * Earlier versions converted isolated consumers to a passive process
+ * `captureResource`. ProcessNode deliberately does not implement that contract:
+ * process-owned artifacts must be written through an explicit Resource node and
+ * `write_resource`. Generated flows therefore use the same history policy for
+ * every valid consumer, including a consumer authored as isolated.
  *
  * The guard is PURE, deterministic and IDEMPOTENT (running it twice is a no-op):
  * after a pass, no `${var:NAME}` reference survives, so a second pass finds nothing
@@ -44,7 +46,6 @@ import { referencedRunVars } from '@/utils/shared/resolveRunVars';
 export interface GuardChange {
   code:
     | 'var-history' // stripped ${var:NAME}, consumer forced to full-history
-    | 'var-resource' // converted ${var:NAME} pair to ${res:NAME}
     | 'var-dangling'; // removed a ${var:NAME} with no earlier producer
   message: string;
 }
@@ -183,33 +184,10 @@ function guardLevel(spec: FlowSpec, changes: GuardChange[]): void {
       continue;
     }
 
-    const anyIsolated = validConsumers.some((c) => c.inputMode === 'isolated');
-    if (anyIsolated) {
-      // RESOURCE: at least one consumer is isolated → history cannot carry the value.
-      // Convert the producer/consumer pair to a tracked run resource — but only if no
-      // producer already captures a DIFFERENT-named resource (a node has just one
-      // captureResource slot; overwriting it would strand that resource's own readers).
-      const conflict = nameProducers.some(
-        (p) => typeof p.captureResource === 'string' && p.captureResource.trim() && p.captureResource.trim() !== name
-      );
-      if (conflict) continue; // rare; leave as-is for the validator to flag rather than corrupt wiring
-      for (const p of nameProducers) {
-        p.captureResource = name;
-        delete p.captureVariable;
-      }
-      const re = varRefRegExp(name);
-      for (const node of nodes) {
-        transformNodeTexts(node, (t) => t.replace(re, '${res:' + name + '}'));
-      }
-      changes.push({
-        code: 'var-resource',
-        message: `Converted scratchpad \${var:${name}} to a tracked run resource \${res:${name}} (a consumer is isolated, so conversation history cannot carry it).`,
-      });
-      continue;
-    }
-
     // HISTORY: carry the value through the conversation. Strip the token everywhere and
     // force each valid consumer to full-history so it actually sees the producer's turn.
+    // This intentionally overrides isolated mode: auto-generation cannot safely synthesize
+    // the explicit Resource-node/write_resource protocol required for process artifacts.
     const re = varRefRegExp(name);
     for (const node of nodes) {
       transformNodeTexts(node, (t) => tidy(t.replace(re, '')));
@@ -241,7 +219,7 @@ function guardRecursive(spec: FlowSpec, changes: GuardChange[]): void {
 
 /**
  * Rewrite unsafe `${var:NAME}` scratchpad usage out of a GENERATED FlowSpec (issue #217),
- * mutating it in place. See the module header for the HISTORY / RESOURCE / DANGLING policy.
+ * mutating it in place. See the module header for the HISTORY / DANGLING policy.
  * Pure, deterministic, idempotent; never throws on malformed input.
  */
 export function guardGeneratedFlowSpec(spec: FlowSpec): GuardResult {

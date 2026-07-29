@@ -221,11 +221,10 @@ export interface FlowSpecNode {
    */
   captureVariable?: string;
   /**
-   * process/subflow only (Tier 3 — resource-tracked data flow): ALSO save this
-   * step's final output as a named run-scoped RESOURCE (flujo://run/… with
-   * producedBy/readBy lineage, readable via the internal "flujo" MCP server).
-   * Later steps inject it with `${res:NAME}`. Use `captureVariable` for short
-   * strings; `captureResource` for big/structured artifacts worth tracking.
+   * subflow only (Tier 3 — resource-tracked data flow): save the folded child
+   * output as a named run-scoped resource. Process nodes must instead connect
+   * to an explicit Resource node and call the supplied `write_resource` tool.
+   * The property remains in the type for reading legacy specifications.
    */
   captureResource?: string;
   /**
@@ -733,9 +732,14 @@ export function compileFlowSpec(
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
           properties.captureVariable = specNode.captureVariable.trim();
         }
-        // captureResource (Tier 3): save this step's output as a named run resource.
+        // ProcessNode has no passive resource-capture seam. Keep this advisory
+        // rather than compiling a property the runtime intentionally ignores.
         if (typeof specNode.captureResource === 'string' && specNode.captureResource.trim()) {
-          properties.captureResource = specNode.captureResource.trim();
+          warn(
+            'process-capture-resource-unsupported',
+            `Node "${key}": process captureResource is not supported; connect the process to a Resource node so it can call write_resource.`,
+            key
+          );
         }
         // captureKv (Tier 4): also persist this step's output to a cross-run kv key.
         if (typeof specNode.captureKv === 'string' && specNode.captureKv.trim()) {

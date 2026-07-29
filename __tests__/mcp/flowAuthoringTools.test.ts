@@ -1,6 +1,6 @@
 /**
  * Tests for the flow-authoring tools on the built-in FLUJO MCP server (#14 follow-up):
- * list_flow_building_blocks / validate_flow_spec / create_flow. External agents author
+ * list_flow_building_blocks / guide / validate / draft / create. External agents author
  * the semantic FlowSpec; these tools compile, validate, and (create_flow only, gated on
  * zero errors) save — no raw ReactFlow JSON in the contract.
  */
@@ -39,6 +39,7 @@ import {
   authoringCallTool,
 } from '@/backend/services/mcp/flowAuthoringTools';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
+import { SIMPLE_FLOW_SPEC_SCHEMA } from '@/utils/shared/simpleFlowSpec';
 
 const goodSpec = {
   name: 'agent_made_flow',
@@ -51,6 +52,13 @@ const goodSpec = {
     { from: 's', to: 'p' },
     { from: 'p', to: 'f' },
   ],
+};
+
+const simpleSpec = {
+  name: 'guided_flow',
+  goal: 'Do the work',
+  model: 'worker',
+  steps: [{ id: 'work', task: 'Do it with the configured tool', tools: ['srv/tool_a'] }],
 };
 
 function textOf(result: { content: Array<{ type: string }> }): string {
@@ -80,20 +88,37 @@ beforeEach(() => {
 });
 
 describe('tool definitions', () => {
-  it('exposes exactly the three authoring tools, recognized by isAuthoringTool', () => {
+  it('exposes the authoring tools, recognized by isAuthoringTool', () => {
     const defs = authoringToolDefinitions();
     expect(defs.map((t) => t.name)).toEqual([...AUTHORING_TOOL_NAMES]);
     for (const name of AUTHORING_TOOL_NAMES) expect(isAuthoringTool(name)).toBe(true);
     expect(isAuthoringTool('some_flow_tool')).toBe(false);
   });
 
-  it('embeds the canonical FlowSpec documentation in the spec-taking tools', () => {
+  it('uses the compact schema instead of embedding the advanced guide in every tool', () => {
     const defs = authoringToolDefinitions();
     const create = defs.find((t) => t.name === 'create_flow')!;
     const validate = defs.find((t) => t.name === 'validate_flow_spec')!;
-    expect(create.description).toContain(FLOWSPEC_DOC);
-    expect(validate.description).toContain(FLOWSPEC_DOC);
+    const draft = defs.find((t) => t.name === 'draft_flow')!;
+    expect(create.description).not.toContain(FLOWSPEC_DOC);
+    expect(validate.description).not.toContain(FLOWSPEC_DOC);
+    expect(draft.description).not.toContain(FLOWSPEC_DOC);
+    expect(create.description!.length).toBeLessThan(400);
     expect(create.inputSchema).toEqual(expect.objectContaining({ required: ['spec'] }));
+    expect(JSON.stringify(create.inputSchema)).toContain(JSON.stringify(SIMPLE_FLOW_SPEC_SCHEMA.required));
+  });
+});
+
+describe('get_flow_authoring_guide', () => {
+  it('returns the compact schema by default and the full guide only on demand', async () => {
+    const simple = payload(await authoringCallTool('get_flow_authoring_guide', {}));
+    expect(simple.profile).toBe('simple');
+    expect(simple.schema).toEqual(SIMPLE_FLOW_SPEC_SCHEMA);
+    expect(simple.guide.join(' ')).not.toContain(FLOWSPEC_DOC);
+
+    const advanced = payload(await authoringCallTool('get_flow_authoring_guide', { profile: 'advanced' }));
+    expect(advanced.profile).toBe('advanced');
+    expect(advanced.guide).toBe(FLOWSPEC_DOC);
   });
 });
 
@@ -141,11 +166,31 @@ describe('validate_flow_spec', () => {
     expect(body.validation.errorCount).toBe(0);
   });
 
+  it('defaults a guided steps spec to the simple profile', async () => {
+    const body = payload(await authoringCallTool('validate_flow_spec', { spec: simpleSpec }));
+    expect(body.profile).toBe('simple');
+    expect(body.validation.errorCount).toBe(0);
+    expect(body.flowName).toBe('guided_flow');
+  });
+
   it('errors helpfully when spec is missing or unparseable', async () => {
     const missing = await authoringCallTool('validate_flow_spec', {});
     expect(missing.isError).toBe(true);
     const garbled = await authoringCallTool('validate_flow_spec', { spec: '{not json' });
     expect(garbled.isError).toBe(true);
+  });
+});
+
+describe('draft_flow', () => {
+  it('returns the complete bundle without saving', async () => {
+    const result = await authoringCallTool('draft_flow', { spec: simpleSpec });
+    expect(result.isError).toBeUndefined();
+    const body = payload(result);
+    expect(body.saved).toBe(false);
+    expect(body.rootFlowId).toBe(body.flow.id);
+    expect(body.flows).toHaveLength(1);
+    expect(body.flow.nodes.some((node: { type: string }) => node.type === 'process')).toBe(true);
+    expect(saveFlowMock).not.toHaveBeenCalled();
   });
 });
 

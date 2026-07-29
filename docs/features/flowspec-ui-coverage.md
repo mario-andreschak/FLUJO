@@ -1,122 +1,80 @@
-# FlowSpec ↔ FlowBuilder UI Coverage
+# Flow authoring profiles
 
-> **Issue #186** — Review & document the gaps between what the **FlowBuilder UI** can
-> author and what is expressible through the **Flow DSL (FlowSpec)** / AI flow generation.
+FLUJO has one flow runtime and two authoring profiles. Both profiles compile to
+the same ReactFlow-compatible definition and execute through the same engine.
 
-This document is the authoritative audit of which FlowSpec capabilities the visual
-**FlowBuilder** can currently author, versus those that today are only reachable through
-the **AI generator** or the **`POST /api/flow/compile`** endpoint.
+## Guided profile
 
-Keep it in sync with the canonical DSL text in
-[`src/utils/shared/flowSpecDoc.ts`](../../src/utils/shared/flowSpecDoc.ts) and the
-compiler in [`src/utils/shared/flowSpecCompiler.ts`](../../src/utils/shared/flowSpecCompiler.ts).
+Guided is the default for the Flow Builder, MCP authoring tools, and automatic
+generation. It is designed for humans who want to describe work and for compact
+models that should not have to choose runtime plumbing.
 
-## TL;DR
+The guided builder exposes:
 
-FLUJO's FlowSpec DSL and the deterministic `FlowSpec → Flow` compiler are effectively
-feature-complete, and the AI generator can emit the full DSL. The FlowBuilder UI, however,
-exposes only a **subset** of these capabilities. The most impactful missing editors are:
+- Process steps: label, task, model, and server tools.
+- Finish steps.
+- Run Another Flow steps: helper flow, label, and task.
+- A compact `SimpleFlowSpec` with ordered steps and optional routes.
 
-- **Edge conditions** (deterministic, model-free routing).
-- **Process-node input/output modes** and **prompt-exclusion flags** (state exists, no rendered controls).
-- **Named-variable / resource / KV capture** (`captureVariable` / `captureResource` / `captureKv`).
-- **Per-node `maxTurns` and `allowedTools`.**
-- **Dynamic subflow fan-out** (`parallelFlowsVariable`, `mapOverList`) — today read-only alerts.
+Start and Finish nodes, ordinary history handoff, layout, node ids, handles,
+edges, and common input/output defaults are inferred.
 
-Until these editors ship, the way to author what the UI can't yet is the AI generator or a
-FlowSpec posted to **`POST /api/flow/compile`** (also exposed through the built-in `flujo`
-MCP server's `create_flow` / `validate_flow_spec` tools).
+## Advanced profile
 
-## Relevant modules
+Advanced is opt-in and preserves the complete FlowSpec and builder surface:
 
-- **DSL / schema (authoritative):** `src/utils/shared/flowSpecCompiler.ts` — `FlowSpecNode`, `FlowSpecEdge`, `FlowSpec`, `compileFlowSpec()`, `applyGenerationDefaults()`.
-- **DSL docs (generator prompt & `/docs`):** `src/utils/shared/flowSpecDoc.ts`.
-- **Edge conditions (Tier 2b):** `src/utils/shared/edgeConditions.ts` — `EdgeCondition`, `evaluateCondition()`.
-- **Generator:** `src/backend/services/flow/generateFlow.ts`; compile endpoint `src/backend/services/flow/compileFlow.ts` (`POST /api/flow/compile`).
-- **FlowBuilder UI root:** `src/frontend/components/Flow/FlowManager/FlowBuilder/` (Canvas, CustomNodes, CustomEdges, Modals, ContextMenu, NodePalette).
-- **Node property modals:** `Modals/ProcessNodePropertiesModal.tsx`, `SubflowNodePropertiesModal.tsx`, `FinishNodePropertiesModal.tsx`, `StartNodePropertiesModal.tsx`, `MCPNodePropertiesModal.tsx`, `ResourceNodePropertiesModal.tsx`, `SignalNodePropertiesModal.tsx`.
-- **Edge creation / rules:** `Canvas/utils/edgeUtils.ts`, `connectionRules.ts`, `nodeUtils.ts`.
-- **UI node factory:** `src/frontend/services/flow/index.ts` (`createNode`).
+- MCP, Resource, Signal, and Trigger nodes.
+- Prompt composition and input/output modes.
+- Conditional/bidirectional edges.
+- Variables, subflow resource capture, persistent KV state, and explicit
+  Process → Resource artifact production.
+- Subflow fan-out, map-over-list, worker spawning, concurrency, joins, and
+  error strategies.
+- Unattended execution and flow-level permission rules.
 
-## Capability matrix — DSL vs. FlowBuilder UI
+The builder preference is stored under `flujo-ui:flow-builder:mode`. When a flow
+contains advanced behavior while Guided is selected, the builder shows a
+non-destructive notice. Hidden properties remain in the saved node data; Guided
+editors do not seed, clear, or rewrite them.
 
-Legend: ✅ supported · ⚠️ partial (state loaded / read-only) · ❌ not in UI
+## Programmatic authoring
 
-| Capability | DSL / Generation | FlowBuilder UI | Gap |
-|---|---|---|---|
-| 7 node types (start/process/finish/mcp/subflow/resource/signal) | ✅ | ✅ create/delete | — |
-| Process: model binding, prompt template, server tools | ✅ | ✅ | — |
-| Process: `inputMode` (full-history/latest-message/isolated) | ✅ | ⚠️ state loaded, no editor | **Gap** |
-| Process: `outputMode` (full-conversation/latest-message) | ✅ | ⚠️ state loaded, no editor | **Gap** |
-| Process: `excludeModelPrompt` / `excludeStartNodePrompt` / `excludeSystemPrompt` | ✅ | ⚠️ state vars exist, not rendered | **Gap** |
-| Process: `maxTurns` | ✅ | ❌ | **Gap** |
-| Process: `allowedTools` (step-level allowlist) | ✅ | ❌ | **Gap** |
-| Process/Subflow: `captureVariable` (`${var:NAME}`) | ✅ | ❌ (insert-only in prompt) | **Gap** |
-| Process/Subflow: `captureResource` (`${res:NAME}`) | ✅ | ❌ | **Gap** |
-| Process/Subflow: `captureKv` (`${kv:NAME}`) | ✅ | ❌ | **Gap** |
-| Edge conditions (contains/regex/equals/always, target, ignoreCase, negate) | ✅ (infra in `edgeUtils.ts`) | ❌ no editor; edge context menu has no "Edit Properties" | **Gap (high value)** |
-| Bidirectional edge toggle | ✅ | ⚠️ right-click exists but undiscoverable | **Gap (discoverability)** |
-| Resource-edge (data-flow) creation | ✅ | ⚠️ shown read-only; not user-creatable via context menu | **Gap** |
-| Subflow: single/parallel-static/spawnBriefs/allowCallerFanout/allowCallerPrompt/concurrency/errorStrategy/joinSeparator | ✅ | ✅ | — |
-| Subflow: `inputMode` / `outputMode` | ✅ | ✅ | — |
-| Subflow: `parallelFlowsVariable` (dynamic fan-out) | ✅ | ⚠️ read-only alert | **Gap** |
-| Subflow: `mapOverList` + `itemSplit` + `sequential` | ✅ | ⚠️ read-only alert | **Gap** |
-| Signal node (`topic`, `payloadTemplate`) | ✅ | ⚠️ modal exists; wiring/coverage to verify | **Verify** |
-| Finish node label normalization | ✅ (generator may emit any label) | ✅ hardcoded "Finish Node" | **Fixed (#188)** |
+| Operation | Default | Advanced access |
+|---|---|---|
+| `create_flow` | SimpleFlowSpec | `profile: "advanced"` or legacy `nodes` + `edges` auto-detection |
+| `validate_flow_spec` | SimpleFlowSpec | same compatibility behavior |
+| `draft_flow` | SimpleFlowSpec, never saves | same compatibility behavior |
+| `get_flow_authoring_guide` | compact schema and rules | `profile: "advanced"` returns the complete FlowSpec guide |
+| `POST /api/flow/compile` | existing advanced contract | unchanged for backward compatibility |
 
-## Finish-node label normalization (#188 — implemented)
+The canonical guided schema and lowerer live in
+`src/utils/shared/simpleFlowSpec.ts`. The complete DSL remains in
+`src/utils/shared/flowSpecCompiler.ts` and `src/utils/shared/flowSpecDoc.ts`.
 
-Finish nodes are identified by **type** (`'finish'`), not label. The UI always renders the
-canonical `"Finish Node"` label (`createNode` in `src/frontend/services/flow/index.ts`,
-read-only modal), but the AI generator may emit **any** custom `label` for a finish node via
-FlowSpec, producing inconsistent naming.
+## Data handoff
 
-**Fix:** `applyGenerationDefaults()` in `src/utils/shared/flowSpecCompiler.ts` now forces
-`node.data.label = 'Finish Node'` for every `node.type === 'finish'`, alongside the existing
-process-node input/output defaults. Because `applyGenerationDefaults()` is called for the root
-flow and every nested subflow bundle in `generateFlow.ts`, finish nodes are normalized at all
-nesting levels.
+Guided flows use conversation history for ordinary step-to-step data. They do
+not expose variable, resource, or KV capture.
 
-## How to author what the UI can't yet
+In Advanced mode:
 
-Anything marked ⚠️ or ❌ above can still be authored **outside the canvas**:
+- `${var:NAME}` reads a run variable.
+- `${res:NAME}` reads a run resource.
+- `${kv:NAME}` reads persistent cross-run state.
+- Subflows may passively capture their concrete folded output as a resource.
+- Processes produce tracked artifacts through an explicit Resource node and the
+  `write_resource` tool; passive Process `captureResource` is unsupported.
 
-1. **AI generator** — describe the flow; the generator emits the full DSL (edge conditions,
-   capture fields, dynamic fan-out, etc.).
-2. **`POST /api/flow/compile`** — send a hand-written FlowSpec (see `flowSpecDoc.ts` for the
-   full grammar) and the deterministic compiler produces a canvas-compatible flow.
-3. **Built-in `flujo` MCP server** — `validate_flow_spec` / `create_flow` accept the same
-   FlowSpec contract.
+`read_resource` dereferences run-resource or native MCP URIs. It is unrelated to
+KV resolution, and ordinary `${res:...}` / `${kv:...}` prompt references are
+resolved by the backend before the model call.
 
-Flows authored this way round-trip through the canvas: the compiler only writes optional fields
-(e.g. `edge.data.condition`) when present, so plain edges/nodes stay byte-compatible with
-UI-authored ones.
+## Compatibility rules
 
-## Prioritized backlog to close the UI gaps
-
-Each slice is independently reviewable and a candidate sub-issue. The issue is titled
-"review and document", so this document (Phase 0) plus #188 is the committed deliverable; the
-following are proposed follow-ups.
-
-1. **Phase 1 — quick wins (half-built):** render process `inputMode` / `outputMode`,
-   `excludeModelPrompt` / `excludeStartNodePrompt` / `excludeSystemPrompt` toggles, and a
-   numeric `maxTurns` field in `ProcessNodePropertiesModal.tsx`.
-2. **Phase 2 — edge conditions (highest-value net-new UI):** an "Edit Properties" edge context
-   menu entry + a new `EdgePropertiesModal` editing `EdgeCondition`, persisted to
-   `edge.data.condition`; a visual badge on conditional edges; make the bidirectional toggle
-   discoverable.
-3. **Phase 3 — data-flow capture editors:** `captureVariable` / `captureResource` / `captureKv`
-   fields (with `${var:}` / `${res:}` / `${kv:}` insert helpers and a KV scope selector) in the
-   process & subflow modals.
-4. **Phase 4 — dynamic subflow fan-out editors:** turn the read-only `parallelFlowsVariable` and
-   `mapOverList` (+ `itemSplit`, `sequential`) alerts in `SubflowNodePropertiesModal.tsx` into
-   real editors.
-5. **Phase 5 — signal / resource node coverage verification:** confirm `SignalNodePropertiesModal`
-   and `ResourceNodePropertiesModal` are fully wired into the canvas/palette; document or fix gaps.
-
-## Constraints observed by the follow-up work
-
-- **UI/compiler parity:** edges/nodes authored in the UI must stay byte-compatible with compiler
-  output (`edgeUtils` spreads `condition` only when present — preserve this).
-- **Backward compatibility:** new optional fields default to current behavior; never break saved flows.
-- **Keep this doc in sync** with `flowSpecDoc.ts` whenever the DSL grows or a gap closes.
+- Switching profiles never removes properties or nodes.
+- Existing advanced FlowSpecs continue to compile.
+- Existing saved flows open in Guided mode with an advanced-feature notice.
+- The vendored Flow Generator is seeded only when missing and is never
+  overwritten on startup. Restoring its bundled definition is explicit.
+- Generated drafts are not saved until the user opens them in the builder and
+  chooses Save.

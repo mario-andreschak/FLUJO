@@ -25,6 +25,7 @@
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
+import { SIMPLE_FLOW_SPEC_SCHEMA } from '@/utils/shared/simpleFlowSpec';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
 import { searchRegistry, installRegistryServer, installBestForCapability } from '@/backend/services/mcp/registryInstall';
@@ -36,7 +37,9 @@ const log = createLogger('backend/services/mcp/flowAuthoringTools');
 
 export const AUTHORING_TOOL_NAMES = [
   'list_flow_building_blocks',
+  'get_flow_authoring_guide',
   'validate_flow_spec',
+  'draft_flow',
   'create_flow',
   'search_mcp_marketplace',
   'install_mcp_server',
@@ -47,14 +50,28 @@ export function isAuthoringTool(name: string): boolean {
   return (AUTHORING_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-/** JSON Schema for the spec-taking tools: one object argument. */
+/** JSON Schema for guided authoring, with the legacy advanced shape retained. */
 function specInputSchema(): Tool['inputSchema'] {
   return {
     type: 'object',
+    additionalProperties: false,
     properties: {
       spec: {
-        type: 'object',
-        description: 'The FlowSpec object (see the tool description for the format).',
+        oneOf: [
+          SIMPLE_FLOW_SPEC_SCHEMA,
+          {
+            type: 'object',
+            description:
+              'Legacy advanced FlowSpec with nodes and edges. Pass profile="advanced"; fetch its contract with get_flow_authoring_guide.',
+          },
+        ],
+        description: 'A guided SimpleFlowSpec by default, or a legacy advanced FlowSpec.',
+      },
+      profile: {
+        type: 'string',
+        enum: ['simple', 'advanced'],
+        description:
+          'Authoring profile. Defaults to simple; legacy specs containing nodes+edges are auto-detected as advanced.',
       },
       keepPills: {
         type: 'boolean',
@@ -71,17 +88,40 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'list_flow_building_blocks',
       description:
-        'List everything a FlowSpec may reference in this FLUJO instance: configured models (bind to process steps), MCP servers and their tools (attach via "servers"), and existing flows (usable as subflow targets). Call this before authoring a spec.',
+        'List models, MCP server/tool references, and existing flows available to a new flow.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      name: 'get_flow_authoring_guide',
+      description:
+        'Fetch the flow-authoring contract only when needed. The simple guide is compact; the advanced guide contains the complete FlowSpec reference.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          profile: {
+            type: 'string',
+            enum: ['simple', 'advanced'],
+            description: 'Guide to return. Defaults to simple.',
+          },
+        },
+      },
+    },
+    {
       name: 'validate_flow_spec',
-      description: `Compile and validate a FlowSpec WITHOUT saving. Returns the compiled flow's validation result (errors block saving; warnings are advisory) so you can iterate until clean, then call create_flow.\n\n${FLOWSPEC_DOC}`,
+      description:
+        'Compile and validate a guided flow without saving. Returns a compact summary and issues. Use draft_flow when the caller needs the complete unsaved draft.',
+      inputSchema: specInputSchema(),
+    },
+    {
+      name: 'draft_flow',
+      description:
+        'Compile and validate a flow WITHOUT saving and return the complete draft bundle for review or opening in the Flow Builder.',
       inputSchema: specInputSchema(),
     },
     {
       name: 'create_flow',
-      description: `Create a new FLUJO flow from a FlowSpec. The spec is compiled deterministically (layout, ids, and wiring are generated for you) and saved ONLY when validation finds zero errors — otherwise the issues are returned to fix. Use list_flow_building_blocks first to see the models, MCP servers/tools, and existing flows you may reference.\n\n${FLOWSPEC_DOC}`,
+      description:
+        'Compile, validate, and save a guided flow. Saving occurs only when validation has no errors. Use list_flow_building_blocks for valid references.',
       inputSchema: specInputSchema(),
     },
     {
@@ -164,6 +204,25 @@ export async function authoringCallTool(
     if (toolName === 'list_flow_building_blocks') {
       const context = await gatherGenerationContext();
       return textResult(context.blocks);
+    }
+
+    if (toolName === 'get_flow_authoring_guide') {
+      const profile = args?.profile === 'advanced' ? 'advanced' : 'simple';
+      if (profile === 'advanced') {
+        return textResult({ profile, guide: FLOWSPEC_DOC });
+      }
+      return textResult({
+        profile,
+        schema: SIMPLE_FLOW_SPEC_SCHEMA,
+        guide: [
+          'Set name, goal, and one or more ordered steps.',
+          'Each step needs id and task. model overrides the top-level default.',
+          'Tools use server/tool references from list_flow_building_blocks.',
+          'Set flow on a step to run an existing flow instead of a model.',
+          'Omit routes for a linear flow. Routes are only for branches; omit when for the fallback.',
+          'Start, Finish, layout, data handoff, and ordinary defaults are inferred.',
+        ],
+      });
     }
 
     if (toolName === 'search_mcp_marketplace') {
@@ -265,13 +324,27 @@ export async function authoringCallTool(
       );
     }
 
-    if (toolName === 'validate_flow_spec' || toolName === 'create_flow') {
+    if (toolName === 'validate_flow_spec' || toolName === 'draft_flow' || toolName === 'create_flow') {
       const spec = extractSpec(args);
       if (!spec) {
-        return textResult({ error: 'Provide a "spec" argument: a FlowSpec object (or a JSON string of one).' }, true);
+        return textResult({ error: 'Provide a "spec" argument: a SimpleFlowSpec object (or JSON string).' }, true);
       }
+      const record = spec && typeof spec === 'object' && !Array.isArray(spec)
+        ? spec as Record<string, unknown>
+        : {};
+      const profile = args.profile === 'advanced'
+        ? 'advanced'
+        : args.profile === 'simple'
+          ? 'simple'
+          : Array.isArray(record.nodes) && Array.isArray(record.edges)
+            ? 'advanced'
+            : 'simple';
       const keepPills = args.keepPills === true;
-      const result = await compileSpec(spec, { save: toolName === 'create_flow', keepPills });
+      const result = await compileSpec(spec, {
+        save: toolName === 'create_flow',
+        keepPills,
+        profile,
+      });
       if (!result.success) {
         return textResult({ error: result.error, issues: result.issues ?? [] }, true);
       }
@@ -280,12 +353,21 @@ export async function authoringCallTool(
       const bundleCount = result.flows.length;
       const subflowNote = bundleCount > 1 ? ` (plus ${bundleCount - 1} nested subflow flow(s))` : '';
       const summary = {
+        profile,
         flowId: result.flow.id,
         flowName: result.flow.name,
         nodeCount: result.flow.nodes.length,
         edgeCount: result.flow.edges.length,
         ...(bundleCount > 1 ? { flows: result.flows.map((f) => ({ id: f.id, name: f.name })) } : {}),
         validation: result.validation,
+        ...(toolName === 'draft_flow'
+          ? {
+              saved: false,
+              rootFlowId: result.flow.id,
+              flow: result.flow,
+              flows: result.flows,
+            }
+          : {}),
         ...(toolName === 'create_flow'
           ? {
               saved: result.saved,

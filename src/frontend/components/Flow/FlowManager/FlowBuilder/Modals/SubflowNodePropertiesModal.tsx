@@ -36,6 +36,7 @@ import { CardGroup } from '@/utils/shared/cardGrouping';
 import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { createLogger } from '@/utils/logger';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
 
@@ -46,9 +47,17 @@ interface SubflowNodePropertiesModalProps {
   onSave: (nodeId: string, data: any) => void;
   /** The id of the flow being edited, so it can be excluded from the picker. */
   flowId?: string;
+  authoringMode?: FlowAuthoringMode;
 }
 
-export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId }: SubflowNodePropertiesModalProps) => {
+export const SubflowNodePropertiesModal = ({
+  open,
+  node,
+  onClose,
+  onSave,
+  flowId,
+  authoringMode = 'advanced',
+}: SubflowNodePropertiesModalProps) => {
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
@@ -141,6 +150,11 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
 
   const handleSave = () => {
     if (node && nodeData) {
+      if (authoringMode === 'guided') {
+        onSave(node.id, nodeData);
+        onClose();
+        return;
+      }
       // Parse the brief editor back into the stored list. An empty editor
       // REMOVES the key (issue #138 spirit: never seed values the user didn't
       // set) rather than persisting an empty array.
@@ -353,6 +367,20 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
           onToggleGroup={flowPicker.toggleGroup}
         />
 
+        {authoringMode === 'guided' && (
+          <TextField
+            fullWidth
+            label="What should this helper do?"
+            value={nodeData.description || ''}
+            onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
+            margin="normal"
+            multiline
+            minRows={2}
+            helperText="This instruction is used when another step hands work to the helper flow."
+          />
+        )}
+
+        {authoringMode === 'advanced' && <>
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           What does the subflow receive?
         </Typography>
@@ -651,6 +679,7 @@ export const SubflowNodePropertiesModal = ({ open, node, onClose, onSave, flowId
             if (patch.captureKvKey !== undefined) setCaptureKvKey(patch.captureKvKey);
           }}
         />
+        </>}
       </DialogContent>
 
       <DialogActions>

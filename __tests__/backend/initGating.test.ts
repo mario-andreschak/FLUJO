@@ -21,6 +21,7 @@ const refreshSpotlightMock = jest.fn();
 const schedulerStartMock = jest.fn();
 const isEncryptionLockedMock = jest.fn();
 const isUserEncryptionEnabledMock = jest.fn();
+const ensureVendoredFlowGeneratorMock = jest.fn();
 
 jest.mock('@/utils/storage/backend', () => ({
   verifyStorage: (...a: unknown[]) => verifyStorageMock(...a),
@@ -38,6 +39,9 @@ jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: (...a: unknown[]) => isEncryptionLockedMock(...a),
   isUserEncryptionEnabled: (...a: unknown[]) => isUserEncryptionEnabledMock(...a),
 }));
+jest.mock('@/backend/services/flow/systemFlows', () => ({
+  ensureVendoredFlowGenerator: (...a: unknown[]) => ensureVendoredFlowGeneratorMock(...a),
+}));
 
 import { ensureBackendInitialized, onUnlocked } from '@/backend/init';
 
@@ -53,6 +57,7 @@ describe('backend init startup gating (#78)', () => {
     jest.clearAllMocks();
     clearGlobals();
     verifyStorageMock.mockResolvedValue(undefined);
+    ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
     startEnabledServersMock.mockResolvedValue(undefined);
     refreshSpotlightMock.mockResolvedValue(undefined);
     schedulerStartMock.mockResolvedValue(undefined);
@@ -64,6 +69,7 @@ describe('backend init startup gating (#78)', () => {
     await ensureBackendInitialized();
 
     expect(verifyStorageMock).toHaveBeenCalledTimes(1);
+    expect(ensureVendoredFlowGeneratorMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
     // Ordering: the MCP sweep must complete before the scheduler arms.
