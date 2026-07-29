@@ -37,6 +37,11 @@ const TourOverlay = dynamic(() => import('./Tour/TourOverlay'), {
   loading: () => null
 });
 
+const TelemetryNotice = dynamic(() => import('./TelemetryNotice'), {
+  ssr: false,
+  loading: () => null
+});
+
 // Error boundary component to catch chunk loading errors
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -98,6 +103,7 @@ export default function AppWrapper({ children }: AppWrapperProps) {
               <Suspense fallback={<div>Loading navigation...</div>}>
                 <Navigation />
                 <EncryptionAuthDialog />
+                <TelemetryNotice />
               </Suspense>
               <main>
                 {children}

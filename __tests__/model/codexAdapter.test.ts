@@ -2,8 +2,8 @@
  * Unit tests for the Codex adapter (issue #301) — the Codex-SDK sibling of the
  * Claude Subscription adapter. The SDK and the loopback tool bridge are mocked;
  * these tests pin down the adapter's contract:
- *   - thread options harden the run (read-only sandbox, never-ask approvals,
- *     stable neutral working dir) and the API key is omitted when empty (codex login).
+ *   - thread options use never-ask approvals and a stable neutral working dir,
+ *     and the API key is omitted when empty (codex login).
  *   - agent messages stream into the transcript exactly once (no duplicate
  *     final answer) and usage maps into the OpenAI shape with the cached split.
  *   - FLUJO tools are exposed through the bridge; an MCP dispatch records the
@@ -139,13 +139,13 @@ beforeEach(() => {
 });
 
 describe('CodexAdapter — thread setup', () => {
-  it('hardens the thread and uses the stable neutral runtime cwd', async () => {
+  it('configures the thread without forcing a sandbox mode', async () => {
     await new CodexAdapter().createCompletion(baseInput());
 
     expect(startThreadMock).toHaveBeenCalledTimes(1);
     const opts = startThreadMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.model).toBe('gpt-5.5');
-    expect(opts.sandboxMode).toBe('read-only');
+    expect(opts).not.toHaveProperty('sandboxMode');
     expect(opts.approvalPolicy).toBe('never');
     expect(opts.skipGitRepoCheck).toBe(true);
     expect(opts.workingDirectory).toBe('C:\\flujo\\db\\codex-runtime\\workspace');
@@ -738,9 +738,9 @@ describe('CodexAdapter — SDK thread reuse', () => {
       'thread-123',
       expect.objectContaining({
         workingDirectory: 'C:\\flujo\\db\\codex-runtime\\workspace',
-        sandboxMode: 'read-only',
       }),
     );
+    expect(resumeThreadMock.mock.calls[0][1]).not.toHaveProperty('sandboxMode');
     expect(runStreamedMock.mock.calls[1][0]).toBe('next');
   });
 

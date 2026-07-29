@@ -49,6 +49,14 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 
 FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
 
+FLUJO shares one anonymous daily-active pulse by default. The payload is limited
+to the app version, platform, install method, UTC date, and a random identifier
+that changes every day; it contains no flows, prompts, models, keys, filenames,
+account details, or permanent installation identifier. A daily in-app notice
+discloses the check. Sharing and the notice can be controlled independently
+under **Settings → Privacy & Usage**. Set `FLUJO_TELEMETRY_URL` to point at a
+self-hosted compatible collector.
+
 ![FLUJO Overview](docs/images/readme/home.png)
 
 FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code and a lot of LOVE.

@@ -18,6 +18,7 @@ import UpdateSettings from './UpdateSettings';
 import OnboardingSettings from './OnboardingSettings';
 import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
 import RegistryAccountSettings from './RegistryAccountSettings';
+import PrivacySettings from './PrivacySettings';
 
 export default function Settings() {
   const [expanded, setExpanded] = useState<string | false>('globalEnv');
@@ -158,6 +159,22 @@ export default function Settings() {
           </AccordionSummary>
           <AccordionDetails>
             <RegistryAccountSettings />
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion
+          expanded={expanded === 'privacy'}
+          onChange={handleChange('privacy')}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="privacy-content"
+            id="privacy-header"
+          >
+            <Typography variant="h6">Privacy & Usage</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <PrivacySettings />
           </AccordionDetails>
         </Accordion>
 

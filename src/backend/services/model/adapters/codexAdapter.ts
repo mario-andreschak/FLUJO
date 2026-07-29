@@ -119,12 +119,10 @@ interface CodexUsage {
  * handlers, before dispatch — the Codex SDK has no canUseTool equivalent.
  *
  * Disable Codex's default shell tool with `features.shell_tool = false`. A
- * complete internal-tool allowlist is not available in the SDK, so the thread
- * also runs with `sandboxMode: 'read-only'` in a stable neutral runtime
- * directory; this prevents any remaining built-in edit capability from
- * writing or reaching the network. The loopback MCP bridge is hosted by
- * FLUJO's Node process, so its filesystem tools retain their own FLUJO
- * authorization and are not constrained by the Codex subprocess sandbox.
+ * complete internal-tool allowlist is not available in the SDK. The thread
+ * runs in a stable neutral runtime directory, while the loopback MCP bridge is
+ * hosted by FLUJO's Node process so its filesystem tools retain their own
+ * FLUJO authorization.
  * `approvalPolicy: 'never'` keeps the CLI from blocking on interactive
  * shell approval prompts it has no way to deliver. The SDK subprocess also
  * receives a FLUJO-managed CODEX_HOME so personal MCP servers and plugins do
@@ -558,7 +556,6 @@ export class CodexAdapter implements CompletionAdapter {
                 | 'xhigh',
             }
           : {}),
-        sandboxMode: 'read-only',
         workingDirectory: runtime.workingDirectory,
         skipGitRepoCheck: true,
         approvalPolicy: 'never',

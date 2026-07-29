@@ -37,7 +37,10 @@ export enum StorageKey {
   REGISTRY_ACCOUNT = 'registry_account',
   // Package-registry settings (issue #197): user-configured registry base URL
   // (blank => use the built-in production default). No secrets.
-  REGISTRY_SETTINGS = 'registry_settings'
+  REGISTRY_SETTINGS = 'registry_settings',
+  // Anonymous daily-activity delivery state. Contains only UTC dates and the
+  // current day's rotating random id; never a permanent installation id.
+  TELEMETRY_STATE = 'telemetry_state'
 }
 
 export const StorageKeys = {
@@ -64,6 +67,7 @@ export const StorageKeys = {
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,
   REGISTRY_SETTINGS: StorageKey.REGISTRY_SETTINGS,
+  TELEMETRY_STATE: StorageKey.TELEMETRY_STATE,
 } as const;
 
 /**
@@ -88,6 +92,17 @@ export interface UpdateSettings {
 export interface OnboardingSettings {
   /** True once the user has finished or skipped the first-run guided tour. */
   completed: boolean;
+}
+
+/**
+ * Privacy-preserving usage-count settings. Missing values deliberately map to
+ * true because this feature is opt-out, while remaining visible and reversible.
+ */
+export interface TelemetrySettings {
+  /** Share at most one anonymous active-install pulse per UTC day. */
+  enabled: boolean;
+  /** Show the daily disclosure after FLUJO performs its telemetry check. */
+  notifyDaily: boolean;
 }
 
 /**
@@ -194,6 +209,7 @@ export interface Settings {
   speech: SpeechSettings;
   update?: UpdateSettings;
   onboarding?: OnboardingSettings;
+  telemetry?: TelemetrySettings;
   /**
    * Optional so existing persisted settings load unchanged; a missing value is
    * treated as disabled (experimental features hidden).
