@@ -173,12 +173,25 @@ export interface ModelStartEvent extends ExecutionEventBase {
 export interface ModelDeltaEvent extends ExecutionEventBase {
   type: 'model:delta';
   node?: NodeRef;
-  delta: string;
+  /** Stable assistant-message id shared with the final durable message. */
+  messageId: string;
+  /** Append-only assistant text delta. */
+  delta?: string;
+  /** Append-only function-call metadata/argument delta. */
+  toolCallDelta?: {
+    index: number;
+    id?: string;
+    nameDelta?: string;
+    argumentsDelta?: string;
+  };
 }
 export interface ModelEndEvent extends ExecutionEventBase {
   type: 'model:end';
   node?: NodeRef;
   content?: string;
+  /** Draft to finalize or discard after an interrupted/failed stream. */
+  messageId?: string;
+  discard?: boolean;
 }
 export interface ToolCallEvent extends ExecutionEventBase {
   type: 'tool:call';

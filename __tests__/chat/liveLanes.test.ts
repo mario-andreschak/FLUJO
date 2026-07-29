@@ -162,7 +162,7 @@ describe('applyLaneEvent (issue #157)', () => {
     expect(applyLaneEvent(seeded, ev({ type: 'node:enter', node: { nodeId: 'x' } }), NOW + 1)).toBe(seeded);
     // Lane event with no activity derivation (streaming deltas).
     expect(
-      applyLaneEvent(seeded, ev({ type: 'model:delta', laneIndex: 0, laneCount: 2, delta: 'x' }), NOW + 1),
+      applyLaneEvent(seeded, ev({ type: 'model:delta', laneIndex: 0, laneCount: 2, messageId: 'draft-1', delta: 'x' }), NOW + 1),
     ).toBe(seeded);
     // Same activity twice → same reference.
     const a = applyLaneEvent(

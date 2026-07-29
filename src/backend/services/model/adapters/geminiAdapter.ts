@@ -350,4 +350,123 @@ export class GeminiAdapter implements CompletionAdapter {
 
     return { completion: toChatCompletion(model.name, resp) };
   }
+
+  async createStreamCompletion({
+    model,
+    apiKey,
+    messages,
+    tools,
+    temperature,
+    maxTokens,
+    signal,
+    onModelDelta,
+  }: CompletionInput): Promise<CompletionResult> {
+    const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
+    const { systemInstruction, contents } = await toGeminiContents(messages, signal);
+    const functionDeclarations = toGeminiTools(tools);
+    const thinkingConfig =
+      typeof model.thinkingBudget === 'number'
+        ? { thinkingBudget: model.thinkingBudget }
+        : model.thinkingLevel
+          ? {
+              thinkingLevel: model.thinkingLevel.toUpperCase() as unknown as
+                import('@google/genai').ThinkingLevel,
+            }
+          : undefined;
+    const liveMessageId = `stream_${uuidv4()}`;
+    const stream = await ai.models.generateContentStream({
+      model: model.name,
+      contents,
+      config: {
+        temperature,
+        ...(typeof maxTokens === 'number' ? { maxOutputTokens: maxTokens } : {}),
+        ...(thinkingConfig ? { thinkingConfig } : {}),
+        ...(systemInstruction ? { systemInstruction } : {}),
+        ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
+        ...(signal ? { abortSignal: signal } : {}),
+      },
+    });
+
+    let responseId = `gemini_${uuidv4()}`;
+    let text = '';
+    let usage: GenerateContentResponse['usageMetadata'];
+    const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const toolIndexById = new Map<string, number>();
+    let activePartialToolIndex: number | undefined;
+
+    for await (const chunk of stream) {
+      responseId = chunk.responseId || responseId;
+      usage = chunk.usageMetadata ?? usage;
+      for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
+        if (typeof part.text === 'string' && part.text.length > 0) {
+          text += part.text;
+          onModelDelta?.({ messageId: liveMessageId, contentDelta: part.text });
+        } else if (part.functionCall) {
+          const providerId = part.functionCall.id;
+          const knownIndex = providerId ? toolIndexById.get(providerId) : undefined;
+          const index = knownIndex ?? activePartialToolIndex ?? toolCalls.length;
+          const prior = toolCalls[index];
+          const id = providerId || prior?.id || `call_${uuidv4()}`;
+          const name = part.functionCall.name ?? '';
+          const argsObject = part.functionCall.args ?? {};
+          const args =
+            part.functionCall.willContinue && Object.keys(argsObject).length === 0
+              ? ''
+              : JSON.stringify(argsObject);
+          toolCalls[index] = {
+            id,
+            type: 'function',
+            function: { name, arguments: args },
+          };
+          if (providerId) toolIndexById.set(providerId, index);
+          activePartialToolIndex = part.functionCall.willContinue ? index : undefined;
+          const nameDelta = name.startsWith(prior?.function.name ?? '')
+            ? name.slice(prior?.function.name.length ?? 0)
+            : (prior ? '' : name);
+          const argumentsDelta = args.startsWith(prior?.function.arguments ?? '')
+            ? args.slice(prior?.function.arguments.length ?? 0)
+            : (prior ? '' : args);
+          onModelDelta?.({
+            messageId: liveMessageId,
+            toolCallDelta: {
+              index,
+              ...(prior ? {} : { id }),
+              ...(nameDelta ? { nameDelta } : {}),
+              ...(argumentsDelta ? { argumentsDelta } : {}),
+            },
+          });
+        }
+      }
+    }
+
+    return {
+      liveMessageId,
+      completion: {
+        id: responseId,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: model.name,
+        choices: [{
+          index: 0,
+          finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+          logprobs: null,
+          message: {
+            role: 'assistant',
+            content: text || null,
+            refusal: null,
+            ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+          },
+        }],
+        ...(usage
+          ? {
+              usage: {
+                prompt_tokens: usage.promptTokenCount ?? 0,
+                completion_tokens: usage.candidatesTokenCount ?? 0,
+                total_tokens: usage.totalTokenCount ?? 0,
+              },
+            }
+          : {}),
+      },
+    };
+  }
 }

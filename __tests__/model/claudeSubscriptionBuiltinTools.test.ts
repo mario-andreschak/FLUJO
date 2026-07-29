@@ -178,6 +178,65 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     expect(capturedOptions().effort).toBe('high');
   });
 
+  it('enables partial SDK events and reconciles streamed text with the final transcript id', async () => {
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'stream_event',
+        uuid: 'assistant-1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'hel' },
+        },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'assistant-1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'lo' },
+        },
+      };
+      yield {
+        type: 'assistant',
+        uuid: 'assistant-1',
+        session_id: 'sess-1',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hello' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'hello',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+    const deltas: unknown[] = [];
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({ onModelDelta: delta => deltas.push(delta) }),
+    );
+
+    expect(capturedOptions().includePartialMessages).toBe(true);
+    expect(deltas).toEqual([
+      expect.objectContaining({ messageId: 'stream_claude_assistant-1', contentDelta: 'hel' }),
+      expect.objectContaining({ messageId: 'stream_claude_assistant-1', contentDelta: 'lo' }),
+    ]);
+    expect(transcript?.[0]).toMatchObject({
+      id: 'stream_claude_assistant-1',
+      role: 'assistant',
+      content: 'hello',
+    });
+  });
+
   it('canUseTool DENIES an arbitrary built-in tool with the #166 message', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     await adapter.createCompletion(baseInput({ tools: [] }));
@@ -242,6 +301,59 @@ const mcpAppTool: OpenAI.ChatCompletionTool = {
 };
 
 describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
+  it('surfaces a tool call before its handler begins execution', async () => {
+    const order: string[] = [];
+    callToolMock.mockImplementationOnce(async () => {
+      order.push('execute');
+      return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
+    });
+    queryMock.mockImplementation(({ options }: {
+      options: {
+        canUseTool: (
+          toolName: string,
+          input: unknown,
+          opts: { toolUseID: string },
+        ) => Promise<{ behavior: string }>;
+      };
+    }) => (async function* () {
+      await options.canUseTool(
+        `mcp__flujo__${sdkToolsMock[0].name}`,
+        { q: 'x' },
+        { toolUseID: 'call-live-1' },
+      );
+      order.push('allowed');
+      await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: { server: 'my-server', tool: 'list_things' },
+        },
+        onTranscriptMessage: message => {
+          if (message.role === 'assistant' && message.tool_calls?.length) {
+            order.push('call-visible');
+          }
+        },
+      }),
+    );
+
+    expect(order).toEqual(['call-visible', 'allowed', 'execute']);
+    expect(transcript?.[0]).toMatchObject({
+      role: 'assistant',
+      tool_calls: [{ id: 'call-live-1' }],
+    });
+    expect(transcript?.[1]).toMatchObject({ role: 'tool', tool_call_id: 'call-live-1' });
+  });
+
   it('preserves the advertised UI, ignores a result redirect, and propagates abort', async () => {
     callToolMock.mockResolvedValueOnce({
       success: true,

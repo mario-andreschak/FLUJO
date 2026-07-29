@@ -18,6 +18,23 @@ export interface ToolResourceMarker {
 }
 
 /**
+ * Provider-neutral live update for one assistant message. Text and function
+ * arguments are append-only deltas; `messageId` remains stable until the
+ * adapter returns its final CompletionResult, allowing the UI to replace the
+ * transient draft with the durable message instead of rendering a duplicate.
+ */
+export interface ModelStreamDelta {
+  messageId: string;
+  contentDelta?: string;
+  toolCallDelta?: {
+    index: number;
+    id?: string;
+    nameDelta?: string;
+    argumentsDelta?: string;
+  };
+}
+
+/**
  * Everything an adapter needs to perform a single chat completion. The caller
  * (ModelHandler) is responsible for resolving/decrypting the API key and
  * stripping FLUJO-internal fields (timestamps) from the messages first.
@@ -134,6 +151,12 @@ export interface CompletionInput {
    */
   onTranscriptMessage?: (message: FlujoChatMessage) => void;
   /**
+   * Live token/tool-argument sink. Request/response adapters use it while
+   * consuming their native SDK stream; self-orchestrating adapters use it for
+   * partial assistant events. The callback is live-only and is never persisted.
+   */
+  onModelDelta?: (delta: ModelStreamDelta) => void;
+  /**
    * Captured run resources for oversized PRIOR tool results/args, keyed by the
    * producing `tool_call_id` (issue #168). Self-orchestrating adapters (Claude
    * subscription) use this to replace inline `…[truncated]` with a head excerpt
@@ -163,6 +186,8 @@ export interface CompletionInput {
  */
 export interface CompletionResult {
   completion: OpenAI.Chat.Completions.ChatCompletion;
+  /** Stable id used by `onModelDelta` for the final assistant response. */
+  liveMessageId?: string;
   /**
    * Ordered assistant/tool messages produced by a self-orchestrating adapter's
    * internal agentic loop. Each carries a stable `id` (and timestamp) so it
@@ -181,9 +206,8 @@ export interface CompletionResult {
 export interface CompletionAdapter {
   createCompletion(input: CompletionInput): Promise<CompletionResult>;
   /**
-   * Optional streaming variant. Adapters that support native SDK streaming
-   * (currently only AnthropicAdapter) implement this. Returns the same
-   * CompletionResult shape as createCompletion.
+   * Optional native streaming variant. ModelHandler selects it whenever a live
+   * delta sink is available and falls back to createCompletion otherwise.
    */
   createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
 }

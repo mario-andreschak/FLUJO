@@ -311,6 +311,59 @@ describe('request shape', () => {
   });
 });
 
+describe('native Responses streaming', () => {
+  it('forwards output text and function arguments before returning the final response', async () => {
+    async function* events() {
+      yield {
+        type: 'response.output_item.added',
+        output_index: 1,
+        item: {
+          type: 'function_call',
+          id: 'fc_item_1',
+          call_id: 'call_abc',
+          name: 'get_weather',
+          arguments: '',
+        },
+      };
+      yield { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, delta: 'Checking.' };
+      yield {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_item_1',
+        output_index: 1,
+        delta: '{"city":"Berlin"}',
+      };
+      yield { type: 'response.completed', response: responseWithToolCall() };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(events());
+    const deltas: unknown[] = [];
+    const result = await new OpenAiResponsesAdapter().createStreamCompletion({
+      model: model(),
+      apiKey: 'sk-test',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0,
+      onModelDelta: delta => deltas.push(delta),
+    });
+
+    expect(bodyOf().stream).toBe(true);
+    expect(result.completion.choices[0].message.tool_calls?.[0].id).toBe('call_abc');
+    expect(deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({ contentDelta: 'Checking.' }),
+      expect.objectContaining({
+        toolCallDelta: expect.objectContaining({
+          id: 'call_abc',
+          nameDelta: 'get_weather',
+        }),
+      }),
+      expect.objectContaining({
+        toolCallDelta: expect.objectContaining({ argumentsDelta: '{"city":"Berlin"}' }),
+      }),
+    ]));
+    expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
+      new Set([result.liveMessageId]),
+    );
+  });
+});
+
 describe('reasoning carry-over across turns', () => {
   const history: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'Weather in Berlin?' }];
 

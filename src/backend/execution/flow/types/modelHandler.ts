@@ -67,6 +67,8 @@ export interface ModelCallResult {
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   toolCalls?: ToolCallInfo[];
   fullResponse?: OpenAI.ChatCompletion;
+  /** Stable id of the live-streamed assistant draft, when one was emitted. */
+  liveMessageId?: string;
   /**
    * The effective agentic-turn cap resolved for this call (per-node override →
    * bound-model setting → system default). Surfaced so the request/response tool

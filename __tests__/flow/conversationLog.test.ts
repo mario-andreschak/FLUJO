@@ -91,7 +91,7 @@ describe('conversation log store', () => {
     const convId = 'conv-store-filter';
     FlowExecutor.conversationStates.set(convId, makeState(convId));
 
-    appendFromBus({ type: 'model:delta', conversationId: convId, seq: 0, timestamp: 1, delta: 'x' } as ExecutionEvent);
+    appendFromBus({ type: 'model:delta', conversationId: convId, seq: 0, timestamp: 1, messageId: 'draft-1', delta: 'x' } as ExecutionEvent);
     appendFromBus({ type: 'run:paused', conversationId: convId, seq: 1, timestamp: 1, reason: 'debug' } as ExecutionEvent);
     appendFromBus(messageEvent(convId, msg('m1', 'assistant')));
     await flushConversationLog(convId);

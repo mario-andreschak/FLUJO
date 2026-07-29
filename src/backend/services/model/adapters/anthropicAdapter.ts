@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractText, extractImageParts, toAnthropicImageMediaType, parseToolArgs } from './messageUtils';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
+import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -497,9 +498,9 @@ function toChatCompletion(
  */
 export class AnthropicAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
-    return this.complete(input, 'createCompletion', (client, params, options) =>
-      client.messages.create(params, options)
-    );
+    return this.complete(input, 'createCompletion', async (client, params, options) => ({
+      message: await client.messages.create(params, options),
+    }));
   }
 
   /**
@@ -519,12 +520,49 @@ export class AnthropicAdapter implements CompletionAdapter {
    * them — which was the whole point of adding this method.
    */
   async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
+    const liveMessageId = `stream_${uuidv4()}`;
     return this.complete(input, 'createStreamCompletion', async (client, params, options) => {
       const stream = client.messages.stream(
         params as Parameters<typeof client.messages.stream>[0],
         options
       );
-      return stream.finalMessage();
+      const toolIndexes = new Map<number, number>();
+      let nextToolIndex = 0;
+      // The real SDK stream is async-iterable. Keeping the finalMessage-only
+      // fallback also supports older SDK-compatible clients and test doubles.
+      if (Symbol.asyncIterator in Object(stream)) {
+        for await (const rawEvent of stream) {
+          const event = rawEvent as Anthropic.RawMessageStreamEvent;
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            const toolIndex = nextToolIndex++;
+            toolIndexes.set(event.index, toolIndex);
+            input.onModelDelta?.({
+              messageId: liveMessageId,
+              toolCallDelta: {
+                index: toolIndex,
+                id: event.content_block.id,
+                nameDelta: event.content_block.name,
+              },
+            });
+          } else if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'text_delta' && event.delta.text) {
+              input.onModelDelta?.({ messageId: liveMessageId, contentDelta: event.delta.text });
+            } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
+              const toolIndex = toolIndexes.get(event.index);
+              if (toolIndex != null) {
+                input.onModelDelta?.({
+                  messageId: liveMessageId,
+                  toolCallDelta: {
+                    index: toolIndex,
+                    argumentsDelta: event.delta.partial_json,
+                  },
+                });
+              }
+            }
+          }
+        }
+      }
+      return { message: await stream.finalMessage(), liveMessageId };
     });
   }
 
@@ -547,7 +585,7 @@ export class AnthropicAdapter implements CompletionAdapter {
       client: Anthropic,
       params: Anthropic.MessageCreateParamsNonStreaming,
       options?: { signal: AbortSignal }
-    ) => Promise<Anthropic.Message>
+    ) => Promise<{ message: Anthropic.Message; liveMessageId?: string }>
   ): Promise<CompletionResult> {
     const client = new Anthropic({
       apiKey,
@@ -611,7 +649,11 @@ export class AnthropicAdapter implements CompletionAdapter {
       });
 
       try {
-        return { completion: toChatCompletion(model.name, await send(client, params, options)) };
+        const result = await send(client, params, options);
+        return {
+          completion: toChatCompletion(model.name, result.message),
+          liveMessageId: result.liveMessageId,
+        };
       } catch (err) {
         if (useCache && breakpoints > 0 && isCacheControlRejection(err)) {
           rejectedCacheControl.add(endpoint);

@@ -4,7 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 // Type-only imports (erased at compile time, so they don't trigger the ESM
 // runtime-load issue that forces the Agent SDK itself to be imported lazily).
 import type Anthropic from '@anthropic-ai/sdk';
-import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -409,6 +409,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
+    onModelDelta,
     signal,
     conversationId,
     nodeId,
@@ -532,25 +533,54 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const transcript: FlujoChatMessage[] = [];
     const baseTs = Date.now();
     let txSeq = 0;
-    const recordMessage = (msg: TranscriptMessage): void => {
-      const full = { ...msg, id: `m_${uuidv4()}`, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
+    const recordMessage = (msg: TranscriptMessage, id = `m_${uuidv4()}`): void => {
+      const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
     };
-    // Materialize an executed (or rejected) tool call as the OpenAI-shaped
-    // assistant(tool_call) + tool(result) pair, streaming both live.
-    const recordToolPair = (ti: ToolInteraction): void => {
+    const recordToolCall = (
+      ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+      messageId?: string,
+    ): void => {
       recordMessage({
         role: 'assistant',
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
-      });
+      }, messageId);
+    };
+    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
       recordMessage({
         role: 'tool',
         tool_call_id: ti.id,
         content: ti.resultContent,
         ...(ti.ui ? { ui: ti.ui } : {}),
       });
+    };
+    // canUseTool sees the SDK's stable tool-use id before the in-process handler
+    // starts. Record the call there, then let the handler append only its result.
+    const queuedToolCalls = new Map<string, Array<{ id: string; argsJson: string }>>();
+    const recordedToolCallIds = new Set<string>();
+    const partialToolMessageIds = new Map<string, string>();
+    const enqueueToolCall = (name: string, callId: string, argsJson: string): void => {
+      const queue = queuedToolCalls.get(name) ?? [];
+      queue.push({ id: callId, argsJson });
+      queuedToolCalls.set(name, queue);
+    };
+    const takeToolCall = (name: string, args: Record<string, unknown>): string => {
+      const queue = queuedToolCalls.get(name);
+      const argsJson = JSON.stringify(args ?? {});
+      const matchingIndex = queue?.findIndex(entry => entry.argsJson === argsJson) ?? -1;
+      const [matching] = matchingIndex >= 0 ? queue!.splice(matchingIndex, 1) : [];
+      const callId = matching?.id ?? queue?.shift()?.id ?? `call_${uuidv4()}`;
+      if (queue?.length === 0) queuedToolCalls.delete(name);
+      if (!recordedToolCallIds.has(callId)) {
+        recordToolCall(
+          { id: callId, name, argsJson },
+          partialToolMessageIds.get(callId),
+        );
+        recordedToolCallIds.add(callId);
+      }
+      return callId;
     };
 
     // Build the in-process MCP server from the node's tools. MCP tools dispatch to
@@ -614,6 +644,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // names are already OpenAI-safe and the caller keys executors by them.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
             log.debug('Claude subscription local tool call', { tool: fnName });
+            const callId = takeToolCall(fnName, args);
             let resultContent: string;
             let isError = false;
             try {
@@ -622,10 +653,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
               isError = true;
             }
-            recordToolPair({
-              id: `call_${uuidv4()}`,
-              name: fnName,
-              argsJson: JSON.stringify(args ?? {}),
+            recordToolResult({
+              id: callId,
               resultContent,
             });
             return isError
@@ -649,6 +678,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
+          const callId = takeToolCall(readableName, args);
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
           const result = await mcpService.callTool(
@@ -661,9 +691,6 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             abortController.signal,
             'model',
           );
-          // Stable lineage id, generated up front so a spilled run resource is
-          // keyed by the SAME toolCallId this pair is recorded under (#251).
-          const callId = `call_${uuidv4()}`;
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {
@@ -715,10 +742,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                 ...(cancelledReason ? { cancelledReason } : {}),
               }
             : undefined;
-          recordToolPair({
+          recordToolResult({
             id: callId,
-            name: readableName,
-            argsJson: JSON.stringify(args ?? {}),
             resultContent,
             ...(ui ? { ui } : {}),
           });
@@ -764,6 +789,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         env: childEnv,
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
+        includePartialMessages: true,
         ...(model.reasoningEffort && model.reasoningEffort !== 'minimal' && model.reasoningEffort !== 'ultra'
           ? {
               effort: model.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max',
@@ -793,14 +819,29 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           if (!toolName.startsWith(`mcp__${SDK_SERVER_NAME}__`)) {
             return { behavior: 'deny', message: `Tool ${toolName} is not permitted for this node.` };
           }
+          const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
+          const args = (input ?? {}) as Record<string, unknown>;
+          // Handoffs are materialized once at the routing boundary below. Every
+          // executable tool, however, becomes visible before approval/execution.
+          if (!isHandoffName(readableName) && !recordedToolCallIds.has(opts.toolUseID)) {
+            recordToolCall(
+              {
+                id: opts.toolUseID,
+                name: readableName,
+                argsJson: JSON.stringify(args),
+              },
+              partialToolMessageIds.get(opts.toolUseID),
+            );
+            recordedToolCallIds.add(opts.toolUseID);
+            enqueueToolCall(readableName, opts.toolUseID, JSON.stringify(args));
+          }
           // Human-in-the-loop: when an approval gate is wired, block until the
           // user decides (surfaced to FLUJO's tool-approval UI). Otherwise auto-allow.
           if (requestToolApproval) {
-            const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
             const { approved, feedback } = await requestToolApproval({
               id: opts.toolUseID,
               name: readableName,
-              args: (input ?? {}) as Record<string, unknown>,
+              args,
             });
             if (approved) {
               return { behavior: 'allow', updatedInput: input };
@@ -810,6 +851,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const rejectionText = feedback
               ? `User rejected this tool call: ${feedback}`
               : 'Tool call rejected by the user.';
+            const queued = queuedToolCalls.get(readableName);
+            if (queued) {
+              const index = queued.findIndex(entry => entry.id === opts.toolUseID);
+              if (index >= 0) queued.splice(index, 1);
+              if (queued.length === 0) queuedToolCalls.delete(readableName);
+            }
             const linkedTool = mcpToolUiByReadableName.get(readableName);
             const uiLink = linkedTool
               ? await resolveAdvertisedToolUiLink(
@@ -821,10 +868,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // On rejection the SDK never calls the tool handler, so record the
             // rejected call here — otherwise it (and the rejection) wouldn't show
             // up in the conversation transcript at all.
-            recordToolPair({
+            recordToolResult({
               id: opts.toolUseID,
-              name: readableName,
-              argsJson: JSON.stringify(input ?? {}),
               resultContent: rejectionText,
               ...(uiLink
                 ? {
@@ -860,6 +905,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // the final answer is already in the transcript and we must not re-emit the
     // concatenated text at the end (it would duplicate in the UI).
     let streamedText = false;
+    const partialToolBlocks = new Map<string, { messageId: string; toolUseId: string }>();
 
     // The message loop, extracted so an external cancellation can race it: the
     // SDK does NOT reliably throw when its abortController fires mid-turn — the
@@ -888,7 +934,44 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           abortController.abort();
           break;
         }
-        if (message.type === 'assistant') {
+        if (message.type === 'stream_event') {
+          const partial = message as SDKPartialAssistantMessage;
+          const event = partial.event;
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            const messageId = `stream_claude_${partial.uuid}_tool_${event.index}`;
+            partialToolBlocks.set(`${partial.uuid}:${event.index}`, {
+              messageId,
+              toolUseId: event.content_block.id,
+            });
+            partialToolMessageIds.set(event.content_block.id, messageId);
+            onModelDelta?.({
+              messageId,
+              toolCallDelta: {
+                index: 0,
+                id: event.content_block.id,
+                nameDelta: event.content_block.name,
+              },
+            });
+          } else if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'text_delta' && event.delta.text) {
+              onModelDelta?.({
+                messageId: `stream_claude_${partial.uuid}`,
+                contentDelta: event.delta.text,
+              });
+            } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
+              const toolBlock = partialToolBlocks.get(`${partial.uuid}:${event.index}`);
+              if (toolBlock) {
+                onModelDelta?.({
+                  messageId: toolBlock.messageId,
+                  toolCallDelta: {
+                    index: 0,
+                    argumentsDelta: event.delta.partial_json,
+                  },
+                });
+              }
+            }
+          }
+        } else if (message.type === 'assistant') {
           const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
@@ -931,7 +1014,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               // arriving as one block after the whole (possibly long) run. Text
               // blocks precede tool_use within a turn, so this lands in the right
               // order: turn text -> tool pair -> next turn text -> ...
-              recordMessage({ role: 'assistant', content: turnText });
+              recordMessage(
+                { role: 'assistant', content: turnText },
+                `stream_claude_${message.uuid}`,
+              );
               streamedText = true;
             }
           }

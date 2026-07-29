@@ -244,6 +244,28 @@ describe('CodexAdapter — transcript & usage', () => {
     expect((transcript![0] as { content?: string }).content).toBe('hello from codex');
   });
 
+  it('emits item.updated text as append-only deltas and reconciles the transcript id', async () => {
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: eventStream([
+        { type: 'item.started', item: { id: 'a1', type: 'agent_message', text: '' } },
+        { type: 'item.updated', item: { id: 'a1', type: 'agent_message', text: 'hel' } },
+        { type: 'item.updated', item: { id: 'a1', type: 'agent_message', text: 'hello' } },
+        { type: 'item.completed', item: { id: 'a1', type: 'agent_message', text: 'hello' } },
+        turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 }),
+      ])(),
+    }));
+    const deltas: unknown[] = [];
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({ onModelDelta: delta => deltas.push(delta) }),
+    );
+
+    expect(deltas).toEqual([
+      expect.objectContaining({ messageId: 'stream_codex_a1', contentDelta: 'hel' }),
+      expect.objectContaining({ messageId: 'stream_codex_a1', contentDelta: 'lo' }),
+    ]);
+    expect(transcript?.[0].id).toBe('stream_codex_a1');
+  });
+
   it("surfaces the built-in shell's command executions as synthetic tool pairs", async () => {
     runStreamedMock.mockImplementationOnce(async () => ({
       events: eventStream([

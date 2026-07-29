@@ -37,7 +37,7 @@ import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './r
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
-import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
@@ -919,14 +919,33 @@ export class ModelHandler {
     // transcript materialization below reuses, so this live copy and the final
     // persisted copy dedupe in the UI. Emitting also keeps the frontend's
     // "no activity" timer reset while background tool calls are in flight.
+    const liveMessageIds = new Set<string>();
     const onTranscriptMessage = emit
       ? (message: FlujoChatMessage) => {
+          // A native partial draft with this id is now durable and must survive
+          // a later failure in the same self-orchestrating run.
+          liveMessageIds.delete(message.id);
           const withNode: FlujoChatMessage = nodeId ? { ...message, processNodeId: nodeId } : message;
           emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
           // Also fold it into the live shared state and persist immediately, so a
           // failure mid-loop (before the normal end-of-run save) doesn't discard
           // tool calls/results that already executed (e.g. SAP objects, tickets).
           if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
+        }
+      : undefined;
+
+    // Native adapter token/tool deltas are live-only. Keep their stable ids so a
+    // failed attempt can explicitly retract its transient UI drafts.
+    const onModelDelta = emit
+      ? (delta: ModelStreamDelta) => {
+          liveMessageIds.add(delta.messageId);
+          emit({
+            type: 'model:delta',
+            messageId: delta.messageId,
+            delta: delta.contentDelta,
+            toolCallDelta: delta.toolCallDelta,
+            node: nodeId ? { nodeId } : undefined,
+          });
         }
       : undefined;
 
@@ -1062,6 +1081,7 @@ export class ModelHandler {
       maxTokens: effectiveMaxTokens,
       requestToolApproval,
       onTranscriptMessage,
+      onModelDelta,
       shouldAbort,
       conversationId,
       nodeId,
@@ -1071,6 +1091,9 @@ export class ModelHandler {
     });
 
     if (!response.success) {
+      for (const messageId of liveMessageIds) {
+        emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined });
+      }
       // Add verbose logging of the error response
       log.verbose('callModel error response', response);
 
@@ -1135,7 +1158,7 @@ export class ModelHandler {
     } else {
       // Create the assistant message with timestamp and ID
       const assistantMessage: FlujoChatMessage = {
-        id: uuidv4(), // Generate unique ID
+        id: modelResponse.liveMessageId ?? uuidv4(),
         role: 'assistant',
         content: prefixedContent,
         // IMPORTANT: Include tool_calls if they exist in the raw response
@@ -1207,6 +1230,7 @@ export class ModelHandler {
         args: Record<string, unknown>;
       }) => Promise<{ approved: boolean; feedback?: string }>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
+      onModelDelta?: (delta: ModelStreamDelta) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
       shouldAbort?: () => boolean;
       /** Conversation + node identity, so self-orchestrating adapters can key a
@@ -1508,6 +1532,7 @@ export class ModelHandler {
           // Make the API request through the selected adapter.
           let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
           let transcript: FlujoChatMessage[] | undefined;
+          let liveMessageId: string | undefined;
           try {
             // --- Auto-unload Ollama (opt-in feature, issue #242) ---
             // When enabled and this is an Ollama model, wrap the completion
@@ -1518,7 +1543,8 @@ export class ModelHandler {
             //      issue an explicit keep_alive:0 unload before loading the
             //      new one — freeing VRAM on GPU-constrained hardware.
             // When disabled (default), zero overhead: falls straight through.
-            const issueCompletion = async () => adapter.createCompletion({
+            const issueCompletion = async () => {
+              const input = {
               model,
               apiKey: decryptedApiKey,
               messages: attemptMessages,
@@ -1533,6 +1559,7 @@ export class ModelHandler {
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
               onTranscriptMessage,
+              onModelDelta: opts?.onModelDelta,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
               nodeId: opts?.nodeId,
@@ -1542,10 +1569,14 @@ export class ModelHandler {
               // prefix routes to the same prompt-cache shard (see
               // derivePromptCacheKey). Adapters that don't support it ignore it.
               promptCacheKey: derivePromptCacheKey(prefixFingerprint),
-            });
+              };
+              return opts?.onModelDelta && adapter.createStreamCompletion
+                ? adapter.createStreamCompletion(input)
+                : adapter.createCompletion(input);
+            };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
-              ({ completion: chatCompletion, transcript } = await withOllamaLock(
+              ({ completion: chatCompletion, transcript, liveMessageId } = await withOllamaLock(
                 ollamaRootForUnload,
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
@@ -1561,7 +1592,7 @@ export class ModelHandler {
                 }
               ));
             } else {
-              ({ completion: chatCompletion, transcript } = await issueCompletion());
+              ({ completion: chatCompletion, transcript, liveMessageId } = await issueCompletion());
             }
           } finally {
             stopCancelWatch();
@@ -1671,7 +1702,8 @@ export class ModelHandler {
               content: choice.message?.content || '',
               messages: [...messages], // Return original messages with timestamps
               fullResponse: chatCompletion, // Return the full original response
-              transcript // Present only for self-orchestrating adapters (Claude subscription)
+              transcript, // Present only for self-orchestrating adapters (Claude subscription)
+              liveMessageId,
             }
           };
 

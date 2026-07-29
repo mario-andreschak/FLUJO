@@ -146,6 +146,7 @@ export class CodexAdapter implements CompletionAdapter {
     localToolExecutors,
     requestToolApproval,
     onTranscriptMessage,
+    onModelDelta,
     signal,
     conversationId,
     nodeId,
@@ -172,8 +173,8 @@ export class CodexAdapter implements CompletionAdapter {
     const transcript: FlujoChatMessage[] = [];
     const baseTs = Date.now();
     let txSeq = 0;
-    const recordMessage = (msg: TranscriptMessage): void => {
-      const full = { ...msg, id: `m_${uuidv4()}`, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
+    const recordMessage = (msg: TranscriptMessage, id = `m_${uuidv4()}`): void => {
+      const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
     };
@@ -584,6 +585,7 @@ export class CodexAdapter implements CompletionAdapter {
       // A network close can occur after the CLI has emitted useful partial
       // output. Resume the same SDK thread once, preserving its tool state and
       // appending only newly streamed assistant messages to the transcript.
+      const streamedAgentText = new Map<string, string>();
       for (let attempt = 0; attempt < 2; attempt += 1) {
         let attemptFailure: Error | undefined;
         try {
@@ -606,6 +608,24 @@ export class CodexAdapter implements CompletionAdapter {
               abortController.abort();
               break;
             }
+            if (
+              event.type === 'item.started' ||
+              event.type === 'item.updated' ||
+              event.type === 'item.completed'
+            ) {
+              const item = event.item;
+              if (item.type === 'agent_message') {
+                const prior = streamedAgentText.get(item.id) ?? '';
+                const delta = item.text.startsWith(prior) ? item.text.slice(prior.length) : item.text;
+                if (delta) {
+                  onModelDelta?.({
+                    messageId: `stream_codex_${item.id}`,
+                    contentDelta: delta,
+                  });
+                }
+                streamedAgentText.set(item.id, item.text);
+              }
+            }
             if (event.type === 'item.completed') {
               const item = event.item;
               if (item.type === 'agent_message') {
@@ -617,7 +637,7 @@ export class CodexAdapter implements CompletionAdapter {
                 }
                 if (item.text) {
                   resultText += (resultText ? '\n\n' : '') + item.text;
-                  recordMessage({ role: 'assistant', content: item.text });
+                  recordMessage({ role: 'assistant', content: item.text }, `stream_codex_${item.id}`);
                   streamedText = true;
                 }
               } else if (item.type === 'command_execution') {

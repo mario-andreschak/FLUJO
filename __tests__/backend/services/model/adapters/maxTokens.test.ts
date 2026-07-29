@@ -32,8 +32,11 @@ jest.mock('@anthropic-ai/sdk', () => {
 // Mock the Google GenAI SDK.
 jest.mock('@google/genai', () => {
   const generateContent = jest.fn();
-  const GoogleGenAI = jest.fn().mockImplementation(() => ({ models: { generateContent } }));
-  return { GoogleGenAI, __generateContent: generateContent };
+  const generateContentStream = jest.fn();
+  const GoogleGenAI = jest.fn().mockImplementation(() => ({
+    models: { generateContent, generateContentStream },
+  }));
+  return { GoogleGenAI, __generateContent: generateContent, __generateContentStream: generateContentStream };
 });
 
 // Adapters must be imported AFTER the mocks above.
@@ -44,6 +47,8 @@ import { GeminiAdapter } from '@/backend/services/model/adapters/geminiAdapter';
 const openaiCreate = (jest.requireMock('@/backend/services/model/openaiClient') as { __create: jest.Mock }).__create;
 const anthropicCreate = (jest.requireMock('@anthropic-ai/sdk') as { __create: jest.Mock }).__create;
 const geminiGenerate = (jest.requireMock('@google/genai') as { __generateContent: jest.Mock }).__generateContent;
+const geminiGenerateStream =
+  (jest.requireMock('@google/genai') as { __generateContentStream: jest.Mock }).__generateContentStream;
 
 const MODEL: Model = { id: 'm1', name: 'test-model', ApiKey: 'key' } as Model;
 const MESSAGES: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'hi' }];
@@ -81,6 +86,13 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       await new OpenAiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0 });
       expect(openaiCreate.mock.calls[0][0]).not.toHaveProperty('max_tokens');
     });
+    geminiGenerateStream.mockResolvedValue((async function* () {
+      yield {
+        responseId: 'gemini-stream',
+        candidates: [{ content: { parts: [{ text: 'hi' }] } }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, totalTokenCount: 3 },
+      };
+    })());
 
     test('maps configured effort to reasoning_effort', async () => {
       await new OpenAiAdapter().createCompletion({
@@ -155,6 +167,51 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
         expect.objectContaining({
           config: expect.objectContaining({ thinkingConfig: { thinkingBudget: -1 } }),
         }),
+      );
+    });
+
+    test('streams text and function calls with one stable assistant id', async () => {
+      geminiGenerateStream.mockResolvedValueOnce((async function* () {
+        yield { responseId: 'g1', candidates: [{ content: { parts: [{ text: 'hel' }] } }] };
+        yield {
+          responseId: 'g1',
+          candidates: [{
+            content: {
+              parts: [{
+                functionCall: { id: 'call_g', name: 'lookup', args: { query: 'x' } },
+              }],
+            },
+          }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 3, totalTokenCount: 4 },
+        };
+      })());
+      const deltas: unknown[] = [];
+      const result = await new GeminiAdapter().createStreamCompletion({
+        model: MODEL,
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+        onModelDelta: delta => deltas.push(delta),
+      });
+
+      expect(geminiGenerateStream).toHaveBeenCalledTimes(1);
+      expect(result.completion.choices[0].message.content).toBe('hel');
+      expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({
+        id: 'call_g',
+        function: { name: 'lookup', arguments: '{"query":"x"}' },
+      });
+      expect(deltas).toEqual(expect.arrayContaining([
+        expect.objectContaining({ contentDelta: 'hel' }),
+        expect.objectContaining({
+          toolCallDelta: expect.objectContaining({
+            id: 'call_g',
+            nameDelta: 'lookup',
+            argumentsDelta: '{"query":"x"}',
+          }),
+        }),
+      ]));
+      expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
+        new Set([result.liveMessageId]),
       );
     });
   });

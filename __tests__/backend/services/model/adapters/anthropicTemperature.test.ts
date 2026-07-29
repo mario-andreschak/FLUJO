@@ -200,4 +200,52 @@ describe('AnthropicAdapter streaming temperature behaviour', () => {
     expect(mockLog.warn).toHaveBeenCalledTimes(1);
     expect(result.completion).toBeDefined();
   });
+
+  test('forwards native text and input-json deltas with one stable message id', async () => {
+    const events = [
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'tool_1', name: 'lookup', input: {} },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"q":"x"}' },
+      },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'text_delta', text: 'working' },
+      },
+    ];
+    const stream = {
+      async *[Symbol.asyncIterator]() {
+        for (const event of events) yield event;
+      },
+      finalMessage: jest.fn().mockResolvedValue(GOOD_RESP),
+    };
+    anthropicStream.mockReturnValueOnce(stream);
+    const deltas: unknown[] = [];
+    const result = await new AnthropicAdapter().createStreamCompletion({
+      model: BASE_MODEL,
+      apiKey: 'k',
+      messages: MSGS,
+      temperature: 0.7,
+      onModelDelta: delta => deltas.push(delta),
+    });
+
+    expect(deltas).toEqual([
+      expect.objectContaining({
+        toolCallDelta: expect.objectContaining({ id: 'tool_1', nameDelta: 'lookup' }),
+      }),
+      expect.objectContaining({
+        toolCallDelta: expect.objectContaining({ argumentsDelta: '{"q":"x"}' }),
+      }),
+      expect.objectContaining({ contentDelta: 'working' }),
+    ]);
+    expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
+      new Set([result.liveMessageId]),
+    );
+  });
 });

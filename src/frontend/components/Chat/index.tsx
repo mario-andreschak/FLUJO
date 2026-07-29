@@ -1221,6 +1221,61 @@ const Chat: React.FC = () => {
           markConversationStopped(event.conversationId, false); // a new run clears the prior Stop notice
         }
         break;
+      case 'model:delta': {
+        touch({});
+        setDetailedConversation(prev => {
+          if (!prev || prev.id !== event.conversationId) return prev;
+
+          const existingIndex = prev.messages.findIndex(message => message.id === event.messageId);
+          const existing = existingIndex >= 0
+            ? prev.messages[existingIndex]
+            : ({
+                id: event.messageId,
+                role: 'assistant',
+                content: '',
+                timestamp: event.timestamp,
+                processNodeId: event.node?.nodeId,
+              } as ChatMessage);
+
+          if (existing.role !== 'assistant') return prev;
+
+          const toolCalls = [...(existing.tool_calls ?? [])];
+          const toolDelta = event.toolCallDelta;
+          if (toolDelta) {
+            const prior = toolCalls[toolDelta.index];
+            toolCalls[toolDelta.index] = {
+              id: toolDelta.id ?? prior?.id ?? `pending_${event.messageId}_${toolDelta.index}`,
+              type: 'function',
+              function: {
+                name: `${prior?.function.name ?? ''}${toolDelta.nameDelta ?? ''}`,
+                arguments: `${prior?.function.arguments ?? ''}${toolDelta.argumentsDelta ?? ''}`,
+              },
+            };
+          }
+
+          const draft = {
+            ...existing,
+            content: `${typeof existing.content === 'string' ? existing.content : ''}${event.delta ?? ''}`,
+            ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+          } as ChatMessage;
+
+          const messages = [...prev.messages];
+          if (existingIndex >= 0) messages[existingIndex] = draft;
+          else messages.push(draft);
+          return { ...prev, messages };
+        });
+        break;
+      }
+      case 'model:end':
+        touch({});
+        if (event.discard && event.messageId) {
+          setDetailedConversation(prev => {
+            if (!prev || prev.id !== event.conversationId) return prev;
+            const messages = prev.messages.filter(message => message.id !== event.messageId);
+            return messages.length === prev.messages.length ? prev : { ...prev, messages };
+          });
+        }
+        break;
       case 'message': {
         const incoming = event.message as ChatMessage;
         touch({});

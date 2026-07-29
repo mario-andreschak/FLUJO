@@ -3,6 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
+import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter');
 
@@ -535,5 +536,123 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     }
 
     return { completion };
+  }
+
+  async createStreamCompletion({
+    model,
+    apiKey,
+    messages,
+    tools,
+    temperature,
+    maxTokens,
+    signal,
+    conversationId,
+    nodeId,
+    promptCacheKey,
+    onModelDelta,
+  }: CompletionInput): Promise<CompletionResult> {
+    const openai = createOpenAIClient({
+      apiKey,
+      baseURL: model.baseUrl,
+      defaultHeaders: getProviderDefaultHeaders(model.provider),
+    });
+    const key = sessionKey(conversationId, nodeId);
+    const carried = key ? reasoningBySession.get(key) : undefined;
+    const input = toResponsesInput(messages, carried);
+    const responsesTools = toResponsesTools(tools);
+    const pk = paramKey(model);
+    const dropped = unsupportedParams.get(pk) ?? new Set<Droppable>();
+    const liveMessageId = `stream_${uuidv4()}`;
+
+    const buildBody = (omit: Set<Droppable>): Record<string, unknown> => ({
+      model: model.name,
+      input,
+      store: false,
+      stream: true,
+      ...(responsesTools ? { tools: responsesTools } : {}),
+      ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
+      ...(omit.has('temperature') ? {} : { temperature }),
+      ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
+      ...(omit.has('include') ? {} : { include: ['reasoning.encrypted_content'] }),
+      ...(omit.has('prompt_cache_key') || !promptCacheKey ? {} : { prompt_cache_key: promptCacheKey }),
+    });
+
+    const consume = async (omit: Set<Droppable>): Promise<OpenAI.Responses.Response> => {
+      const stream = await openai.responses.create(
+        buildBody(omit) as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
+        signal ? { signal } : undefined,
+      );
+      let response: OpenAI.Responses.Response | undefined;
+      const toolIndexes = new Map<string, number>();
+      let nextToolIndex = 0;
+
+      for await (const event of stream) {
+        if (event.type === 'response.output_text.delta' && event.delta) {
+          onModelDelta?.({ messageId: liveMessageId, contentDelta: event.delta });
+        } else if (
+          event.type === 'response.output_item.added' &&
+          event.item.type === 'function_call'
+        ) {
+          const index = nextToolIndex++;
+          if (event.item.id) toolIndexes.set(event.item.id, index);
+          onModelDelta?.({
+            messageId: liveMessageId,
+            toolCallDelta: {
+              index,
+              id: event.item.call_id,
+              nameDelta: event.item.name,
+            },
+          });
+        } else if (event.type === 'response.function_call_arguments.delta') {
+          let index = toolIndexes.get(event.item_id);
+          if (index == null) {
+            index = event.output_index;
+            toolIndexes.set(event.item_id, index);
+            nextToolIndex = Math.max(nextToolIndex, index + 1);
+          }
+          if (event.delta) {
+            onModelDelta?.({
+              messageId: liveMessageId,
+              toolCallDelta: { index, argumentsDelta: event.delta },
+            });
+          }
+        } else if (event.type === 'response.completed') {
+          response = event.response;
+        } else if (event.type === 'response.failed') {
+          response = event.response;
+        }
+      }
+      if (!response) throw new Error('OpenAI Responses stream ended without a terminal response');
+      return response;
+    };
+
+    const omit = new Set(dropped);
+    let response: OpenAI.Responses.Response | undefined;
+    for (let attempt = 0; attempt <= DROPPABLE.length; attempt++) {
+      try {
+        response = await consume(omit);
+        break;
+      } catch (error) {
+        const param = rejectedParam(error, omit);
+        if (!param) throw error;
+        omit.add(param);
+        unsupportedParams.set(pk, new Set(omit));
+        log.warn('Responses streaming API rejected an optional parameter; dropping it and retrying', {
+          param,
+          model: model.name,
+          provider: model.provider,
+        });
+      }
+    }
+    if (!response) {
+      throw new Error('OpenAI Responses API rejected every supported parameter combination');
+    }
+
+    const { completion, reasoning } = fromResponse(response, model.name);
+    const firstCallId = completion.choices[0]?.message?.tool_calls?.[0]?.id;
+    if (key && firstCallId && reasoning.length > 0) {
+      stashReasoning(key, firstCallId, reasoning);
+    }
+    return { completion, liveMessageId };
   }
 }

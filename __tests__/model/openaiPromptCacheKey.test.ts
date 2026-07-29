@@ -147,3 +147,77 @@ describe('prompt_cache_key rejection handling', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('native chat-completions streaming', () => {
+  it('emits text and tool-argument deltas and assembles the final completion', async () => {
+    async function* chunks() {
+      yield {
+        id: 'chatcmpl-stream',
+        created: 1,
+        model: 'gpt-test',
+        choices: [{ index: 0, delta: { content: 'Hel' }, finish_reason: null }],
+      };
+      yield {
+        id: 'chatcmpl-stream',
+        created: 1,
+        model: 'gpt-test',
+        choices: [{
+          index: 0,
+          delta: {
+            content: 'lo',
+            tool_calls: [{
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'weather', arguments: '{"city":"' },
+            }],
+          },
+          finish_reason: null,
+        }],
+      };
+      yield {
+        id: 'chatcmpl-stream',
+        created: 1,
+        model: 'gpt-test',
+        choices: [{
+          index: 0,
+          delta: { tool_calls: [{ index: 0, function: { arguments: 'Paris"}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+      };
+    }
+    mockCreate.mockResolvedValueOnce(chunks());
+    const deltas: unknown[] = [];
+    const result = await new OpenAiAdapter().createStreamCompletion({
+      model: model('openai'),
+      apiKey: 'sk-test',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0,
+      onModelDelta: delta => deltas.push(delta),
+    });
+
+    expect(bodyOf()).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    expect(result.completion.choices[0].message.content).toBe('Hello');
+    expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({
+      id: 'call_1',
+      function: { name: 'weather', arguments: '{"city":"Paris"}' },
+    });
+    expect(result.completion.usage?.total_tokens).toBe(5);
+    expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
+      new Set([result.liveMessageId]),
+    );
+    expect(deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({ contentDelta: 'Hel' }),
+      expect.objectContaining({
+        toolCallDelta: expect.objectContaining({ argumentsDelta: '{"city":"' }),
+      }),
+      expect.objectContaining({
+        toolCallDelta: expect.objectContaining({ argumentsDelta: 'Paris"}' }),
+      }),
+    ]));
+  });
+});

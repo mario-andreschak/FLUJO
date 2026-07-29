@@ -353,11 +353,10 @@ function createDirectModelStreamingResponse(
 // This subscribes to the in-process ExecutionEventBus (the same stream the live
 // chat view uses) rather than polling the conversation over HTTP. The previous
 // implementation fetched `http://localhost:4200/v1/chat/conversations/{id}`
-// once per second and diffed the assistant content — an HTTP round-trip to the
-// server's own port plus up-to-1s latency. Because the model layer is
-// non-streamed, each assistant message arrives complete in a single `message`
-// event, so we forward its content as one OpenAI chunk; the (non-standard)
-// `conversation` field is read from the in-memory conversationStates map.
+// once per second and diffed assistant content. Native `model:delta` events are
+// forwarded immediately; adapters without a delta still fall back to the final
+// assistant `message` event. The non-standard `conversation` field is read from
+// the in-memory conversationStates map.
 export function createStreamingResponse(
   model: string,
   conversationId: string
@@ -373,6 +372,13 @@ export function createStreamingResponse(
       let unsubscribe: (() => void) | null = null;
       // Replay + live can both deliver an event; de-dupe on monotonic seq.
       let lastSeq = -1;
+      // Final durable messages reuse their draft id. Avoid replaying the full
+      // content after already forwarding its native token deltas.
+      const streamedTextMessageIds = new Set<string>();
+      const streamedToolParts = new Map<
+        string,
+        Map<number, { id: boolean; name: boolean; arguments: boolean }>
+      >();
 
       const send = (obj: unknown) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
@@ -409,14 +415,62 @@ export function createStreamingResponse(
         if (event.seq <= lastSeq) return; // de-dupe replay vs live
         lastSeq = event.seq;
 
-        if (event.type === 'message') {
+        if (event.type === 'model:delta') {
+          const delta: Record<string, unknown> = {};
+          if (event.delta) {
+            streamedTextMessageIds.add(event.messageId);
+            delta.content = event.delta;
+          }
+          if (event.toolCallDelta) {
+            const part = event.toolCallDelta;
+            const calls = streamedToolParts.get(event.messageId) ?? new Map();
+            const seen = calls.get(part.index) ?? { id: false, name: false, arguments: false };
+            seen.id ||= Boolean(part.id);
+            seen.name ||= Boolean(part.nameDelta);
+            seen.arguments ||= Boolean(part.argumentsDelta);
+            calls.set(part.index, seen);
+            streamedToolParts.set(event.messageId, calls);
+            delta.tool_calls = [{
+              index: part.index,
+              ...(part.id ? { id: part.id, type: 'function' } : {}),
+              function: {
+                ...(part.nameDelta ? { name: part.nameDelta } : {}),
+                ...(part.argumentsDelta ? { arguments: part.argumentsDelta } : {}),
+              },
+            }];
+          }
+          if (Object.keys(delta).length > 0) send(baseChunk(delta, null));
+        } else if (event.type === 'message') {
           const msg = event.message;
-          if (msg && msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.length > 0) {
+          if (msg && msg.role === 'assistant') {
             // Content chunks carry ONLY the delta. The full conversation state
             // (the non-standard `conversation` field) is attached once, on the
             // final chunk in finish() — embedding it per chunk serialized the
             // entire growing conversation O(chunks) times per run.
-            send(baseChunk({ content: msg.content }, null));
+            if (
+              !streamedTextMessageIds.has(msg.id) &&
+              typeof msg.content === 'string' &&
+              msg.content.length > 0
+            ) {
+              send(baseChunk({ content: msg.content }, null));
+            }
+            const seenToolParts = streamedToolParts.get(msg.id);
+            const missingToolCalls = (msg.tool_calls ?? []).flatMap((toolCall, index) => {
+              const seen = seenToolParts?.get(index);
+              const missingFunction = {
+                ...(!seen?.name ? { name: toolCall.function.name } : {}),
+                ...(!seen?.arguments ? { arguments: toolCall.function.arguments } : {}),
+              };
+              if (seen?.id && seen.name && seen.arguments) return [];
+              return [{
+                index,
+                ...(!seen?.id ? { id: toolCall.id, type: 'function' as const } : {}),
+                function: missingFunction,
+              }];
+            });
+            if (missingToolCalls.length > 0) {
+              send(baseChunk({ tool_calls: missingToolCalls }, null));
+            }
           }
         } else if (event.type === 'run:done') {
           finish(event.status === 'error' ? 'error' : 'completed');

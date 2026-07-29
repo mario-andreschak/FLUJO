@@ -3,6 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
+import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
 
@@ -153,6 +154,136 @@ export class OpenAiAdapter implements CompletionAdapter {
           baseUrl: model.baseUrl,
         });
         return { completion: await send(false) };
+      }
+      throw error;
+    }
+  }
+
+  async createStreamCompletion({
+    model,
+    apiKey,
+    messages,
+    tools,
+    temperature,
+    maxTokens,
+    signal,
+    promptCacheKey,
+    onModelDelta,
+  }: CompletionInput): Promise<CompletionResult> {
+    const openai = createOpenAIClient({
+      apiKey,
+      baseURL: model.baseUrl,
+      defaultHeaders: getProviderDefaultHeaders(model.provider),
+    });
+    const requestParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+      model: model.name,
+      messages,
+      temperature,
+      stream: true,
+      ...(model.reasoningEffort
+        ? { reasoning_effort: model.reasoningEffort as 'low' | 'medium' | 'high' }
+        : {}),
+      ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),
+      ...(tools?.length ? { tools } : {}),
+      ...(['openai', 'openrouter'].includes(model.provider ?? 'openai')
+        ? { stream_options: { include_usage: true } }
+        : {}),
+    };
+    const endpoint = endpointKey(model.provider, model.baseUrl);
+    const sendCacheKey =
+      !!promptCacheKey &&
+      PROMPT_CACHE_KEY_PROVIDERS.has(model.provider ?? 'openai') &&
+      !rejectedPromptCacheKey.has(endpoint);
+    const liveMessageId = `stream_${uuidv4()}`;
+
+    const consume = async (withCacheKey: boolean): Promise<CompletionResult> => {
+      const body = withCacheKey
+        ? { ...requestParams, prompt_cache_key: promptCacheKey }
+        : requestParams;
+      const stream = await openai.chat.completions.create(
+        body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+        signal ? { signal } : undefined,
+      );
+
+      let completionId = `chatcmpl_${uuidv4()}`;
+      let created = Math.floor(Date.now() / 1000);
+      let responseModel = model.name;
+      let finishReason: OpenAI.Chat.Completions.ChatCompletion.Choice['finish_reason'] = 'stop';
+      let content = '';
+      let usage: OpenAI.Completions.CompletionUsage | undefined;
+      const calls: OpenAI.ChatCompletionMessageToolCall[] = [];
+
+      for await (const chunk of stream) {
+        completionId = chunk.id || completionId;
+        created = chunk.created || created;
+        responseModel = chunk.model || responseModel;
+        usage = chunk.usage ?? usage;
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+        if (choice.delta.content) {
+          content += choice.delta.content;
+          onModelDelta?.({ messageId: liveMessageId, contentDelta: choice.delta.content });
+        }
+        for (const part of choice.delta.tool_calls ?? []) {
+          const index = part.index;
+          const prior = calls[index];
+          const id = part.id ?? prior?.id ?? `call_${uuidv4()}`;
+          const nameDelta = part.function?.name ?? '';
+          const argumentsDelta = part.function?.arguments ?? '';
+          calls[index] = {
+            id,
+            type: 'function',
+            function: {
+              name: `${prior?.function.name ?? ''}${nameDelta}`,
+              arguments: `${prior?.function.arguments ?? ''}${argumentsDelta}`,
+            },
+          };
+          onModelDelta?.({
+            messageId: liveMessageId,
+            toolCallDelta: {
+              index,
+              ...(part.id ? { id: part.id } : {}),
+              ...(nameDelta ? { nameDelta } : {}),
+              ...(argumentsDelta ? { argumentsDelta } : {}),
+            },
+          });
+        }
+      }
+
+      return {
+        liveMessageId,
+        completion: {
+          id: completionId,
+          object: 'chat.completion',
+          created,
+          model: responseModel,
+          choices: [{
+            index: 0,
+            finish_reason: finishReason,
+            logprobs: null,
+            message: {
+              role: 'assistant',
+              content: content || null,
+              refusal: null,
+              ...(calls.length ? { tool_calls: calls } : {}),
+            },
+          }],
+          ...(usage ? { usage } : {}),
+        },
+      };
+    };
+
+    try {
+      return await consume(sendCacheKey);
+    } catch (error) {
+      if (sendCacheKey && isPromptCacheKeyRejection(error)) {
+        rejectedPromptCacheKey.add(endpoint);
+        log.warn('Provider rejected prompt_cache_key while streaming; retrying without it', {
+          provider: model.provider,
+          baseUrl: model.baseUrl,
+        });
+        return consume(false);
       }
       throw error;
     }
