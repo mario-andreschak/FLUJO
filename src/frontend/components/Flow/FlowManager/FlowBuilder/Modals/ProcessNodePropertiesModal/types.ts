@@ -1,6 +1,7 @@
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { Model as SharedModel } from '@/shared/types/model';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 // Re-export the shared Model type
 export type Model = SharedModel;
@@ -20,6 +21,8 @@ export interface ProcessNodePropertiesModalProps {
      * tools.
      */
     onConnectMcpServer?: (serverName: string) => void;
+    /** Guided hides runtime plumbing while preserving every stored property. */
+    authoringMode?: FlowAuthoringMode;
 }
 
 export interface ProcessNodeData {

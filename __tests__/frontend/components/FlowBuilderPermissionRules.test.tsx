@@ -46,10 +46,15 @@ const initialFlow: any = {
 };
 
 describe('FlowBuilder permission rules', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('edits, reorders, and saves rules in their displayed order without editor IDs', async () => {
     const onSave = jest.fn();
     render(<FlowBuilder initialFlow={initialFlow} onSave={onSave} onDelete={() => {}} allFlows={[initialFlow]} />);
 
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
     fireEvent.click(screen.getByRole('button', { name: /Permission Rules/i }));
     expect(screen.getByText('Flow permission rules')).toBeInTheDocument();
 
@@ -71,6 +76,7 @@ describe('FlowBuilder permission rules', () => {
     const onSave = jest.fn();
     render(<FlowBuilder initialFlow={initialFlow} onSave={onSave} onDelete={() => {}} allFlows={[initialFlow]} />);
 
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
     fireEvent.click(screen.getByRole('button', { name: /Permission Rules/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
