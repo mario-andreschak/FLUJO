@@ -3,6 +3,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
+import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
 
 /**
  * Captured run resources for oversized PRIOR tool results/args, keyed by the
@@ -70,6 +71,10 @@ export interface CompletionInput {
    * Request/response adapters ignore it.
    */
   sessionResume?: boolean;
+  /** Persisted Codex thread metadata supplied by the conversation owner. */
+  codexSession?: CodexSessionMetadata;
+  /** Replace or invalidate the durable Codex metadata after an adapter turn. */
+  onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionTool[];
   /** Sampling temperature. */

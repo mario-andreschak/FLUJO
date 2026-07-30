@@ -829,7 +829,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, requireToolApproval, mcpNodes } = input; // Added nodeId
+    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
@@ -1085,6 +1085,8 @@ export class ModelHandler {
       shouldAbort,
       conversationId,
       nodeId,
+      codexSession,
+      onCodexSessionChange,
       localToolExecutors,
       runResourceMarkers,
       sessionResume,
@@ -1237,6 +1239,8 @@ export class ModelHandler {
        * reusable Agent SDK session per (conversationId, nodeId) — issue #154. */
       conversationId?: string;
       nodeId?: string;
+      codexSession?: import('../types').CodexSessionMetadata;
+      onCodexSessionChange?: (session: import('../types').CodexSessionMetadata | undefined) => void;
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
@@ -1563,6 +1567,8 @@ export class ModelHandler {
               signal: abortController.signal,
               conversationId: opts?.conversationId,
               nodeId: opts?.nodeId,
+              codexSession: opts?.codexSession,
+              onCodexSessionChange: opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: opts?.sessionResume,
               // Derived from the tool-block hash, so every request sharing this

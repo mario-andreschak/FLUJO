@@ -475,6 +475,15 @@ export class ProcessNode extends BaseNode {
     // Forwarded so self-orchestrating adapters can surface mid-run tool-approval
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
+    codexSession: sharedState.codexSessions?.[nodeId],
+    onCodexSessionChange: (session) => {
+      if (session) {
+        sharedState.codexSessions = { ...(sharedState.codexSessions ?? {}), [nodeId]: session };
+      } else if (sharedState.codexSessions?.[nodeId]) {
+        const { [nodeId]: _removed, ...remaining } = sharedState.codexSessions;
+        sharedState.codexSessions = Object.keys(remaining).length > 0 ? remaining : undefined;
+      }
+    },
     requireToolApproval: sharedState.requireApproval ?? false,
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
@@ -885,6 +894,8 @@ export class ProcessNode extends BaseNode {
           nodeId: prepResult.nodeId, // Pass the node ID
           toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
           conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
+          codexSession: prepResult.codexSession,
+          onCodexSessionChange: prepResult.onCodexSessionChange,
           requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
           mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
           unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs

@@ -744,6 +744,89 @@ describe('CodexAdapter — SDK thread reuse', () => {
     expect(runStreamedMock.mock.calls[1][0]).toBe('next');
   });
 
+  it('resumes from durable metadata after the process-local cache is cleared', async () => {
+    let persisted: CompletionInput['codexSession'];
+    const onCodexSessionChange = (session: CompletionInput['codexSession']) => { persisted = session; };
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-durable'),
+          agentMessage('first answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-durable'),
+          agentMessage('second answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }));
+
+    const identity = { conversationId: 'durable-conversation', nodeId: 'process-1', sessionResume: true };
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, onCodexSessionChange }));
+    expect(persisted?.threadId).toBe('thread-durable');
+    _clearCodexSessionsForTests();
+
+    await new CodexAdapter().createCompletion(baseInput({
+      ...identity,
+      codexSession: persisted,
+      onCodexSessionChange,
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'next' },
+      ] as OpenAI.ChatCompletionMessageParam[],
+    }));
+
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+    expect(resumeThreadMock).toHaveBeenCalledWith('thread-durable', expect.any(Object));
+    expect(runStreamedMock.mock.calls[1][0]).toBe('next');
+  });
+
+  it('invalidates a stale resumed thread and retries the same request fresh once', async () => {
+    let persisted: CompletionInput['codexSession'];
+    const updates: Array<string | undefined> = [];
+    const onCodexSessionChange = (session: CompletionInput['codexSession']) => {
+      persisted = session;
+      updates.push(session?.threadId);
+    };
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-stale'),
+          agentMessage('first answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }))
+      .mockRejectedValueOnce(new Error('thread not found'))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-replacement'),
+          agentMessage('recovered answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }));
+
+    const identity = { conversationId: 'stale-conversation', nodeId: 'process-1', sessionResume: true };
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, onCodexSessionChange }));
+    await new CodexAdapter().createCompletion(baseInput({
+      ...identity,
+      codexSession: persisted,
+      onCodexSessionChange,
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'do not lose this request' },
+      ] as OpenAI.ChatCompletionMessageParam[],
+    }));
+
+    expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+    expect(startThreadMock).toHaveBeenCalledTimes(2);
+    expect(runStreamedMock.mock.calls[2][0]).toEqual(expect.stringContaining('do not lose this request'));
+    expect(updates).toEqual(['thread-stale', undefined, 'thread-replacement']);
+  });
+
   it('starts fresh when FLUJO history diverges from the stored thread watermark', async () => {
     runStreamedMock
       .mockImplementationOnce(async () => ({

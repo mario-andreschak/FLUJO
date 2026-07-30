@@ -4,6 +4,7 @@ import {
   ToolDefinition,
   ToolCallInfo,
   MCPNodeReference,
+  CodexSessionMetadata,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
@@ -49,6 +50,8 @@ export interface ModelCallInput {
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
+  codexSession?: CodexSessionMetadata;
+  onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
   requireToolApproval?: boolean;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to

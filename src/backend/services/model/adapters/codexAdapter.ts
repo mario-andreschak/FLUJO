@@ -135,22 +135,25 @@ interface CodexUsage {
  * scoped views and prefix/history divergence fall back to a fresh full flatten.
  */
 export class CodexAdapter implements CompletionAdapter {
-  async createCompletion({
-    model,
-    apiKey,
-    messages,
-    tools,
-    toolNameMap,
-    localToolExecutors,
-    requestToolApproval,
-    onTranscriptMessage,
-    onModelDelta,
-    signal,
-    conversationId,
-    nodeId,
-    runResourceMarkers,
-    sessionResume,
-  }: CompletionInput): Promise<CompletionResult> {
+  async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    const {
+      model,
+      apiKey,
+      messages,
+      tools,
+      toolNameMap,
+      localToolExecutors,
+      requestToolApproval,
+      onTranscriptMessage,
+      onModelDelta,
+      signal,
+      conversationId,
+      nodeId,
+      runResourceMarkers,
+      sessionResume,
+      codexSession,
+      onCodexSessionChange,
+    } = input;
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
     // the CommonJS Jest transform for every module referencing the adapter
     // factory (same reason the Agent SDK is imported lazily).
@@ -412,12 +415,20 @@ export class CodexAdapter implements CompletionAdapter {
       // full-history thread. Drop it now so a later full-history turn never
       // resumes across this divergence.
       invalidateCodexSession(sessionRegistryKey);
+      onCodexSessionChange?.(undefined);
     }
+    const configuration = {
+      adapter: model.adapter ?? 'codex-cli',
+      provider: model.provider ?? 'openai',
+      model: model.name,
+      reasoningEffort: model.reasoningEffort,
+    };
     const sessionTracking =
       sessionResume && conversationId && nodeId
         ? {
             key: sessionRegistryKey!,
-            prefixHash: computeCodexPrefixHash(model.name, systemPrompt, bridgeTools),
+            configuration,
+            prefixHash: computeCodexPrefixHash(configuration, systemPrompt, bridgeTools),
           }
         : undefined;
     let resumeThreadId: string | undefined;
@@ -428,6 +439,7 @@ export class CodexAdapter implements CompletionAdapter {
         sessionTracking.key,
         sessionTracking.prefixHash,
         messages,
+        codexSession,
       );
       if (reusable && messages.length > reusable.seenMessageCount) {
         const delta = buildUserMessage(
@@ -679,7 +691,21 @@ export class CodexAdapter implements CompletionAdapter {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
-      if (sessionTracking) invalidateCodexSession(sessionTracking.key);
+      if (sessionTracking) {
+        invalidateCodexSession(sessionTracking.key);
+        onCodexSessionChange?.(undefined);
+      }
+      // A stale/missing persisted thread must not lose the current user request.
+      // Retry exactly once from the full flattened history on a new SDK thread.
+      if (resumeThreadId && handoffCalls.length === 0) {
+        log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
+          conversationId,
+          nodeId,
+          model: model.name,
+          errorClass: err instanceof Error ? err.name : typeof err,
+        });
+        return this.createCompletion({ ...input, codexSession: undefined });
+      }
       // A handoff aborts the stream on purpose; only genuine errors propagate.
       if (handoffCalls.length === 0) throw err;
     } finally {
@@ -713,14 +739,19 @@ export class CodexAdapter implements CompletionAdapter {
         handoffCalls.length === 0 &&
         capturedThreadId;
       if (reusable) {
-        recordCodexSession(sessionTracking.key, {
+        const stored = recordCodexSession(sessionTracking.key, {
+          adapter: sessionTracking.configuration.adapter,
+          provider: sessionTracking.configuration.provider,
           threadId: capturedThreadId!,
+          configurationHash: sessionTracking.prefixHash,
           prefixHash: sessionTracking.prefixHash,
           seenMessageCount: messages.length + transcript.length,
           historyHash: computeCodexHistoryHash([...messages, ...transcript]),
         });
+        onCodexSessionChange?.(stored);
       } else {
         invalidateCodexSession(sessionTracking.key);
+        onCodexSessionChange?.(undefined);
       }
       log.debug('Codex SDK thread usage', {
         conversationId,

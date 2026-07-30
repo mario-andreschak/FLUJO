@@ -565,6 +565,18 @@ export interface FlowParams {
     nodeParams?: Record<string, NodeParams>;
 }
 
+/** Durable Codex SDK thread metadata, scoped to one Process node. */
+export interface CodexSessionMetadata {
+    adapter: string;
+    provider: string;
+    threadId: string;
+    configurationHash: string;
+    prefixHash: string;
+    historyHash: string;
+    seenMessageCount: number;
+    updatedAt: number;
+}
+
 // Shared state (minimized)
 export interface SharedState {
     // Only tracking info in shared state
@@ -575,6 +587,8 @@ export interface SharedState {
     };
     // Messages as the single source of truth, now using our timestamped type
     messages: FlujoChatMessage[];
+    /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
+    codexSessions?: Record<string, CodexSessionMetadata>;
     /** Server-owned anchors for undoing a confirmed per-message revert. */
     revertOperations?: Record<string, {
         messageId: string;
@@ -997,6 +1011,9 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  node produced during the visit, in call order (see DebugStep.modelInputs).
      *  `modelInput` above is the first/representative entry. Same debug gate. */
     modelInputs?: ModelInputSnapshot[];
+    /** Durable Codex session for this node and a state-owned replacement hook. */
+    codexSession?: CodexSessionMetadata;
+    onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
 }
 
 // FinishNode prep result
