@@ -1,8 +1,8 @@
 import { promises as fs } from 'node:fs';
-import net from 'node:net';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -69,38 +69,38 @@ describe('standalone stdio MCP packages', () => {
     }
   });
 
-  it('serves flujo tools through the authenticated local backend bridge', async () => {
-    const token = randomUUID();
-    const endpoint = process.platform === 'win32'
-      ? `\\\\.\\pipe\\flujo-mcp-test-${process.pid}-${randomUUID()}`
-      : path.join(os.tmpdir(), `flujo-mcp-test-${process.pid}-${randomUUID()}.sock`);
-    const bridge = net.createServer((socket) => {
-      socket.setEncoding('utf8');
-      socket.once('data', (chunk: string) => {
-        const request = JSON.parse(chunk.trim()) as { id: string; token: string; operation: string };
-        const result = request.operation === 'listTools'
-          ? { tools: [{ name: 'ping', description: 'bridge test', inputSchema: { type: 'object', properties: {} } }] }
-          : { content: [{ type: 'text', text: 'pong' }] };
-        socket.end(`${JSON.stringify({ id: request.id, result: request.token === token ? result : undefined, error: request.token === token ? undefined : 'unauthorized' })}\n`);
-      });
+  it('serves flujo tools through the localhost control API', async () => {
+    const backend = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.method === 'GET' && request.url === '/api/mcp/flujo/tools') {
+        response.end(JSON.stringify({
+          tools: [{ name: 'list_flows', description: 'HTTP test', inputSchema: { type: 'object', properties: {} } }],
+        }));
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/api/mcp/flujo/flows') {
+        response.end(JSON.stringify({ content: [{ type: 'text', text: 'pong' }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: 'not found' }));
     });
     await new Promise<void>((resolve, reject) => {
-      bridge.once('error', reject);
-      bridge.listen(endpoint, resolve);
+      backend.once('error', reject);
+      backend.listen(0, '127.0.0.1', resolve);
     });
+    const { port } = backend.address() as AddressInfo;
     const client = await connectPackage('flujo', {
-      FLUJO_MCP_BRIDGE_ENDPOINT: endpoint,
-      FLUJO_MCP_BRIDGE_TOKEN: token,
+      FLUJO_BASE_URL: `http://127.0.0.1:${port}`,
     });
     try {
       const listed = await client.listTools();
-      expect(listed.tools.map((tool) => tool.name)).toEqual(['ping']);
-      const called = await client.callTool({ name: 'ping', arguments: {} });
+      expect(listed.tools.map((tool) => tool.name)).toEqual(['list_flows']);
+      const called = await client.callTool({ name: 'list_flows', arguments: {} });
       expect(called.content).toEqual([{ type: 'text', text: 'pong' }]);
     } finally {
       await client.close();
-      await new Promise<void>((resolve) => bridge.close(() => resolve()));
-      if (process.platform !== 'win32') await fs.rm(endpoint, { force: true });
+      await new Promise<void>((resolve) => backend.close(() => resolve()));
     }
   });
 });

@@ -4,7 +4,7 @@ This workspace contains the stdio MCP processes managed by FLUJO:
 
 | Package | Executable | Purpose |
 | --- | --- | --- |
-| `@flujo-ai/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through a private authenticated local bridge. |
+| `@flujo-ai/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through the localhost control API. |
 | `@flujo-ai/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
 | `@flujo-ai/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground and background shell execution with process-tree cleanup. |
 
@@ -28,7 +28,7 @@ node mcp-servers/filesystem/dist/index.js
 node mcp-servers/bash/dist/index.js
 ```
 
-`mcp-flujo` is independently executable, but application-state calls require `FLUJO_MCP_BRIDGE_ENDPOINT` and `FLUJO_MCP_BRIDGE_TOKEN`; FLUJO supplies both automatically. Do not persist or expose the bridge token.
+`mcp-flujo` is independently executable and uses `FLUJO_BASE_URL` to reach the running FLUJO instance. When the variable is absent it defaults to `http://127.0.0.1:4200`; FLUJO supplies the effective custom-port URL to managed child processes automatically.
 
 ## Roots and operator policy
 
@@ -55,4 +55,4 @@ If a built-in server cannot connect:
 1. Run `npm run build:mcp` and confirm the package's `dist/index.js` exists.
 2. Check the MCP server stderr log; protocol output must never be written to stdout.
 3. Confirm configured roots fall within the operator ceiling.
-4. For `mcp-flujo`, launch it through FLUJO so private bridge credentials are present.
+4. For `mcp-flujo`, confirm `FLUJO_BASE_URL` points at the running local FLUJO instance.

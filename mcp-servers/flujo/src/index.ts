@@ -13,30 +13,30 @@ import {
   type ListToolsResult,
   type ReadResourceResult,
 } from '@modelcontextprotocol/sdk/types.js';
-import { bridgeRequest } from './bridge.js';
+import { flujoRequest } from './client.js';
 
-export * from './bridge.js';
+export * from './client.js';
 
 const server = new Server(
   { name: '@flujo-ai/mcp-flujo', version: '0.1.0' },
   { capabilities: { tools: {}, resources: {} } },
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => bridgeRequest<ListToolsResult>('listTools'));
+server.setRequestHandler(ListToolsRequestSchema, async () => flujoRequest<ListToolsResult>('listTools'));
 server.setRequestHandler(CallToolRequestSchema, async (request) =>
-  bridgeRequest<CallToolResult>('callTool', {
+  flujoRequest<CallToolResult>('callTool', {
     name: request.params.name,
     args: request.params.arguments ?? {},
   }),
 );
 server.setRequestHandler(ListResourcesRequestSchema, async () =>
-  bridgeRequest<ListResourcesResult>('listResources'),
+  flujoRequest<ListResourcesResult>('listResources'),
 );
 server.setRequestHandler(ListResourceTemplatesRequestSchema, async () =>
-  bridgeRequest<ListResourceTemplatesResult>('listResourceTemplates'),
+  flujoRequest<ListResourceTemplatesResult>('listResourceTemplates'),
 );
 server.setRequestHandler(ReadResourceRequestSchema, async (request) =>
-  bridgeRequest<ReadResourceResult>('readResource', { uri: request.params.uri }),
+  flujoRequest<ReadResourceResult>('readResource', { uri: request.params.uri }),
 );
 
 const transport = new StdioServerTransport();
