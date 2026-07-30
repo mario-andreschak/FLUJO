@@ -15,7 +15,7 @@ import {
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { buildUserMessage } from './claudeSubscriptionAdapter';
+import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
@@ -68,6 +68,21 @@ function buildReadableName(server: string, tool: string, used: Set<string>): str
 
 function isHandoffName(name: string): boolean {
   return name.startsWith('handoff_to_') || name === 'handoff';
+}
+
+function codexImageExtension(mimeType: string | undefined): string {
+  switch ((mimeType || '').toLowerCase()) {
+    case 'image/jpeg':
+    case 'image/jpg':
+      return 'jpeg';
+    case 'image/gif':
+      return 'gif';
+    case 'image/webp':
+      return 'webp';
+    case 'image/png':
+    default:
+      return 'png';
+  }
 }
 
 const CODEX_CONNECTION_CLOSED_MID_RESPONSE =
@@ -159,7 +174,8 @@ export class CodexAdapter implements CompletionAdapter {
     // factory (same reason the Agent SDK is imported lazily).
     const { Codex } = await import('@openai/codex-sdk');
 
-    const { systemPrompt, content: fullContent } = buildUserMessage(messages, runResourceMarkers);
+    const fullInput = normalizeMessageInput(messages, runResourceMarkers);
+    const { systemPrompt } = fullInput;
 
     const abortController = new AbortController();
     const onExternalAbort = () => abortController.abort();
@@ -432,7 +448,7 @@ export class CodexAdapter implements CompletionAdapter {
           }
         : undefined;
     let resumeThreadId: string | undefined;
-    let content = fullContent;
+    let normalizedInput = fullInput;
     let inputSystemPrompt = systemPrompt;
     if (sessionTracking) {
       const reusable = findReusableCodexSession(
@@ -442,13 +458,13 @@ export class CodexAdapter implements CompletionAdapter {
         codexSession,
       );
       if (reusable && messages.length > reusable.seenMessageCount) {
-        const delta = buildUserMessage(
+        const delta = normalizeMessageInput(
           messages.slice(reusable.seenMessageCount),
           runResourceMarkers,
         );
-        if (delta.content.length > 0) {
+        if (delta.text.length > 0 || delta.images.length > 0) {
           resumeThreadId = reusable.threadId;
-          content = delta.content;
+          normalizedInput = delta;
           // The original system prompt is already in the persisted Codex thread.
           inputSystemPrompt = undefined;
           log.debug('Codex resuming SDK thread', {
@@ -482,26 +498,21 @@ export class CodexAdapter implements CompletionAdapter {
         text: `<system_instructions>\n${inputSystemPrompt}\n</system_instructions>`,
       });
     }
-    if (typeof content === 'string') {
-      inputItems.push({ type: 'text', text: content });
-    } else {
-      for (const block of content) {
-        if (block.type === 'text') {
-          inputItems.push({ type: 'text', text: block.text });
-        } else if (block.type === 'image') {
-          if (block.source.type === 'base64') {
-            const dir = await ensureScratchDir();
-            const ext = block.source.media_type.split('/')[1] ?? 'png';
-            const file = path.join(dir, `img_${tempFiles.length}.${ext}`);
-            await fs.writeFile(file, Buffer.from(block.source.data, 'base64'));
-            tempFiles.push(file);
-            inputItems.push({ type: 'local_image', path: file });
-          } else {
-            // Remote URLs can't be attached (the CLI reads local paths only);
-            // reference them in text so the model at least knows they exist.
-            inputItems.push({ type: 'text', text: `[image: ${block.source.url}]` });
-          }
-        }
+    if (normalizedInput.text) {
+      inputItems.push({ type: 'text', text: normalizedInput.text });
+    }
+    for (const image of normalizedInput.images) {
+      if (image.base64) {
+        const dir = await ensureScratchDir();
+        const ext = codexImageExtension(image.mimeType);
+        const file = path.join(dir, `img_${tempFiles.length}.${ext}`);
+        await fs.writeFile(file, Buffer.from(image.base64, 'base64'));
+        tempFiles.push(file);
+        inputItems.push({ type: 'local_image', path: file });
+      } else {
+        // Remote URLs can't be attached (the CLI reads local paths only);
+        // reference them in text so the model at least knows they exist.
+        inputItems.push({ type: 'text', text: `[image: ${image.url}]` });
       }
     }
 
