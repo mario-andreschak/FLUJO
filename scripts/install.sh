@@ -357,10 +357,10 @@ fi
 # ---------------------------------------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
   step "Existing FLUJO clone found - updating ($BRANCH)"
-  # Hard-reset instead of pull: `npm install`/`npm run build` rewrite
-  # package-lock.json, leaving the tree dirty, so `git pull` aborts. This is an
-  # install/deploy copy, not a dev checkout, so discarding tracked-file drift is
-  # safe; untracked node_modules/.next/user data are preserved by reset --hard.
+  # Older FLUJO installers used `npm install`, which could rewrite
+  # package-lock.json and leave the tree dirty. This is an install/deploy copy,
+  # not a dev checkout, so discarding tracked-file drift is safe; untracked
+  # node_modules/.next/user data are preserved by reset --hard.
   git -C "$INSTALL_DIR" fetch origin "$BRANCH"
   git -C "$INSTALL_DIR" checkout "$BRANCH"
   git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
@@ -374,10 +374,11 @@ fi
 # 4. Install dependencies and build.
 # ---------------------------------------------------------------------------
 cd "$INSTALL_DIR"
-step "Installing npm dependencies (npm install)"
+step "Installing npm dependencies (npm ci)"
 # --include=dev: `next build` needs typescript/webpack/postcss (all
 # devDependencies), which npm prunes when NODE_ENV=production.
-npm install --include=dev
+# `npm ci` honors the committed lockfile exactly and never rewrites it.
+npm ci --include=dev
 
 step "Building FLUJO (npm run build)"
 npm run build

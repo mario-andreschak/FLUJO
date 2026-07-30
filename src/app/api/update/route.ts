@@ -212,11 +212,26 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // A previous installer/update may have used `npm install`, which can rewrite
+    // the lockfile merely because a different npm version is in use. That
+    // generated-only drift must not permanently wedge the updater. It is safe to
+    // restore when package.json is unchanged; if both files changed, treat that
+    // as an intentional dependency edit and let git protect it.
+    const status = await git.status();
+    const dirtyPaths = new Set(status.files.map((file) => file.path.replace(/\\/g, '/')));
+    if (dirtyPaths.has('package-lock.json') && !dirtyPaths.has('package.json')) {
+      log.info('Restoring generated package-lock.json drift before update');
+      await git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', 'package-lock.json']);
+    }
+
     // Non-Windows: rebuild in-process and ask the user to restart manually.
     log.info('Applying update (non-Windows): git pull');
     await git.pull();
-    log.info('Applying update: npm install');
-    execSync('npm install', execOptions);
+    // This is a deployment install backed by a committed lockfile. `npm ci`
+    // installs that exact tree and, unlike `npm install`, never updates the
+    // dependency manifests as a side effect.
+    log.info('Applying update: npm ci');
+    execSync('npm ci --include=dev', execOptions);
     log.info('Applying update: npm run build');
     execSync('npm run build', execOptions);
     log.info('Update build complete');

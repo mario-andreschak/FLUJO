@@ -9,7 +9,7 @@
 
       1. Wait briefly so the HTTP "restarting" response reaches the browser.
       2. Stop whatever is listening on the port (the FLUJO server), by PID.
-      3. git pull + npm install + npm run build (server is down, no file locks).
+      3. git update + npm ci + npm run build (server is down, no file locks).
       4. Start the rebuilt server with `npm start` (keeps the custom-CA launcher).
       5. Wait for it to come up, then open the browser.
 
@@ -61,12 +61,11 @@ if (Test-PortListening $Port) { Log "WARNING: port $Port still in use after 30s"
 
 # 3. Pull + install + build (server down -> no Windows file locks).
 #
-# `npm install` rewrites package-lock.json on nearly every run (npm-version /
-# partial-install drift), which leaves the working tree dirty and makes a plain
-# `git pull` abort with "local changes would be overwritten by merge". This is a
-# deployment copy (in %LOCALAPPDATA%\FLUJO), not a dev checkout, so we hard-reset
-# to the remote branch instead of merging. `reset --hard` only touches TRACKED
-# files; untracked node_modules/.next/user data are preserved.
+# Older FLUJO installers used `npm install`, which could rewrite package-lock.json
+# and leave the working tree dirty. This is a deployment copy (in
+# %LOCALAPPDATA%\FLUJO), not a dev checkout, so we hard-reset to the remote branch
+# instead of merging. `reset --hard` only touches TRACKED files; untracked
+# node_modules/.next/user data are preserved.
 $branch = (& git rev-parse --abbrev-ref HEAD 2>$null | Out-String).Trim()
 if (-not $branch -or $branch -eq 'HEAD') { $branch = 'main' }
 $remote = (& git config --get "branch.$branch.remote" 2>$null | Out-String).Trim()
@@ -87,8 +86,8 @@ if ($fetchOk -and $LASTEXITCODE -eq 0) {
 # Install with dev dependencies: `next build` needs typescript/webpack/postcss,
 # which are devDependencies and get pruned when npm runs in production mode.
 # --include=dev forces them in even when NODE_ENV=production.
-Log "npm install"
-& cmd /c "npm install --include=dev" 2>&1 | ForEach-Object { Log "  $_" }
+Log "npm ci"
+& cmd /c "npm ci --include=dev" 2>&1 | ForEach-Object { Log "  $_" }
 Log "npm run build"
 & cmd /c "npm run build" 2>&1 | ForEach-Object { Log "  $_" }
 

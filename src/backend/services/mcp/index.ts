@@ -2106,10 +2106,16 @@ export class MCPService {
       return { status: 'disconnected' };
     }
 
-    // Check if this is a streamable server that requires OAuth but has no tokens
+    // A live client is authoritative: a server may be connected with a static
+    // Authorization header even when an earlier OAuth-capability probe persisted
+    // oauthScopes. In that mixed state, missing FLUJO-managed OAuth tokens must not
+    // override the proven working connection with a stale auth-required badge.
+    const hasLiveClient = !!this.getClient(serverName);
+
+    // Check if this is a disconnected streamable server that requires OAuth but has no tokens
     if (config.transport === 'streamable') {
       const streamableConfig = config as MCPStreamableConfig;
-      if (streamableConfig.oauthScopes && streamableConfig.oauthScopes.length > 0) {
+      if (!hasLiveClient && streamableConfig.oauthScopes && streamableConfig.oauthScopes.length > 0) {
         // This server requires OAuth authentication
         if (!streamableConfig.oauthTokens || !streamableConfig.oauthTokens.access_token) {
           log.info(`getServerStatus: Server ${serverName} requires OAuth authentication but has no valid tokens`);
@@ -2154,7 +2160,7 @@ export class MCPService {
     // as "not connected" instead of lying "connected" until something trips over it.
     // The map itself is shared across module instances, so a client connected by the
     // startup instance is visible here without any adoption step.
-    const clientExists = !!this.getClient(serverName);
+    const clientExists = hasLiveClient || !!this.getClient(serverName);
 
     if (clientExists) {
       log.info(`getServerStatus: Server ${serverName} is connected`);

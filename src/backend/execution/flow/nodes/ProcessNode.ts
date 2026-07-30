@@ -48,6 +48,48 @@ import { v4 as uuidv4 } from 'uuid'; // Import uuid
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
 
+/**
+ * Providers report unsupported tool use through several shapes: an OpenAI SDK
+ * APIError, an OpenRouter in-band error object, or FLUJO's normalized model
+ * error. Match only explicit tool-capability failures so authentication,
+ * routing, rate-limit, and generic 4xx errors are never retried with a
+ * materially different request.
+ */
+function isUnsupportedToolUseError(error: unknown): boolean {
+  const record = error && typeof error === 'object'
+    ? error as Record<string, unknown>
+    : undefined;
+  let details = '';
+  try {
+    details = JSON.stringify(record?.details ?? record ?? '');
+  } catch {
+    // The normalized message/code below are sufficient if provider details are
+    // circular or otherwise not serializable.
+  }
+  const haystack = [
+    error instanceof Error ? error.message : '',
+    typeof record?.message === 'string' ? record.message : '',
+    typeof record?.code === 'string' ? record.code : '',
+    typeof record?.type === 'string' ? record.type : '',
+    details,
+  ].join(' ').toLowerCase();
+
+  return (
+    haystack.includes('no endpoints found that support tool use') ||
+    haystack.includes('no endpoint found that supports tool use') ||
+    haystack.includes('tool use is not supported') ||
+    haystack.includes('tool use not supported') ||
+    haystack.includes('tools are not supported') ||
+    haystack.includes('tools not supported') ||
+    haystack.includes('does not support tool use') ||
+    haystack.includes('does not support tools') ||
+    haystack.includes('function calling is not supported') ||
+    haystack.includes('tools_not_supported') ||
+    haystack.includes('tool_use_not_supported') ||
+    haystack.includes('unsupported_tool_use')
+  );
+}
+
 export class ProcessNode extends BaseNode {
   /**
    * Generate handoff tools for each connected non-MCP node
@@ -860,35 +902,59 @@ export class ProcessNode extends BaseNode {
       });
 
       let modelResult;
+      let usedToolFreeFallback = false;
       try {
-        // Call the model with tool support
-        modelResult = await ModelHandler.callModel({
-          modelId: prepResult.boundModel,
-          prompt: prepResult.currentPrompt,
-        messages: prepResult.messages,
-        // Scoped view for latest-message / isolated inputMode; when unset the
-        // model sees `messages` verbatim (full-history). Persistence always uses
-        // the full `messages`, never this.
-        wireMessages: prepResult.wireMessages,
-        tools,
-        iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
-        maxIterations: 1, // Vestigial: the agentic-turn cap is now resolved from maxTurns (see below)
-        // Per-node override of the agentic-turn cap. ModelHandler merges this with
-        // the bound model's maxTurns setting and the system default (50), replacing
-        // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
-        maxTurns: node_params?.properties?.maxTurns,
-        // Per-node override of the per-completion output-token cap (#189).
-        // ModelHandler resolves this against the bound model's maxTokens, then
-        // lets the adapter apply its own default when both are unset.
-        maxTokens: node_params?.properties?.maxTokens,
-          nodeName, // Pass the node name to be included in the response header
-          nodeId: prepResult.nodeId, // Pass the node ID
-          toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
-          conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
-          requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
-          mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
-          unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
-        });
+        const callModelWithTools = (attemptTools: OpenAI.ChatCompletionTool[] | undefined) =>
+          ModelHandler.callModel({
+            modelId: prepResult.boundModel,
+            prompt: prepResult.currentPrompt,
+            messages: prepResult.messages,
+            // Scoped view for latest-message / isolated inputMode; when unset the
+            // model sees `messages` verbatim (full-history). Persistence always uses
+            // the full `messages`, never this.
+            wireMessages: prepResult.wireMessages,
+            tools: attemptTools,
+            iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
+            maxIterations: 1, // Vestigial: the agentic-turn cap is now resolved from maxTurns (see below)
+            // Per-node override of the agentic-turn cap. ModelHandler merges this with
+            // the bound model's maxTurns setting and the system default (50), replacing
+            // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
+            maxTurns: node_params?.properties?.maxTurns,
+            // Per-node override of the per-completion output-token cap (#189).
+            // ModelHandler resolves this against the bound model's maxTokens, then
+            // lets the adapter apply its own default when both are unset.
+            maxTokens: node_params?.properties?.maxTokens,
+            nodeName, // Pass the node name to be included in the response header
+            nodeId: prepResult.nodeId, // Pass the node ID
+            toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
+            conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
+            requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
+            mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
+            unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
+          });
+
+        // First try the authored request unchanged. Some OpenRouter image models
+        // have no provider endpoint that accepts even a handoff-only tool block.
+        modelResult = await callModelWithTools(tools);
+
+        // Retry exactly once without tools, but only when the removed block is
+        // entirely handoff plumbing and the engine can route the plain response
+        // deterministically. MCP and synthetic/executable tools are never
+        // silently removed.
+        if (
+          !modelResult.success &&
+          this.canRetryWithoutTools(prepResult, node_params, tools, modelResult.error)
+        ) {
+          log.warn(
+            `[ProcessNode ${prepResult.nodeId}] Provider rejected handoff-only tools; retrying once without tools`,
+            {
+              controlEdges: this.orderedControlEdges(node_params),
+              conditionedEdges: Object.keys(node_params?.edgeConditions ?? {}),
+            }
+          );
+          modelResult = await callModelWithTools(undefined);
+          usedToolFreeFallback = modelResult.success;
+        }
 
         // --- Log successful model call result (check success first) ---
         if (modelResult.success) {
@@ -960,6 +1026,9 @@ export class ProcessNode extends BaseNode {
         // #253: carry the resolved turn cap out so post() can record it on
         // SharedState.turnBudgets for runFlow's per-node turn counter.
         effectiveMaxTurns: result.effectiveMaxTurns,
+        // Lets post() traverse a sole bare edge when this successful response
+        // came from the safe, handoff-free provider retry.
+        usedToolFreeFallback,
       };
 
       // Log tool calls if present
@@ -1105,6 +1174,46 @@ export class ProcessNode extends BaseNode {
       !action.includes('-mcpEdge') &&
       !action.endsWith('mcpEdge') &&
       !action.includes('-mcp')
+    );
+  }
+
+  /**
+   * A tool-free response can still advance when routing is engine-owned:
+   * conditioned edges are evaluated from the returned text, while a sole bare
+   * edge is unambiguous and can be traversed by post(). Multiple bare edges
+   * still require the model to choose a handoff and are therefore ineligible.
+   */
+  private hasAutomaticToolFreeRoute(node_params?: ProcessNodeParams): boolean {
+    const controlEdges = this.orderedControlEdges(node_params);
+    const conditions = node_params?.edgeConditions;
+    const hasConditionedEdge = controlEdges.some((edgeId) => !!conditions?.[edgeId]);
+    const hasSingleBareEdge =
+      controlEdges.length === 1 && !conditions?.[controlEdges[0]];
+    return hasConditionedEdge || hasSingleBareEdge;
+  }
+
+  /**
+   * Stripping tools is safe only when every advertised capability is routing
+   * plumbing. A bound MCP node or any synthetic/executable tool keeps the
+   * original failure: silently removing those tools would change the task.
+   */
+  private canRetryWithoutTools(
+    prepResult: ProcessNodePrepResult,
+    node_params: ProcessNodeParams | undefined,
+    tools: OpenAI.ChatCompletionTool[] | undefined,
+    error: unknown
+  ): boolean {
+    if (!tools?.length || !isUnsupportedToolUseError(error)) return false;
+    if ((node_params?.properties?.mcpNodes?.length ?? 0) > 0) return false;
+    if (!this.hasAutomaticToolFreeRoute(node_params)) return false;
+
+    const definitions = prepResult.availableTools ?? [];
+    return (
+      definitions.length > 0 &&
+      definitions.every((tool) => !tool.server && tool.name.startsWith('handoff_to_')) &&
+      tools.every(
+        (tool) => tool.type === 'function' && tool.function.name.startsWith('handoff_to_')
+      )
     );
   }
 
@@ -1271,6 +1380,21 @@ export class ProcessNode extends BaseNode {
       // Conditioned node, nothing matched, no fallback → fall through and
       // terminate (FINAL_RESPONSE_ACTION), same as an unmatched plain response.
       log.info('Conditioned node: no predicate matched and no bare fallback; terminating');
+    }
+
+    // A provider that cannot accept tools may have been retried without the
+    // handoff-only tool block. In that exceptional path, one bare outgoing edge
+    // is an unambiguous continuation and does not need a model-authored handoff.
+    // This is deliberately marker-gated so ordinary all-bare nodes retain their
+    // existing model-decided routing semantics.
+    if (execResult.usedToolFreeFallback) {
+      const ordered = this.orderedControlEdges(node_params);
+      if (ordered.length === 1 && !edgeConditions?.[ordered[0]]) {
+        log.info('Tool-free provider fallback: routing through sole bare edge', {
+          edgeId: ordered[0],
+        });
+        return ordered[0];
+      }
     }
 
     // If no error, no handoff, and no other tool calls, it's a final response for this step
