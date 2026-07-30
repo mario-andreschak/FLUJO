@@ -54,6 +54,16 @@ describe('testModelConnection', () => {
     expect(result.diagnosis).toMatch(/both/i);
   });
 
+  it('omits temperature from both OpenAI-compatible test requests', async () => {
+    sdkCreate.mockResolvedValue(okCompletion);
+    axiosPost.mockResolvedValue(okAxios);
+
+    await run();
+
+    expect(sdkCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+    expect(axiosPost.mock.calls[0][1]).not.toHaveProperty('temperature');
+  });
+
   it('flags the keep-alive / Premature close bug when the SDK fails but axios succeeds', async () => {
     sdkCreate.mockRejectedValue(new Error('Premature close'));
     axiosPost.mockResolvedValue(okAxios);
