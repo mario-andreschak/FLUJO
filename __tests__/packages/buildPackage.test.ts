@@ -217,9 +217,23 @@ describe('deriveMcpSecrets', () => {
 });
 
 describe('previewPackageSecrets', () => {
-  it('previews model + MCP secrets for a resolved selection', () => {
+  it('previews embedded placeholders + model + MCP secrets for a resolved selection', () => {
     const ents: PackageEntities = {
-      flows: [flow('f', 'F', [processNode('m1'), mcpNode('web')])],
+      flows: [
+        flow('f', 'F', [
+          processNode('m1'),
+          mcpNode('web'),
+          {
+            id: 'prompt',
+            type: 'process',
+            position: { x: 0, y: 0 },
+            data: {
+              type: 'process',
+              properties: { promptTemplate: 'Use {{secret.PATH_REPO}}' },
+            },
+          } as unknown as FlowNode,
+        ]),
+      ],
       models: [model('m1', 'Keyed', 'sk-abc')],
       mcpServers: [registryServer('web', secretEnv())],
       plannedExecutions: [],
@@ -227,6 +241,7 @@ describe('previewPackageSecrets', () => {
     const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
     const secrets = previewPackageSecrets(resolved, ents);
     expect(secrets.length).toBeGreaterThanOrEqual(2);
+    expect(secrets).toContainEqual(expect.objectContaining({ name: 'PATH_REPO', required: true }));
     expect(JSON.stringify(secrets)).not.toContain('sk-abc');
     expect(JSON.stringify(secrets)).not.toContain('super-secret');
   });
@@ -259,7 +274,7 @@ describe('buildManifestFromEntities', () => {
     expect(result.package!.secrets.some((s) => s.name === (pkgModel.apiKeyRef as { secret: string }).secret)).toBe(true);
   });
 
-  it('turns globals used in packaged flows into required package secrets', () => {
+  it('preserves globals used in packaged flows and declares them as package globals', () => {
     const flowWithGlobals = flow('f', 'F', [
       {
         id: 'prompt',
@@ -283,17 +298,64 @@ describe('buildManifestFromEntities', () => {
     const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
     const result = buildManifestFromEntities(resolved, ents, metadata);
 
+    expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
-    expect(result.package!.secrets).toEqual([
+    expect(result.package!.secrets).toEqual([]);
+    expect(result.package!.globals).toEqual([
       expect.objectContaining({ name: 'API_TOKEN', required: true }),
       expect.objectContaining({ name: 'API_BASE', required: true }),
     ]);
     expect(result.package!.requiredGlobals).toBeUndefined();
     expect(JSON.stringify(result.package!.flows)).toContain(
-      'Use {{secret.API_TOKEN}} at {{secret.API_BASE}}; again {{secret.API_TOKEN}}',
+      'Use ${global:API_TOKEN} at ${global:API_BASE}; again ${global:API_TOKEN}',
     );
-    expect(JSON.stringify(result.package!.flows)).not.toContain('${global:');
     expect(JSON.stringify(flowWithGlobals)).toContain('${global:API_TOKEN}');
+  });
+
+  it('re-declares placeholders when re-exporting installed flows and executions', () => {
+    const flowWithPlaceholder = flow('f', 'F', [
+      {
+        id: 'prompt',
+        type: 'process',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'process',
+          properties: { promptTemplate: 'Repository: {{secret.PATH_REPO}}' },
+        },
+      } as unknown as FlowNode,
+    ]);
+    const execution = {
+      id: 'pe',
+      name: 'AP implementation',
+      flowId: 'f',
+      enabled: false,
+      prompt: 'Run in {{secret.PATH_REPO}}',
+      trigger: { type: 'manual' },
+    } as unknown as PlannedExecution;
+    const ents: PackageEntities = {
+      flows: [flowWithPlaceholder],
+      models: [],
+      mcpServers: [],
+      plannedExecutions: [execution],
+    };
+
+    const resolved = resolveDependencies({ plannedExecutionIds: ['pe'] }, ents);
+    const result = buildManifestFromEntities(
+      resolved,
+      ents,
+      metadata,
+      [],
+      [],
+      ['PATH_REPO'],
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.package!.secrets).toEqual([
+      expect.objectContaining({ name: 'PATH_REPO', required: true }),
+    ]);
+    expect(JSON.stringify(result.package!.flows)).toContain('{{secret.PATH_REPO}}');
+    expect(JSON.stringify(result.package!.plannedExecutions)).toContain('{{secret.PATH_REPO}}');
   });
 
   it('records a global-var-bound model API key in requiredGlobals (not silently dropped)', () => {

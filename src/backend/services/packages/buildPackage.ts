@@ -38,7 +38,10 @@ import type {
   HeaderDeclaration,
   McpInstallOrigin,
 } from '@/shared/types/package/installOrigin';
-import type { PackageSecret } from '@/shared/types/package/secrets';
+import {
+  collectSecretPlaceholdersDeep,
+  type PackageSecret,
+} from '@/shared/types/package/secrets';
 import type { SecretSubstitution } from '@/shared/types/package/secretProposal';
 import { applySecretSubstitutions, backstopScan, deriveSecretProposals } from './deriveSecrets';
 import type { DeriveResult } from './deriveSecrets';
@@ -494,15 +497,46 @@ export function deriveMcpSecrets(servers: PackagedMcpServer[]): PackageSecret[] 
 }
 
 /**
- * Preview the secrets a resolved selection will declare (model API keys + MCP
- * secret env/header declarations), WITHOUT building the whole manifest. Powers
- * the wizard's "Secret review" step. Pure.
+ * Rebuild declarations for placeholders already embedded in packageable
+ * content. This is required when re-exporting entities installed from another
+ * package: install resolves provided values, but unresolved optional values can
+ * legitimately remain as `{{secret.NAME}}` references in the saved entity.
+ */
+function deriveEmbeddedContentSecrets(
+  flows: Flow[],
+  models: Model[],
+  plannedExecutions: PlannedExecution[],
+): PackageSecret[] {
+  const modelsWithoutApiKeys = models.map(({ ApiKey: _dropped, ...model }) => model);
+  const executionsWithoutWebhookTokens = plannedExecutions.map((execution) => {
+    if (execution.trigger?.type !== 'webhook') return execution;
+    const { token: _dropped, ...trigger } = execution.trigger;
+    return { ...execution, trigger };
+  });
+  const names = collectSecretPlaceholdersDeep({
+    flows,
+    models: modelsWithoutApiKeys,
+    plannedExecutions: executionsWithoutWebhookTokens,
+  });
+  return names.map((name) => ({
+    name,
+    description: `Secret "${name}" referenced by packaged content`,
+    required: true,
+  }));
+}
+
+/**
+ * Preview the secrets a resolved selection will declare (embedded content
+ * placeholders + model API keys + MCP secret env/header declarations), WITHOUT
+ * building the whole manifest. Powers the wizard's "Secret review" step. Pure.
  */
 export function previewPackageSecrets(
   resolved: ResolvedSelection,
   entities: PackageEntities,
 ): PackageSecret[] {
+  const flowById = new Map(entities.flows.map((flow) => [flow.id, flow]));
   const modelById = new Map(entities.models.map((m) => [m.id, m]));
+  const plannedById = new Map(entities.plannedExecutions.map((execution) => [execution.id, execution]));
   const secrets: PackageSecret[] = [];
   const seen = new Set<string>();
   const push = (s?: PackageSecret) => {
@@ -518,6 +552,16 @@ export function previewPackageSecrets(
   }
   const mcp = validateMcpSelection(resolved.mcpServerNames, entities.mcpServers);
   for (const s of deriveMcpSecrets(mcp.packaged)) push(s);
+  const selectedFlows = resolved.flowIds
+    .map((id) => flowById.get(id))
+    .filter((flow): flow is Flow => Boolean(flow));
+  const selectedModels = resolved.modelIds
+    .map((id) => modelById.get(id))
+    .filter((model): model is Model => Boolean(model));
+  const selectedExecutions = resolved.plannedExecutionIds
+    .map((id) => plannedById.get(id))
+    .filter((execution): execution is PlannedExecution => Boolean(execution));
+  for (const s of deriveEmbeddedContentSecrets(selectedFlows, selectedModels, selectedExecutions)) push(s);
   return secrets;
 }
 
@@ -603,12 +647,15 @@ export function buildManifestFromEntities(
 
   for (const s of deriveMcpSecrets(mcp.packaged)) pushSecret(s);
   excludeMcpSecrets(mcp.packaged, excludedSecretNames);
+  const embeddedSecrets = deriveEmbeddedContentSecrets(flows, models, plannedExecutions);
+  const embeddedSecretNames = new Set(embeddedSecrets.map((secret) => secret.name));
   for (let i = secrets.length - 1; i >= 0; i -= 1) {
-    if (excludedSecretNames.has(secrets[i].name)) {
+    if (excludedSecretNames.has(secrets[i].name) && !embeddedSecretNames.has(secrets[i].name)) {
       secretNames.delete(secrets[i].name);
       secrets.splice(i, 1);
     }
   }
+  for (const secret of embeddedSecrets) pushSecret(secret);
 
   // requiredGlobals: every `${global:VAR}` this package expects the INSTALLING
   // host to already have set — model API keys bound to a global var, plus any
