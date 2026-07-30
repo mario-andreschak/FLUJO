@@ -349,7 +349,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
                 maxChainDepth: e.target.value === '' ? undefined : Number(e.target.value),
               })
             }
-            helperText="Stop after this many hops (default 5)"
+            helperText="Stop after this many hops (default 100)"
             inputProps={{ min: 1 }}
           />
           <TextField

@@ -125,7 +125,7 @@ export interface FlowEventTriggerConfig {
   outputMatch?: { contains?: string; regex?: string };
   /**
    * Loop safety: refuse to fire once the event-chain depth reaches this many
-   * hops (a `skipped` run is recorded instead). Default 5.
+   * hops (a `skipped` run is recorded instead). Default 100.
    */
   maxChainDepth?: number;
   /** Minimum gap between fires of THIS trigger, in ms (extra loop clamp). */

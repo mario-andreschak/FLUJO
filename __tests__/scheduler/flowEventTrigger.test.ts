@@ -177,6 +177,23 @@ describe('armFlowEvent', () => {
     trigger.dispose();
   });
 
+  it('uses 100 as the default chain depth cap when maxChainDepth is omitted', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent(
+      { type: 'flow-event', source: { flowId: 'flow-A' }, on: ['completed'] },
+      deps
+    );
+
+    publish({ chainDepth: 99 });
+    expect(deps.onFire).toHaveBeenCalledWith(expect.objectContaining({ chainDepth: 100 }));
+
+    publish({ chainDepth: 100 });
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(deps.onSkip).toHaveBeenCalledWith(expect.stringContaining('depth limit (100)'));
+
+    trigger.dispose();
+  });
+
   it('enforces the minIntervalMs cooldown between fires', () => {
     jest.useFakeTimers();
     try {
@@ -293,6 +310,20 @@ describe('armFlowEvent topic source (issue #117)', () => {
     publishSignal({ topic: 't', chainDepth: 2 }); // at the cap → skip
     expect(deps.onFire).toHaveBeenCalledTimes(1);
     expect(deps.onSkip).toHaveBeenCalledTimes(1);
+    trigger.dispose();
+  });
+
+  it('uses 100 as the default chain depth cap for signal events', () => {
+    const deps = makeDeps();
+    const trigger = armFlowEvent({ type: 'flow-event', source: { topic: 't' } }, deps);
+
+    publishSignal({ topic: 't', chainDepth: 99 });
+    expect(deps.onFire).toHaveBeenCalledWith(expect.objectContaining({ chainDepth: 100 }));
+
+    publishSignal({ topic: 't', chainDepth: 100 });
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    expect(deps.onSkip).toHaveBeenCalledWith(expect.stringContaining('depth limit (100)'));
+
     trigger.dispose();
   });
 

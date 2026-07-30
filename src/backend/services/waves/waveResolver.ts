@@ -67,7 +67,7 @@ export interface ResolveWavesInput {
 /** Default subflow-tree recursion cap. */
 const DEFAULT_MAX_SUBFLOW_DEPTH = 10;
 /** Default chain traversal cap (mirrors flowEvent DEFAULT_MAX_CHAIN_DEPTH). */
-const DEFAULT_MAX_CHAIN_DEPTH = 5;
+const DEFAULT_MAX_CHAIN_DEPTH = 100;
 
 /** Map a trigger config to a Waves trigger kind. */
 function triggerKind(trigger: TriggerConfig): WaveTriggerKind {
