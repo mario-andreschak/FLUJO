@@ -235,11 +235,6 @@ export const ProcessNodePropertiesModal = ({
       // Empty/new nodes still open on Basic, as does Advanced mode.
       const initialSection = getInitialProcessSection(authoringMode, savedPromptTemplate);
       setActiveSection(initialSection);
-      if (initialSection === 'task') {
-        isProgrammaticScroll.current = true;
-        taskRef.current?.scrollIntoView({ block: 'start' });
-        window.setTimeout(() => { isProgrammaticScroll.current = false; }, 0);
-      }
     }
   }, [node, open, authoringMode]);
 
@@ -270,6 +265,13 @@ export const ProcessNodePropertiesModal = ({
     sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     // Re-enable observer once the smooth scroll has settled.
     window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
+  };
+
+  const handleDialogEntered = () => {
+    if (activeSection !== 'task') return;
+    isProgrammaticScroll.current = true;
+    taskRef.current?.scrollIntoView({ block: 'start' });
+    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 0);
   };
 
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
@@ -484,6 +486,7 @@ export const ProcessNodePropertiesModal = ({
     <Dialog
       open={open}
       onClose={onClose}
+      slotProps={{ transition: { onEntered: handleDialogEntered } }}
       maxWidth="xl"
       fullWidth
       PaperProps={{
