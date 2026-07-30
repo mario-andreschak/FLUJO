@@ -20,9 +20,39 @@ export const BASH_SERVER_NAME = 'bash';
 // version lives in @/utils/shared/mcpConstants so that pure client-side modules
 // (e.g. flowValidation.ts) can import isBuiltInServerName without pulling in
 // server-only dependencies.
-import { BUILTIN_SERVER_NAMES as _BUILTIN_SERVER_NAMES, isBuiltInServerName as _isBuiltInServerName } from '@/utils/shared/mcpConstants';
+import {
+  BUILTIN_SERVER_NAMES as _BUILTIN_SERVER_NAMES,
+  isBuiltInServerName as _isBuiltInServerName,
+  MCPPackageCapabilities,
+} from '@/utils/shared/mcpConstants';
 export const BUILTIN_SERVER_NAMES: readonly string[] = _BUILTIN_SERVER_NAMES;
 export { _isBuiltInServerName as isBuiltInServerName };
+
+const PACKAGE_IDS: Record<string, string> = {
+  [INTERNAL_SERVER_NAME]: '@flujo-ai/mcp-flujo',
+  [FILESYSTEM_SERVER_NAME]: '@flujo-ai/mcp-filesystem',
+  [BASH_SERVER_NAME]: '@flujo-ai/mcp-bash',
+};
+
+const PACKAGE_CAPABILITIES: Record<string, MCPPackageCapabilities> = {
+  [INTERNAL_SERVER_NAME]: { resources: true, flujoControlPlane: true },
+  [FILESYSTEM_SERVER_NAME]: {
+    hostPathAccess: {
+      environmentRootVariables: ['FLUJO_FS_ROOTS'],
+      protectedPaths: true,
+      snapshots: true,
+    },
+    mcpApps: true,
+    resources: true,
+  },
+  [BASH_SERVER_NAME]: {
+    hostPathAccess: {
+      environmentRootVariables: ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'],
+      protectedPaths: true,
+      snapshots: true,
+    },
+  },
+};
 
 /** Shared persisted-config factory for the shipped servers other than `flujo`. */
 function builtInStdioConfig(name: string): MCPStdioConfig {
@@ -39,12 +69,20 @@ function builtInStdioConfig(name: string): MCPStdioConfig {
     _buildCommand: '',
     _installCommand: '',
     exposeAsMcpServer: true,
+    internalPackage: PACKAGE_IDS[name],
+    packageCapabilities: PACKAGE_CAPABILITIES[name],
   };
 }
 
 /** Build the current default config for one reserved internal server name. */
 export function builtInServerConfig(name: string): MCPStdioConfig {
-  if (name === INTERNAL_SERVER_NAME) return internalServerConfig();
+  if (name === INTERNAL_SERVER_NAME) {
+    return {
+      ...internalServerConfig(),
+      internalPackage: PACKAGE_IDS[name],
+      packageCapabilities: PACKAGE_CAPABILITIES[name],
+    };
+  }
   return builtInStdioConfig(name);
 }
 

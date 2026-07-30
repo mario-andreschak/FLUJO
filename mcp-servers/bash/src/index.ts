@@ -13,9 +13,24 @@ const server = new Server(
 );
 
 configureRootsProvider(async () => (await server.listRoots()).roots);
+
+function callerNodeIdOf(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const flujo = (meta as Record<string, unknown>).flujo;
+  if (!flujo || typeof flujo !== 'object') return undefined;
+  const callerNodeId = (flujo as Record<string, unknown>).callerNodeId;
+  return typeof callerNodeId === 'string' && callerNodeId.length > 0
+    ? callerNodeId
+    : undefined;
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: bashToolDefinitions() }));
 server.setRequestHandler(CallToolRequestSchema, async (request) =>
-  bashCallTool(request.params.name, request.params.arguments ?? {}),
+  bashCallTool(
+    request.params.name,
+    request.params.arguments ?? {},
+    callerNodeIdOf(request.params._meta),
+  ),
 );
 
 const transport = new StdioServerTransport();

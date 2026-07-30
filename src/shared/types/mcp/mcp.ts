@@ -3,6 +3,7 @@ import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js
 import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { MCPPackageCapabilities } from '@/utils/shared/mcpConstants';
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
@@ -68,6 +69,12 @@ export type MCPManagerConfig = {
    * packageable-vs-abort purely from `source.type`.
    */
   source?: MCPServerSource;
+  /** Immutable shipped-package identity. Ordinary user configurations omit it. */
+  internalPackage?: string;
+  /** Security/workflow traits declared by the package, never inferred from name. */
+  packageCapabilities?: MCPPackageCapabilities;
+  /** Package-level protected-path policy; legacy Settings remains a read fallback. */
+  protectedPathsEnabled?: boolean;
   /**
    * When true, FLUJO re-exposes this server's tools to external MCP clients at
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.

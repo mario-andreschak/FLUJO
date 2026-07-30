@@ -28,12 +28,26 @@ const server = new Server(
 
 configureRootsProvider(async () => (await server.listRoots()).roots);
 
+function callerNodeIdOf(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const flujo = (meta as Record<string, unknown>).flujo;
+  if (!flujo || typeof flujo !== 'object') return undefined;
+  const callerNodeId = (flujo as Record<string, unknown>).callerNodeId;
+  return typeof callerNodeId === 'string' && callerNodeId.length > 0
+    ? callerNodeId
+    : undefined;
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: filesystemToolDefinitions(),
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) =>
-  filesystemCallTool(request.params.name, request.params.arguments ?? {}),
+  filesystemCallTool(
+    request.params.name,
+    request.params.arguments ?? {},
+    callerNodeIdOf(request.params._meta),
+  ),
 );
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => filesystemListResources());

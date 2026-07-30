@@ -1,5 +1,5 @@
 import { MCPStdioConfig } from '@/shared/types/mcp';
-import { StorageKey } from '@/shared/types/storage';
+import { Settings, StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { builtInServerConfig, BUILTIN_SERVER_NAMES, InternalServerOverrides } from './registry';
@@ -26,7 +26,7 @@ function persistedInternalConfig(
   return stored;
 }
 
-async function runMigration(): Promise<void> {
+async function runV1Migration(): Promise<void> {
   const completed = await loadItem<boolean>(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, false);
   if (completed === true) return;
 
@@ -66,6 +66,52 @@ async function runMigration(): Promise<void> {
   log.info('Migrated internal MCP servers to ordinary persisted configurations');
 }
 
+function isShippedRecord(name: string, stored: Record<string, unknown>): boolean {
+  const expected = builtInServerConfig(name);
+  return stored.transport === expected.transport
+    && stored.command === expected.command
+    && stored.cwd === expected.cwd
+    && JSON.stringify(stored.args ?? []) === JSON.stringify(expected.args ?? []);
+}
+
+async function runV2CapabilitiesMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(
+    StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,
+    false,
+  );
+  if (completed === true) return;
+
+  const servers = await loadItem<Record<string, Record<string, unknown>>>(StorageKey.MCP_SERVERS, {});
+  const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+  const legacyProtectedPaths = settings?.experimental?.protectedPathsEnabled;
+  const nextServers = { ...(servers && typeof servers === 'object' ? servers : {}) };
+  let changed = false;
+
+  for (const name of BUILTIN_SERVER_NAMES) {
+    const stored = nextServers[name];
+    if (!stored || !isShippedRecord(name, stored)) continue;
+    const expected = builtInServerConfig(name);
+    const next: Record<string, unknown> = {
+      ...stored,
+      internalPackage: expected.internalPackage,
+      packageCapabilities: expected.packageCapabilities,
+    };
+    if (
+      typeof legacyProtectedPaths === 'boolean'
+      && expected.packageCapabilities?.hostPathAccess?.protectedPaths === true
+      && typeof stored.protectedPathsEnabled !== 'boolean'
+    ) {
+      next.protectedPathsEnabled = legacyProtectedPaths;
+    }
+    nextServers[name] = next;
+    changed = true;
+  }
+
+  if (changed) await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  await saveItem(StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2, true);
+  log.info('Migrated shipped MCP package capability declarations');
+}
+
 /**
  * Idempotently migrate synthesized internal MCP servers to MCP_SERVERS records.
  * The durable marker is authoritative; this promise only coalesces concurrent
@@ -76,7 +122,8 @@ export function migrateInternalMcpServers(): Promise<void> {
 
   migrationInFlight = (async () => {
     try {
-      await runMigration();
+      await runV1Migration();
+      await runV2CapabilitiesMigration();
     } finally {
       migrationInFlight = undefined;
     }

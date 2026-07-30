@@ -25,6 +25,9 @@ export enum StorageKey {
   // Durable marker for the one-time migration of shipped internal MCP servers
   // into ordinary MCP_SERVERS records (issue #346).
   MCP_INTERNAL_SERVERS_MIGRATION_V1 = 'mcp_internal_servers_migration_v1',
+  // Adds immutable package ids/capabilities to shipped records without claiming
+  // a user-defined configuration that happens to reuse a former built-in name.
+  MCP_INTERNAL_CAPABILITIES_MIGRATION_V2 = 'mcp_internal_capabilities_migration_v2',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -66,6 +69,7 @@ export const StorageKeys = {
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
   MCP_INTERNAL_SERVERS_MIGRATION_V1: StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1,
+  MCP_INTERNAL_CAPABILITIES_MIGRATION_V2: StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,

@@ -128,6 +128,7 @@ import {
 } from './betaClient';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
 import { INTERNAL_SERVER_NAME } from './internalServerConfig';
+import { packageCapabilitiesOf } from '@/utils/shared/mcpConstants';
 import {
   BASH_SERVER_NAME,
   FILESYSTEM_SERVER_NAME,
@@ -678,26 +679,28 @@ export class MCPService {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
 
-      if (isBuiltInServerName(config.name) && config.transport === 'stdio') {
-        const childEnv: Record<string, string> = {
-          ...(config.env as Record<string, string> | undefined),
-        };
-        // Preserve the Settings-backed protected-path switch across the process
-        // boundary. Operator env ceilings/overrides are already in the persisted
-        // config, while this value is application state and must be resolved here.
-        if (config.name === FILESYSTEM_SERVER_NAME || config.name === BASH_SERVER_NAME) {
-          const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
-          childEnv.FLUJO_PROTECTED_PATHS_ENABLED = await isProtectedPathsEnabled() ? '1' : '0';
+      if (config.transport === 'stdio') {
+        const capabilities = packageCapabilitiesOf(config);
+        if (capabilities) {
+          const childEnv: Record<string, string> = {
+            ...(config.env as Record<string, string> | undefined),
+          };
+          // Security/workflow behavior follows the validated package contract,
+          // never a mutable server display name.
+          if (capabilities.hostPathAccess?.protectedPaths === true) {
+            const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
+            childEnv.FLUJO_PROTECTED_PATHS_ENABLED = await isProtectedPathsEnabled(
+              config.protectedPathsEnabled,
+            ) ? '1' : '0';
+          }
+          if (capabilities.flujoControlPlane === true) {
+            const { ensureFlujoStdioBridge } = await import('./internal/stdioBridge');
+            const bridge = await ensureFlujoStdioBridge();
+            childEnv.FLUJO_MCP_BRIDGE_ENDPOINT = bridge.endpoint;
+            childEnv.FLUJO_MCP_BRIDGE_TOKEN = bridge.token;
+          }
+          config = { ...config, env: childEnv };
         }
-        // The flujo child owns MCP framing but delegates application-state work
-        // through this private authenticated local IPC bridge.
-        if (config.name === INTERNAL_SERVER_NAME) {
-          const { ensureFlujoStdioBridge } = await import('./internal/stdioBridge');
-          const bridge = await ensureFlujoStdioBridge();
-          childEnv.FLUJO_MCP_BRIDGE_ENDPOINT = bridge.endpoint;
-          childEnv.FLUJO_MCP_BRIDGE_TOKEN = bridge.token;
-        }
-        config = { ...config, env: childEnv };
       }
 
       // Resolve + decrypt any custom headers (#84) BEFORE anything reads them. The SAME
@@ -1423,7 +1426,8 @@ export class MCPService {
       timeout,
       onProgress,
       signal,
-      source
+      source,
+      callerNodeId
     );
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;

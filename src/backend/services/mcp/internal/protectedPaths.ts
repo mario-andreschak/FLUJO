@@ -41,8 +41,9 @@ export const ALLOW_PROTECTED_PATHS_ENV = 'FLUJO_ALLOW_PROTECTED_PATHS';
  * failure leaves this layer OFF. The legacy operator override still wins when
  * set, allowing deployments that already use it to keep their current posture.
  */
-export async function isProtectedPathsEnabled(): Promise<boolean> {
+export async function isProtectedPathsEnabled(configured?: unknown): Promise<boolean> {
   if (isTruthyEnv(process.env[ALLOW_PROTECTED_PATHS_ENV])) return false;
+  if (typeof configured === 'boolean') return configured;
   try {
     const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
     return settings?.experimental?.protectedPathsEnabled === true;
