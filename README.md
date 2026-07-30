@@ -345,6 +345,15 @@ Prefer a graphical installer? Download `flujo-setup.exe` from the
 wizard around the same `install.ps1` script above (see
 [`installer/flujo-setup.iss`](installer/flujo-setup.iss)).
 
+The Windows installer is a networked bootstrapper, not an offline file-copy
+package. It requires Windows App Installer (`winget`) and access to GitHub, the
+winget catalog, npm, and Python package sources. Missing Git, Node.js, Python,
+and uv are installed through winget; Ollama is optional. The installer also
+installs the Claude Code CLI used by the optional Claude Subscription provider.
+Running the installer again against an existing FLUJO Git checkout updates and
+rebuilds that checkout. For safety, an existing target that is not a Git checkout
+is rejected before registration or cloning.
+
 ### One-line install (Linux / macOS)
 
 The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
@@ -378,9 +387,14 @@ or, from inside your install folder:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-It asks, per prerequisite (Git, Node.js, Python, uv), whether to remove it — defaulting
-to **yes** for ones FLUJO installed and **no** for ones that were already on your system
-— then removes the `flujo` command and the FLUJO folder.
+It asks, per prerequisite (Git, Node.js, Python, uv, and optional Ollama), whether
+to remove it — defaulting to **yes** for ones FLUJO installed and **no** for ones
+that were already on your system — then removes the `flujo` command and the FLUJO
+folder. These ownership decisions come from
+`%LOCALAPPDATA%\FLUJO-cli\install-manifest.json`; without a readable manifest,
+all detected prerequisites default to **keep**. The graphical bootstrapper is
+intentionally not registered in Windows Apps, so this direct PowerShell command
+is the supported uninstall entry point.
 
 > ⚠️ **This permanently deletes your data.** All flows, encrypted API keys, MCP server
 > configs and chat history live in `<install>\db\` and are removed with the folder. Use
