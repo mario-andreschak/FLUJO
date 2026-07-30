@@ -454,6 +454,50 @@ describe('installPackage — adopt-and-configure', () => {
       metadata: { isSecret: true },
     });
   });
+
+  it('preserves an embedded global template when installing a non-secret header', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-global-template-id',
+      name: 'global-template-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['GITHUB_TOKEN'],
+      globals: [
+        { name: 'GITHUB_TOKEN', required: true, isSecret: true },
+      ],
+      secrets: [],
+      mcpServers: [
+        {
+          name: 'github',
+          transport: 'streamable',
+          installOrigin: { sourceType: 'remote', url: 'https://example.com/mcp' },
+          envDeclarations: [],
+          headerDeclarations: [
+            {
+              name: 'Authorization',
+              isSecret: false,
+              globalTemplate: 'Bearer ${global:GITHUB_TOKEN}',
+            },
+          ],
+        },
+      ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'global-template-pkg',
+      consentGranted: true,
+    });
+
+    const config = updateServerConfigMock.mock.calls[0][1] as {
+      headers: Record<string, unknown>;
+    };
+    expect(config.headers.Authorization).toBe('Bearer ${global:GITHUB_TOKEN}');
+  });
 });
 
 describe('installPackage — {{secret.NAME}} placeholder resolution', () => {

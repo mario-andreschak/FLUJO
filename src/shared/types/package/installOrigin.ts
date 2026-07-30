@@ -44,6 +44,12 @@ export interface EnvDeclaration {
   secretRef?: string;
   /** Host `${global:VAR}` name that supplies this value at runtime. */
   globalVar?: string;
+  /**
+   * A value containing one or more host-global references, for example
+   * `Bearer ${global:GITHUB_TOKEN}`. Unlike a literal config value, this is
+   * safe and portable because it contains references rather than their values.
+   */
+  globalTemplate?: string;
 }
 
 /** Declaration of ONE custom HTTP header (same shape/rules as EnvDeclaration). */

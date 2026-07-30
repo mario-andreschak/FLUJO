@@ -115,8 +115,21 @@ export const envDeclarationSchema = z
     isSecret: z.boolean(),
     secretRef: z.string().optional(),
     globalVar: z.string().optional(),
+    globalTemplate: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((declaration, ctx) => {
+    if (
+      declaration.globalTemplate !== undefined &&
+      !/\$\{global:[A-Za-z0-9_.-]+\}/.test(declaration.globalTemplate)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['globalTemplate'],
+        message: 'globalTemplate must contain at least one ${global:NAME} reference',
+      });
+    }
+  });
 
 export const packagedMcpServerSchema = z
   .object({

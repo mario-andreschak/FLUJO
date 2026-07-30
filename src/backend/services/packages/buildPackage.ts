@@ -52,6 +52,7 @@ import type { Flow } from '@/shared/types/flow';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 import type { PlannedExecution } from '@/shared/types/plannedExecution';
 import { isSecretEnvVar, isSecretHeaderKey } from '@/utils/shared/common';
+import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('backend/services/packages/buildPackage');
 
@@ -98,13 +99,14 @@ export function previewPackageGlobals(
   for (const server of packagedMcp.packaged) {
     for (const declaration of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
       if (declaration.globalVar) names.add(declaration.globalVar);
+      if (declaration.globalTemplate) collectGlobalsDeep(declaration.globalTemplate, names);
     }
   }
   return Array.from(names, (name) => ({
       name,
       description: `Global variable ${name} required by this package`,
       required: true,
-      isSecret: false,
+      isSecret: entities.globalVariables?.[name]?.isSecret === true,
     }));
 }
 
@@ -169,6 +171,8 @@ export interface PackageEntities {
   models: Model[];
   mcpServers: MCPServerConfig[];
   plannedExecutions: PlannedExecution[];
+  /** Secret metadata only; global values are never included in package entities. */
+  globalVariables?: Record<string, { isSecret: boolean }>;
 }
 
 export type PackageEntityType = 'flow' | 'model' | 'mcpServer' | 'plannedExecution';
@@ -380,11 +384,14 @@ function declarationsFrom(
       typeof value === 'object' &&
       value !== null &&
       typeof value.metadata?.isSecret === 'boolean';
-    const globalMatch = GLOBAL_VAR_REGEX.exec(literalValue(value) ?? '');
+    const literal = literalValue(value) ?? '';
+    const globalMatch = GLOBAL_VAR_REGEX.exec(literal);
+    const embeddedGlobalNames = collectGlobalsDeep(literal);
     return {
       name,
       isSecret: hasExplicitMetadata ? isSecretValue(value) : inferLegacySecret(name),
       ...(globalMatch ? { globalVar: globalMatch[1] } : {}),
+      ...(!globalMatch && embeddedGlobalNames.size > 0 ? { globalTemplate: literal } : {}),
     };
   });
 }
@@ -490,7 +497,7 @@ export function deriveMcpSecrets(servers: PackagedMcpServer[]): PackageSecret[] 
       // A global binding already supplies the value on the installing host. It
       // may still be marked secret (PAT/API-key globals should be), but must not
       // also create an install-time secret prompt.
-      if (!decl.isSecret || decl.secretRef || decl.globalVar) continue;
+      if (!decl.isSecret || decl.secretRef || decl.globalVar || decl.globalTemplate) continue;
       const secretName = toSecretName('MCP', `${serverName}_${decl.name}`);
       decl.secretRef = secretName;
       if (!seen.has(secretName)) {
@@ -682,6 +689,9 @@ export function buildManifestFromEntities(
   for (const server of mcp.packaged) {
     for (const decl of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
       if (decl.globalVar) requiredGlobals.add(decl.globalVar);
+      if (decl.globalTemplate) {
+        collectGlobalsDeep(decl.globalTemplate, requiredGlobals);
+      }
     }
   }
   const globals = normalizeGlobalDeclarations(
@@ -735,18 +745,30 @@ export async function loadPackageableEntities(): Promise<PackageEntities> {
   const { modelService } = await import('@/backend/services/model');
   const { loadServerConfigs } = await import('@/backend/services/mcp/config');
   const { getSchedulerService } = await import('@/backend/services/scheduler');
+  const { loadItem } = await import('@/utils/storage/backend');
 
-  const [flows, models, serverConfigsRaw, peList] = await Promise.all([
+  const [flows, models, serverConfigsRaw, peList, storedGlobals] = await Promise.all([
     flowService.loadFlows(),
     modelService.loadModels(),
     loadServerConfigs(),
     getSchedulerService().list(),
+    loadItem<Record<string, unknown>>(StorageKey.GLOBAL_ENV_VARS, {}),
   ]);
 
   const mcpServers = Array.isArray(serverConfigsRaw) ? serverConfigsRaw : [];
   const plannedExecutions = peList.map((entry) => entry.execution);
+  const globalVariables = Object.fromEntries(
+    Object.entries(storedGlobals).map(([name, raw]) => {
+      const value = raw as { value?: unknown; metadata?: { isSecret?: unknown } } | string;
+      const isSecret =
+        (typeof value === 'object' && value !== null && value.metadata?.isSecret === true) ||
+        (typeof value === 'string' &&
+          (value.startsWith('encrypted:') || value.startsWith('encrypted_failed:')));
+      return [name, { isSecret }];
+    }),
+  );
 
-  return { flows, models, mcpServers, plannedExecutions };
+  return { flows, models, mcpServers, plannedExecutions, globalVariables };
 }
 
 /** Resolve a selection against the live entities (I/O wrapper). */

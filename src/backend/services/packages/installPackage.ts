@@ -723,9 +723,12 @@ function resolveDeclarations(
       // though the value is a portable global reference rather than a package
       // secret. This keeps masking/encryption and future re-exports correct.
       if (decl.isSecret) secretNames.add(decl.name);
+    } else if (decl.globalTemplate) {
+      values[decl.name] = decl.globalTemplate;
+      if (decl.isSecret) secretNames.add(decl.name);
     }
-    // Neither secretRef nor globalVar: nothing to resolve — the declaration is
-    // metadata-only (e.g. documents a var the server reads from its own env).
+    // No binding: nothing to resolve — the declaration is metadata-only (e.g.
+    // documents a var the server reads from its own environment).
   }
   return { values, secretNames, missingRequired };
 }

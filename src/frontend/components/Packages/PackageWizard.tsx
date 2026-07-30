@@ -821,20 +821,28 @@ export default function PackageWizard({ open, onClose }: Props) {
             ) : (
               <Stack spacing={1.5}>
                 {resolveResult.globals.map((entry) => (
-                  <TextField
-                    key={entry.name}
-                    size="small"
-                    label={entry.name}
-                    value={globalDescriptions[entry.name] ?? ''}
-                    onChange={(event) =>
-                      setGlobalDescriptions((current) => ({
-                        ...current,
-                        [entry.name]: event.target.value,
-                      }))
-                    }
-                    helperText="Description shown during package installation"
-                    fullWidth
-                  />
+                  <Stack key={entry.name} direction="row" spacing={1} alignItems="flex-start">
+                    <TextField
+                      size="small"
+                      label={entry.name}
+                      value={globalDescriptions[entry.name] ?? ''}
+                      onChange={(event) =>
+                        setGlobalDescriptions((current) => ({
+                          ...current,
+                          [entry.name]: event.target.value,
+                        }))
+                      }
+                      helperText={
+                        entry.isSecret
+                          ? 'Secret global; its value is never included in the package'
+                          : 'Description shown during package installation'
+                      }
+                      fullWidth
+                    />
+                    {entry.isSecret && (
+                      <Chip label="secret global" size="small" color="warning" variant="outlined" />
+                    )}
+                  </Stack>
                 ))}
               </Stack>
             )}

@@ -526,6 +526,40 @@ describe('buildManifestFromEntities', () => {
     });
   });
 
+  it('preserves an embedded secret-global header template and reviews the global as secret', () => {
+    const ents: PackageEntities = {
+      flows: [],
+      models: [],
+      mcpServers: [registryHttpServer('github', {
+        Authorization: {
+          value: 'Bearer ${global:softwaredev_github_api_key}',
+          metadata: { isSecret: false },
+        },
+      })],
+      plannedExecutions: [],
+      globalVariables: {
+        softwaredev_github_api_key: { isSecret: true },
+      },
+    };
+    const resolved = resolveDependencies({ mcpServerNames: ['github'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.requiredGlobals).toEqual(['softwaredev_github_api_key']);
+    expect(result.package!.globals).toContainEqual(expect.objectContaining({
+      name: 'softwaredev_github_api_key',
+      required: true,
+      isSecret: true,
+    }));
+    expect(result.package!.secrets).toEqual([]);
+    expect(result.package!.mcpServers[0].headerDeclarations).toContainEqual({
+      name: 'Authorization',
+      isSecret: false,
+      globalTemplate: 'Bearer ${global:softwaredev_github_api_key}',
+    });
+    expect(result.json).not.toContain('encrypted:');
+  });
+
   it('fails the build when a local-only MCP server is included', () => {
     const ents: PackageEntities = {
       flows: [],
