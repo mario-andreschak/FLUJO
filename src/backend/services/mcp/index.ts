@@ -110,7 +110,6 @@ import {
 import { encryptApiKey } from '@/backend/services/model/encryption';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { normalizeHeaderValue, isMaskedHeaderValue, isGlobalBinding, hydrateMaskedHeaders } from '@/utils/mcp/headers';
-import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
 import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
 import {
@@ -1850,25 +1849,11 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
-    // If env variables are being updated, resolve any global variable references
-    if (updates.env) {
-      log.debug(`updateServerConfig: Resolving global variables in env for ${serverName}`);
-      try {
-        // Log the original env variables for debugging
-        log.debug(`Original env variables for ${serverName}:`, JSON.stringify(updates.env, null, 2));
-        
-        // Resolve global variables in the environment variables and update directly
-        updates.env = await resolveGlobalVars(updates.env) as Record<string, string>;
-        
-        // Log the resolved env variables for debugging
-        log.debug(`Resolved env variables for ${serverName}:`, JSON.stringify(updates.env, null, 2));
-        
-        log.debug(`updateServerConfig: Successfully resolved global variables for ${serverName}`);
-      } catch (error) {
-        log.warn(`updateServerConfig: Error resolving global variables for ${serverName}:`, error);
-        // Continue with the update even if global variable resolution fails
-      }
-    }
+    // Keep env `${global:VAR}` bindings verbatim in storage. They are resolved
+    // (and encrypted values decrypted) immediately before each connection in
+    // resolveConfigHeaders, matching custom-header behaviour. Baking globals at
+    // save time made bindings non-portable and prevented rotations from taking
+    // effect until the server was edited again.
 
     // OAuth client secret handling, mirroring model API-key semantics. The browser only ever
     // sends MASKED_API_KEY (meaning "keep the stored secret"), a "${global:VAR}" binding, or a

@@ -51,6 +51,7 @@ import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 import type { PlannedExecution } from '@/shared/types/plannedExecution';
+import { isSecretEnvVar, isSecretHeaderKey } from '@/utils/shared/common';
 
 const log = createLogger('backend/services/packages/buildPackage');
 
@@ -351,10 +352,10 @@ function isSecretValue(value: EnvVarValue | undefined): boolean {
   return typeof value === 'object' && value !== null && value.metadata?.isSecret === true;
 }
 
-/** The literal string value of a plain (non-secret) env entry, if any. */
+/** The literal string carried by either the legacy string or metadata object shape. */
 function literalValue(value: EnvVarValue | undefined): string | undefined {
   if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && !value.metadata?.isSecret && typeof value.value === 'string') {
+  if (value && typeof value === 'object' && typeof value.value === 'string') {
     return value.value;
   }
   return undefined;
@@ -364,15 +365,25 @@ function literalValue(value: EnvVarValue | undefined): string | undefined {
  * Build env/header DECLARATIONS (names + isSecret, never a literal secret
  * value). A literal `${global:VAR}` value IS preserved as a `globalVar`
  * binding (not a value) — otherwise it is silently dropped on install, same
- * class of bug as an unrecorded model API key global-var binding.
+ * class of bug as an unrecorded model API key global-var binding. Legacy
+ * plain-string entries have no metadata, so infer their secret status from the
+ * key exactly as the MCP editors/masking layer do. Explicit object metadata
+ * remains authoritative, including an intentional `isSecret: false`.
  */
-function declarationsFrom(record: Record<string, EnvVarValue> | undefined): EnvDeclaration[] {
+function declarationsFrom(
+  record: Record<string, EnvVarValue> | undefined,
+  inferLegacySecret: (name: string) => boolean,
+): EnvDeclaration[] {
   if (!record) return [];
   return Object.entries(record).map(([name, value]) => {
-    const globalMatch = !isSecretValue(value) ? GLOBAL_VAR_REGEX.exec(literalValue(value) ?? '') : null;
+    const hasExplicitMetadata =
+      typeof value === 'object' &&
+      value !== null &&
+      typeof value.metadata?.isSecret === 'boolean';
+    const globalMatch = GLOBAL_VAR_REGEX.exec(literalValue(value) ?? '');
     return {
       name,
-      isSecret: isSecretValue(value),
+      isSecret: hasExplicitMetadata ? isSecretValue(value) : inferLegacySecret(name),
       ...(globalMatch ? { globalVar: globalMatch[1] } : {}),
     };
   });
@@ -412,7 +423,7 @@ export function validateMcpSelection(
       continue;
     }
     const headers = (config as { headers?: Record<string, EnvVarValue> }).headers;
-    const headerDeclarations: HeaderDeclaration[] = declarationsFrom(headers);
+    const headerDeclarations: HeaderDeclaration[] = declarationsFrom(headers, isSecretHeaderKey);
     packaged.push({
       name: config.name,
       transport: config.transport,
@@ -420,7 +431,7 @@ export function validateMcpSelection(
       ...(config.autoApprove && config.autoApprove.length ? { autoApprove: config.autoApprove } : {}),
       ...(config.folder ? { folder: config.folder } : {}),
       installOrigin,
-      envDeclarations: declarationsFrom(config.env),
+      envDeclarations: declarationsFrom(config.env, isSecretEnvVar),
       ...(headerDeclarations.length ? { headerDeclarations } : {}),
     });
   }
@@ -476,7 +487,10 @@ export function deriveMcpSecrets(servers: PackagedMcpServer[]): PackageSecret[] 
   const seen = new Set<string>();
   const addFor = (serverName: string, decls: EnvDeclaration[] | undefined) => {
     for (const decl of decls ?? []) {
-      if (!decl.isSecret || decl.secretRef) continue;
+      // A global binding already supplies the value on the installing host. It
+      // may still be marked secret (PAT/API-key globals should be), but must not
+      // also create an install-time secret prompt.
+      if (!decl.isSecret || decl.secretRef || decl.globalVar) continue;
       const secretName = toSecretName('MCP', `${serverName}_${decl.name}`);
       decl.secretRef = secretName;
       if (!seen.has(secretName)) {

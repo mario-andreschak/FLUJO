@@ -332,6 +332,12 @@ export async function deleteConversationLog(conversationId: string): Promise<voi
 export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
   const messages: FlujoChatMessage[] = [];
   const indexById = new Map<string, number>();
+  // The first Codex live-streaming release used SDK-local ids such as
+  // `stream_codex_item_0`. Codex restarts that numbering on later model calls,
+  // so distinct durable messages written during that release can share an id.
+  // New messages carry a per-call namespace; preserve every legacy collision
+  // here so old conversations recover on their next detail fetch.
+  const legacyCodexIdOccurrences = new Map<string, number>();
 
   for (const event of events) {
     if (event.type === 'message') {
@@ -339,12 +345,24 @@ export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
       if (!incoming || !incoming.id) continue;
       if (incoming.role === 'system') continue;
       const depth = event.depth ?? 0;
-      const projected: FlujoChatMessage = depth > 0 ? { ...incoming, depth } : { ...incoming };
-      const existingIndex = indexById.get(incoming.id);
+      let projectedId = incoming.id;
+      let existingIndex = indexById.get(projectedId);
+      if (existingIndex !== undefined && /^stream_codex_item_/.test(projectedId)) {
+        const occurrence = (legacyCodexIdOccurrences.get(projectedId) ?? 1) + 1;
+        legacyCodexIdOccurrences.set(projectedId, occurrence);
+        projectedId = `${projectedId}_legacy_${occurrence}`;
+        existingIndex = undefined;
+      } else if (!legacyCodexIdOccurrences.has(projectedId)) {
+        legacyCodexIdOccurrences.set(projectedId, 1);
+      }
+      const withRecoveredId =
+        projectedId === incoming.id ? incoming : { ...incoming, id: projectedId };
+      const projected: FlujoChatMessage =
+        depth > 0 ? { ...withRecoveredId, depth } : { ...withRecoveredId };
       if (existingIndex !== undefined) {
         messages[existingIndex] = projected;
       } else {
-        indexById.set(incoming.id, messages.length);
+        indexById.set(projectedId, messages.length);
         messages.push(projected);
       }
     } else if (event.type === 'message:removed') {

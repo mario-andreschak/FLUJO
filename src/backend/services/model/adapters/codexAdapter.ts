@@ -171,6 +171,15 @@ export class CodexAdapter implements CompletionAdapter {
     const transcript: FlujoChatMessage[] = [];
     const baseTs = Date.now();
     let txSeq = 0;
+    // Codex item ids (for example `item_0`) are only unique within one SDK
+    // turn. A Flow can invoke this adapter many times in the same conversation,
+    // so using the raw item id as the durable chat-message id makes later turns
+    // overwrite earlier streamed messages and gives React duplicate keys.
+    // Namespace every item with this adapter invocation while keeping the id
+    // stable across item.started/updated/completed events for reconciliation.
+    const streamMessageNamespace = `${baseTs}_${uuidv4()}`;
+    const getStreamMessageId = (itemId: string): string =>
+      `stream_codex_${streamMessageNamespace}_${itemId}`;
     const recordMessage = (msg: TranscriptMessage, id = `m_${uuidv4()}`): void => {
       const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
@@ -616,7 +625,7 @@ export class CodexAdapter implements CompletionAdapter {
                 const delta = item.text.startsWith(prior) ? item.text.slice(prior.length) : item.text;
                 if (delta) {
                   onModelDelta?.({
-                    messageId: `stream_codex_${item.id}`,
+                    messageId: getStreamMessageId(item.id),
                     contentDelta: delta,
                   });
                 }
@@ -634,7 +643,7 @@ export class CodexAdapter implements CompletionAdapter {
                 }
                 if (item.text) {
                   resultText += (resultText ? '\n\n' : '') + item.text;
-                  recordMessage({ role: 'assistant', content: item.text }, `stream_codex_${item.id}`);
+                  recordMessage({ role: 'assistant', content: item.text }, getStreamMessageId(item.id));
                   streamedText = true;
                 }
               } else if (item.type === 'command_execution') {

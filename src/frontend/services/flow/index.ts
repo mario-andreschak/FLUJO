@@ -445,7 +445,10 @@ class FlowService {
       data: {
         label: `${type === 'mcp' ? 'MCP' : type.charAt(0).toUpperCase() + type.slice(1)} Node`,
         type,
-        properties: {},
+        // Guided FlowBuilder does not expose process input modes. Persist its
+        // intended "Full conversation" choice explicitly so a newly-created
+        // process node can never inherit or be mistaken for latest-message.
+        properties: type === 'process' ? { inputMode: 'full-history' } : {},
       },
     };
   }

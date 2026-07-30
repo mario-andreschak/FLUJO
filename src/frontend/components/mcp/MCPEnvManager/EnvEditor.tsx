@@ -32,6 +32,8 @@ import {
 import { isSecretEnvVar } from '@/utils/shared';
 import { MASKED_STRING } from '@/shared/types/constants';
 
+const GLOBAL_BINDING_RE = /^\$\{global:([A-Za-z0-9_.-]+)\}$/;
+
 interface EnvVariable {
   key: string;
   value: string;
@@ -79,7 +81,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
         : { isSecret: isSecretEnvVar(key) };
       
       // Check if the value is a global variable binding
-      const bindingMatch = value.match(/\$\{global:([^}]+)\}/);
+      const bindingMatch = value.match(GLOBAL_BINDING_RE);
       
       if (bindingMatch) {
         const boundTo = bindingMatch[1];
@@ -188,6 +190,10 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
       }
       
       if (field === 'value') {
+        const bindingMatch = strValue.match(GLOBAL_BINDING_RE);
+        updatedVariable.isBound = !!bindingMatch;
+        updatedVariable.boundTo = bindingMatch?.[1];
+
         if (newVariables[index].isEncrypted) {
           // User is changing an encrypted value, so it's no longer encrypted
           updatedVariable.isEncrypted = false;          

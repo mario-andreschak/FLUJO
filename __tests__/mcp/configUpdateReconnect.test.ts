@@ -14,9 +14,10 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 }));
 
 const loadServerConfigsMock = jest.fn();
+const saveConfigMock = jest.fn(async (_configs: unknown) => ({ success: true }));
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...a),
-  saveConfig: jest.fn(async () => ({ success: true })),
+  saveConfig: (configs: unknown) => saveConfigMock(configs),
 }));
 
 jest.mock('@/backend/services/mcp/tools', () => ({
@@ -43,6 +44,7 @@ beforeEach(() => {
   createNewClientMock.mockReset().mockReturnValue(makeClient());
   shouldRecreateClientMock.mockReset().mockReturnValue({ needsNewClient: false });
   safelyCloseClientMock.mockReset().mockResolvedValue(undefined);
+  saveConfigMock.mockClear();
   loadServerConfigsMock.mockReset().mockResolvedValue([
     { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
   ]);
@@ -74,5 +76,25 @@ describe('updateServerConfig on a connected, still-enabled server', () => {
 
     expect(createNewClientMock).toHaveBeenCalledTimes(1); // no rebuild
     expect(safelyCloseClientMock).not.toHaveBeenCalled();
+  });
+
+  it('persists env global bindings verbatim instead of baking their current value', async () => {
+    const svc = new MCPService();
+    await svc.updateServerConfig('srv', {
+      env: {
+        GITHUB_TOKEN: {
+          value: '${global:GITHUB_TOKEN}',
+          metadata: { isSecret: true },
+        },
+      },
+    } as any);
+
+    const savedMap = saveConfigMock.mock.calls[0][0] as Map<string, {
+      env: Record<string, unknown>;
+    }>;
+    expect(savedMap.get('srv')?.env.GITHUB_TOKEN).toEqual({
+      value: '${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
   });
 });

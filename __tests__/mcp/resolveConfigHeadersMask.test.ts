@@ -16,10 +16,15 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 }));
 
 import { resolveConfigHeaders } from '@/backend/services/mcp/connection';
+import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 import { MASKED_API_KEY, MASKED_STRING } from '@/shared/types/constants';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 
 describe('resolveConfigHeaders — mask guard (#137)', () => {
+  beforeEach(() => {
+    (resolveAndDecryptApiKey as jest.Mock).mockImplementation(async (v: string) => v);
+  });
+
   it('drops a still-masked secret header and never forwards the placeholder', async () => {
     const config = {
       name: 'gh',
@@ -58,5 +63,37 @@ describe('resolveConfigHeaders — mask guard (#137)', () => {
     };
 
     expect(resolved.headers).toEqual({ Authorization: 'Bearer real-token' });
+  });
+
+  it('resolves env global bindings only in the temporary connection config', async () => {
+    (resolveAndDecryptApiKey as jest.Mock).mockImplementation(async (value: string) =>
+      value === '${global:GITHUB_TOKEN}' ? 'resolved-token' : value
+    );
+    const config = {
+      name: 'github',
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      env: {
+        GITHUB_TOKEN: {
+          value: '${global:GITHUB_TOKEN}',
+          metadata: { isSecret: true },
+        },
+        MODE: 'safe',
+      },
+      disabled: false,
+    } as unknown as MCPServerConfig;
+
+    const resolved = await resolveConfigHeaders(config);
+
+    expect(resolved.env).toEqual({
+      GITHUB_TOKEN: 'resolved-token',
+      MODE: 'safe',
+    });
+    // The persisted/source config remains a portable reference.
+    expect(config.env.GITHUB_TOKEN).toEqual({
+      value: '${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
   });
 });

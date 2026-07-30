@@ -407,6 +407,53 @@ describe('installPackage — adopt-and-configure', () => {
     expect(config.env['API_KEY']).toEqual({ value: 'sk-1', metadata: { isSecret: true } });
     expect(config.folder).toBe('remote-pkg');
   });
+
+  it('Test E: secret global env/header bindings stay references and retain secret metadata', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-global-server-id',
+      name: 'global-server-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['GITHUB_TOKEN'],
+      secrets: [],
+      mcpServers: [
+        {
+          name: 'github',
+          transport: 'streamable',
+          installOrigin: { sourceType: 'remote', url: 'https://example.com/mcp' },
+          envDeclarations: [
+            { name: 'GITHUB_TOKEN', isSecret: true, globalVar: 'GITHUB_TOKEN' },
+          ],
+          headerDeclarations: [
+            { name: 'Authorization', isSecret: true, globalVar: 'GITHUB_TOKEN' },
+          ],
+        },
+      ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'global-server-pkg',
+      consentGranted: true,
+    });
+
+    const config = updateServerConfigMock.mock.calls[0][1] as {
+      env: Record<string, unknown>;
+      headers: Record<string, unknown>;
+    };
+    expect(config.env.GITHUB_TOKEN).toEqual({
+      value: '${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
+    expect(config.headers.Authorization).toEqual({
+      value: '${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
+  });
 });
 
 describe('installPackage — {{secret.NAME}} placeholder resolution', () => {

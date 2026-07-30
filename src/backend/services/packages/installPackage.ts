@@ -719,6 +719,10 @@ function resolveDeclarations(
       }
     } else if (decl.globalVar) {
       values[decl.name] = `\${global:${decl.globalVar}}`;
+      // Preserve the secret classification on the installed config even
+      // though the value is a portable global reference rather than a package
+      // secret. This keeps masking/encryption and future re-exports correct.
+      if (decl.isSecret) secretNames.add(decl.name);
     }
     // Neither secretRef nor globalVar: nothing to resolve — the declaration is
     // metadata-only (e.g. documents a var the server reads from its own env).

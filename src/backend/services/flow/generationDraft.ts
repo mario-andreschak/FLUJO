@@ -24,10 +24,12 @@ export const DEFAULT_GENERATED_SUBFLOW_DEPTH = 2;
  * Canonical model-facing policy for generated flows. Both generator surfaces use
  * this exact text so their authored specs follow the same data-flow conventions.
  */
-export const GENERATED_FLOW_AUTHORING_POLICY = `GENERATED-FLOW DEFAULTS (context saving): process nodes you leave without an explicit inputMode/outputMode are compiled with inputMode "latest-message" and outputMode "latest-message" — each step sees only the current task and later steps see only its final response, not its tool calls/results. When a step genuinely needs the whole conversation or later steps need its intermediate work, set "full-history" / "full-conversation" explicitly.
+export const GENERATED_FLOW_AUTHORING_POLICY = `GENERATED-FLOW PROCESS INPUT POLICY: every process node receives the full conversation. Use inputMode "full-history" or leave inputMode unset; NEVER emit inputMode "latest-message" on a process node. Generated process nodes that omit inputMode, or incorrectly request "latest-message", are deterministically compiled as "full-history". The advanced "isolated" mode remains available only when the task genuinely requires ignoring conversation history.
+
+GENERATED-FLOW OUTPUT DEFAULT (context saving): process nodes you leave without an explicit outputMode are compiled with outputMode "latest-message", so later steps see the node's final response but not its tool calls/results. When later steps need that intermediate work, set outputMode "full-conversation" explicitly.
 
 GENERATED-FLOW DATA-FLOW POLICY (IMPORTANT — carry data through the conversation, NOT scratchpad variables):
-1. PREFER CONVERSATION HISTORY. For a later step to use an earlier step's output, keep that output in the thread: give the earlier (producer) step outputMode "full-conversation" (or leave "latest-message" when only its final text matters) and give the later (consumer) step inputMode "full-history" so it actually sees the producer's turn.
+1. PREFER CONVERSATION HISTORY. Every process step receives full history. For a later step to use an earlier step's tool exchange, keep that exchange in the thread by giving the earlier (producer) step outputMode "full-conversation" (or leave "latest-message" when only its final text matters).
 2. DO NOT emit \${var:NAME} in generated prompts. The scratchpad variable feature is valid for hand authoring, but unsafe for ordinary auto-generated handoff. Use history instead.
 3. DO NOT emit passive "captureResource" on a process node. Process artifacts require an explicit Resource node and write_resource. Ordinary generated flows should use history.
 4. Any unsafe \${var:NAME} reference is deterministically rewritten to history or removed before compilation.
