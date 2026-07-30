@@ -560,6 +560,46 @@ describe('buildManifestFromEntities', () => {
     expect(result.json).not.toContain('encrypted:');
   });
 
+  it('preserves global templates embedded in MCP env values and stdio arguments', () => {
+    const server = registryServer('templated', {
+      API_ORIGIN: {
+        value: 'https://${global:API_HOST}/v1',
+        metadata: { isSecret: false },
+      },
+    });
+    (server as MCPServerConfig & { args: string[] }).args = [
+      '-y',
+      '@example/server',
+      '--token=${global:API_TOKEN}',
+    ];
+    const ents: PackageEntities = {
+      flows: [],
+      models: [],
+      mcpServers: [server],
+      plannedExecutions: [],
+      globalVariables: {
+        API_HOST: { isSecret: false },
+        API_TOKEN: { isSecret: true },
+      },
+    };
+    const resolved = resolveDependencies({ mcpServerNames: ['templated'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.globals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'API_HOST', isSecret: false }),
+      expect.objectContaining({ name: 'API_TOKEN', isSecret: true }),
+    ]));
+    expect(result.package!.mcpServers[0].envDeclarations).toContainEqual({
+      name: 'API_ORIGIN',
+      isSecret: false,
+      globalTemplate: 'https://${global:API_HOST}/v1',
+    });
+    expect(result.package!.mcpServers[0].argTemplates).toEqual([
+      { index: 2, value: '--token=${global:API_TOKEN}' },
+    ]);
+  });
+
   it('fails the build when a local-only MCP server is included', () => {
     const ents: PackageEntities = {
       flows: [],

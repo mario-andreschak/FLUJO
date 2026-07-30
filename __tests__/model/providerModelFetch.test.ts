@@ -20,6 +20,7 @@ jest.mock('@/utils/logger', () => ({
 import {
   fetchModelsFromProvider,
   fetchOpenAIModels,
+  fetchOpenRouterModels,
 } from '@/backend/services/model/provider';
 
 // We need to mock global fetch since fetchOpenAIModels uses it.
@@ -133,5 +134,59 @@ describe('fetchOpenAIModels with a custom LiteLLM base URL', () => {
     await fetchOpenAIModels('sk-key', 'https://gateway.corp.io/litellm/v1');
 
     expect(mockFetch.mock.calls[0][0]).toBe('https://gateway.corp.io/litellm/v1/models');
+  });
+});
+
+describe('fetchOpenRouterModels capability discovery', () => {
+  it('requests all output modalities and normalizes context, token, tool, and modality metadata', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{
+          id: 'google/gemini-3.1-flash-lite-image',
+          name: 'Gemini 3.1 Flash Lite Image',
+          description: 'Image model',
+          context_length: 65536,
+          supported_parameters: ['temperature', 'response_format'],
+          architecture: {
+            input_modalities: ['text', 'image'],
+            output_modalities: ['text', 'image'],
+          },
+          top_provider: { max_completion_tokens: 65536 },
+        }],
+      }),
+    });
+
+    const models = await fetchOpenRouterModels();
+
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      'https://openrouter.ai/api/v1/models?output_modalities=all',
+    );
+    expect(models[0]).toEqual({
+      id: 'google/gemini-3.1-flash-lite-image',
+      name: 'Gemini 3.1 Flash Lite Image',
+      description: 'Image model',
+      contextWindow: 65536,
+      maxTokens: 65536,
+      supportsTools: false,
+      supportedParameters: ['temperature', 'response_format'],
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text', 'image'],
+    });
+  });
+
+  it('marks OpenRouter models advertising tools as tool-capable', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{
+          id: 'tool-model',
+          supported_parameters: ['tools', 'tool_choice'],
+        }],
+      }),
+    });
+
+    const [model] = await fetchOpenRouterModels();
+    expect(model.supportsTools).toBe(true);
   });
 });

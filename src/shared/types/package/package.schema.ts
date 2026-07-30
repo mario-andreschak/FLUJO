@@ -131,6 +131,22 @@ export const envDeclarationSchema = z
     }
   });
 
+export const mcpArgTemplateSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    value: z.string().min(1),
+  })
+  .strict()
+  .superRefine((template, ctx) => {
+    if (!/\$\{global:[A-Za-z0-9_.-]+\}/.test(template.value)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['value'],
+        message: 'argument template must contain at least one ${global:NAME} reference',
+      });
+    }
+  });
+
 export const packagedMcpServerSchema = z
   .object({
     name: z.string().min(1),
@@ -141,6 +157,7 @@ export const packagedMcpServerSchema = z
     installOrigin: mcpInstallOriginSchema,
     envDeclarations: z.array(envDeclarationSchema),
     headerDeclarations: z.array(envDeclarationSchema).optional(),
+    argTemplates: z.array(mcpArgTemplateSchema).optional(),
   })
   // strict: reject raw `command`/`args`/`rootPath`/`serverUrl`/OAuth/server files.
   .strict();

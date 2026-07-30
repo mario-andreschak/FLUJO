@@ -114,6 +114,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [dialogContent, setDialogContent] = useState('');
   const [dialogTitle, setDialogTitle] = useState('');
   const [dialogType, setDialogType] = useState<'document' | 'audio'>('document');
+  const [pendingAudioDataUrl, setPendingAudioDataUrl] = useState<string | null>(null);
+  const [pendingAudioMimeType, setPendingAudioMimeType] = useState<string | undefined>();
   const [isProcessing, setIsProcessing] = useState(false);
   
   // Transcription state
@@ -206,21 +208,39 @@ const ChatInput: React.FC<ChatInputProps> = ({
     
     const file = files[0];
     log.debug('File selected', { fileName: file.name, fileSize: file.size, fileType: file.type });
-    setDialogTitle(`Processing ${file.name}`);
-    setDialogType('document');
-    setDialogContent('');
-    setIsProcessing(true);
-    setDialogOpen(true);
-    
     try {
-      // Read file as text
-      const text = await readFileAsText(file);
-      log.debug('File read successfully', { contentLength: text.length });
-      setDialogContent(text);
-      setIsProcessing(false);
+      const mimeType = file.type || 'application/octet-stream';
+      const isText =
+        mimeType.startsWith('text/') ||
+        /\.(txt|md|json|csv|html?|xml|js|ts|jsx|tsx|css|scss)$/i.test(file.name);
+      if (!isText) {
+        const dataUrl = await readFileAsDataUrl(file);
+        const type: Attachment['type'] =
+          mimeType.startsWith('image/') ? 'image'
+            : mimeType.startsWith('audio/') ? 'audio'
+              : mimeType.startsWith('video/') ? 'video'
+                : 'document';
+        setAttachments(prev => [...prev, {
+          id: uuidv4(),
+          type,
+          content: dataUrl,
+          originalName: file.name,
+          mimeType,
+        }]);
+      } else {
+        setDialogTitle(`Processing ${file.name}`);
+        setDialogType('document');
+        setDialogContent('');
+        setIsProcessing(true);
+        setDialogOpen(true);
+        const text = await readFileAsText(file);
+        log.debug('File read successfully', { contentLength: text.length });
+        setDialogContent(text);
+        setIsProcessing(false);
+      }
     } catch (error) {
       log.error('Error reading file:', error);
-      setDialogContent('Error reading file. Please try again with a text file.');
+      setDialogContent('Error reading file. Please try again.');
       setIsProcessing(false);
     }
     
@@ -250,6 +270,17 @@ const ChatInput: React.FC<ChatInputProps> = ({
       reader.readAsText(file);
     });
   };
+
+  const readFileAsDataUrl = (file: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () =>
+        typeof reader.result === 'string'
+          ? resolve(reader.result)
+          : reject(new Error('Failed to encode file'));
+      reader.onerror = () => reject(new Error('Error reading file'));
+      reader.readAsDataURL(file);
+    });
   
   // Start audio recording
   const startRecording = async () => {
@@ -275,11 +306,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
       // Handle recording stop
       mediaRecorder.onstop = async () => {
         // Create blob from chunks
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const recordedMime = mediaRecorder.mimeType || audioChunksRef.current[0]?.type || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: recordedMime });
         
         // Start the dialog with loading state
         setDialogTitle('Audio Recording');
         setDialogType('audio');
+        setPendingAudioDataUrl(await readFileAsDataUrl(audioBlob));
+        setPendingAudioMimeType(recordedMime);
         setDialogContent(''); // Clear any previous content
         setIsProcessing(true);
         setDialogOpen(true);
@@ -382,11 +416,18 @@ const ChatInput: React.FC<ChatInputProps> = ({
     const newAttachment: Attachment = {
       id: uuidv4(),
       type: dialogType,
-      content: dialogContent,
-      originalName: dialogTitle
+      content: dialogType === 'audio' && pendingAudioDataUrl
+        ? pendingAudioDataUrl
+        : dialogContent,
+      originalName: dialogTitle,
+      ...(dialogType === 'audio' && pendingAudioMimeType
+        ? { mimeType: pendingAudioMimeType, transcript: dialogContent }
+        : {}),
     };
     
     setAttachments([...attachments, newAttachment]);
+    setPendingAudioDataUrl(null);
+    setPendingAudioMimeType(undefined);
     setDialogOpen(false);
   };
   
@@ -427,6 +468,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
                     component="img"
                     src={attachment.content}
                     alt={attachment.originalName || 'pasted image'}
+                    sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, mr: 1 }}
+                  />
+                ) : attachment.type === 'video' ? (
+                  <Box
+                    component="video"
+                    src={attachment.content}
                     sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, mr: 1 }}
                   />
                 ) : attachment.type === 'document' ? (
@@ -500,7 +547,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             ref={fileInputRef}
             onChange={handleFileChange}
             style={{ display: 'none' }}
-            accept=".txt,.md,.json,.csv,.html,.xml,.js,.ts,.jsx,.tsx,.css,.scss"
+            accept="image/*,audio/*,video/*,.pdf,.txt,.md,.json,.csv,.html,.xml,.js,.ts,.jsx,.tsx,.css,.scss"
           />
 
           {/* Audio recording button */}

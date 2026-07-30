@@ -933,9 +933,24 @@ export class ProcessNode extends BaseNode {
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
           });
 
-        // First try the authored request unchanged. Some OpenRouter image models
-        // have no provider endpoint that accepts even a handoff-only tool block.
-        modelResult = await callModelWithTools(tools);
+        // Provider catalogues can tell us before the request that a model lacks
+        // tool support. Strip only handoff-only plumbing when routing remains
+        // deterministic; executable/MCP tools are never silently removed.
+        let initialTools = tools;
+        if (
+          this.canRunWithoutTools(prepResult, node_params, tools) &&
+          await this.discoverBoundModelToolSupport(prepResult) === false
+        ) {
+          log.info(
+            `[ProcessNode ${prepResult.nodeId}] Provider metadata reports no tool support; calling without handoff-only tools`,
+          );
+          initialTools = undefined;
+          usedToolFreeFallback = true;
+        }
+
+        // Unknown capabilities retain the error-driven compatibility fallback
+        // below because many OpenAI-compatible providers expose only id/name.
+        modelResult = await callModelWithTools(initialTools);
 
         // Retry exactly once without tools, but only when the removed block is
         // entirely handoff plumbing and the engine can route the plain response
@@ -943,6 +958,7 @@ export class ProcessNode extends BaseNode {
         // silently removed.
         if (
           !modelResult.success &&
+          initialTools !== undefined &&
           this.canRetryWithoutTools(prepResult, node_params, tools, modelResult.error)
         ) {
           log.warn(
@@ -1192,6 +1208,54 @@ export class ProcessNode extends BaseNode {
     return hasConditionedEdge || hasSingleBareEdge;
   }
 
+  private canRunWithoutTools(
+    prepResult: ProcessNodePrepResult,
+    node_params: ProcessNodeParams | undefined,
+    tools: OpenAI.ChatCompletionTool[] | undefined,
+  ): boolean {
+    if (!tools?.length) return false;
+    if ((node_params?.properties?.mcpNodes?.length ?? 0) > 0) return false;
+    if (!this.hasAutomaticToolFreeRoute(node_params)) return false;
+
+    const definitions = prepResult.availableTools ?? [];
+    return (
+      definitions.length > 0 &&
+      definitions.every((tool) => !tool.server && tool.name.startsWith('handoff_to_')) &&
+      tools.every(
+        (tool) => tool.type === 'function' && tool.function.name.startsWith('handoff_to_')
+      )
+    );
+  }
+
+  /**
+   * Prefer persisted capability metadata. For legacy OpenRouter models saved
+   * before discovery existed, consult the cached provider catalogue so the very
+   * first execution can avoid a known-invalid tool request too.
+   */
+  private async discoverBoundModelToolSupport(
+    prepResult: ProcessNodePrepResult,
+  ): Promise<boolean | undefined> {
+    try {
+      const model = await modelService.getModel(prepResult.boundModel);
+      if (!model) return undefined;
+      if (model.supportsTools !== undefined) return model.supportsTools;
+      if (model.provider !== 'openrouter' || !model.baseUrl) return undefined;
+
+      const discovered = await modelService.fetchProviderModels(
+        model.baseUrl,
+        model.id,
+        model.name,
+      );
+      return discovered.find(candidate => candidate.id === model.name)?.supportsTools;
+    } catch (error) {
+      log.warn('Could not discover bound-model tool capability; using provider fallback', {
+        modelId: prepResult.boundModel,
+        error,
+      });
+      return undefined;
+    }
+  }
+
   /**
    * Stripping tools is safe only when every advertised capability is routing
    * plumbing. A bound MCP node or any synthetic/executable tool keeps the
@@ -1203,17 +1267,9 @@ export class ProcessNode extends BaseNode {
     tools: OpenAI.ChatCompletionTool[] | undefined,
     error: unknown
   ): boolean {
-    if (!tools?.length || !isUnsupportedToolUseError(error)) return false;
-    if ((node_params?.properties?.mcpNodes?.length ?? 0) > 0) return false;
-    if (!this.hasAutomaticToolFreeRoute(node_params)) return false;
-
-    const definitions = prepResult.availableTools ?? [];
     return (
-      definitions.length > 0 &&
-      definitions.every((tool) => !tool.server && tool.name.startsWith('handoff_to_')) &&
-      tools.every(
-        (tool) => tool.type === 'function' && tool.function.name.startsWith('handoff_to_')
-      )
+      isUnsupportedToolUseError(error) &&
+      this.canRunWithoutTools(prepResult, node_params, tools)
     );
   }
 

@@ -3,8 +3,10 @@ import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { extractText, extractImageParts, parseToolArgs } from './messageUtils';
+import { extractText, extractMediaParts, parseToolArgs } from './messageUtils';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { mediaTypeFromMime } from '@/shared/types/model/media';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
 
@@ -18,6 +20,7 @@ const log = createLogger('backend/services/model/adapters/geminiAdapter');
 // (literal addresses only — no DNS resolution).
 const FETCH_IMAGE_TIMEOUT_MS = 30_000; // 30s — deliberately short vs the LLM ceiling
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB pre-base64
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const GEMINI_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 /** Normalize a response Content-Type to a Gemini-accepted image MIME, or null. */
@@ -26,6 +29,7 @@ function normalizeGeminiImageMime(contentType: string): string | null {
   if (mime === 'image/jpg') return 'image/jpeg';
   return GEMINI_IMAGE_MIME.has(mime) ? mime : null;
 }
+
 
 /**
  * Conservative SSRF guard: block requests to obvious private / loopback /
@@ -145,17 +149,19 @@ export async function toGeminiContents(
       // we don't perform. A fetch that fails (network error, non-image, too
       // large, blocked host) drops just that image with a warning — the turn's
       // text still goes through.
-      for (const img of extractImageParts(msg.content)) {
-        if (img.base64 && img.mimeType) {
-          parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
-        } else if (img.url) {
+      for (const media of extractMediaParts(msg.content)) {
+        if (media.data && media.mimeType) {
+          parts.push({ inlineData: { mimeType: media.mimeType, data: media.data } });
+        } else if (media.url) {
           try {
-            const inline = await fetchRemoteImageAsInline(img.url, signal);
+            const inline = media.type === 'image'
+              ? await fetchRemoteImageAsInline(media.url, signal)
+              : await fetchRemoteMediaAsInline(media.url, signal);
             parts.push({ inlineData: inline });
           } catch (err) {
             log.warn(
-              'Skipping remote image for Gemini (fetch failed / not an image / too large)',
-              { url: img.url, reason: err instanceof Error ? err.message : String(err) }
+              'Skipping remote media for Gemini (fetch failed / unsupported / too large)',
+              { url: media.url, reason: err instanceof Error ? err.message : String(err) }
             );
           }
         }
@@ -234,16 +240,26 @@ export function toGeminiTools(tools?: OpenAI.ChatCompletionTool[]): FunctionDecl
     }));
 }
 
+function requestedGeminiModalities(outputModalities?: string[]): import('@google/genai').Modality[] | undefined {
+  const modalities = (outputModalities ?? [])
+    .map(value => value.toUpperCase())
+    .filter(value => value === 'TEXT' || value === 'IMAGE' || value === 'AUDIO');
+  return modalities.some(value => value !== 'TEXT')
+    ? Array.from(new Set(modalities)) as import('@google/genai').Modality[]
+    : undefined;
+}
+
 /** Map a Gemini response back into an OpenAI-shaped ChatCompletion. */
 function toChatCompletion(
   modelName: string,
   resp: GenerateContentResponse
-): OpenAI.Chat.Completions.ChatCompletion {
+): { completion: OpenAI.Chat.Completions.ChatCompletion; media: ModelMediaPart[] } {
   const candidate = resp.candidates?.[0];
   const parts = candidate?.content?.parts ?? [];
 
   let text = '';
   const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+  const media: ModelMediaPart[] = [];
   for (const part of parts) {
     if (typeof part.text === 'string') {
       text += part.text;
@@ -258,6 +274,20 @@ function toChatCompletion(
           arguments: JSON.stringify(part.functionCall.args ?? {}),
         },
       });
+    } else if (part.inlineData?.data) {
+      const mimeType = part.inlineData.mimeType ?? 'application/octet-stream';
+      media.push({
+        type: mediaTypeFromMime(mimeType),
+        data: part.inlineData.data,
+        mimeType,
+      });
+    } else if (part.fileData?.fileUri) {
+      const mimeType = part.fileData.mimeType ?? 'application/octet-stream';
+      media.push({
+        type: mediaTypeFromMime(mimeType),
+        url: part.fileData.fileUri,
+        mimeType,
+      });
     }
   }
 
@@ -266,7 +296,7 @@ function toChatCompletion(
 
   const usage = resp.usageMetadata;
 
-  return {
+  const completion: OpenAI.Chat.Completions.ChatCompletion = {
     id: `gemini_${uuidv4()}`,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
@@ -292,6 +322,7 @@ function toChatCompletion(
         }
       : undefined,
   };
+  return { completion, media };
 }
 
 /**
@@ -316,6 +347,7 @@ export class GeminiAdapter implements CompletionAdapter {
 
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);
     const functionDeclarations = toGeminiTools(tools);
+    const responseModalities = requestedGeminiModalities(model.outputModalities);
     const thinkingConfig =
       typeof model.thinkingBudget === 'number'
         ? { thinkingBudget: model.thinkingBudget }
@@ -343,12 +375,13 @@ export class GeminiAdapter implements CompletionAdapter {
         ...(thinkingConfig ? { thinkingConfig } : {}),
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
+        ...(responseModalities ? { responseModalities } : {}),
         // The abort signal (Stop button) cancels the in-flight HTTP request.
         ...(signal ? { abortSignal: signal } : {}),
       },
     });
 
-    return { completion: toChatCompletion(model.name, resp) };
+    return toChatCompletion(model.name, resp);
   }
 
   async createStreamCompletion({
@@ -364,6 +397,7 @@ export class GeminiAdapter implements CompletionAdapter {
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);
     const functionDeclarations = toGeminiTools(tools);
+    const responseModalities = requestedGeminiModalities(model.outputModalities);
     const thinkingConfig =
       typeof model.thinkingBudget === 'number'
         ? { thinkingBudget: model.thinkingBudget }
@@ -383,6 +417,7 @@ export class GeminiAdapter implements CompletionAdapter {
         ...(thinkingConfig ? { thinkingConfig } : {}),
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
+        ...(responseModalities ? { responseModalities } : {}),
         ...(signal ? { abortSignal: signal } : {}),
       },
     });
@@ -391,6 +426,8 @@ export class GeminiAdapter implements CompletionAdapter {
     let text = '';
     let usage: GenerateContentResponse['usageMetadata'];
     const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const media: ModelMediaPart[] = [];
+    const seenMedia = new Set<string>();
     const toolIndexById = new Map<string, number>();
     let activePartialToolIndex: number | undefined;
 
@@ -435,12 +472,39 @@ export class GeminiAdapter implements CompletionAdapter {
               ...(argumentsDelta ? { argumentsDelta } : {}),
             },
           });
+        } else if (part.inlineData?.data) {
+          const mimeType = part.inlineData.mimeType ?? 'application/octet-stream';
+          const item: ModelMediaPart = {
+            type: mediaTypeFromMime(mimeType),
+            data: part.inlineData.data,
+            mimeType,
+          };
+          const key = `${item.type}|${item.mimeType}|${item.data}`;
+          if (!seenMedia.has(key)) {
+            seenMedia.add(key);
+            media.push(item);
+            onModelDelta?.({ messageId: liveMessageId, mediaPart: item });
+          }
+        } else if (part.fileData?.fileUri) {
+          const mimeType = part.fileData.mimeType ?? 'application/octet-stream';
+          const item: ModelMediaPart = {
+            type: mediaTypeFromMime(mimeType),
+            url: part.fileData.fileUri,
+            mimeType,
+          };
+          const key = `${item.type}|${item.mimeType}|${item.url}`;
+          if (!seenMedia.has(key)) {
+            seenMedia.add(key);
+            media.push(item);
+            onModelDelta?.({ messageId: liveMessageId, mediaPart: item });
+          }
         }
       }
     }
 
     return {
       liveMessageId,
+      media,
       completion: {
         id: responseId,
         object: 'chat.completion',
@@ -469,4 +533,65 @@ export class GeminiAdapter implements CompletionAdapter {
       },
     };
   }
+}
+
+async function fetchRemoteMediaAsInline(
+  url: string,
+  signal?: AbortSignal
+): Promise<{ mimeType: string; data: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('invalid URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`unsupported protocol "${parsed.protocol}"`);
+  }
+  if (isBlockedImageHost(parsed.hostname)) {
+    throw new Error('blocked host (private/loopback)');
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_IMAGE_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const rawType = response.headers.get('content-type') || '';
+    const mimeType = normalizeGeminiMediaMime(rawType);
+    if (!mimeType) throw new Error(`unsupported content-type "${rawType}"`);
+    const cap = mimeType.startsWith('image/') ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
+    const declared = response.headers.get('content-length');
+    if (declared && Number(declared) > cap) {
+      throw new Error(`media too large (${declared} bytes > ${cap})`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > cap) {
+      throw new Error(`media too large (${buffer.length} bytes > ${cap})`);
+    }
+    return { mimeType, data: buffer.toString('base64') };
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+function normalizeGeminiMediaMime(contentType: string): string | null {
+  const image = normalizeGeminiImageMime(contentType);
+  if (image) return image;
+  const mime = contentType.split(';')[0].trim().toLowerCase();
+  if (
+    mime.startsWith('audio/') ||
+    mime.startsWith('video/') ||
+    mime === 'application/pdf' ||
+    mime === 'text/plain'
+  ) {
+    return mime;
+  }
+  return null;
 }

@@ -90,12 +90,15 @@ const log = createLogger('frontend/components/Chat/index');
 // Define types for our chat data
 export interface Attachment {
   id: string;
-  type: 'document' | 'audio' | 'image';
+  type: 'document' | 'audio' | 'image' | 'video';
   // For document/audio this is text (the contents / transcription). For an
   // image it is a `data:` URL (e.g. `data:image/png;base64,...`) — the form a
   // pasted screenshot is read into.
   content: string;
   originalName?: string;
+  mimeType?: string;
+  /** Optional text transcript retained alongside a raw audio attachment. */
+  transcript?: string;
 }
 
 // Use the shared FlujoChatMessage type and extend it with UI-specific fields
@@ -115,20 +118,66 @@ function buildApiContent(msg: ChatMessage): OpenAI.ChatCompletionUserMessagePara
   }
   let text = typeof msg.content === 'string' ? msg.content : '';
   const attachments = msg.attachments ?? [];
-  const docAudio = attachments.filter(a => a.type !== 'image');
+  const textAttachments = attachments.filter(
+    attachment =>
+      attachment.type === 'document' &&
+      !attachment.content.startsWith('data:'),
+  );
   const images = attachments.filter(a => a.type === 'image');
-  if (docAudio.length > 0) {
-    text += '\n\n' + docAudio.map(a => `[${a.type.toUpperCase()}]: ${a.content}`).join('\n\n');
+  const binary = attachments.filter(
+    attachment => attachment.type !== 'image' && !textAttachments.includes(attachment),
+  );
+  if (textAttachments.length > 0) {
+    text += '\n\n' + textAttachments
+      .map(a => `[DOCUMENT]: ${a.content}`)
+      .join('\n\n');
   }
-  if (images.length === 0) {
+  if (images.length === 0 && binary.length === 0) {
     return text;
   }
-  const parts: OpenAI.ChatCompletionContentPart[] = [];
+  const parts: Array<Record<string, unknown>> = [];
   if (text.trim()) parts.push({ type: 'text', text });
   for (const img of images) {
     parts.push({ type: 'image_url', image_url: { url: img.content } });
   }
-  return parts;
+  for (const attachment of binary) {
+    if (attachment.type === 'audio') {
+      const match = /^data:([^;,]+);base64,([\s\S]*)$/.exec(attachment.content);
+      const mimeType = attachment.mimeType ?? match?.[1];
+      if (match && (mimeType === 'audio/wav' || mimeType === 'audio/mpeg')) {
+        parts.push({
+          type: 'input_audio',
+          input_audio: {
+            data: match[2],
+            format: mimeType === 'audio/mpeg' ? 'mp3' : 'wav',
+          },
+        });
+      } else {
+        parts.push({
+          type: 'audio_url',
+          audio_url: { url: attachment.content, mime_type: mimeType },
+        });
+      }
+      if (attachment.transcript) {
+        parts.push({ type: 'text', text: `[Audio transcript]: ${attachment.transcript}` });
+      }
+    } else if (attachment.type === 'video') {
+      parts.push({
+        type: 'video_url',
+        video_url: { url: attachment.content, mime_type: attachment.mimeType },
+      });
+    } else {
+      parts.push({
+        type: 'file',
+        file: {
+          file_data: attachment.content,
+          filename: attachment.originalName,
+          mime_type: attachment.mimeType,
+        },
+      });
+    }
+  }
+  return parts as unknown as OpenAI.ChatCompletionUserMessageParam['content'];
 }
 
 // Represents the full conversation details including messages
@@ -1256,6 +1305,20 @@ const Chat: React.FC = () => {
           const draft = {
             ...existing,
             content: `${typeof existing.content === 'string' ? existing.content : ''}${event.delta ?? ''}`,
+            ...(event.mediaPart
+              ? {
+                  media: [
+                    ...(existing.media ?? []),
+                    ...(existing.media ?? []).some(part =>
+                      part.type === event.mediaPart?.type &&
+                      part.url === event.mediaPart?.url &&
+                      part.resourceUri === event.mediaPart?.resourceUri
+                    )
+                      ? []
+                      : [event.mediaPart],
+                  ],
+                }
+              : {}),
             ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
           } as ChatMessage;
 

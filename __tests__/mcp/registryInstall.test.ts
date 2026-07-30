@@ -110,6 +110,17 @@ describe('installRegistryServer', () => {
     expect(config.env.THE_API_KEY).toEqual({ value: 'sk-123', metadata: { isSecret: true } });
   });
 
+  it('applies portable global templates to existing stdio argument positions', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      argTemplates: [{ index: 2, value: '--token=${global:API_TOKEN}' }],
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.args).toEqual(['-y', '@example/voice@1.0.0', '--token=${global:API_TOKEN}']);
+  });
+
   it('resolveOnly returns the resolved plan WITHOUT spawning (no updateServerConfig)', async () => {
     registryGetJsonMock.mockResolvedValue({
       servers: [

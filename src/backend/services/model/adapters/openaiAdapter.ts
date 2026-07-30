@@ -4,6 +4,8 @@ import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
+import { extractAssistantMedia } from './messageUtils';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
 
@@ -28,6 +30,25 @@ const PROMPT_CACHE_KEY_PROVIDERS = new Set(['openai', 'openrouter']);
 const rejectedPromptCacheKey = new Set<string>();
 
 const endpointKey = (provider?: string, baseUrl?: string) => `${provider ?? 'openai'}|${baseUrl ?? ''}`;
+
+function applyRequestedOutputModalities(
+  body: Record<string, unknown>,
+  outputModalities?: string[],
+): void {
+  const requested = (outputModalities ?? [])
+    .map(modality => modality.toLowerCase())
+    .filter(modality => ['text', 'image', 'audio', 'video'].includes(modality));
+  if (!requested.some(modality => modality !== 'text')) return;
+
+  // OpenRouter image models require `modalities: ["image", "text"]`; OpenAI
+  // audio Chat Completions require audio configuration. Keep this duck-typed
+  // because the installed OpenAI SDK's union intentionally knows only the
+  // modalities supported by OpenAI's own Chat endpoint.
+  body.modalities = Array.from(new Set(requested));
+  if (requested.includes('audio')) {
+    body.audio = { voice: 'alloy', format: 'mp3' };
+  }
+}
 
 /**
  * True when a provider error is specifically "I don't know this parameter",
@@ -100,6 +121,10 @@ export class OpenAiAdapter implements CompletionAdapter {
     if (tools && tools.length > 0) {
       requestParams.tools = tools;
     }
+    applyRequestedOutputModalities(
+      requestParams as unknown as Record<string, unknown>,
+      model.outputModalities,
+    );
 
     // Cache-routing hint. OpenAI's automatic prompt cache is sharded, and without
     // this the routing hash comes from the prefix alone — so concurrent requests
@@ -142,7 +167,11 @@ export class OpenAiAdapter implements CompletionAdapter {
     };
 
     try {
-      return { completion: await send(sendCacheKey) };
+      const completion = await send(sendCacheKey);
+      return {
+        completion,
+        media: extractAssistantMedia(completion.choices?.[0]?.message),
+      };
     } catch (error) {
       // A gateway that rejects `prompt_cache_key` must not break the call: drop
       // the parameter permanently for this endpoint and retry once without it.
@@ -153,7 +182,11 @@ export class OpenAiAdapter implements CompletionAdapter {
           provider: model.provider,
           baseUrl: model.baseUrl,
         });
-        return { completion: await send(false) };
+        const completion = await send(false);
+        return {
+          completion,
+          media: extractAssistantMedia(completion.choices?.[0]?.message),
+        };
       }
       throw error;
     }
@@ -189,6 +222,10 @@ export class OpenAiAdapter implements CompletionAdapter {
         ? { stream_options: { include_usage: true } }
         : {}),
     };
+    applyRequestedOutputModalities(
+      requestParams as unknown as Record<string, unknown>,
+      model.outputModalities,
+    );
     const endpoint = endpointKey(model.provider, model.baseUrl);
     const sendCacheKey =
       !!promptCacheKey &&
@@ -212,6 +249,18 @@ export class OpenAiAdapter implements CompletionAdapter {
       let content = '';
       let usage: OpenAI.Completions.CompletionUsage | undefined;
       const calls: OpenAI.ChatCompletionMessageToolCall[] = [];
+      const media: ModelMediaPart[] = [];
+      const seenMedia = new Set<string>();
+      const streamedAudioChunks: string[] = [];
+      let streamedAudioTranscript = '';
+
+      const appendMedia = (part: ModelMediaPart) => {
+        const key = `${part.type}|${part.url ?? ''}|${part.data ?? ''}|${part.mimeType ?? ''}`;
+        if (seenMedia.has(key)) return;
+        seenMedia.add(key);
+        media.push(part);
+        onModelDelta?.({ messageId: liveMessageId, mediaPart: part });
+      };
 
       for await (const chunk of stream) {
         completionId = chunk.id || completionId;
@@ -221,10 +270,34 @@ export class OpenAiAdapter implements CompletionAdapter {
         const choice = chunk.choices?.[0];
         if (!choice) continue;
         if (choice.finish_reason) finishReason = choice.finish_reason;
-        if (choice.delta.content) {
-          content += choice.delta.content;
-          onModelDelta?.({ messageId: liveMessageId, contentDelta: choice.delta.content });
+        const deltaContent = choice.delta.content as unknown;
+        if (typeof deltaContent === 'string' && deltaContent) {
+          content += deltaContent;
+          onModelDelta?.({ messageId: liveMessageId, contentDelta: deltaContent });
+        } else if (Array.isArray(deltaContent)) {
+          const textDelta = deltaContent
+            .filter((part): part is { type: 'text'; text: string } =>
+              part?.type === 'text' && typeof part.text === 'string'
+            )
+            .map(part => part.text)
+            .join('');
+          if (textDelta) {
+            content += textDelta;
+            onModelDelta?.({ messageId: liveMessageId, contentDelta: textDelta });
+          }
         }
+        const rawDelta = choice.delta as unknown as {
+          audio?: { data?: string; transcript?: string; mime_type?: string; mimeType?: string };
+        };
+        if (rawDelta.audio?.data) streamedAudioChunks.push(rawDelta.audio.data);
+        if (rawDelta.audio?.transcript) streamedAudioTranscript += rawDelta.audio.transcript;
+        for (const part of extractAssistantMedia(choice.delta)) {
+          // Chat audio arrives as append-only base64 deltas and must be joined
+          // before it becomes a playable item. Other provider extensions (for
+          // example OpenRouter `images`) are complete items.
+          if (part.type !== 'audio' || !rawDelta.audio) appendMedia(part);
+        }
+        for (const part of extractAssistantMedia(chunk)) appendMedia(part);
         for (const part of choice.delta.tool_calls ?? []) {
           const index = part.index;
           const prior = calls[index];
@@ -251,8 +324,20 @@ export class OpenAiAdapter implements CompletionAdapter {
         }
       }
 
+      if (streamedAudioChunks.length > 0) {
+        appendMedia({
+          type: 'audio',
+          data: Buffer.concat(
+            streamedAudioChunks.map(chunk => Buffer.from(chunk, 'base64')),
+          ).toString('base64'),
+          mimeType: 'audio/mpeg',
+          ...(streamedAudioTranscript ? { transcript: streamedAudioTranscript } : {}),
+        });
+      }
+
       return {
         liveMessageId,
+        media,
         completion: {
           id: completionId,
           object: 'chat.completion',

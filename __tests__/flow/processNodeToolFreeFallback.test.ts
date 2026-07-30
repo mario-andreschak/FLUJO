@@ -1,4 +1,5 @@
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { modelService } from '@/backend/services/model';
 import { FinishNode, ProcessNode } from '@/backend/execution/flow/nodes';
 import type {
   ProcessNodeParams,
@@ -96,6 +97,33 @@ afterEach(() => {
 });
 
 describe('ProcessNode unsupported-tool fallback', () => {
+  beforeEach(() => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue(null);
+  });
+
+  it('uses discovered capability metadata to avoid the invalid tool request', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'google/gemini-3.1-flash-lite-image',
+      ApiKey: 'encrypted:test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      supportsTools: false,
+    });
+    const callModel = jest
+      .spyOn(ModelHandler, 'callModel')
+      .mockResolvedValue(successfulCompletion as any);
+    const node = nodeWithFinish();
+    const nodeParams = params();
+
+    const exec = await node.execCore(prep(), nodeParams);
+
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(callModel.mock.calls[0][0].tools).toBeUndefined();
+    expect(exec.usedToolFreeFallback).toBe(true);
+    await expect(node.post(prep(), exec, state(), nodeParams)).resolves.toBe('e-finish');
+  });
+
   it('retries a sole-handoff node without tools and automatically takes its only edge', async () => {
     const callModel = jest
       .spyOn(ModelHandler, 'callModel')

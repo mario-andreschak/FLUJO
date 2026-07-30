@@ -275,6 +275,81 @@ describe('fromResponse', () => {
     expect(reasoning).toHaveLength(1);
     expect(reasoning[0].id).toBe('rs_1');
   });
+
+  it('normalizes image-generation and audio output items as media', () => {
+    const { media } = fromResponse(responseWithToolCall({
+      output: [
+        {
+          type: 'image_generation_call',
+          id: 'ig_1',
+          status: 'completed',
+          result: 'IMAGE_BASE64',
+        },
+        {
+          type: 'message',
+          id: 'm_audio',
+          role: 'assistant',
+          status: 'completed',
+          content: [{
+            type: 'output_audio',
+            data: 'AUDIO_BASE64',
+            transcript: 'hello',
+            mime_type: 'audio/mpeg',
+          }],
+        },
+      ],
+    }) as never, 'gpt-5');
+
+    expect(media).toEqual([
+      { type: 'image', data: 'IMAGE_BASE64', mimeType: 'image/png' },
+      {
+        type: 'audio',
+        data: 'AUDIO_BASE64',
+        mimeType: 'audio/mpeg',
+        transcript: 'hello',
+      },
+    ]);
+  });
+
+  it('maps audio and file/video extensions into Responses input parts', () => {
+    const input = toResponsesInput([{
+      role: 'user',
+      content: [
+        {
+          type: 'input_audio',
+          input_audio: { data: 'AUDIO', format: 'mp3' },
+        },
+        {
+          type: 'file',
+          file: {
+            file_data: 'data:application/pdf;base64,PDF',
+            filename: 'brief.pdf',
+          },
+        },
+        {
+          type: 'video_url',
+          video_url: { url: 'data:video/mp4;base64,VIDEO' },
+        },
+      ],
+    } as never]);
+
+    expect(input).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'input_audio', data: 'AUDIO', format: 'mp3' },
+        {
+          type: 'input_file',
+          file_data: 'data:application/pdf;base64,PDF',
+          filename: 'brief.pdf',
+        },
+        {
+          type: 'input_file',
+          file_data: 'data:video/mp4;base64,VIDEO',
+          filename: 'video',
+        },
+      ],
+    }]);
+  });
 });
 
 describe('request shape', () => {
@@ -284,6 +359,16 @@ describe('request shape', () => {
       expect(bodyOf()).not.toHaveProperty('previous_response_id');
       expect(bodyOf()).not.toHaveProperty('conversation');
     });
+  });
+
+  it('enables the Responses image-generation tool for image-output models', async () => {
+    await call(
+      { ...model(), outputModalities: ['text', 'image'] },
+      [{ role: 'user', content: 'draw a banana' }],
+    );
+    expect(bodyOf().tools).toEqual(expect.arrayContaining([
+      { type: 'image_generation' },
+    ]));
   });
 
   it('requests encrypted reasoning content', async () => {

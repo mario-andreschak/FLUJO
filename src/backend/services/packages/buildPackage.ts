@@ -101,6 +101,9 @@ export function previewPackageGlobals(
       if (declaration.globalVar) names.add(declaration.globalVar);
       if (declaration.globalTemplate) collectGlobalsDeep(declaration.globalTemplate, names);
     }
+    for (const template of server.argTemplates ?? []) {
+      collectGlobalsDeep(template.value, names);
+    }
   }
   return Array.from(names, (name) => ({
       name,
@@ -431,6 +434,14 @@ export function validateMcpSelection(
     }
     const headers = (config as { headers?: Record<string, EnvVarValue> }).headers;
     const headerDeclarations: HeaderDeclaration[] = declarationsFrom(headers, isSecretHeaderKey);
+    const argTemplates =
+      config.transport === 'stdio' && Array.isArray(config.args)
+        ? config.args.flatMap((value, index) =>
+            typeof value === 'string' && collectGlobalsDeep(value).size > 0
+              ? [{ index, value }]
+              : [],
+          )
+        : [];
     packaged.push({
       name: config.name,
       transport: config.transport,
@@ -440,6 +451,7 @@ export function validateMcpSelection(
       installOrigin,
       envDeclarations: declarationsFrom(config.env, isSecretEnvVar),
       ...(headerDeclarations.length ? { headerDeclarations } : {}),
+      ...(argTemplates.length ? { argTemplates } : {}),
     });
   }
 
@@ -692,6 +704,9 @@ export function buildManifestFromEntities(
       if (decl.globalTemplate) {
         collectGlobalsDeep(decl.globalTemplate, requiredGlobals);
       }
+    }
+    for (const template of server.argTemplates ?? []) {
+      collectGlobalsDeep(template.value, requiredGlobals);
     }
   }
   const globals = normalizeGlobalDeclarations(

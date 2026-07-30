@@ -54,3 +54,13 @@ export interface EnvDeclaration {
 
 /** Declaration of ONE custom HTTP header (same shape/rules as EnvDeclaration). */
 export type HeaderDeclaration = EnvDeclaration;
+
+/**
+ * A portable override for one stdio argument that contains host-global
+ * references. The index preserves its position in the registry-provided
+ * argument list without packaging the command or unrelated arguments.
+ */
+export interface McpArgTemplate {
+  index: number;
+  value: string;
+}

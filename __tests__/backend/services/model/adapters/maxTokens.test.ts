@@ -86,6 +86,37 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       await new OpenAiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0 });
       expect(openaiCreate.mock.calls[0][0]).not.toHaveProperty('max_tokens');
     });
+
+    test('requests advertised image output and normalizes OpenRouter message.images', async () => {
+      const url = 'data:image/png;base64,AAAA';
+      openaiCreate.mockResolvedValueOnce({
+        id: 'c-image',
+        object: 'chat.completion',
+        created: 0,
+        model: 'image-model',
+        choices: [{
+          index: 0,
+          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: null,
+            images: [{ type: 'image_url', image_url: { url } }],
+          },
+        }],
+      });
+
+      const result = await new OpenAiAdapter().createCompletion({
+        model: { ...MODEL, outputModalities: ['image', 'text'] },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+
+      expect(openaiCreate.mock.calls[0][0]).toHaveProperty('modalities', ['image', 'text']);
+      expect(result.media).toEqual([
+        expect.objectContaining({ type: 'image', url, mimeType: 'image/png', data: 'AAAA' }),
+      ]);
+    });
     geminiGenerateStream.mockResolvedValue((async function* () {
       yield {
         responseId: 'gemini-stream',
@@ -170,6 +201,34 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       );
     });
 
+    test('requests advertised image output and keeps inlineData from the response', async () => {
+      geminiGenerate.mockResolvedValueOnce({
+        candidates: [{
+          content: {
+            parts: [
+              { text: 'Here it is.' },
+              { inlineData: { mimeType: 'image/png', data: 'AAAA' } },
+            ],
+          },
+        }],
+      });
+
+      const result = await new GeminiAdapter().createCompletion({
+        model: { ...MODEL, outputModalities: ['text', 'image'] },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+
+      expect(geminiGenerate.mock.calls[0][0]).toEqual(expect.objectContaining({
+        config: expect.objectContaining({ responseModalities: ['TEXT', 'IMAGE'] }),
+      }));
+      expect(result.completion.choices[0].message.content).toBe('Here it is.');
+      expect(result.media).toEqual([
+        { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+      ]);
+    });
+
     test('streams text and function calls with one stable assistant id', async () => {
       geminiGenerateStream.mockResolvedValueOnce((async function* () {
         yield { responseId: 'g1', candidates: [{ content: { parts: [{ text: 'hel' }] } }] };
@@ -213,6 +272,34 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
         new Set([result.liveMessageId]),
       );
+    });
+
+    test('streams complete media parts without dropping them', async () => {
+      geminiGenerateStream.mockResolvedValueOnce((async function* () {
+        yield {
+          responseId: 'g-image',
+          candidates: [{
+            content: {
+              parts: [{ inlineData: { mimeType: 'image/webp', data: 'BBBB' } }],
+            },
+          }],
+        };
+      })());
+      const deltas: unknown[] = [];
+      const result = await new GeminiAdapter().createStreamCompletion({
+        model: { ...MODEL, outputModalities: ['image'] },
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+        onModelDelta: delta => deltas.push(delta),
+      });
+
+      expect(result.media).toEqual([
+        { type: 'image', mimeType: 'image/webp', data: 'BBBB' },
+      ]);
+      expect(deltas).toContainEqual(expect.objectContaining({
+        mediaPart: { type: 'image', mimeType: 'image/webp', data: 'BBBB' },
+      }));
     });
   });
 

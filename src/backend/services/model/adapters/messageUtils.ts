@@ -1,4 +1,6 @@
 import OpenAI from 'openai';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { mediaTypeFromMime } from '@/shared/types/model/media';
 
 /**
  * Flatten an OpenAI message `content` value to plain text. Handles the string
@@ -39,6 +41,12 @@ export interface ImagePart {
 // the `s` flag (which needs an es2018 target this project doesn't compile to).
 const DATA_URL_RE = /^data:([^;,]+)(?:;[^,]*)?,([\s\S]*)$/;
 
+export function parseDataUrl(url: string): { mimeType: string; base64: string } | undefined {
+  const match = DATA_URL_RE.exec(url);
+  if (!match || !/;base64/i.test(url)) return undefined;
+  return { mimeType: match[1], base64: match[2] };
+}
+
 /**
  * Pull image content parts out of an OpenAI message `content`. Returns [] for
  * the string form (no images) and for messages with no `image_url` parts. The
@@ -54,12 +62,200 @@ export function extractImageParts(
     if (!part || (part as { type?: string }).type !== 'image_url') continue;
     const url = (part as OpenAI.ChatCompletionContentPartImage).image_url?.url;
     if (!url) continue;
-    const m = DATA_URL_RE.exec(url);
-    if (m && /;base64/i.test(url)) {
-      out.push({ url, mimeType: m[1], base64: m[2] });
+    const parsed = parseDataUrl(url);
+    if (parsed) {
+      out.push({ url, mimeType: parsed.mimeType, base64: parsed.base64 });
     } else {
       out.push({ url });
     }
+  }
+  return out;
+}
+
+const AUDIO_FORMAT_MIME: Record<string, string> = {
+  wav: 'audio/wav',
+  mp3: 'audio/mpeg',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  opus: 'audio/opus',
+  pcm16: 'audio/pcm',
+};
+
+/**
+ * Extract every media part FLUJO accepts on its OpenAI-shaped internal wire.
+ * Standard image/input-audio parts and FLUJO's video/file extensions are all
+ * normalized here so native adapters do not each invent their own parser.
+ */
+export function extractMediaParts(content: unknown): ModelMediaPart[] {
+  if (!Array.isArray(content)) return [];
+  const media: ModelMediaPart[] = [];
+
+  for (const raw of content) {
+    if (!raw || typeof raw !== 'object') continue;
+    const part = raw as Record<string, any>;
+
+    if (part.type === 'image_url' && typeof part.image_url?.url === 'string') {
+      const parsed = parseDataUrl(part.image_url.url);
+      media.push({
+        type: 'image',
+        url: part.image_url.url,
+        ...(parsed ? { mimeType: parsed.mimeType, data: parsed.base64 } : {}),
+      });
+      continue;
+    }
+
+    if (part.type === 'input_audio' && typeof part.input_audio?.data === 'string') {
+      const format = String(part.input_audio.format ?? 'wav').toLowerCase();
+      media.push({
+        type: 'audio',
+        mimeType: AUDIO_FORMAT_MIME[format] ?? `audio/${format}`,
+        data: part.input_audio.data,
+      });
+      continue;
+    }
+
+    const urlContainer =
+      part.type === 'audio_url' ? part.audio_url
+        : part.type === 'video_url' ? part.video_url
+          : undefined;
+    if (urlContainer && typeof urlContainer.url === 'string') {
+      const parsed = parseDataUrl(urlContainer.url);
+      const fallbackType = part.type === 'audio_url' ? 'audio' : 'video';
+      media.push({
+        type: fallbackType,
+        url: urlContainer.url,
+        mimeType: parsed?.mimeType ?? urlContainer.mime_type,
+        ...(parsed ? { data: parsed.base64 } : {}),
+      });
+      continue;
+    }
+
+    if (part.type === 'file' || part.type === 'input_file') {
+      const file = part.file ?? part;
+      const url = file.url ?? file.file_url ?? file.file_data;
+      const parsed = typeof url === 'string' ? parseDataUrl(url) : undefined;
+      const mimeType = parsed?.mimeType ?? file.mime_type ?? file.mimeType;
+      media.push({
+        type: mediaTypeFromMime(mimeType),
+        ...(typeof url === 'string' ? { url } : {}),
+        ...(parsed ? { data: parsed.base64 } : {}),
+        ...(mimeType ? { mimeType } : {}),
+        ...(file.filename || file.name ? { name: file.filename ?? file.name } : {}),
+      });
+    }
+  }
+  return media;
+}
+
+/**
+ * Normalize provider extensions on an assistant message. OpenRouter returns
+ * generated images in `message.images`; OpenAI audio models use
+ * `message.audio`; compatible gateways may expose equivalent audio/video/file
+ * arrays. Unknown entries are ignored rather than poisoning the completion.
+ */
+export function extractAssistantMedia(message: unknown): ModelMediaPart[] {
+  if (!message || typeof message !== 'object') return [];
+  const candidate = message as Record<string, any>;
+  const out: ModelMediaPart[] = [
+    ...extractMediaParts(candidate.content),
+    ...extractNativeMediaParts(candidate.content),
+  ];
+
+  const collectUrlArray = (field: string, type: ModelMediaPart['type']) => {
+    const entries = candidate[field];
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      const url =
+        entry?.image_url?.url ??
+        entry?.audio_url?.url ??
+        entry?.video_url?.url ??
+        entry?.file_url?.url ??
+        entry?.url;
+      const data = entry?.data;
+      if (typeof url !== 'string' && typeof data !== 'string') continue;
+      const parsed = typeof url === 'string' ? parseDataUrl(url) : undefined;
+      out.push({
+        type,
+        ...(typeof url === 'string' ? { url } : {}),
+        ...(typeof data === 'string' ? { data } : parsed ? { data: parsed.base64 } : {}),
+        ...(parsed?.mimeType || entry?.mimeType || entry?.mime_type
+          ? { mimeType: parsed?.mimeType ?? entry.mimeType ?? entry.mime_type }
+          : {}),
+        ...(entry?.name ? { name: entry.name } : {}),
+      });
+    }
+  };
+
+  collectUrlArray('images', 'image');
+  collectUrlArray('audios', 'audio');
+  collectUrlArray('videos', 'video');
+  collectUrlArray('files', 'file');
+
+  if (candidate.audio && typeof candidate.audio === 'object') {
+    const audio = candidate.audio;
+    if (typeof audio.data === 'string') {
+      out.push({
+        type: 'audio',
+        data: audio.data,
+        mimeType: audio.mime_type ?? audio.mimeType ?? 'audio/mpeg',
+        ...(typeof audio.transcript === 'string' ? { transcript: audio.transcript } : {}),
+      });
+    }
+  }
+
+  return out.filter((part, index, all) => {
+    const key = `${part.type}|${part.url ?? ''}|${part.data ?? ''}|${part.mimeType ?? ''}`;
+    return all.findIndex(candidatePart =>
+      `${candidatePart.type}|${candidatePart.url ?? ''}|${candidatePart.data ?? ''}|${candidatePart.mimeType ?? ''}` === key
+    ) === index;
+  });
+}
+
+/**
+ * Best-effort normalization for SDK-native content blocks. This keeps the
+ * Claude Agent SDK and Codex transcript adapters future-proof without claiming
+ * that their current text-output models generate media.
+ */
+export function extractNativeMediaParts(value: unknown): ModelMediaPart[] {
+  const items = Array.isArray(value) ? value : [value];
+  const out: ModelMediaPart[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const block = item as Record<string, any>;
+    const inline = block.inlineData ?? block.inline_data;
+    const source = block.source ?? inline ?? block;
+    const mimeType =
+      source.mimeType ??
+      source.mime_type ??
+      source.media_type ??
+      block.mimeType ??
+      block.mime_type;
+    const explicitType = String(block.type ?? '').toLowerCase();
+    const isMediaBlock =
+      ['image', 'audio', 'video', 'file', 'document', 'generated_image'].includes(explicitType) ||
+      Boolean(inline) ||
+      (typeof mimeType === 'string' &&
+        /^(image|audio|video)\//i.test(mimeType));
+    if (!isMediaBlock) continue;
+
+    const data = source.data ?? block.data;
+    const url =
+      source.url ??
+      source.uri ??
+      source.fileUri ??
+      block.url ??
+      block.uri;
+    if (typeof data !== 'string' && typeof url !== 'string') continue;
+    out.push({
+      type: explicitType === 'document' || explicitType === 'file'
+        ? 'file'
+        : mediaTypeFromMime(mimeType),
+      ...(typeof data === 'string' ? { data } : {}),
+      ...(typeof url === 'string' ? { url } : {}),
+      ...(typeof mimeType === 'string' ? { mimeType } : {}),
+      ...(typeof block.name === 'string' ? { name: block.name } : {}),
+      ...(typeof block.transcript === 'string' ? { transcript: block.transcript } : {}),
+    });
   }
   return out;
 }

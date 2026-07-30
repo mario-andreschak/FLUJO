@@ -766,10 +766,30 @@ async function adoptAndConfigureServer(
   for (const [envName, value] of Object.entries(resolvedEnv)) {
     mergedEnv[envName] = secretEnvNames.has(envName) ? { value, metadata: { isSecret: true } } : value;
   }
+  const existingArgs = (existingConfig as { args?: string[] }).args;
+  const mergedArgs = Array.isArray(existingArgs) ? [...existingArgs] : [];
+  for (const template of server.argTemplates ?? []) {
+    if (
+      template.index > mergedArgs.length ||
+      (template.index < mergedArgs.length &&
+        !/\$\{global:[A-Za-z0-9_.-]+\}/.test(mergedArgs[template.index]))
+    ) {
+      const error =
+        `argument template index ${template.index} cannot replace a static existing argument`;
+      summary.servers.push({ localName: server.name, source, installed: false, error });
+      summary.skipped.push({ type: 'server', name: server.name, note: error });
+      return;
+    }
+    mergedArgs[template.index] = template.value;
+  }
 
   const saved = await mcpService.updateServerConfig(
     server.name,
-    { env: mergedEnv, folder: packageFolder } as Partial<MCPServerConfig>,
+    {
+      env: mergedEnv,
+      folder: packageFolder,
+      ...(server.argTemplates?.length ? { args: mergedArgs } : {}),
+    } as Partial<MCPServerConfig>,
   );
   const failed =
     !Array.isArray(saved) &&
@@ -849,7 +869,11 @@ async function installServer(
       summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
       return;
     }
-    const result = await installRegistryServer(registryName, env.values);
+    const result = server.argTemplates?.length
+      ? await installRegistryServer(registryName, env.values, {
+          argTemplates: server.argTemplates,
+        })
+      : await installRegistryServer(registryName, env.values);
     const entry: InstallServerResult = {
       localName: server.name,
       source,

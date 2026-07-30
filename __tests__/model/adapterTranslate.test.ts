@@ -32,6 +32,26 @@ const MULTIMODAL_CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
   },
 ];
 
+const OTHER_MEDIA_CONVERSATION = [{
+  role: 'user',
+  content: [
+    { type: 'text', text: 'Inspect these attachments.' },
+    { type: 'input_audio', input_audio: { data: 'AUDIO', format: 'wav' } },
+    {
+      type: 'video_url',
+      video_url: { url: 'data:video/mp4;base64,VIDEO', mime_type: 'video/mp4' },
+    },
+    {
+      type: 'file',
+      file: {
+        file_data: 'data:application/pdf;base64,PDF',
+        filename: 'brief.pdf',
+        mime_type: 'application/pdf',
+      },
+    },
+  ],
+}] as unknown as OpenAI.ChatCompletionMessageParam[];
+
 // A representative tool-using conversation in OpenAI wire format:
 // system + user, an assistant turn with a tool_call, then the tool result.
 const CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
@@ -99,6 +119,23 @@ describe('anthropic translation', () => {
     expect(tools[0]).toMatchObject({ name: 'mcp_get_weather_abc', description: 'Get weather' });
     expect(tools[0].input_schema).toMatchObject({ type: 'object' });
   });
+
+  it('maps PDF attachments to document blocks and labels unsupported audio/video', () => {
+    const { messages } = toAnthropicMessages(OTHER_MEDIA_CONVERSATION);
+    const blocks = messages[0].content as any[];
+    expect(blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'document',
+        source: expect.objectContaining({
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: 'PDF',
+        }),
+      }),
+      expect.objectContaining({ type: 'text', text: '[Unsupported audio attachment]' }),
+      expect.objectContaining({ type: 'text', text: '[Unsupported video attachment]' }),
+    ]));
+  });
 });
 
 describe('gemini translation', () => {
@@ -139,6 +176,15 @@ describe('gemini translation', () => {
       mimeType: 'image/png',
       data: PNG_DATA_URL.split(',')[1],
     });
+  });
+
+  it('maps audio, video, and file attachments to Gemini inlineData parts', async () => {
+    const { contents } = await toGeminiContents(OTHER_MEDIA_CONVERSATION);
+    expect(contents[0].parts).toEqual(expect.arrayContaining([
+      { inlineData: { mimeType: 'audio/wav', data: 'AUDIO' } },
+      { inlineData: { mimeType: 'video/mp4', data: 'VIDEO' } },
+      { inlineData: { mimeType: 'application/pdf', data: 'PDF' } },
+    ]));
   });
 
   describe('remote (http/https) image URLs (issue #172)', () => {

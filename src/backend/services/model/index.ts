@@ -29,6 +29,7 @@ import { modelCache, filterModels } from './cache';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getCompletionAdapter } from './adapters';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 /**
  * Result of a direct (single-turn) chat completion through ModelService.
@@ -36,7 +37,11 @@ import { getCompletionAdapter } from './adapters';
  * provider body (which can echo request headers) is never passed through.
  */
 export type DirectCompletionResult =
-  | { success: true; completion: OpenAI.Chat.Completions.ChatCompletion }
+  | {
+      success: true;
+      completion: OpenAI.Chat.Completions.ChatCompletion;
+      media?: ModelMediaPart[];
+    }
   | {
       success: false;
       error: { message: string; type: string; code: string; param?: string | null };
@@ -660,7 +665,7 @@ class ModelService {
         maxTokens: resolvedMaxTokens,
       });
 
-      const { completion } = await adapter.createCompletion({
+      const { completion, media } = await adapter.createCompletion({
         model,
         apiKey: decryptedApiKey,
         messages,
@@ -704,6 +709,7 @@ class ModelService {
       return {
         success: true,
         completion: { ...completion, model: `model-${modelIdentifier}` },
+        ...(media?.length ? { media } : {}),
       };
     } catch (error) {
       // Never include the key or the raw provider payload in what goes back out.

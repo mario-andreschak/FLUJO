@@ -69,6 +69,15 @@ export interface Model {
      */
     contextWindow?: number;
     /**
+     * Capability metadata discovered from the provider's model catalogue.
+     * `supportsTools` is intentionally optional: false means explicitly
+     * unsupported, while undefined means the provider did not tell us.
+     */
+    supportsTools?: boolean;
+    supportedParameters?: string[];
+    inputModalities?: string[];
+    outputModalities?: string[];
+    /**
      * Upper bound on agentic turns for self-orchestrating adapters (e.g. the
      * Claude subscription / Agent SDK path). A Process node can override this
      * per-node. Unset = the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).

@@ -8,6 +8,7 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 // Input for model call
 export interface ModelCallInput {
@@ -64,6 +65,8 @@ export interface ModelCallInput {
 // Result of model call
 export interface ModelCallResult {
   content?: string;
+  /** Direct model media normalized by the selected adapter. */
+  media?: ModelMediaPart[];
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   toolCalls?: ToolCallInfo[];
   fullResponse?: OpenAI.ChatCompletion;

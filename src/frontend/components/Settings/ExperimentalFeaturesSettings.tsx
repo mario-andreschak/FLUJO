@@ -87,6 +87,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleShowModelsWithoutToolsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Show models without tool capabilities toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        showModelsWithoutToolCapabilities: event.target.checked,
+      },
+    });
+  };
+
   return (
     <Box sx={{ p: 2 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -144,6 +155,24 @@ export default function ExperimentalFeaturesSettings() {
           automatically unload the previous model from VRAM before loading the new
           one. Recommended for GPU-constrained hardware. Note: concurrent Ollama
           requests to the same server are serialised while this is on.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.showModelsWithoutToolCapabilities ?? false}
+              onChange={handleShowModelsWithoutToolsChange}
+              name="showModelsWithoutToolCapabilities"
+            />
+          }
+          label="Show Models without tool capabilities"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Provider model lists hide models explicitly known not to support tool
+          calls. Turn this on to reveal image generators and other non-tool
+          models. Models with unknown capabilities remain visible either way.
         </Typography>
       </FormControl>
 

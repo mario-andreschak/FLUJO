@@ -202,6 +202,41 @@ export interface InstallOptions {
    * pass false to force it off for a specific install.
    */
   worksGate?: boolean;
+  /**
+   * Package-provided replacements for existing stdio argument positions. Each
+   * value must contain a portable `${global:NAME}` reference; raw commands and
+   * unrelated arguments are never accepted through this channel.
+   */
+  argTemplates?: Array<{ index: number; value: string }>;
+}
+
+function applyArgTemplates(
+  config: ReturnType<typeof buildConfigFromOption>,
+  templates: InstallOptions['argTemplates'],
+): ReturnType<typeof buildConfigFromOption> | { error: string } {
+  if (!templates?.length) return config;
+  if (config.transport !== 'stdio' || !Array.isArray(config.args)) {
+    return { error: 'Package argument templates require a stdio registry server' };
+  }
+  const args = [...config.args];
+  for (const template of templates) {
+    if (
+      !Number.isInteger(template.index) ||
+      template.index < 0 ||
+      template.index > args.length ||
+      (template.index < args.length &&
+        !/\$\{global:[A-Za-z0-9_.-]+\}/.test(args[template.index])) ||
+      !/\$\{global:[A-Za-z0-9_.-]+\}/.test(template.value)
+    ) {
+      return {
+        error:
+          `Invalid package argument template at index ${String(template.index)}; ` +
+          'templates may append arguments or replace an existing global-backed argument',
+      };
+    }
+    args[template.index] = template.value;
+  }
+  return { ...config, args };
 }
 
 /**
@@ -270,7 +305,12 @@ export async function installRegistryServer(
     };
   }
 
-  const config = applySpotlightEnvDefaults(buildConfigFromOption(server, option), envOverrides);
+  const baseConfig = applySpotlightEnvDefaults(buildConfigFromOption(server, option), envOverrides);
+  const templatedConfig = applyArgTemplates(baseConfig, options?.argTemplates);
+  if ('error' in templatedConfig) {
+    return { installed: false, plan, error: templatedConfig.error };
+  }
+  const config = templatedConfig;
   const serverName = config.name as string;
 
   // Never clobber an existing server: report it as available instead.

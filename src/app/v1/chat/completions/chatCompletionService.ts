@@ -11,6 +11,7 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { modelService } from '@/backend/services/model';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -117,6 +118,13 @@ async function processChatCompletionInternal(
     content: result.outputText,
     tool_calls: result.toolCalls,
   };
+  const latestAssistantMedia = [...result.messages]
+    .reverse()
+    .find(message => message.role === 'assistant' && message.media?.length)
+    ?.media;
+  if (latestAssistantMedia?.length) {
+    (responseMessage as unknown as { media?: ModelMediaPart[] }).media = latestAssistantMedia;
+  }
 
   // Determine finish reason. Order matters: awaiting_tool_approval reports as a
   // plain stop (the frontend keys off status, not this reason).
@@ -278,10 +286,13 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
   }
 
   if (data.stream === true) {
-    return createDirectModelStreamingResponse(data.model, result.completion);
+    return createDirectModelStreamingResponse(data.model, result.completion, result.media);
   }
 
-  return NextResponse.json(result.completion);
+  return NextResponse.json({
+    ...result.completion,
+    ...(result.media?.length ? { media: result.media } : {}),
+  });
 }
 
 // Emulate SSE streaming for a completion that already arrived in full — the
@@ -292,7 +303,8 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
 // which this path bypasses entirely.
 function createDirectModelStreamingResponse(
   model: string,
-  completion: OpenAI.Chat.Completions.ChatCompletion
+  completion: OpenAI.Chat.Completions.ChatCompletion,
+  media?: ModelMediaPart[],
 ) {
   const encoder = new TextEncoder();
   const chunkId = completion.id || `chatcmpl-${Date.now()}`;
@@ -319,6 +331,9 @@ function createDirectModelStreamingResponse(
       const content = typeof choice?.message?.content === 'string' ? choice.message.content : '';
       if (content.length > 0) {
         send(baseChunk({ content }, null));
+      }
+      if (media && media.length > 0) {
+        send(baseChunk({ media }, null));
       }
 
       const toolCalls = choice?.message?.tool_calls;
@@ -421,6 +436,9 @@ export function createStreamingResponse(
             streamedTextMessageIds.add(event.messageId);
             delta.content = event.delta;
           }
+          if (event.mediaPart) {
+            delta.media = [event.mediaPart];
+          }
           if (event.toolCallDelta) {
             const part = event.toolCallDelta;
             const calls = streamedToolParts.get(event.messageId) ?? new Map();
@@ -453,6 +471,9 @@ export function createStreamingResponse(
               msg.content.length > 0
             ) {
               send(baseChunk({ content: msg.content }, null));
+            }
+            if (msg.media && msg.media.length > 0) {
+              send(baseChunk({ media: msg.media }, null));
             }
             const seenToolParts = streamedToolParts.get(msg.id);
             const missingToolCalls = (msg.tool_calls ?? []).flatMap((toolCall, index) => {

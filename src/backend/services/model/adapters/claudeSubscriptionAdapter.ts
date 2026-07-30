@@ -16,7 +16,14 @@ import {
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
-import { extractText, extractImageParts, toAnthropicImageMediaType, truncateForPrompt } from './messageUtils';
+import {
+  extractText,
+  extractImageParts,
+  extractMediaParts,
+  extractNativeMediaParts,
+  toAnthropicImageMediaType,
+  truncateForPrompt,
+} from './messageUtils';
 import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import {
@@ -236,6 +243,7 @@ export function buildUserMessage(
   // call turn and a `tool` result each render as their own line (#160).
   const lines: string[] = [];
   const images: ReturnType<typeof extractImageParts> = [];
+  const documents: import('@/shared/types/model/media').ModelMediaPart[] = [];
 
   // Whether any tool exchange was rendered, and how many plain text turns there
   // were. Together these select the byte-identical no-tool fast paths below.
@@ -315,7 +323,20 @@ export function buildUserMessage(
         }
       }
     }
-    if (msg.role === 'user') images.push(...extractImageParts(msg.content));
+    if (msg.role === 'user') {
+      images.push(...extractImageParts(msg.content));
+      const otherMedia = extractMediaParts(msg.content).filter(item => item.type !== 'image');
+      for (const item of otherMedia) {
+        if (item.type === 'file' && item.mimeType === 'application/pdf') {
+          documents.push(item);
+          continue;
+        }
+        const label = `[Human ${item.type} attachment${item.name ? `: ${item.name}` : ''}]`;
+        lines.push(label);
+        plainTurns++;
+        if (plainTurns === 1) firstPlainText = label;
+      }
+    }
   }
 
   // Three render paths, deliberately ordered so BOTH tool-free ones stay
@@ -334,7 +355,7 @@ export function buildUserMessage(
 
   const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
-  if (images.length === 0) {
+  if (images.length === 0 && documents.length === 0) {
     return { systemPrompt, content: promptText };
   }
 
@@ -348,6 +369,23 @@ export function buildUserMessage(
       });
     } else {
       blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+    }
+  }
+  for (const document of documents) {
+    if (document.data) {
+      blocks.push({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: document.data,
+        },
+      } as Anthropic.ContentBlockParam);
+    } else if (document.url) {
+      blocks.push({
+        type: 'document',
+        source: { type: 'url', url: document.url },
+      } as Anthropic.ContentBlockParam);
     }
   }
   return { systemPrompt, content: blocks };
@@ -372,7 +410,10 @@ interface ToolInteraction {
 }
 
 type ToolUi = NonNullable<FlujoChatMessage['ui']>;
-type TranscriptMessage = OpenAI.ChatCompletionMessageParam & { ui?: ToolUi };
+type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
+  ui?: ToolUi;
+  media?: import('@/shared/types/model/media').ModelMediaPart[];
+};
 
 /**
  * Claude Subscription adapter — drives a Claude Pro/Max subscription through the
@@ -975,6 +1016,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
+          const turnMedia = extractNativeMediaParts(content);
           let turnHandoffUses = 0;
           if (Array.isArray(content)) {
             for (const block of content) {
@@ -998,7 +1040,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Mid-spawn narration (between successive spawn calls) is mid-action
           // plumbing, not the node's answer — the routing turn's own prose
           // (before any handoff was recorded) is still preserved below.
-          if (turnText && handoffCalls.length === 0) {
+          if ((turnText || turnMedia.length > 0) && handoffCalls.length === 0) {
             if (isMalformedClaudeToolCallProse(turnText)) {
               // Quarantine the complete contaminated SDK turn. Keeping adjacent
               // prose would require guessing a safe boundary; skipping it keeps
@@ -1015,7 +1057,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               // blocks precede tool_use within a turn, so this lands in the right
               // order: turn text -> tool pair -> next turn text -> ...
               recordMessage(
-                { role: 'assistant', content: turnText },
+                {
+                  role: 'assistant',
+                  content: turnText,
+                  ...(turnMedia.length ? { media: turnMedia } : {}),
+                },
                 `stream_claude_${message.uuid}`,
               );
               streamedText = true;

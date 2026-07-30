@@ -27,6 +27,7 @@ import {
   recordCodexSession,
   invalidateCodexSession,
 } from './codexSessionStore';
+import { extractNativeMediaParts } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -89,7 +90,10 @@ interface ToolInteraction {
 }
 
 type ToolUi = NonNullable<FlujoChatMessage['ui']>;
-type TranscriptMessage = OpenAI.ChatCompletionMessageParam & { ui?: ToolUi };
+type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
+  ui?: ToolUi;
+  media?: import('@/shared/types/model/media').ModelMediaPart[];
+};
 
 /** The Codex SDK usage block (turn.completed). */
 interface CodexUsage {
@@ -498,6 +502,15 @@ export class CodexAdapter implements CompletionAdapter {
             // reference them in text so the model at least knows they exist.
             inputItems.push({ type: 'text', text: `[image: ${block.source.url}]` });
           }
+        } else if (block.type === 'document') {
+          // The Codex SDK input union currently accepts text and local images,
+          // not arbitrary local files. Keep the attachment visible in context
+          // instead of silently dropping it; native Claude receives the actual
+          // document block through the shared buildUserMessage path.
+          inputItems.push({
+            type: 'text',
+            text: '[PDF document attachment supplied; this Codex SDK version cannot attach non-image files.]',
+          });
         }
       }
     }
@@ -634,16 +647,30 @@ export class CodexAdapter implements CompletionAdapter {
             }
             if (event.type === 'item.completed') {
               const item = event.item;
-              if (item.type === 'agent_message') {
+              const itemMedia = extractNativeMediaParts(item);
+              if (itemMedia.length > 0 && item.type !== 'agent_message') {
+                recordMessage(
+                  { role: 'assistant', content: '', media: itemMedia },
+                  getStreamMessageId(item.id),
+                );
+                streamedText = true;
+              } else if (item.type === 'agent_message') {
+                const messageMedia = extractNativeMediaParts(
+                  (item as unknown as { content?: unknown }).content,
+                );
                 // A message AFTER spawning means the model stopped queueing
                 // workers: end the run without accumulating post-handoff narration.
                 if (handoffCalls.length > 0) {
                   abortController.abort();
                   break;
                 }
-                if (item.text) {
+                if (item.text || messageMedia.length > 0) {
                   resultText += (resultText ? '\n\n' : '') + item.text;
-                  recordMessage({ role: 'assistant', content: item.text }, getStreamMessageId(item.id));
+                  recordMessage({
+                    role: 'assistant',
+                    content: item.text,
+                    ...(messageMedia.length ? { media: messageMedia } : {}),
+                  }, getStreamMessageId(item.id));
                   streamedText = true;
                 }
               } else if (item.type === 'command_execution') {

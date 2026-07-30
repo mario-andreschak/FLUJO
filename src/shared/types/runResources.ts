@@ -28,8 +28,14 @@ export type RunResourceKind = 'text' | 'image' | 'audio' | 'blob' | 'link';
  *  - 'mcp-link': a native MCP resource_link a tool returned.
  *  - 'tool-args': oversized tool-call PARAMETERS captured for later dereference
  *    (issue #168), keyed by the producing `toolCallId`.
+ *  - 'model-output': binary media returned directly by a model.
  */
-export type RunResourceSource = 'tool-result' | 'capture' | 'mcp-link' | 'tool-args';
+export type RunResourceSource =
+  | 'tool-result'
+  | 'capture'
+  | 'mcp-link'
+  | 'tool-args'
+  | 'model-output';
 
 export interface RunResourceProducer {
   source: RunResourceSource;

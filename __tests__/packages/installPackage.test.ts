@@ -498,6 +498,49 @@ describe('installPackage — adopt-and-configure', () => {
     };
     expect(config.headers.Authorization).toBe('Bearer ${global:GITHUB_TOKEN}');
   });
+
+  it('passes stdio global argument templates to a new registry install', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-arg-template-id',
+      name: 'arg-template-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['GITHUB_TOKEN'],
+      globals: [{ name: 'GITHUB_TOKEN', required: true, isSecret: true }],
+      secrets: [],
+      mcpServers: [
+        {
+          name: 'web-search',
+          transport: 'stdio',
+          installOrigin: { sourceType: 'registry', ref: 'ai.keenable/web-search' },
+          envDeclarations: [],
+          argTemplates: [
+            { index: 2, value: '--token=${global:GITHUB_TOKEN}' },
+          ],
+        },
+      ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'arg-template-pkg',
+      consentGranted: true,
+    });
+
+    expect(installRegistryServerMock).toHaveBeenCalledWith(
+      'ai.keenable/web-search',
+      {},
+      {
+        argTemplates: [
+          { index: 2, value: '--token=${global:GITHUB_TOKEN}' },
+        ],
+      },
+    );
+  });
 });
 
 describe('installPackage — {{secret.NAME}} placeholder resolution', () => {

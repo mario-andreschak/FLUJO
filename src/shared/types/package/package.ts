@@ -16,7 +16,12 @@
 import type { Flow } from '../flow/flow';
 import type { PlannedExecution, TriggerConfig, WebhookTriggerConfig } from '../plannedExecution/plannedExecution';
 import type { PackageSecret } from './secrets';
-import type { EnvDeclaration, HeaderDeclaration, McpInstallOrigin } from './installOrigin';
+import type {
+  EnvDeclaration,
+  HeaderDeclaration,
+  McpArgTemplate,
+  McpInstallOrigin,
+} from './installOrigin';
 
 /**
  * How a packaged model's API key is supplied at install time. The real key is
@@ -63,10 +68,11 @@ export interface PackagedModel {
 export type PackagedMcpTransport = 'stdio' | 'sse' | 'streamable' | 'websocket';
 
 /**
- * A packaged MCP server, by reference only. No `command`, `args`, `rootPath`,
+ * A packaged MCP server, by reference only. No `command`, raw `args`, `rootPath`,
  * `_buildCommand`, `_installCommand`, `serverUrl`, OAuth secrets, or server
- * files — just where to install it (`installOrigin`) and DECLARATIONS of the
- * env vars / headers it needs (names + `isSecret`, never values).
+ * files — just where to install it (`installOrigin`), declarations of the env
+ * vars / headers it needs, and narrowly-scoped argument templates containing
+ * portable global references.
  */
 export interface PackagedMcpServer {
   name: string;
@@ -77,6 +83,7 @@ export interface PackagedMcpServer {
   installOrigin: McpInstallOrigin;
   envDeclarations: EnvDeclaration[];
   headerDeclarations?: HeaderDeclaration[];
+  argTemplates?: McpArgTemplate[];
 }
 
 /**

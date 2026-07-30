@@ -479,6 +479,25 @@ describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => 
     expect(m.id).toBe('a1');
     expect(m.usage).toEqual({ promptTokens: 1, completionTokens: 1, totalTokens: 2 });
   });
+
+  it('keeps generated media display-only and sends assistant text to strict providers', () => {
+    const generated = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Here it is.' },
+        { type: 'image_url', image_url: { url: '/resource/image' } },
+      ],
+      media: [{ type: 'image', url: '/resource/image', mimeType: 'image/png' }],
+      id: 'a-media',
+      timestamp: 1,
+    } as unknown as FlujoChatMessage;
+
+    expect(toApiMessages([generated])).toEqual([
+      { role: 'assistant', content: 'Here it is.' },
+    ]);
+    expect(generated.media).toHaveLength(1);
+    expect(Array.isArray(generated.content)).toBe(true);
+  });
 });
 
 describe('deriveModelInputView (debugger model-input explanation — issue #153)', () => {
