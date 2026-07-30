@@ -1295,6 +1295,23 @@ const Chat: React.FC = () => {
         });
         break;
       }
+      case 'node:changed-files': {
+        touch({});
+        const nodeId = event.node?.nodeId;
+        if (!nodeId || event.changedFiles.length === 0) break;
+        setDetailedConversation(prev => {
+          if (!prev || prev.id !== event.conversationId) return prev;
+          const index = prev.messages.findLastIndex(message => message.processNodeId === nodeId);
+          if (index < 0) return prev;
+          const messages = [...prev.messages];
+          messages[index] = {
+            ...messages[index],
+            changedFiles: event.changedFiles.map(({ path, status }) => ({ path, status })),
+          };
+          return { ...prev, messages };
+        });
+        break;
+      }
       case 'usage':
         setLiveStats(prev => ({
           totalTokens: (prev?.totalTokens ?? 0) + (event.totalTokens || 0),
@@ -3447,6 +3464,7 @@ const Chat: React.FC = () => {
                 editingMessageId={editingMessage?.messageId ?? null} // Bubble being edited (in the input)
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
+                onRevertToHere={() => fetchDetailedConversation(detailedConversation.id)}
                 onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}

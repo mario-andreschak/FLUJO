@@ -347,6 +347,17 @@ export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
         indexById.set(incoming.id, messages.length);
         messages.push(projected);
       }
+    } else if (event.type === 'node:changed-files') {
+      const nodeId = event.node?.nodeId;
+      if (!nodeId || event.changedFiles.length === 0) continue;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].processNodeId !== nodeId) continue;
+        messages[i] = {
+          ...messages[i],
+          changedFiles: event.changedFiles.map(({ path, status }) => ({ path, status })),
+        };
+        break;
+      }
     } else if (event.type === 'message:removed') {
       const existingIndex = indexById.get(event.messageId);
       if (existingIndex === undefined) continue;

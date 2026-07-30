@@ -46,7 +46,10 @@ import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
+import RestoreIcon from '@mui/icons-material/Restore';
 import { ChatMessage } from './index';
+import RevertPreviewDialog from './RevertPreviewDialog';
+import { FEATURES } from '@/config/features';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -97,6 +100,8 @@ interface ChatMessagesProps {
   editingMessageId?: string | null;
   onToggleDisabled: (messageId: string) => void;
   onSplitConversation: (messageId: string) => void;
+  /** Called after a confirmed message-scoped worktree revert. */
+  onRevertToHere?: (messageId: string) => void;
   /** Start editing a message — opens the editor in the ChatInput, not inline. */
   onBeginEditMessage?: (messageId: string) => void;
   onApproveToolCall?: (toolCallId: string, always?: boolean) => void; // Add approve handler prop
@@ -1199,6 +1204,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   editingMessageId,
   onToggleDisabled,
   onSplitConversation,
+  onRevertToHere,
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
@@ -1285,6 +1291,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   // Message menu state
   const [menuAnchorEl, setMenuAnchorEl] = React.useState<null | HTMLElement>(null);
   const [activeMessageId, setActiveMessageId] = React.useState<string | null>(null);
+  const [revertMessageId, setRevertMessageId] = React.useState<string | null>(null);
   // State to manage raw view toggle for each tool message
   const [showRawToolResult, setShowRawToolResult] = React.useState<Record<string, boolean>>({});
 
@@ -1314,6 +1321,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const handleSplitConversation = () => {
     if (activeMessageId) {
       onSplitConversation(activeMessageId);
+      handleMenuClose();
+    }
+  };
+
+  const handleRevertToHere = () => {
+    if (activeMessageId) {
+      setRevertMessageId(activeMessageId);
       handleMenuClose();
     }
   };
@@ -1490,8 +1504,23 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <ListItemIcon><CallSplitIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Split Conversation Here</ListItemText>
         </MenuItem>
+        {FEATURES.ENABLE_REVERT_TO_HERE && activeMsgForMenu?.changedFiles?.length ? (
+          <MenuItem onClick={handleRevertToHere}>
+            <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Revert to here</ListItemText>
+          </MenuItem>
+        ) : null}
       </Menu>
 
+      {FEATURES.ENABLE_REVERT_TO_HERE && conversationId && (
+        <RevertPreviewDialog
+          open={!!revertMessageId}
+          conversationId={conversationId}
+          messageId={revertMessageId}
+          onClose={() => setRevertMessageId(null)}
+          onReverted={onRevertToHere}
+        />
+      )}
 
       {/* Display Pending Elicitation Form */}
       {pendingElicitation && (

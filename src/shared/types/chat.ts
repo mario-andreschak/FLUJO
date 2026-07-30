@@ -69,6 +69,9 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   /** The ID of the process node that generated or handled this message */
   processNodeId?: string;
 
+  /** Server-projected, repository-relative changes associated with this message. */
+  changedFiles?: Array<{ path: string; status: string }>;
+
   /**
    * Subflow nesting depth for display. Absent/0 = a top-level message of this
    * conversation; >0 = a step of a nested subflow run, folded into the parent

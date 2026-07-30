@@ -575,6 +575,15 @@ export interface SharedState {
     };
     // Messages as the single source of truth, now using our timestamped type
     messages: FlujoChatMessage[];
+    /** Server-owned anchors for undoing a confirmed per-message revert. */
+    revertOperations?: Record<string, {
+        messageId: string;
+        root: string;
+        snapshotId: string;
+        paths: string[];
+        createdAt: number;
+        undoneAt?: number;
+    }>;
     /**
      * Latest `ui/update-model-context` payload per MCP App. This is persisted
      * separately from chat messages and injected only into future model wire
