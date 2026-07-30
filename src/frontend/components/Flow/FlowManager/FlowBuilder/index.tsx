@@ -64,6 +64,8 @@ import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
 import TriggerNodePropertiesModal from './Modals/TriggerNodePropertiesModal';
 import FlowVersionHistoryDialog from './Modals/FlowVersionHistoryDialog';
+import ConvertProcessToSubflowDialog from './Modals/ConvertProcessToSubflowDialog';
+import type { ProcessToSubflowDraft } from './utils/convertProcessToSubflow';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
@@ -126,6 +128,7 @@ interface FlowBuilderProps {
   initialFlow?: Flow;
   onSave: (flow: Flow) => void;
   onDelete: (flowId: string) => void;
+  onConversionCommitted?: (parentFlow: Flow, childFlow: Flow) => void;
   allFlows: Flow[];
 }
 
@@ -146,7 +149,7 @@ type SaveResult = 'saved' | 'invalid-name' | 'rename-dialog';
 
 type PermissionRuleDraft = PermissionRule & { id: string };
 
-export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, allFlows }, ref) => {
+export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
@@ -215,6 +218,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [processNodeModalMode, setProcessNodeModalMode] = useState<'create' | 'edit'>('edit');
   // The edge whose properties (Tier 2b routing condition) are being edited.
   const [editingEdge, setEditingEdge] = useState<Edge | null>(null);
+  const [conversionProcessId, setConversionProcessId] = useState<string | null>(null);
 
   // AI-Improve (issue #99): the dialog that revises the current flow, plus a transient
   // notice summarizing the last improvement (validation counts / installed servers).
@@ -321,7 +325,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setHistory([emptyState]);
       setHistoryIndex(0);
     }
-  }, [initialFlow, createPermissionRuleDraft]);
+  // The builder owns edits for the lifetime of a selected flow. Parent state may
+  // receive a freshly saved object (including new timestamps) without resetting
+  // undo history; only switching to a different flow reinitializes the canvas.
+  }, [initialFlow?.id, createPermissionRuleDraft]);
   
   // Keys that don't represent a real edit: selection/drag/measurement state
   // must create neither an undo step nor "unsaved changes".
@@ -803,6 +810,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setNodes(prevState.nodes);
       setEdges(prevState.edges);
       setHistoryIndex(newIndex);
+      setHasUnsavedChanges(true);
       log.info(`handleUndo: Restored flow state to previous version (${prevState.nodes.length} nodes, ${prevState.edges.length} edges)`);
     }
   }, [history, historyIndex, canUndo]);
@@ -816,9 +824,37 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setNodes(nextState.nodes);
       setEdges(nextState.edges);
       setHistoryIndex(newIndex);
+      setHasUnsavedChanges(true);
       log.info(`handleRedo: Restored flow state to next version (${nextState.nodes.length} nodes, ${nextState.edges.length} edges)`);
     }
   }, [history, historyIndex, canRedo]);
+
+  const handleAcceptProcessConversion = useCallback(async (draft: ProcessToSubflowDraft) => {
+    if (!initialFlow || !conversionProcessId || !draft.parentFlow || !draft.childFlow) {
+      throw new Error('Save the parent flow before converting a Process node.');
+    }
+    const result = await flowService.convertProcessToSubflow(
+      draft.parentFlow,
+      draft.childFlow,
+      conversionProcessId,
+      initialFlow.updatedAt,
+    );
+    if (!result.success) throw new Error(result.error);
+
+    // Install the returned graph and its history entry together. Suppressing the
+    // normal effect avoids a duplicate entry; Undo then restores the exact
+    // pre-conversion snapshot and Redo reapplies the conversion.
+    const entry: HistoryEntry = { nodes: result.parentFlow.nodes, edges: result.parentFlow.edges };
+    const nextHistory = [...history.slice(0, historyIndex + 1), entry];
+    setIsHistoryAction(true);
+    setHistory(nextHistory);
+    setHistoryIndex(nextHistory.length - 1);
+    setNodes(result.parentFlow.nodes);
+    setEdges(result.parentFlow.edges);
+    setHasUnsavedChanges(false);
+    setConversionProcessId(null);
+    onConversionCommitted?.(result.parentFlow, result.childFlow);
+  }, [initialFlow, conversionProcessId, history, historyIndex, onConversionCommitted]);
 
   // Memoized handlers for better performance
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -1294,6 +1330,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               onInit={onInit}
               reactFlowWrapper={reactFlowWrapper}
               onEditNode={openNodeProperties}
+              onConvertProcessToSubflow={initialFlow ? node => setConversionProcessId(node.id) : undefined}
               onEditEdge={(edge) => setEditingEdge(edge)}
             />
           </Box>
@@ -1380,6 +1417,27 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edge={editingEdge}
         onClose={() => setEditingEdge(null)}
         onSave={handleSaveEdgeCondition}
+      />
+
+      <ConvertProcessToSubflowDialog
+        open={!!conversionProcessId}
+        processNodeId={conversionProcessId}
+        parentFlow={{
+          id: initialFlow?.id || '',
+          name: flowName,
+          description: flowDescription,
+          unattended: flowUnattended,
+          folder: initialFlow?.folder,
+          favorite: initialFlow?.favorite,
+          permissionRules: getPermissionRulesForSave(),
+          createdAt: initialFlow?.createdAt,
+          updatedAt: initialFlow?.updatedAt,
+          nodes,
+          edges,
+        }}
+        existingFlowNames={allFlows.map(flow => flow.name)}
+        onClose={() => setConversionProcessId(null)}
+        onAccept={handleAcceptProcessConversion}
       />
 
       {/* Version history: browse/preview/restore archived versions of this flow. */}

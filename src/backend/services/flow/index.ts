@@ -28,6 +28,12 @@ import {
 
 const log = createLogger('backend/services/flow/index');
 
+export interface ConvertProcessToSubflowResponse extends FlowServiceResponse {
+  parentFlow?: Flow;
+  childFlow?: Flow;
+  conflict?: boolean;
+}
+
 /** Remove edge-derived runtime data before a flow crosses the persistence boundary. */
 function stripDerivedAttachmentProperties(flow: Flow): void {
   for (const node of flow.nodes) {
@@ -264,6 +270,89 @@ export class FlowService { // Add export keyword here
         error: error instanceof Error ? error.message : 'Failed to save flow' 
       };
     }
+  }
+
+  /**
+   * Persist a Process -> Subflow conversion as one compensated operation.
+   * The child is written first so the parent never references a missing flow.
+   * If the parent write fails (including after a partial write), restore the
+   * captured parent and remove the new child before reporting failure.
+   */
+  async convertProcessToSubflow(
+    parentDraft: Flow,
+    childDraft: Flow,
+    processNodeId: string,
+    expectedUpdatedAt?: number,
+  ): Promise<ConvertProcessToSubflowResponse> {
+    const existing = await this.getFlow(parentDraft.id);
+    if (!existing) {
+      return { success: false, error: `Flow "${parentDraft.id}" not found` };
+    }
+    if (
+      typeof expectedUpdatedAt === 'number' &&
+      typeof existing.updatedAt === 'number' &&
+      existing.updatedAt !== expectedUpdatedAt
+    ) {
+      return {
+        success: false,
+        conflict: true,
+        error: 'The parent flow changed after this editor was opened. Reload it and build the conversion preview again.',
+      };
+    }
+
+    const originalParent = JSON.parse(JSON.stringify(existing)) as Flow;
+    const currentProcess = existing.nodes.find(node => node.id === processNodeId);
+    const childProcess = childDraft.nodes.find(node => node.id === processNodeId);
+    const replacement = parentDraft.nodes.find(node => node.id === processNodeId);
+    const referencedChildId = replacement?.data?.properties?.subflowId;
+
+    if (currentProcess && currentProcess.type !== 'process' && currentProcess.data?.type !== 'process') {
+      return { success: false, error: 'The selected node is no longer a Process in the saved parent flow.' };
+    }
+    if (childProcess?.type !== 'process' && childProcess?.data?.type !== 'process') {
+      return { success: false, error: 'The child draft does not contain the selected Process node.' };
+    }
+    if (
+      (replacement?.type !== 'subflow' && replacement?.data?.type !== 'subflow') ||
+      referencedChildId !== childDraft.id
+    ) {
+      return { success: false, error: 'The rewritten parent does not contain a valid Subflow replacement.' };
+    }
+    if (!childDraft.id || childDraft.id === existing.id || !childDraft.name?.trim()) {
+      return { success: false, error: 'The child flow needs a distinct ID and a non-empty name.' };
+    }
+    if (await this.getFlow(childDraft.id)) {
+      return { success: false, error: `A flow with child ID "${childDraft.id}" already exists.` };
+    }
+
+    // Clone caller-owned drafts because saveFlow intentionally stamps and
+    // strips persistence-only fields in place.
+    const childFlow = JSON.parse(JSON.stringify(childDraft)) as Flow;
+    const parentFlow = JSON.parse(JSON.stringify({ ...parentDraft, id: existing.id })) as Flow;
+    const childResult = await this.saveFlow(childFlow);
+    if (!childResult.success) {
+      return { success: false, error: childResult.error || 'Failed to save the child flow.' };
+    }
+
+    const parentResult = await this.saveFlow(parentFlow);
+    if (parentResult.success) {
+      return { success: true, parentFlow, childFlow };
+    }
+
+    const rollbackErrors: string[] = [];
+    const childRollback = await this.deleteFlow(childFlow.id);
+    if (!childRollback.success) {
+      rollbackErrors.push(`child cleanup failed: ${childRollback.error || 'unknown error'}`);
+    }
+    const parentRollback = await this.saveFlow(originalParent);
+    if (!parentRollback.success) {
+      rollbackErrors.push(`parent restore failed: ${parentRollback.error || 'unknown error'}`);
+    }
+    const suffix = rollbackErrors.length > 0 ? ` Rollback warning: ${rollbackErrors.join('; ')}.` : '';
+    return {
+      success: false,
+      error: `${parentResult.error || 'Failed to save the rewritten parent flow.'}${suffix}`,
+    };
   }
 
   /**

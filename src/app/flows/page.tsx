@@ -309,6 +309,17 @@ const FlowsPage = () => {
     }
   };
 
+  // The conversion endpoint has already persisted both flows. Mirror its
+  // returned state locally without issuing a second parent save.
+  const handleConversionCommitted = useCallback((parentFlow: Flow, childFlow: Flow) => {
+    setFlows(previous => {
+      const withoutConverted = previous.filter(flow => flow.id !== parentFlow.id && flow.id !== childFlow.id);
+      return [...withoutConverted, parentFlow, childFlow];
+    });
+    setSelectedFlow(parentFlow.id);
+    showSnackbar(`Created subflow "${childFlow.name}"`, 'success');
+  }, [showSnackbar]);
+
   const handleDeleteFlow = async (flowId: string) => {
     log.info('Deleting flow', { flowId });
     try {
@@ -543,6 +554,7 @@ const FlowsPage = () => {
               initialFlow={selectedFlowData}
               onSave={handleSaveFlow}
               onDelete={handleDeleteFlow}
+              onConversionCommitted={handleConversionCommitted}
               allFlows={flows}
             />
           </Box>

@@ -26,6 +26,10 @@ export interface FlowVersionRecord {
   flow: Flow;
 }
 
+export type ConvertProcessToSubflowResult =
+  | { success: true; parentFlow: Flow; childFlow: Flow }
+  | { success: false; error: string };
+
 /**
  * FlowService class provides a client-side API for UI components
  * This service makes API calls to the server-side API layer
@@ -293,6 +297,48 @@ class FlowService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to improve flow'
+      };
+    }
+  }
+
+  /**
+   * Atomically (with server-side compensation) persist a child flow and its
+   * rewritten parent after the user accepts a Process conversion preview.
+   */
+  async convertProcessToSubflow(
+    parentFlow: Flow,
+    childFlow: Flow,
+    processNodeId: string,
+    expectedUpdatedAt?: number,
+  ): Promise<ConvertProcessToSubflowResult> {
+    try {
+      const response = await fetch(
+        `/api/flow/${encodeURIComponent(parentFlow.id)}/convert-process-to-subflow`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parentFlow, childFlow, processNodeId, expectedUpdatedAt }),
+        },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { success: false, error: data?.error || 'Failed to convert Process to Subflow.' };
+      }
+      const savedParent = data.parentFlow as Flow;
+      const savedChild = data.childFlow as Flow;
+      if (this.flowsCache) {
+        const parentIndex = this.flowsCache.findIndex(flow => flow.id === savedParent.id);
+        if (parentIndex >= 0) this.flowsCache[parentIndex] = savedParent;
+        else this.flowsCache.push(savedParent);
+        if (!this.flowsCache.some(flow => flow.id === savedChild.id)) {
+          this.flowsCache.push(savedChild);
+        }
+      }
+      return { success: true, parentFlow: savedParent, childFlow: savedChild };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to convert Process to Subflow.',
       };
     }
   }

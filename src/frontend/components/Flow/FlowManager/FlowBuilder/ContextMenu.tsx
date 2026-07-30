@@ -7,6 +7,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 interface ContextMenuProps {
   open: boolean;
@@ -14,6 +15,8 @@ interface ContextMenuProps {
   onClose: () => void;
   onDelete: () => void;
   onEditProperties?: () => void;
+  /** Build a preview that converts the targeted Process into a child flow. */
+  onConvertToSubflow?: () => void;
   /** Flip a flow-control edge between one-way and bidirectional. */
   onToggleBidirectional?: () => void;
   onCopy?: () => void;
@@ -33,6 +36,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onClose,
   onDelete,
   onEditProperties,
+  onConvertToSubflow,
   onToggleBidirectional,
   onCopy,
   onPaste,
@@ -64,6 +68,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     onClose();
   };
 
+  const handleConvertToSubflow = () => {
+    if (onConvertToSubflow) {
+      onConvertToSubflow();
+    }
+    onClose();
+  };
+
   const handleToggleBidirectional = () => {
     if (onToggleBidirectional) {
       onToggleBidirectional();
@@ -84,6 +95,16 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemText>Edit Properties</ListItemText>
       </MenuItem>
     );
+    if (onConvertToSubflow) {
+      menuItems.push(
+        <MenuItem key="convert-to-subflow" onClick={handleConvertToSubflow}>
+          <ListItemIcon>
+            <AccountTreeIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Convert to subflow</ListItemText>
+        </MenuItem>
+      );
+    }
   }
 
   // Edge-specific menu items (a single edge, not a node or multi-selection):

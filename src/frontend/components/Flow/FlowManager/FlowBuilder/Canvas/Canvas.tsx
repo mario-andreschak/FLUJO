@@ -254,6 +254,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onInit,
     reactFlowWrapper,
     onEditNode,
+    onConvertProcessToSubflow,
     onEditEdge,
   } = props;
 
@@ -555,6 +556,14 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       }
     }
   }, [contextMenu.nodeId, contextMenu.edgeId, nodes, edges, onEditNode, onEditEdge]);
+
+  const handleConvertToSubflow = useCallback(() => {
+    if (!contextMenu.nodeId || !onConvertProcessToSubflow) return;
+    const node = findNodeById(contextMenu.nodeId, nodes);
+    if (node?.type === 'process' || node?.data?.type === 'process') {
+      onConvertProcessToSubflow(node);
+    }
+  }, [contextMenu.nodeId, nodes, onConvertProcessToSubflow]);
 
   // Toggle a flow-control edge between one-way and bidirectional from the edge
   // context menu. Reuses the exact marker logic of the bidirectional drag path
@@ -955,6 +964,11 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onClose={closeContextMenu}
         onDelete={handleDelete}
         onEditProperties={handleEditProperties}
+        onConvertToSubflow={
+          onConvertProcessToSubflow && contextMenu.nodeId && nodes.find(node => node.id === contextMenu.nodeId)?.type === 'process'
+            ? handleConvertToSubflow
+            : undefined
+        }
         onToggleBidirectional={handleToggleBidirectional}
         onCopy={handleContextCopy}
         onPaste={handlePaste}
