@@ -187,3 +187,16 @@ code.tool-reference.global {
   background-color: #f3e5f5;
   border-color: #e1bee7;
 }
+
+
+/* References outside the current node/chat catalog remain editable and literal. */
+.tool-reference-container.invalid {
+  background-color: #ffebee;
+  border-color: #ef9a9a;
+  text-decoration: underline wavy #c62828;
+  text-underline-offset: 3px;
+}
+
+.tool-reference.invalid {
+  color: #c62828;
+}

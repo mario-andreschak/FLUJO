@@ -2,9 +2,12 @@ import { render, screen } from '@testing-library/react';
 import GlobalReferenceEditor, {
   deserializeReferenceValue,
   filterGlobalNames,
+  filterReferenceSuggestions,
+  findAtCompletion,
   findGlobalCompletion,
   serializeReferenceValue,
 } from '@/frontend/components/shared/GlobalReferenceEditor';
+import { createPromptReferenceSuggestion } from '@/utils/shared/promptRefs';
 
 describe('GlobalReferenceEditor (#318)', () => {
   it('round-trips mixed and adjacent references as the original plain string', () => {
@@ -24,6 +27,30 @@ describe('GlobalReferenceEditor (#318)', () => {
     ]);
     expect(findGlobalCompletion('${global:closed}')).toBeNull();
     expect(findGlobalCompletion('${global:nested{')).toBeNull();
+  });
+
+  it('detects ordinary-text @ queries and filters grouped reference suggestions', () => {
+    expect(findAtCompletion('before @rea')).toEqual({ query: 'rea', start: 7, end: 11 });
+    expect(findAtCompletion('email@example.com')).toBeNull();
+    expect(findAtCompletion('${global:@name')).toBeNull();
+
+    const tool = createPromptReferenceSuggestion(
+      { kind: 'tool', server: 'files', name: 'read' },
+      'Read file',
+    );
+    const resource = createPromptReferenceSuggestion(
+      { kind: 'resource', server: 'files', name: 'file:///readme.md' },
+      'README',
+    );
+    const global = createPromptReferenceSuggestion(
+      { kind: 'global', server: '', name: 'APP_URL' },
+      'APP_URL',
+    );
+
+    expect(filterReferenceSuggestions([global, resource, tool, tool], 'read')).toEqual([
+      tool,
+      resource,
+    ]);
   });
 
   it('renders a global expression as an accessible pill without rendering any variable value', () => {

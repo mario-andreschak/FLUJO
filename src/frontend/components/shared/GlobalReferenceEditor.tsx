@@ -29,6 +29,8 @@ import {
   promptRefLabel,
   PromptRef,
   PromptRefKind,
+  PromptReferenceSuggestion,
+  createPromptReferenceSuggestion,
 } from '@/utils/shared/promptRefs';
 import './PromptBuilder/promptBuilder.css';
 
@@ -40,7 +42,9 @@ export interface GlobalReferenceEditorRef {
 export interface GlobalReferenceEditorProps {
   value: string;
   onChange: (value: string) => void;
-  globalNames: string[];
+  globalNames?: string[];
+  /** Context-authorized tool/resource/global options for the `@` picker. */
+  suggestions?: PromptReferenceSuggestion[];
   placeholder?: string;
   disabled?: boolean;
   multiline?: boolean;
@@ -86,9 +90,12 @@ interface GlobalCompletion {
   end: number;
 }
 
+type AtCompletion = GlobalCompletion;
+
 interface ActiveCompletion extends GlobalCompletion {
   range: Range;
-  names: string[];
+  mode: 'at' | 'global';
+  items: PromptReferenceSuggestion[];
 }
 
 export function findGlobalCompletion(text: string, offset = text.length): GlobalCompletion | null {
@@ -103,6 +110,34 @@ export function filterGlobalNames(globalNames: string[], query: string): string[
   return [...new Set(globalNames)]
     .filter((name) => name.toLocaleLowerCase().includes(lowered))
     .sort((a, b) => a.localeCompare(b));
+}
+
+/** Detect an ordinary-text `@query` immediately before the caret. */
+export function findAtCompletion(text: string, offset = text.length): AtCompletion | null {
+  const prefix = text.slice(0, offset);
+  const match = prefix.match(/(?:^|\s)@([^\s@{}]*)$/);
+  if (!match || match.index === undefined) return null;
+  const atOffset = match.index + (match[0].startsWith('@') ? 0 : 1);
+  return { query: match[1], start: atOffset, end: offset };
+}
+
+export function filterReferenceSuggestions(
+  suggestions: PromptReferenceSuggestion[],
+  query: string,
+): PromptReferenceSuggestion[] {
+  const lowered = query.toLocaleLowerCase();
+  const seen = new Set<string>();
+  return suggestions
+    .filter((item) => {
+      if (seen.has(item.value)) return false;
+      seen.add(item.value);
+      const haystack = `${item.label} ${item.name} ${item.server} ${item.description ?? ''}`.toLocaleLowerCase();
+      return haystack.includes(lowered);
+    })
+    .sort((a, b) => {
+      const kindOrder = { tool: 0, resource: 1, global: 2, runres: 3 } as const;
+      return kindOrder[a.kind] - kindOrder[b.kind] || a.label.localeCompare(b.label);
+    });
 }
 
 const lineToChildren = (line: string): ParagraphElement['children'] => {
@@ -203,7 +238,15 @@ const withReferencePills = (editor: BaseEditor & ReactEditor) => {
   return editor;
 };
 
-const ReferencePill = ({ element, disabled }: { element: ReferenceElement; disabled: boolean }) => {
+const ReferencePill = ({
+  element,
+  disabled,
+  invalid,
+}: {
+  element: ReferenceElement;
+  disabled: boolean;
+  invalid: boolean;
+}) => {
   const editor = useSlate();
   const handoff = element.kind === 'tool' && element.server === 'handoff';
   const className =
@@ -224,8 +267,13 @@ const ReferencePill = ({ element, disabled }: { element: ReferenceElement; disab
   };
 
   return (
-    <span contentEditable={false} className={`tool-reference-container ${className}`}>
-      <span className={`tool-reference ${className}`}>{promptRefLabel(element)}</span>
+    <span
+      contentEditable={false}
+      className={`tool-reference-container ${className}${invalid ? ' invalid' : ''}`}
+      title={invalid ? 'This reference is not available in the current context' : undefined}
+      aria-invalid={invalid || undefined}
+    >
+      <span className={`tool-reference ${className}${invalid ? ' invalid' : ''}`}>{promptRefLabel(element)}</span>
       {!disabled && (
         <span
           className={`tool-reference-delete ${className}`}
@@ -255,7 +303,8 @@ const ReferencePill = ({ element, disabled }: { element: ReferenceElement; disab
 const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferenceEditorProps>(({
   value,
   onChange,
-  globalNames,
+  globalNames = [],
+  suggestions,
   placeholder,
   disabled = false,
   multiline = true,
@@ -275,6 +324,17 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   const [activeIndex, setActiveIndex] = useState(0);
   const [revision, setRevision] = useState(0);
   const applyingExternalValue = useRef(false);
+  const pickerSuggestions = useMemo(() => {
+    const globals = globalNames.map((name) => createPromptReferenceSuggestion(
+      { kind: 'global', server: '', name },
+      name,
+    ));
+    return filterReferenceSuggestions([...(suggestions ?? []), ...globals], '');
+  }, [globalNames, suggestions]);
+  const validatedValues = useMemo(
+    () => suggestions ? new Set(pickerSuggestions.map((item) => item.value)) : null,
+    [pickerSuggestions, suggestions],
+  );
 
   const updateCompletion = useCallback(() => {
     if (!editor.selection || !Range.isCollapsed(editor.selection)) {
@@ -287,32 +347,36 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       setActiveCompletion(null);
       return;
     }
-    const completion = findGlobalCompletion(node.text, point.offset);
+    const atCompletion = findAtCompletion(node.text, point.offset);
+    const globalCompletion = findGlobalCompletion(node.text, point.offset);
+    const completion = atCompletion ?? globalCompletion;
     if (!completion) {
       setActiveCompletion(null);
       return;
     }
-    const names = filterGlobalNames(globalNames, completion.query);
-    if (names.length === 0) {
-      setActiveCompletion(null);
-      return;
-    }
+    const mode = atCompletion ? 'at' : 'global';
+    const source = mode === 'at'
+      ? pickerSuggestions
+      : pickerSuggestions.filter((item) => item.kind === 'global');
+    const items = filterReferenceSuggestions(source, completion.query);
     setActiveIndex(0);
     setActiveCompletion({
       ...completion,
-      names,
+      mode,
+      items,
       range: {
         anchor: { path: point.path, offset: completion.start },
         focus: point,
       },
     });
-  }, [editor, globalNames]);
+  }, [editor, pickerSuggestions]);
 
-  const chooseGlobal = useCallback((name: string) => {
+  const chooseSuggestion = useCallback((item: PromptReferenceSuggestion) => {
     if (!activeCompletion) return;
     Transforms.select(editor, activeCompletion.range);
     Transforms.delete(editor);
-    insertReference(editor, { kind: 'global', server: '', name });
+    const parsed = parsePromptRefPill(item.value);
+    if (parsed) insertReference(editor, parsed);
     setActiveCompletion(null);
     ReactEditor.focus(editor);
   }, [activeCompletion, editor]);
@@ -350,19 +414,19 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (activeCompletion) {
-      if (event.key === 'ArrowDown') {
+      if (event.key === 'ArrowDown' && activeCompletion.items.length > 0) {
         event.preventDefault();
-        setActiveIndex((index) => (index + 1) % activeCompletion.names.length);
+        setActiveIndex((index) => (index + 1) % activeCompletion.items.length);
         return;
       }
-      if (event.key === 'ArrowUp') {
+      if (event.key === 'ArrowUp' && activeCompletion.items.length > 0) {
         event.preventDefault();
-        setActiveIndex((index) => (index - 1 + activeCompletion.names.length) % activeCompletion.names.length);
+        setActiveIndex((index) => (index - 1 + activeCompletion.items.length) % activeCompletion.items.length);
         return;
       }
-      if (event.key === 'Enter' || event.key === 'Tab') {
+      if ((event.key === 'Enter' || event.key === 'Tab') && activeCompletion.items[activeIndex]) {
         event.preventDefault();
-        chooseGlobal(activeCompletion.names[activeIndex]);
+        chooseSuggestion(activeCompletion.items[activeIndex]);
         return;
       }
       if (event.key === 'Escape') {
@@ -381,15 +445,21 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
 
   const renderElement = useCallback(({ attributes, children, element }: any) => {
     if (element.type === 'binding-reference') {
+      const reference = element as ReferenceElement;
+      const serialized = encodePromptRefPill(reference.kind, reference.server, reference.name);
       return (
         <span {...attributes} className="tool-reference-wrapper">
-          <ReferencePill element={element as ReferenceElement} disabled={disabled} />
+          <ReferencePill
+            element={reference}
+            disabled={disabled}
+            invalid={validatedValues !== null && !validatedValues.has(serialized)}
+          />
           {children}
         </span>
       );
     }
     return <p {...attributes}>{children}</p>;
-  }, [disabled]);
+  }, [disabled, validatedValues]);
 
   const lineHeight = 1.5;
   const editorMinHeight = `${Math.max(1, minRows) * lineHeight}em`;
@@ -435,7 +505,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
         <Paper
           elevation={8}
           role="listbox"
-          aria-label="Global variables"
+          aria-label={activeCompletion.mode === 'at' ? 'Available references' : 'Global variables'}
           sx={{
             position: 'absolute',
             zIndex: 1500,
@@ -447,28 +517,55 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
             overflowY: 'auto',
           }}
         >
-          {activeCompletion.names.map((name, index) => (
-            <Box
-              key={name}
-              role="option"
-              aria-selected={index === activeIndex}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                chooseGlobal(name);
-              }}
-              sx={{
-                px: 1.5,
-                py: 1,
-                cursor: 'pointer',
-                bgcolor: index === activeIndex ? 'action.selected' : 'background.paper',
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-            >
-              <Typography component="span" sx={{ fontFamily: 'monospace', fontSize: 14 }}>
-                {`\${global:${name}}`}
-              </Typography>
+          {activeCompletion.items.length === 0 ? (
+            <Box sx={{ px: 1.5, py: 1.25 }}>
+              <Typography variant="body2" color="text.secondary">No matching references</Typography>
             </Box>
-          ))}
+          ) : activeCompletion.items.map((item, index) => {
+            const previousKind = activeCompletion.items[index - 1]?.kind;
+            const groupLabel = item.kind === 'tool'
+              ? 'Tools'
+              : item.kind === 'resource'
+                ? 'Resources'
+                : item.kind === 'global'
+                  ? 'Globals'
+                  : 'Temporary data';
+            return (
+              <React.Fragment key={item.value}>
+                {item.kind !== previousKind && (
+                  <Typography
+                    component="div"
+                    variant="overline"
+                    sx={{ px: 1.5, pt: index === 0 ? 0.75 : 1.25, color: 'text.secondary' }}
+                  >
+                    {groupLabel}
+                  </Typography>
+                )}
+                <Box
+                  role="option"
+                  aria-selected={index === activeIndex}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    chooseSuggestion(item);
+                  }}
+                  sx={{
+                    px: 1.5,
+                    py: 1,
+                    cursor: 'pointer',
+                    bgcolor: index === activeIndex ? 'action.selected' : 'background.paper',
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}
+                >
+                  <Typography component="div" sx={{ fontFamily: 'monospace', fontSize: 14 }}>
+                    {item.label}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
+                    {item.description || item.value}
+                  </Typography>
+                </Box>
+              </React.Fragment>
+            );
+          })}
         </Paper>
       )}
     </Box>

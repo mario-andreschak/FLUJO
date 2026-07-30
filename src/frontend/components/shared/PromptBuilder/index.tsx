@@ -14,7 +14,13 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { mcpService } from '@/frontend/services/mcp';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { createLogger } from '@/utils/logger';
-import { findPromptRefs, PromptRef, PromptRefMatch } from '@/utils/shared/promptRefs';
+import {
+  createPromptReferenceSuggestion,
+  findPromptRefs,
+  PromptRef,
+  PromptRefMatch,
+  PromptReferenceSuggestion,
+} from '@/utils/shared/promptRefs';
 import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '../GlobalReferenceEditor';
 import './promptBuilder.css';
 
@@ -32,6 +38,7 @@ interface PromptBuilderProps {
   height?: number | string;
   onModeChange?: (mode: 'raw' | 'preview') => void;
   customPreviewRenderer?: () => React.ReactNode;
+  suggestions?: PromptReferenceSuggestion[];
 }
 
 const ToolPreview = ({ server, name }: { server: string; name: string }) => {
@@ -182,12 +189,23 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   height = 300,
   onModeChange,
   customPreviewRenderer,
+  suggestions = [],
 }, ref) => {
   const { globalEnvVars } = useStorage();
   const globalNames = useMemo(
-    () => Object.keys(globalEnvVars).sort((a, b) => a.localeCompare(b)),
+    () => Object.entries(globalEnvVars)
+      .filter(([, entry]) => !entry.metadata?.isSecret)
+      .map(([name]) => name)
+      .sort((a, b) => a.localeCompare(b)),
     [globalEnvVars],
   );
+  const pickerSuggestions = useMemo(() => [
+    ...suggestions,
+    ...globalNames.map((name) => createPromptReferenceSuggestion(
+      { kind: 'global', server: '', name },
+      name,
+    )),
+  ], [globalNames, suggestions]);
   const editorRef = useRef<GlobalReferenceEditorRef>(null);
   const [mode, setMode] = useState<'raw' | 'preview'>('raw');
 
@@ -243,7 +261,7 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
               ref={editorRef}
               value={value}
               onChange={onChange}
-              globalNames={globalNames}
+              suggestions={pickerSuggestions}
               placeholder="Write your prompt here..."
               bare
               minRows={4}

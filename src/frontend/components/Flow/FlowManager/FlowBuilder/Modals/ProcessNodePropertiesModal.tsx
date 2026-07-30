@@ -19,6 +19,12 @@ import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { encodeBindingPill } from '@/utils/shared/mcpBinding';
+import {
+  createPromptReferenceSuggestion,
+  PromptReferenceSuggestion,
+} from '@/utils/shared/promptRefs';
+import { mcpService } from '@/frontend/services/mcp';
+import type { MCPResource, MCPResourceTemplate } from '@/shared/types/mcp';
 import { ProcessNodePropertiesModalProps } from './ProcessNodePropertiesModal/types'; // Adjusted path
 import useModelManagement from './ProcessNodePropertiesModal/hooks/useModelManagement'; // Adjusted path
 import useServerConnection from './ProcessNodePropertiesModal/hooks/useServerConnection'; // Adjusted path
@@ -139,6 +145,67 @@ export const ProcessNodePropertiesModal = ({
     handleRetryServer,
     handleRestartServer
   } = useServerConnection(open, node, flowEdges, flowNodes);
+
+  const [resourceSuggestions, setResourceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const serverNames = [...new Set(
+      connectedMcpNodes
+        .filter((connected) => connected.status === 'connected')
+        .map((connected) => connected.serverName),
+    )];
+    if (!open || serverNames.length === 0) {
+      setResourceSuggestions([]);
+      return () => { cancelled = true; };
+    }
+    void Promise.all(serverNames.map(async (serverName) => {
+      try {
+        const result = await mcpService.listServerResources(serverName);
+        const contexts = connectedMcpNodes.filter((connected) => connected.serverName === serverName);
+        const isEnabled = (uri: string) => contexts.some((connected) => {
+          const enabled = connected.enabledResources;
+          return enabled === undefined || enabled === 'all' || enabled.includes(uri);
+        });
+        return [
+          ...(result.resources ?? [])
+            .filter((resource: MCPResource) => isEnabled(resource.uri))
+            .map((resource: MCPResource) => createPromptReferenceSuggestion(
+              { kind: 'resource', server: serverName, name: resource.uri },
+              resource.name || resource.uri,
+              resource.description || `${serverName} · ${resource.uri}`,
+            )),
+          ...(result.resourceTemplates ?? [])
+            .filter((resource: MCPResourceTemplate) => isEnabled(resource.uriTemplate))
+            .map((resource: MCPResourceTemplate) => createPromptReferenceSuggestion(
+              { kind: 'resource', server: serverName, name: resource.uriTemplate },
+              resource.name || resource.uriTemplate,
+              resource.description || `${serverName} · ${resource.uriTemplate}`,
+            )),
+        ];
+      } catch (error) {
+        log.warn(`Failed to load @ resource suggestions for ${serverName}`, error);
+        return [];
+      }
+    })).then((groups) => {
+      if (!cancelled) setResourceSuggestions(groups.flat());
+    });
+    return () => { cancelled = true; };
+  }, [open, connectedMcpNodes]);
+
+  const referenceSuggestions = React.useMemo<PromptReferenceSuggestion[]>(() => {
+    const toolSuggestions = connectedMcpNodes.flatMap((connected) => {
+      const enabled = new Set(connected.enabledTools ?? []);
+      return (serverToolsMap[connected.serverName] ?? [])
+        .filter((tool) => tool?.name && enabled.has(tool.name))
+        .map((tool) => createPromptReferenceSuggestion(
+          { kind: 'tool', server: connected.serverName, name: tool.name },
+          tool.name,
+          tool.description || connected.serverName,
+        ));
+    });
+    return [...toolSuggestions, ...resourceSuggestions];
+  }, [connectedMcpNodes, resourceSuggestions, serverToolsMap]);
   
   // Tier 3 (issue #161 item 3): resource NODES wired to this process node on
   // the canvas. Direction encodes role (resource→process = consume;
@@ -582,6 +649,7 @@ export const ProcessNodePropertiesModal = ({
                   excludeSystemPrompt={excludeSystemPrompt}
                   nodeData={nodeData}
                   flowId={flowId}
+                  suggestions={referenceSuggestions}
                 />
               </Box>
             </Box>

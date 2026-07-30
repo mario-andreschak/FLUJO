@@ -609,12 +609,45 @@ export class ProcessNode extends BaseNode {
             .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
             .map((n) => n.id)
         );
-        wireBase = collapseNodeOutputs(prepResult.messages, collapsedNodeIds);
+        wireBase = collapseNodeOutputs(wireBase, collapsedNodeIds);
       } catch (err) {
         // Collapsing is a context-token optimization — never block the run on it.
         log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
       }
     }
+
+    // Chat references are a wire-only projection: preserve canonical serialized
+    // pills in SharedState.messages, but expand only resources authorized for
+    // this ProcessNode and non-secret globals before the model sees them.
+    if (wireBase.some((message) =>
+      message.role === 'user'
+      && typeof message.content === 'string'
+      && message.content.includes('${')
+    )) {
+      wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
+        if (message.role !== 'user' || typeof message.content !== 'string') return message;
+        let content = await promptRenderer.resolveChatMessageReferences(
+          message.content,
+          mcpNodes,
+          (info) => sharedState.emit?.({
+            type: 'resource:read',
+            node: { nodeId },
+            source: 'pill',
+            ...info,
+          }),
+        );
+        content = await resolveRunResourceRefs(
+          content,
+          sharedState.ephemeral ? undefined : sharedState.conversationId,
+          sharedState.emit,
+          { nodeId },
+        );
+        return content === message.content
+          ? message
+          : { ...message, content } as FlujoChatMessage;
+      }));
+    }
+
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
       // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
       // like the system prompt) so an isolated step can pull captured state.

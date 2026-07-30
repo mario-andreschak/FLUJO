@@ -50,6 +50,16 @@ export interface PromptRefMatch extends PromptRef {
   index: number;
 }
 
+/** A context-scoped option shown by prompt-authoring `@` pickers. */
+export interface PromptReferenceSuggestion extends PromptRef {
+  /** Short human-facing name used for filtering and selection. */
+  label: string;
+  /** Canonical serialized reference inserted into the persisted string. */
+  value: string;
+  /** Optional context shown under the label (description, URI, or server). */
+  description?: string;
+}
+
 /** Matches `${res:NAME}`. Mirrors the backend `RES_REF_SCAN` (no `}` inside NAME). */
 const RES_REF_SCAN = /\$\{res:([^}]+)\}/g;
 /** Matches `${global:NAME}` without accepting an empty name or nested closing brace. */
@@ -115,6 +125,20 @@ export function encodePromptRefPill(kind: PromptRefKind, server: string, name: s
   if (kind === 'runres') return `\${res:${name}}`;
   if (kind === 'global') return `\${global:${name}}`;
   return encodeBindingPill(kind, server, name);
+}
+
+/** Build a typed picker option while keeping serialization in one codec. */
+export function createPromptReferenceSuggestion(
+  ref: PromptRef,
+  label = ref.name,
+  description?: string,
+): PromptReferenceSuggestion {
+  return {
+    ...ref,
+    label,
+    value: encodePromptRefPill(ref.kind, ref.server, ref.name),
+    description,
+  };
 }
 
 /** Readable chip label for a parsed reference (no `${` … `}`), e.g. `res:NAME`. */
