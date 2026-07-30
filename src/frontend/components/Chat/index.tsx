@@ -3387,31 +3387,33 @@ const Chat: React.FC = () => {
                   // flow dropdown (which would render blank).
                   <Chip color="primary" variant="outlined" icon={<BoltIcon />} label="Quick Chat" />
                 ) : (
-                  <FlowSelector
-                    // Remove duplicate selectedFlowId prop
-                    selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
-                    onSelectFlow={handleFlowSelect}
-                    disabled={isDebugPaused} // Disable flow selection when debugging
-                  />
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+                    <FlowSelector
+                      // Remove duplicate selectedFlowId prop
+                      selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+                      onSelectFlow={handleFlowSelect}
+                      disabled={isDebugPaused} // Disable flow selection when debugging
+                    />
+                    {/* Keep the FlowBuilder shortcut beside the picker instead
+                        of at the far edge of the flexible header row. */}
+                    {(() => {
+                      const builderFlowId =
+                        currentConversationSummary?.flowId || detailedConversation?.flowId || null;
+                      if (!builderFlowId) return null;
+                      return (
+                        <Tooltip title="Open this flow in the FlowBuilder">
+                          <IconButton
+                            color="primary"
+                            onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
+                          >
+                            <AccountTreeIcon />
+                          </IconButton>
+                        </Tooltip>
+                      );
+                    })()}
+                  </Box>
                 )}
               </Box>
-              {/* Open this flow in the FlowBuilder (#148). Hidden for quick-chat
-                  pseudo-flows, which have no editable saved flow. */}
-              {(() => {
-                const builderFlowId =
-                  currentConversationSummary?.flowId || detailedConversation?.flowId || null;
-                if (!builderFlowId || isQuickChatFlowId(builderFlowId)) return null;
-                return (
-                  <Tooltip title="Open this flow in the FlowBuilder">
-                    <IconButton
-                      color="primary"
-                      onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
-                    >
-                      <AccountTreeIcon />
-                    </IconButton>
-                  </Tooltip>
-                );
-              })()}
               {/* Token totals + context meter (persisted usage; refreshed with the conversation) */}
               <ConversationStats
                 usage={detailedConversation?.usage}

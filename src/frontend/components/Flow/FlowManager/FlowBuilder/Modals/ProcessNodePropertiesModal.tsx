@@ -37,6 +37,7 @@ import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjusted path
 import { createLogger } from '@/utils/logger';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
@@ -51,6 +52,17 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: 'task', label: 'Task' },
   { key: 'advanced', label: 'Advanced' },
 ];
+
+export function getInitialProcessSection(
+  authoringMode: FlowAuthoringMode,
+  promptTemplate: unknown,
+): SectionKey {
+  return authoringMode === 'guided'
+    && typeof promptTemplate === 'string'
+    && promptTemplate.trim().length > 0
+    ? 'task'
+    : 'basic';
+}
 
 export const ProcessNodePropertiesModal = ({
   open,
@@ -219,10 +231,17 @@ export const ProcessNodePropertiesModal = ({
       setCaptureKvScope(kvParsed.scope);
       setCaptureKvKey(kvParsed.key || '');
 
-      // Reset section navigation each time the modal opens on a node.
-      setActiveSection('basic');
+      // In Guided mode, take returning users directly to their authored task.
+      // Empty/new nodes still open on Basic, as does Advanced mode.
+      const initialSection = getInitialProcessSection(authoringMode, savedPromptTemplate);
+      setActiveSection(initialSection);
+      if (initialSection === 'task') {
+        isProgrammaticScroll.current = true;
+        taskRef.current?.scrollIntoView({ block: 'start' });
+        window.setTimeout(() => { isProgrammaticScroll.current = false; }, 0);
+      }
     }
-  }, [node, open]);
+  }, [node, open, authoringMode]);
 
   // Issue #300: keep the active tab in sync with the section scrolled into view.
   useEffect(() => {
