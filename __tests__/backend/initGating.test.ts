@@ -16,6 +16,7 @@
 // Async return values are configured in beforeEach; a bare undefined return is
 // harmless for the void-returning collaborators (they are awaited).
 const verifyStorageMock = jest.fn();
+const migrateInternalMcpServersMock = jest.fn();
 const startEnabledServersMock = jest.fn();
 const refreshSpotlightMock = jest.fn();
 const schedulerStartMock = jest.fn();
@@ -28,6 +29,9 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: { startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a) },
+}));
+jest.mock('@/backend/services/mcp/internal/migration', () => ({
+  migrateInternalMcpServers: (...a: unknown[]) => migrateInternalMcpServersMock(...a),
 }));
 jest.mock('@/backend/services/spotlight', () => ({
   refreshSpotlightServers: (...a: unknown[]) => refreshSpotlightMock(...a),
@@ -58,6 +62,7 @@ describe('backend init startup gating (#78)', () => {
     clearGlobals();
     verifyStorageMock.mockResolvedValue(undefined);
     ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
+    migrateInternalMcpServersMock.mockResolvedValue(undefined);
     startEnabledServersMock.mockResolvedValue(undefined);
     refreshSpotlightMock.mockResolvedValue(undefined);
     schedulerStartMock.mockResolvedValue(undefined);
@@ -70,12 +75,32 @@ describe('backend init startup gating (#78)', () => {
 
     expect(verifyStorageMock).toHaveBeenCalledTimes(1);
     expect(ensureVendoredFlowGeneratorMock).toHaveBeenCalledTimes(1);
+    expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
-    // Ordering: the MCP sweep must complete before the scheduler arms.
+    // Ordering: migration completes before the MCP sweep, which completes before
+    // the scheduler arms.
+    expect(migrateInternalMcpServersMock.mock.invocationCallOrder[0]).toBeLessThan(
+      startEnabledServersMock.mock.invocationCallOrder[0]
+    );
     expect(startEnabledServersMock.mock.invocationCallOrder[0]).toBeLessThan(
       schedulerStartMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it('does not start the sweep until a failed migration succeeds on retry', async () => {
+    migrateInternalMcpServersMock
+      .mockRejectedValueOnce(new Error('migration failed'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(ensureBackendInitialized()).rejects.toThrow('migration failed');
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+
+    await ensureBackendInitialized();
+    expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(2);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(schedulerStartMock).toHaveBeenCalledTimes(1);
   });
 
   it('locked USER mode: verifies storage but defers MCP/scheduler startup', async () => {
@@ -84,6 +109,7 @@ describe('backend init startup gating (#78)', () => {
     await ensureBackendInitialized();
 
     expect(verifyStorageMock).toHaveBeenCalledTimes(1);
+    expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
   });
@@ -96,6 +122,7 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock).not.toHaveBeenCalled();
 
     await onUnlocked();
+    expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
     // MCP before scheduler here too.

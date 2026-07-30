@@ -54,13 +54,7 @@ export function builtInStdioEnv(name: string): Record<string, string> {
   return env;
 }
 
-/**
- * The synthetic config entry for the built-in server. Appended by
- * MCPService.loadServerConfigs() when no stored server claims the name (a stored
- * config always wins, so a pre-existing user server named "flujo" keeps working
- * and simply shadows the built-in). Never persisted: saveConfig() drops any
- * config with `builtIn: true`.
- */
+/** Current default used when issue #346 seeds the persisted `flujo` config. */
 export function internalServerConfig(): MCPStdioConfig {
   return {
     name: INTERNAL_SERVER_NAME,
@@ -74,7 +68,6 @@ export function internalServerConfig(): MCPStdioConfig {
     rootPath: '',
     _buildCommand: '',
     _installCommand: '',
-    builtIn: true,
     // Always re-exposed at /mcp-proxy/flujo so external MCP clients (Claude Code,
     // Cursor, the brain, …) can drive FLUJO through one endpoint. Same posture as
     // the /mcp-flows endpoint: localhost-only (DNS-rebind guarded) and gated by

@@ -20,9 +20,11 @@ export enum StorageKey {
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
   PENDING_APPROVALS = 'pending_approvals',
-  // Per-built-in-server overrides (issue #170). Only a tiny { disabled } flag is
-  // persisted here; the synthetic built-in configs themselves are NEVER stored.
+  // Legacy per-internal-server overrides retained only as migration input.
   MCP_INTERNAL_OVERRIDES = 'mcp_internal_overrides',
+  // Durable marker for the one-time migration of shipped internal MCP servers
+  // into ordinary MCP_SERVERS records (issue #346).
+  MCP_INTERNAL_SERVERS_MIGRATION_V1 = 'mcp_internal_servers_migration_v1',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -63,6 +65,7 @@ export const StorageKeys = {
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
+  MCP_INTERNAL_SERVERS_MIGRATION_V1: StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,

@@ -129,12 +129,9 @@ import {
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
 import { INTERNAL_SERVER_NAME } from './internalServerConfig';
 import {
-  isBuiltInServerName,
-  builtInServerConfigsWithOverrides,
-  setInternalServerDisabled,
-  setInternalServerRoots,
-  FILESYSTEM_SERVER_NAME,
   BASH_SERVER_NAME,
+  FILESYSTEM_SERVER_NAME,
+  isBuiltInServerName,
 } from './internal/registry';
 import {
   ToolCallSource,
@@ -539,21 +536,6 @@ export class MCPService {
         return serverConfigs;
       }
 
-      // The built-in internal servers (FLUJO's backend API, filesystem, bash) are
-      // synthesized here rather than stored, so they are always present and always
-      // up to date. A stored config that claims one of the reserved names wins
-      // (legacy user server) and simply shadows the built-in one. Never persisted:
-      // saveConfig() drops builtIn entries. The per-server enable/disable override
-      // (issue #170) is applied here (only the tiny { disabled } flag is stored).
-      const builtIns = await builtInServerConfigsWithOverrides();
-      for (const builtIn of builtIns) {
-        if (serverConfigs.some(c => c.name === builtIn.name)) {
-          log.warn(`loadServerConfigs: A stored server is named "${builtIn.name}" — it shadows FLUJO's built-in server`);
-          continue;
-        }
-        serverConfigs.push(builtIn);
-      }
-
       log.debug(`loadServerConfigs: Loaded ${serverConfigs.length} server configs`);
       return serverConfigs;
     } catch (error) {
@@ -597,20 +579,6 @@ export class MCPService {
   async isServerDisabled(serverName: string): Promise<boolean> {
     const config = await this.getServerConfig(serverName);
     return config?.disabled === true;
-  }
-
-  /**
-   * Is this name the built-in internal server (and not shadowed by a stored
-   * config)? The storage check keeps a pre-existing user server that happens to
-   * be named like the built-in one fully functional: for such a name every
-   * short-circuit below steps aside and the normal client/transport path runs.
-   * Names other than the reserved one return false at a string compare — the
-   * storage read only ever happens for the reserved name itself.
-   */
-  private async isInternalServer(serverName: string): Promise<boolean> {
-    if (!isBuiltInServerName(serverName)) return false;
-    const stored = await loadServerConfigs();
-    return !Array.isArray(stored) || !stored.some(c => c.name === serverName);
   }
 
   /**
@@ -710,12 +678,12 @@ export class MCPService {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
 
-      if (config.builtIn === true && config.transport === 'stdio') {
+      if (isBuiltInServerName(config.name) && config.transport === 'stdio') {
         const childEnv: Record<string, string> = {
           ...(config.env as Record<string, string> | undefined),
         };
         // Preserve the Settings-backed protected-path switch across the process
-        // boundary. Operator env ceilings/overrides are already in the synthetic
+        // boundary. Operator env ceilings/overrides are already in the persisted
         // config, while this value is application state and must be resolved here.
         if (config.name === FILESYSTEM_SERVER_NAME || config.name === BASH_SERVER_NAME) {
           const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
@@ -1524,13 +1492,12 @@ export class MCPService {
    * Treat the per-server MCP Apps opt-in as a live authorization predicate.
    * Historical chat messages can outlive a config change, so a persisted
    * `ui://` marker must not keep app-originated access after the user opts out.
-   * Built-in servers are host-owned and explicitly exempt from this toggle.
+   * Persisted internal configs follow the same opt-in rule; notably, the shipped
+   * filesystem server must not gain MCP Apps access during migration.
    */
   async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
-    const internal = await this.isInternalServer(serverName);
     const config = await this.getServerConfig(serverName);
     if (config?.disabled === true) return false;
-    if (internal) return true;
     return config?.enableMcpApps === true;
   }
 
@@ -1748,47 +1715,6 @@ export class MCPService {
 
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
-
-    // The built-in internal servers are synthesized, not stored — their command/
-    // env/name cannot be edited, and this also blocks CREATING a server under a
-    // reserved name (the POST route funnels through here). Renaming another server
-    // onto a reserved name is caught by the duplicate check below, since
-    // loadServerConfigs() always contains the synthetic entries. The ONE mutation
-    // that IS allowed is toggling `disabled` on/off (issue #170): it is persisted
-    // as a tiny override, never as the synthetic config itself.
-    if (await this.isInternalServer(serverName)) {
-      const keys = Object.keys(updates).filter(k => k !== 'name');
-      const nameOk = updates.name === undefined || updates.name === serverName;
-      const onlyDisabledChange =
-        keys.length > 0 && keys.every(k => k === 'disabled') && typeof updates.disabled === 'boolean' && nameOk;
-      // The `filesystem` and `bash` built-ins additionally allow configuring their
-      // confinement roots (issues #170 + #175): persisted as a tiny override, never
-      // as the synthetic config.
-      const onlyRootsChange =
-        (serverName === FILESYSTEM_SERVER_NAME || serverName === BASH_SERVER_NAME) &&
-        keys.length > 0 &&
-        keys.every(k => k === 'roots') &&
-        Array.isArray(updates.roots) &&
-        nameOk;
-      if (onlyDisabledChange) {
-        await setInternalServerDisabled(serverName, updates.disabled as boolean);
-        log.info(`updateServerConfig: Toggled built-in server ${serverName} disabled=${updates.disabled}`);
-        const refreshed = await this.loadServerConfigs();
-        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
-        return cfg ?? { success: true };
-      }
-      if (onlyRootsChange) {
-        await setInternalServerRoots(serverName, updates.roots as string[]);
-        log.info(`updateServerConfig: Set built-in ${serverName} roots (${(updates.roots as string[]).length})`);
-        const refreshed = await this.loadServerConfigs();
-        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
-        return cfg ?? { success: true };
-      }
-      return {
-        success: false,
-        error: `"${serverName}" is a FLUJO built-in server: only enabling/disabling it is allowed, not editing.`,
-      };
-    }
 
     // Load all configs from storage
     const configsResult = await this.loadServerConfigs();
@@ -2018,14 +1944,6 @@ export class MCPService {
    */
   async deleteServerConfig(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`deleteServerConfig: Entering method for server ${serverName}`);
-
-    // The built-in internal server is synthesized, not stored — it cannot be deleted.
-    if (await this.isInternalServer(serverName)) {
-      return {
-        success: false,
-        error: `"${INTERNAL_SERVER_NAME}" is FLUJO's built-in server and cannot be deleted.`,
-      };
-    }
 
     // First disconnect if connected
     if (this.clients.has(serverName)) {

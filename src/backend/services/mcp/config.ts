@@ -215,16 +215,11 @@ export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise
   log.debug('Entering saveConfig method');
   try {
     const mcpServers = Object.fromEntries(
-      Array.from(configs.entries())
-        // The built-in internal server is synthesized at load time
-        // (MCPService.loadServerConfigs), so callers that load-modify-save the whole
-        // set naturally carry it here. Dropping it keeps it out of storage — it must
-        // never be persisted or it would stop being synthetic.
-        .filter(([, config]) => config.builtIn !== true)
-        .map(([name, config]) => {
-        // Remove the name property since it's used as the key
+      Array.from(configs.entries()).map(([name, config]) => {
+        // Remove the name property since it's used as the key. Internal servers
+        // migrated by issue #346 persist through this same ordinary config path.
         const { name: _, ...configWithoutName } = config;
-        
+
         // Return the entry with the server name as the key
         return [name, configWithoutName];
       })

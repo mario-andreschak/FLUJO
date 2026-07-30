@@ -7,6 +7,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
 import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
+import { migrateInternalMcpServers } from '@/backend/services/mcp/internal/migration';
 
 const log = createLogger('backend/init');
 
@@ -99,20 +100,31 @@ async function runInitialization(): Promise<void> {
 
 /**
  * Start the secret-dependent background services exactly once per process, in
- * order: the MCP server sweep, then arming the scheduler. The scheduler is
- * armed AFTER the MCP sweep so a catch-up or early scheduled run doesn't race
- * servers that are still connecting.
+ * order: migrate internal MCP configs, run the MCP server sweep, then arm the
+ * scheduler. The scheduler is armed AFTER the MCP sweep so a catch-up or early
+ * scheduled run doesn't race servers that are still connecting.
  *
  * Idempotent and concurrency-safe via a memoized global promise: safe to call
  * from both boot (runInitialization) and the unlock transition (onUnlocked)
- * without double-starting. The inner steps each catch their own failures, so
- * the memo always settles (a transient failure isn't retried automatically —
- * a FLUJO restart re-runs boot).
+ * without double-starting. A migration failure rejects and clears both startup
+ * memos so a later initialization call can retry; downstream service failures
+ * remain isolated to their existing logging paths.
  */
 function startSecretDependentServices(): Promise<void> {
   if (!global.__flujo_secret_services_promise) {
     global.__flujo_secret_services_promise = (async () => {
       log.info('Initializing MCP servers');
+      try {
+        // Issue #346: provisioning must finish before the enabled-server sweep.
+        await migrateInternalMcpServers();
+      } catch (error) {
+        log.error('Failed to migrate internal MCP server configurations:', error);
+        // Keep the startup retryable in-process; starting without the durable
+        // records would silently omit the shipped servers.
+        global.__flujo_secret_services_promise = undefined;
+        throw error;
+      }
+
       // startEnabledServers() never rejects in practice (it catches per-server
       // failures) and always clears the startup flag in its own finally, so we
       // don't need to manage that flag here - just guard against the unexpected.
