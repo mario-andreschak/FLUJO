@@ -28,12 +28,16 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 const createNewClientMock = jest.fn();
 const shouldRecreateClientMock = jest.fn();
 const safelyCloseClientMock = jest.fn();
+const probeOAuthSupportMock = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
   createNewClient: (...a: unknown[]) => createNewClientMock(...a),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
   shouldRecreateClient: (...a: unknown[]) => shouldRecreateClientMock(...a),
   safelyCloseClient: (...a: unknown[]) => safelyCloseClientMock(...a),
+}));
+jest.mock('@/utils/mcp/oauthProbe', () => ({
+  probeOAuthSupport: (...a: unknown[]) => probeOAuthSupportMock(...a),
 }));
 
 import { MCPService } from '@/backend/services/mcp';
@@ -44,11 +48,13 @@ beforeEach(() => {
   createNewClientMock.mockReset().mockReturnValue(makeClient());
   shouldRecreateClientMock.mockReset().mockReturnValue({ needsNewClient: false });
   safelyCloseClientMock.mockReset().mockResolvedValue(undefined);
+  probeOAuthSupportMock.mockReset().mockResolvedValue({ oauthCapable: true });
   saveConfigMock.mockClear();
   loadServerConfigsMock.mockReset().mockResolvedValue([
     { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
   ]);
   global.__mcp_clients?.clear();
+  global.__mcp_active_transports?.clear();
 });
 
 describe('updateServerConfig on a connected, still-enabled server', () => {
@@ -96,5 +102,73 @@ describe('updateServerConfig on a connected, still-enabled server', () => {
       value: '${global:GITHUB_TOKEN}',
       metadata: { isSecret: true },
     });
+  });
+});
+
+describe('static Authorization header OAuth-scope cleanup', () => {
+  const headerAuthenticatedServer = (overrides: Record<string, unknown> = {}) => ({
+    name: 'github',
+    transport: 'streamable',
+    serverUrl: 'https://api.githubcopilot.com/mcp/',
+    headers: {
+      Authorization: {
+        value: 'encrypted:rotated-pat',
+        metadata: { isSecret: true },
+      },
+    },
+    oauthScopes: ['read'],
+    disabled: false,
+    autoApprove: [],
+    rootPath: '',
+    env: {},
+    ...overrides,
+  });
+
+  it('removes the legacy inferred scope after the header establishes a live connection', async () => {
+    const config = headerAuthenticatedServer();
+    loadServerConfigsMock.mockResolvedValue([config]);
+    const svc = new MCPService();
+
+    const result = await svc.connectServer('github');
+
+    expect(result.success).toBe(true);
+    const savedMap = saveConfigMock.mock.calls[0][0] as Map<string, {
+      oauthScopes?: string[];
+      headers?: unknown;
+    }>;
+    expect(savedMap.get('github')?.oauthScopes).toBeUndefined();
+    expect(savedMap.get('github')?.headers).toEqual(config.headers);
+  });
+
+  it('preserves scopes when durable OAuth state exists', async () => {
+    loadServerConfigsMock.mockResolvedValue([
+      headerAuthenticatedServer({ oauthClientId: 'registered-client' }),
+    ]);
+    const svc = new MCPService();
+
+    const result = await svc.connectServer('github');
+
+    expect(result.success).toBe(true);
+    expect(saveConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('does not infer or persist OAuth when an explicit Authorization header is rejected', async () => {
+    loadServerConfigsMock.mockResolvedValue([
+      headerAuthenticatedServer({ oauthScopes: undefined }),
+    ]);
+    createNewClientMock.mockReturnValue({
+      ...makeClient(),
+      connect: jest.fn(async () => {
+        throw Object.assign(new Error('HTTP 401 Unauthorized'), { code: 401 });
+      }),
+    });
+    const svc = new MCPService();
+
+    const result = await svc.connectServer('github');
+
+    expect(result.success).toBe(false);
+    expect(result.requiresAuthentication).toBe(true);
+    expect(probeOAuthSupportMock).not.toHaveBeenCalled();
+    expect(saveConfigMock).not.toHaveBeenCalled();
   });
 });

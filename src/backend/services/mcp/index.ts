@@ -149,6 +149,39 @@ type ToolArgs = Record<string, unknown>;
 // Create a logger instance for this file
 const log = createLogger('backend/services/mcp/index');
 
+/** Whether a remote config explicitly selects static Authorization-header auth. */
+function hasConfiguredAuthorizationHeader(config: MCPServerConfig): boolean {
+  if (config.transport !== 'streamable' && config.transport !== 'sse') return false;
+  const headers = (config as MCPStreamableConfig | MCPSSEConfig).headers;
+  if (!headers) return false;
+
+  return Object.entries(headers).some(([key, raw]) => {
+    if (key.toLowerCase() !== 'authorization') return false;
+    return normalizeHeaderValue(raw, key).value.trim().length > 0;
+  });
+}
+
+/**
+ * The legacy OAuth inference path persisted exactly this default. Restrict cleanup to that
+ * signature so user-authored scope lists are never removed speculatively.
+ */
+function hasLegacyInferredOAuthScopes(config: MCPStreamableConfig): boolean {
+  return config.oauthScopes?.length === 1 && config.oauthScopes[0] === 'read';
+}
+
+/** Whether a config contains durable or in-progress FLUJO-managed OAuth state. */
+function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
+  return !!(
+    config.oauthClientId ||
+    config.oauthClientSecret ||
+    config.oauthClientMetadata ||
+    config.oauthClientInformation ||
+    config.oauthTokens ||
+    config.oauthCodeVerifier ||
+    config.authorizationUrl
+  );
+}
+
 /**
  * Main service class for MCP server management
  * 
@@ -175,6 +208,43 @@ export class MCPService {
   // (sent by servers that support resources/subscribe, registered via subscribeToResource).
   // ResourceHandler checks this before re-reading a bound resource node.
   private pendingResourceUpdates: Map<string, Set<string>> = new Map();
+
+  /**
+   * Remove the exact stale marker written by the old auth-inference path once a static
+   * Authorization header has proved it can establish a real connection. Reload from storage
+   * before saving so resolved/decrypted connection material is never persisted accidentally.
+   */
+  private async clearLegacyInferredOAuthScopesForHeaderAuth(serverName: string): Promise<void> {
+    try {
+      const configs = await this.loadServerConfigs();
+      if (!Array.isArray(configs)) return;
+
+      const index = configs.findIndex(c => c.name === serverName);
+      if (index === -1 || configs[index].transport !== 'streamable') return;
+
+      const stored = configs[index] as MCPStreamableConfig;
+      if (
+        !hasConfiguredAuthorizationHeader(stored) ||
+        !hasLegacyInferredOAuthScopes(stored) ||
+        hasManagedOAuthState(stored)
+      ) {
+        return;
+      }
+
+      configs[index] = { ...stored, oauthScopes: undefined };
+      const result = await saveConfig(new Map(configs.map(c => [c.name, c])));
+      if (result.success) {
+        log.info(`Removed stale inferred OAuth scopes from header-authenticated server ${serverName}`);
+      } else {
+        log.warn(`Failed to remove stale inferred OAuth scopes from ${serverName}: ${result.error}`);
+      }
+    } catch (error) {
+      // Cleanup is best-effort and must never turn a successful MCP connection into a failure.
+      log.warn(
+        `Failed to clean inferred OAuth scopes for ${serverName}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
 
   // Connected clients per server name. Global-backed (see __mcp_clients) so EVERY
   // MCPService instance shares the one map: a client registered or deregistered by any
@@ -631,6 +701,9 @@ export class MCPService {
     // the stored config is the source of truth for `disabled`.
     const storedConfig =
       typeof configOrName === 'string' ? config : await this.getServerConfig(config.name);
+    // Keep the storage-shaped config separate from the resolved connection clone below.
+    // Auth-mode decisions and cleanup must never operate on decrypted header material.
+    const persistedConfig = storedConfig ?? config;
     if ((storedConfig ?? config).disabled) {
       log.info(`connectServer: Server ${config.name} is disabled — refusing to create a client/transport`);
       // Disabled servers must not keep retry machinery alive either.
@@ -689,6 +762,7 @@ export class MCPService {
           // zombie's late close) must not fire against it later.
           this.clearRetryTimer(config.name);
           this.connectionRetryAttempts.delete(config.name);
+          await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
           return { success: true };
         }
 
@@ -908,6 +982,7 @@ export class MCPService {
       this.lastConnectionError.delete(config.name);
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
+      await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
 
       const negotiated = negotiatedProtocolVersion(client);
       log.info(
@@ -921,13 +996,18 @@ export class MCPService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const oauthProviderError = isOAuthAuthenticationError(error);
       const requiresAuthentication = isAuthRequiredError(error);
+      const usesStaticAuthorization = hasConfiguredAuthorizationHeader(persistedConfig);
       let oauthCapable: boolean | undefined;
 
       // A transport-level 401/403 proves only that this request was rejected. It may be
       // a static bearer/custom-header failure, so enable and persist OAuth only after the
       // endpoint advertises OAuth capability. Provider-originated errors are already
       // conclusive because this server was connected with a configured OAuth provider.
-      if (requiresAuthentication && (config.transport === 'streamable' || config.transport === 'sse')) {
+      if (
+        requiresAuthentication &&
+        !usesStaticAuthorization &&
+        (config.transport === 'streamable' || config.transport === 'sse')
+      ) {
         const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig).serverUrl;
         if (serverUrl) {
           oauthCapable = (await probeOAuthSupport(serverUrl)).oauthCapable;
