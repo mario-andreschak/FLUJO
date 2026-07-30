@@ -138,7 +138,11 @@ describe('installPackage — happy path', () => {
     expect(summary.dryRun).toBe(false);
 
     // Server: registry install called with the resolved env, recorded as created.
-    expect(installRegistryServerMock).toHaveBeenCalledWith('ai.keenable/web-search', { WEB_KEY: 'sk-1' });
+    expect(installRegistryServerMock).toHaveBeenCalledWith(
+      'ai.keenable/web-search',
+      { WEB_KEY: 'sk-1' },
+      { preferredTransport: 'stdio', headerOverrides: {} },
+    );
     expect(summary.servers[0]).toEqual(expect.objectContaining({ localName: 'web', installed: true, serverName: 'web-search' }));
     expect(updateServerConfigMock).toHaveBeenCalledWith('web-search', { folder: 'my-pkg' });
 
@@ -538,6 +542,8 @@ describe('installPackage — adopt-and-configure', () => {
         argTemplates: [
           { index: 2, value: '--token=${global:GITHUB_TOKEN}' },
         ],
+        preferredTransport: 'stdio',
+        headerOverrides: {},
       },
     );
   });

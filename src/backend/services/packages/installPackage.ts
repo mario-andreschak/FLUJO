@@ -48,6 +48,7 @@ import type {
 import type { EnvDeclaration } from '@/shared/types/package/installOrigin';
 import { fetchPackageManifest } from './packageRegistry';
 import { installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { installGithubServer } from '@/backend/services/mcp/githubInstall';
 import { modelService } from '@/backend/services/model';
 import { flowService } from '@/backend/services/flow';
 import { mcpService } from '@/backend/services/mcp';
@@ -753,6 +754,7 @@ async function adoptAndConfigureServer(
   missingRequired: string[],
   resolvedEnv: Record<string, string>,
   secretEnvNames: Set<string>,
+  resolvedHeaders: Record<string, MCPHeaderValue> = {},
 ): Promise<void> {
   const { packageFolder, summary, ledgerEntities, existingServerConfigs } = ctx;
   const source = serverSource(server);
@@ -794,6 +796,14 @@ async function adoptAndConfigureServer(
     server.name,
     {
       env: mergedEnv,
+      ...(Object.keys(resolvedHeaders).length > 0
+        ? {
+            headers: {
+              ...('headers' in existingConfig ? (existingConfig.headers ?? {}) : {}),
+              ...resolvedHeaders,
+            },
+          }
+        : {}),
       folder: packageFolder,
       ...(server.argTemplates?.length ? { args: mergedArgs } : {}),
     } as Partial<MCPServerConfig>,
@@ -846,12 +856,41 @@ async function installServer(
   }
 
   if (origin.sourceType === 'github') {
-    // No automated github clone/build install path exists server-side yet
-    // (that flow currently only runs client-side in the GitHub tab wizard).
-    summary.servers.push({ localName: server.name, source, installed: false,
-      error: 'GitHub-sourced servers are not auto-installable yet — install manually from the MCP page' });
-    summary.skipped.push({ type: 'server', name: server.name,
-      note: 'GitHub-sourced servers require manual install' });
+    if (!origin.ref) {
+      summary.servers.push({ localName: server.name, source, installed: false, error: 'missing GitHub repository URL' });
+      summary.skipped.push({ type: 'server', name: server.name, note: 'installOrigin has no GitHub ref' });
+      return;
+    }
+    if (missingRequired.length > 0) {
+      summary.disabled.push({ type: 'server', name: server.name, note: `missing required secret(s) for: ${missingRequired.join(', ')}` });
+      summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
+      return;
+    }
+    const result = await installGithubServer({
+      name: server.name,
+      repositoryUrl: origin.ref,
+      env: env.values,
+      folder: ctx.packageFolder,
+    });
+    summary.servers.push({
+      localName: server.name,
+      source,
+      installed: result.installed,
+      ...(result.serverName ? { serverName: result.serverName } : {}),
+      ...(result.alreadyExisted ? { alreadyExisted: true } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    });
+    if (result.installed) {
+      ledgerEntities.servers.push(result.serverName ?? server.name);
+      const ref = { type: 'server' as const, name: server.name, id: result.serverName ?? server.name };
+      if (result.alreadyExisted) summary.updated.push(ref);
+      else {
+        ledgerCreated.servers.push(result.serverName ?? server.name);
+        summary.created.push(ref);
+      }
+    } else {
+      summary.skipped.push({ type: 'server', name: server.name, note: result.error ?? 'GitHub install failed' });
+    }
     return;
   }
 
@@ -866,7 +905,14 @@ async function installServer(
     // ADOPT-AND-CONFIGURE: if a server with this name already exists, merge env
     // into it rather than installing a new server from the registry.
     if (existingServerNames.has(server.name)) {
-      await adoptAndConfigureServer(server, ctx, missingRequired, env.values, env.secretNames);
+      await adoptAndConfigureServer(
+        server,
+        ctx,
+        missingRequired,
+        env.values,
+        env.secretNames,
+        resolvedHeaders,
+      );
       return;
     }
 
@@ -876,11 +922,11 @@ async function installServer(
       summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
       return;
     }
-    const result = server.argTemplates?.length
-      ? await installRegistryServer(registryName, env.values, {
-          argTemplates: server.argTemplates,
-        })
-      : await installRegistryServer(registryName, env.values);
+    const result = await installRegistryServer(registryName, env.values, {
+      preferredTransport: server.transport,
+      headerOverrides: resolvedHeaders,
+      ...(server.argTemplates?.length ? { argTemplates: server.argTemplates } : {}),
+    });
     const entry: InstallServerResult = {
       localName: server.name,
       source,

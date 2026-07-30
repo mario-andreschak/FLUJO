@@ -41,6 +41,7 @@ import { GITHUB_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/git
 import { NPM_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/npmDownloads';
 import { REGISTRY_STATUS_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/registryStatus';
 import { loadQualitySettings } from '@/backend/services/mcp/quality/settings';
+import type { MCPHeaderValue } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/registryInstall');
 
@@ -208,6 +209,41 @@ export interface InstallOptions {
    * unrelated arguments are never accepted through this channel.
    */
   argTemplates?: Array<{ index: number; value: string }>;
+  /**
+   * Transport recorded by a package export. Registry entries can expose both a
+   * local package and a hosted endpoint; restore the same kind that was
+   * exported instead of blindly taking the registry's first option.
+   */
+  preferredTransport?: 'stdio' | 'sse' | 'streamable' | 'websocket';
+  /** Resolved package header declarations (including secret metadata). */
+  headerOverrides?: Record<string, MCPHeaderValue>;
+  /** Explicit approval to execute locally when the exported remote kind is unavailable. */
+  allowLocalFallback?: boolean;
+}
+
+function optionTransport(option: InstallOption): 'stdio' | 'sse' | 'streamable' {
+  if (option.kind === 'package') return 'stdio';
+  return option.remote.type === 'sse' ? 'sse' : 'streamable';
+}
+
+function chooseInstallOption(
+  options: InstallOption[],
+  preferred?: InstallOptions['preferredTransport'],
+): InstallOption | undefined {
+  if (!preferred) return options[0];
+  const exact = options.find((option) => optionTransport(option) === preferred);
+  if (exact) return exact;
+  // A websocket package cannot be represented by the public registry today.
+  // For all other remote transports, prefer another hosted option before ever
+  // falling back to code execution on the local machine.
+  if (preferred !== 'stdio') {
+    return options.find((option) => option.kind === 'remote') ?? options[0];
+  }
+  return options.find((option) => option.kind === 'package') ?? options[0];
+}
+
+function headerLiteral(value: MCPHeaderValue): string {
+  return typeof value === 'string' ? value : value.value;
 }
 
 function applyArgTemplates(
@@ -281,7 +317,7 @@ export async function installRegistryServer(
   }
 
   const installOptions = getInstallOptions(server);
-  const option: InstallOption | undefined = installOptions[0]; // packages first, same as the UI
+  const option = chooseInstallOption(installOptions, options?.preferredTransport);
   if (!option) {
     return { installed: false, error: `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)` };
   }
@@ -295,7 +331,10 @@ export async function installRegistryServer(
     return { installed: false, serverName: plan.serverName, plan };
   }
 
-  const missing = missingRequiredInputs(option, envOverrides);
+  const providedHeaders = Object.fromEntries(
+    Object.entries(options?.headerOverrides ?? {}).map(([name, value]) => [name, headerLiteral(value)]),
+  );
+  const missing = missingRequiredInputs(option, { ...envOverrides, ...providedHeaders });
   if (missing.length > 0) {
     return {
       installed: false,
@@ -305,10 +344,33 @@ export async function installRegistryServer(
     };
   }
 
-  const baseConfig = applySpotlightEnvDefaults(buildConfigFromOption(server, option), envOverrides);
+  const registryConfig = buildConfigFromOption(server, option);
+  const currentHeaders =
+    'headers' in registryConfig
+      ? (registryConfig.headers as Record<string, MCPHeaderValue> | undefined)
+      : undefined;
+  const baseConfig = applySpotlightEnvDefaults(
+    option.kind === 'remote' && Object.keys(options?.headerOverrides ?? {}).length > 0
+      ? { ...registryConfig, headers: { ...(currentHeaders ?? {}), ...options?.headerOverrides } }
+      : registryConfig,
+    envOverrides,
+  );
   const templatedConfig = applyArgTemplates(baseConfig, options?.argTemplates);
   if ('error' in templatedConfig) {
     return { installed: false, plan, error: templatedConfig.error };
+  }
+  if (
+    options?.preferredTransport &&
+    options.preferredTransport !== 'stdio' &&
+    option.kind === 'package' &&
+    !options.allowLocalFallback
+  ) {
+    return {
+      installed: false,
+      error:
+        `"${server.name}" was exported as ${options.preferredTransport}, but the registry now only offers ` +
+        'a local executable install. Confirm local execution before using that fallback.',
+    };
   }
   const config = templatedConfig;
   const serverName = config.name as string;
