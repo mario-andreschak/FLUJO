@@ -1,40 +1,83 @@
 /**
  * Editable flows shipped with FLUJO (issue #338).
  *
- * Vendored flows are ordinary saved flows after their first seed. Startup only
- * creates a missing flow and never overwrites user edits. Restoring the bundled
- * definition is an explicit action so version history remains meaningful.
+ * Vendored flows are ordinary saved flows after their first seed. Startup creates
+ * a missing flow and performs the one known v1→v2 repair; that save archives the
+ * old definition. Other existing/editable definitions are left untouched.
  */
 import type { Flow } from '@/shared/types/flow';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { flowService } from './index';
+import {
+  DEFAULT_GENERATED_SUBFLOW_DEPTH,
+  GENERATED_FLOW_AUTHORING_POLICY,
+} from './generationDraft';
 
 export const FLOW_GENERATOR_ID = 'system-flow-generator';
-export const FLOW_GENERATOR_VERSION = 1;
+export const FLOW_GENERATOR_VERSION = 3;
 export const FLOW_GENERATOR_ROLE = 'flow-generator';
 
-const GENERATOR_PROMPT = `You are FLUJO's guided Flow Generator.
+const SAFE_AUTHORING_TOOLS = [
+  'list_flow_building_blocks',
+  'get_flow_authoring_guide',
+  'draft_generated_flow',
+  'search_mcp_marketplace',
+] as const;
+const INSTALL_AUTHORING_TOOLS = [
+  'install_mcp_server',
+  'install_best_mcp_server',
+] as const;
+const ALL_AUTHORING_TOOLS = [
+  ...SAFE_AUTHORING_TOOLS,
+  ...INSTALL_AUTHORING_TOOLS,
+] as const;
 
-Help the user design a workflow through a short conversation. Ask only for missing information that materially changes the design: the goal, required output, or external capability. Ask at most one concise question at a time.
+const GENERATOR_PROMPT = `You are the experimental, completely Flow-based FLUJO Flow Generator.
 
-Before drafting, call list_flow_building_blocks so every model, tool, and existing-flow reference is real. Use the default simple authoring profile. Do not ask the user about input modes, output modes, resources, variables, KV, fan-out, concurrency, prompt exclusions, or graph wiring; the compiler owns those defaults.
+Every user turn is an instruction to CREATE or REVISE an unsaved Flow draft. You must produce a draft on every turn. Never stop at advice, a design discussion, a promise to build later, or a clarifying question. When details are missing, make sensible reversible assumptions and continue.
 
-When the request is sufficiently clear, call draft_flow with a SimpleFlowSpec. Never call create_flow: the user must review the unsaved draft in the builder. After draft_flow returns, briefly summarize the proposed steps and invite the user to open the draft or request a revision. For a revision, call draft_flow again with a complete replacement SimpleFlowSpec.`;
+This Flow is the editable expression of the production generator:
+1. Flow Architect performs the production generator's model-driven authoring and capability-discovery stage.
+2. Generation Compiler invokes the SAME deterministic hardening pipeline used by the production generator.
+
+Prefer a small, clear root Flow, but create inline subflowSpec / parallelSubflowSpecs when a task has self-contained phases. New nested subflows are enabled by default, bounded to ${DEFAULT_GENERATED_SUBFLOW_DEPTH} nesting levels and six generated flows total. Never call create_flow: the result must remain unsaved until the user opens it in the builder.
+
+${GENERATED_FLOW_AUTHORING_POLICY}`;
+
+const ARCHITECT_PROMPT = `You are the Flow Architect stage.
+
+On EVERY visit:
+1. Call list_flow_building_blocks before authoring so every model, MCP server/tool, and existing-flow reference is real.
+2. Call get_flow_authoring_guide with profile "advanced".
+3. Read the newest user instruction. If the transcript already contains a prior draft_generated_flow call/result, treat this as a revision: start from its returned hardened "spec", preserve everything not requested to change, and emit a complete replacement specification.
+4. If a required external capability is missing, search the MCP marketplace. Install only when the run's MCP installation policy explicitly permits it and installation tools are actually available.
+5. Return ONLY one complete advanced FlowSpec JSON object as your final response—no prose or Markdown fences.
+
+Use inline subflowSpec / parallelSubflowSpecs for newly-created subflows. Do not emit generateSubflow because the deterministic compiler cannot expand it. Do not merely explain what you would build.`;
+
+const COMPILER_PROMPT = `You are the Generation Compiler and repair stage.
+
+Find the newest complete advanced FlowSpec JSON produced by the Flow Architect. Call draft_generated_flow with that complete specification. This tool is not a generic compiler: it executes the exact deterministic post-model pipeline shared with FLUJO's production generator—scratchpad guard, forgiving structural repair, bounded nested compilation, generated input/output defaults, and whole-bundle validation.
+
+If the first result contains validation errors, repair the COMPLETE returned spec using its issues and call draft_generated_flow one more time, matching the production generator's default single repair round. Never call create_flow or substitute generic draft_flow. Never finish with only prose, a promise, or JSON that was not submitted to draft_generated_flow.
+
+After a usable draft_generated_flow result exists, respond with only a short factual summary. The tool result—not your prose—is the authoritative unsaved draft returned to the UI.`;
 
 /** Build the bundled definition without reading or writing storage. */
 export function buildVendoredFlowGenerator(): Flow {
   const compiled = compileFlowSpec({
     name: 'Flow_Generator',
     description:
-      'Editable guided flow used by the Generate Flow chat. FLUJO seeds it once and never overwrites your changes.',
+      'Experimental editable multi-stage Flow Generator: architecture, capability discovery, validation, repair, and unsaved drafting.',
     nodes: [
       { key: 'start', type: 'start', label: 'Start', prompt: GENERATOR_PROMPT },
       {
-        key: 'designer',
+        key: 'architect',
         type: 'process',
-        label: 'Flow Designer',
-        description: 'Clarifies the request and proposes an unsaved guided draft.',
-        maxTurns: 16,
+        label: 'Flow Architect',
+        description: 'Inventories real building blocks and authors a complete advanced FlowSpec.',
+        prompt: ARCHITECT_PROMPT,
+        maxTurns: 12,
         inputMode: 'full-history',
         outputMode: 'latest-message',
         servers: [{
@@ -42,24 +85,36 @@ export function buildVendoredFlowGenerator(): Flow {
           tools: [
             'list_flow_building_blocks',
             'get_flow_authoring_guide',
-            'draft_flow',
+            'search_mcp_marketplace',
+            ...INSTALL_AUTHORING_TOOLS,
           ],
+        }],
+      },
+      {
+        key: 'compiler',
+        type: 'process',
+        label: 'Generation Compiler',
+        description: 'Runs the production generator hardening pipeline and one bounded repair round.',
+        prompt: COMPILER_PROMPT,
+        maxTurns: 16,
+        inputMode: 'full-history',
+        outputMode: 'latest-message',
+        servers: [{
+          name: 'flujo',
+          tools: ['draft_generated_flow'],
         }],
       },
       { key: 'finish', type: 'finish', label: 'Finish' },
     ],
     edges: [
-      { from: 'start', to: 'designer' },
-      { from: 'designer', to: 'finish' },
+      { from: 'start', to: 'architect' },
+      { from: 'architect', to: 'compiler' },
+      { from: 'compiler', to: 'finish' },
     ],
   }, {
     servers: [{ name: 'flujo' }],
     serverTools: {
-      flujo: [
-        'list_flow_building_blocks',
-        'get_flow_authoring_guide',
-        'draft_flow',
-      ],
+      flujo: [...ALL_AUTHORING_TOOLS],
     },
   });
   if (!compiled.flow) {
@@ -67,27 +122,53 @@ export function buildVendoredFlowGenerator(): Flow {
   }
 
   compiled.flow.id = FLOW_GENERATOR_ID;
-  compiled.flow.name = 'Flow Generator';
+  compiled.flow.name = 'Experimental Flow Generator';
   compiled.flow.folder = 'System';
-  compiled.flow.permissionRules = [
-    { action: 'list_flow_building_blocks', resource: '*', effect: 'allow' },
-    { action: 'get_flow_authoring_guide', resource: '*', effect: 'allow' },
-    { action: 'draft_flow', resource: '*', effect: 'allow' },
-  ];
-  const designer = compiled.flow.nodes.find((node) => node.type === 'process');
-  if (!designer) throw new Error('Bundled Flow Generator has no designer process');
-  designer.data.properties = {
-    ...(designer.data.properties ?? {}),
-    systemRole: FLOW_GENERATOR_ROLE,
-    systemFlowVersion: FLOW_GENERATOR_VERSION,
-  };
+  // The saved/editable system Flow is safe to run manually: it can discover
+  // marketplace options but cannot install. An opted-in session snapshot adds
+  // the install tools and permission rules below.
+  const installNames = new Set<string>(INSTALL_AUTHORING_TOOLS);
+  for (const node of compiled.flow.nodes.filter((candidate) => candidate.type === 'mcp')) {
+    const enabled = node.data?.properties?.enabledTools;
+    if (Array.isArray(enabled)) {
+      node.data.properties = {
+        ...(node.data.properties ?? {}),
+        enabledTools: enabled.filter((tool) => !installNames.has(String(tool))),
+      };
+    }
+  }
+  compiled.flow.permissionRules = SAFE_AUTHORING_TOOLS.map((action) => ({
+    action,
+    resource: '*',
+    effect: 'allow' as const,
+  }));
+  const stages = compiled.flow.nodes.filter((node) => node.type === 'process');
+  if (stages.length !== 2) {
+    throw new Error('Bundled Flow Generator must contain architect and compiler stages');
+  }
+  stages.forEach((stage, index) => {
+    stage.data.properties = {
+      ...(stage.data.properties ?? {}),
+      systemRole: FLOW_GENERATOR_ROLE,
+      systemStage: index === 0 ? 'architect' : 'compiler',
+      systemFlowVersion: FLOW_GENERATOR_VERSION,
+    };
+  });
   return compiled.flow;
 }
 
-/** Seed once when missing. Existing/editable definitions are returned untouched. */
+/**
+ * Seed once when missing. Versions 1 and 2 were the incomplete conversions that did
+ * not execute the production generator's deterministic pipeline. Upgrade those exact
+ * versions once; saveFlow archives the prior definition so edits remain recoverable.
+ */
 export async function ensureVendoredFlowGenerator(): Promise<Flow> {
   const existing = await flowService.getFlow(FLOW_GENERATOR_ID);
-  if (existing) return existing;
+  const existingVersion = existing?.nodes
+    .filter((node) => node.type === 'process')
+    .map((node) => Number(node.data?.properties?.systemFlowVersion ?? 0))
+    .find((version) => version > 0);
+  if (existing && existingVersion !== 1 && existingVersion !== 2) return existing;
   const bundled = buildVendoredFlowGenerator();
   const saved = await flowService.saveFlow(bundled);
   if (!saved.success) {
@@ -113,6 +194,7 @@ export async function restoreVendoredFlowGenerator(): Promise<Flow> {
 export async function buildFlowGeneratorSnapshot(
   conversationId: string,
   modelId: string,
+  options?: { allowInstall?: boolean },
 ): Promise<Flow> {
   const source = await ensureVendoredFlowGenerator();
   const snapshot = JSON.parse(JSON.stringify(source)) as Flow;
@@ -121,19 +203,65 @@ export async function buildFlowGeneratorSnapshot(
   delete snapshot.createdAt;
   delete snapshot.updatedAt;
 
-  const designer = snapshot.nodes.find(
+  const stages = snapshot.nodes.filter(
     (node) =>
       node.type === 'process' &&
       node.data?.properties?.systemRole === FLOW_GENERATOR_ROLE,
   );
-  if (!designer) {
+  if (stages.length < 2) {
     throw new Error(
-      'The editable Flow Generator has no process marked as the flow-generator role. Restore the default generator or add that role back.',
+      'The editable Flow Generator is missing its architect/compiler stages. Restore the default generator or add the flow-generator roles back.',
     );
   }
-  designer.data.properties = {
-    ...(designer.data.properties ?? {}),
-    boundModel: modelId,
-  };
+  for (const stage of stages) {
+    stage.data.properties = {
+      ...(stage.data.properties ?? {}),
+      boundModel: modelId,
+    };
+  }
+
+  const allowInstall = options?.allowInstall === true;
+  const installNames = new Set<string>(INSTALL_AUTHORING_TOOLS);
+  if (allowInstall) {
+    for (const node of snapshot.nodes.filter((candidate) => candidate.type === 'mcp')) {
+      const enabled = Array.isArray(node.data?.properties?.enabledTools)
+        ? node.data.properties.enabledTools.map(String)
+        : [];
+      node.data.properties = {
+        ...(node.data.properties ?? {}),
+        enabledTools: [...new Set([...enabled, ...INSTALL_AUTHORING_TOOLS])],
+      };
+    }
+    const existingActions = new Set((snapshot.permissionRules ?? []).map((rule) => rule.action));
+    snapshot.permissionRules = [
+      ...(snapshot.permissionRules ?? []),
+      ...INSTALL_AUTHORING_TOOLS
+        .filter((action) => !existingActions.has(action))
+        .map((action) => ({ action, resource: '*', effect: 'allow' as const })),
+    ];
+  } else {
+    for (const node of snapshot.nodes.filter((candidate) => candidate.type === 'mcp')) {
+      const enabled = node.data?.properties?.enabledTools;
+      if (Array.isArray(enabled)) {
+        node.data.properties = {
+          ...(node.data.properties ?? {}),
+          enabledTools: enabled.filter((tool) => !installNames.has(String(tool))),
+        };
+      }
+    }
+    snapshot.permissionRules = (snapshot.permissionRules ?? [])
+      .filter((rule) => !installNames.has(rule.action));
+  }
+
+  const start = snapshot.nodes.find((node) => node.type === 'start');
+  if (start) {
+    const policy = allowInstall
+      ? 'MCP INSTALLATION POLICY FOR THIS RUN: explicitly opted in. Marketplace search and install tools may be used; consent/audit enforcement still applies.'
+      : 'MCP INSTALLATION POLICY FOR THIS RUN: NOT opted in. Marketplace search is allowed for recommendations, but installation tools have been removed. Do not install or reference an unconfigured server in the draft.';
+    start.data.properties = {
+      ...(start.data.properties ?? {}),
+      promptTemplate: `${String(start.data.properties?.promptTemplate ?? '')}\n\n${policy}`,
+    };
+  }
   return snapshot;
 }

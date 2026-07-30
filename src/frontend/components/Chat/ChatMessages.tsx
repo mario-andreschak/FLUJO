@@ -59,6 +59,7 @@ import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } 
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
 import type { McpAppModelContext } from '@/shared/types/chat';
+import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -279,6 +280,66 @@ const MARKDOWN_COMPONENTS: Components = {
   }
 };
 
+const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1 }}>
+    {media.map((part, index) => {
+      const src = mediaDataUrl(part);
+      const key = part.resourceUri ?? part.url ?? `${part.type}-${index}`;
+      if (!src) return null;
+      if (part.type === 'image') {
+        return (
+          <Box
+            key={key}
+            component="img"
+            src={src}
+            alt={part.name ?? `Generated image ${index + 1}`}
+            sx={{ maxWidth: '100%', height: 'auto', borderRadius: 1 }}
+          />
+        );
+      }
+      if (part.type === 'audio') {
+        return (
+          <Box key={key}>
+            <Box component="audio" controls src={src} sx={{ width: '100%' }} />
+            {part.transcript && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                {part.transcript}
+              </Typography>
+            )}
+          </Box>
+        );
+      }
+      if (part.type === 'video') {
+        return (
+          <Box
+            key={key}
+            component="video"
+            controls
+            src={src}
+            sx={{ maxWidth: '100%', maxHeight: 560, borderRadius: 1 }}
+          />
+        );
+      }
+      return (
+        <Button
+          key={key}
+          component="a"
+          href={src}
+          download={part.name || true}
+          target="_blank"
+          rel="noopener noreferrer"
+          variant="outlined"
+          size="small"
+          startIcon={<AttachFileIcon />}
+          sx={{ alignSelf: 'flex-start' }}
+        >
+          {part.name ?? 'Download generated file'}
+        </Button>
+      );
+    })}
+  </Box>
+);
+
 /**
  * Renders a tool result body — either the raw string or the "rendered" view
  * that understands the MCP `{ content: [...] }` shape (text → markdown,
@@ -349,6 +410,17 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
                       >
                         Your browser does not support the audio element.
                       </audio>
+                    );
+                  } else if (item.type === 'video' && item.data && item.mimeType) {
+                    return (
+                      <video
+                        key={index}
+                        controls
+                        src={`data:${item.mimeType};base64,${item.data}`}
+                        style={{ maxWidth: '100%', maxHeight: '560px', marginTop: '8px' }}
+                      >
+                        Your browser does not support the video element.
+                      </video>
                     );
                   } else {
                     return (
@@ -784,10 +856,9 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 {message.content}
               </ReactMarkdown>
             )}
-            {/* Multipart content (text + images): a user turn that carried a
-                pasted/attached image is stored as an OpenAI content-part
-                array. Render text parts as markdown and image_url parts as
-                inline images. */}
+            {/* Multipart content (text + images): user attachments and generated
+                assistant images are normalized to an OpenAI-style content-part
+                array. Render text as markdown and image_url parts inline. */}
             {message.role !== 'tool' && Array.isArray(message.content) && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {(message.content as any[]).map((part, partIndex) => {
@@ -812,8 +883,21 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 })}
               </Box>
             )}
+            {message.role !== 'tool' && message.media && message.media.length > 0 && (
+              <MessageMediaView
+                media={message.media.filter(part =>
+                  part.type !== 'image' ||
+                  !Array.isArray(message.content) ||
+                  !(message.content as any[]).some(
+                    contentPart =>
+                      contentPart?.type === 'image_url' &&
+                      contentPart.image_url?.url === mediaDataUrl(part)
+                  )
+                )}
+              />
+            )}
             {/* Fallback for non-string, non-array content (e.g., assistant message with only tool calls) */}
-            {message.role !== 'tool' && typeof message.content !== 'string' && !Array.isArray(message.content) && !hasToolCalls(message) && (
+            {message.role !== 'tool' && typeof message.content !== 'string' && !Array.isArray(message.content) && !hasToolCalls(message) && !message.media?.length && (
                <Typography variant="body2" fontStyle="italic" color="text.secondary">
                  [No text content]
                </Typography>

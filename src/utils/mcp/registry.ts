@@ -634,6 +634,6 @@ export function missingRequiredInputs(
       .map(v => v.name);
   }
   return (option.remote.headers ?? [])
-    .filter(h => h.isRequired && !(h.value ?? h.default))
+    .filter(h => h.isRequired && !(h.value ?? h.default) && !envOverrides?.[h.name])
     .map(h => h.name);
 }

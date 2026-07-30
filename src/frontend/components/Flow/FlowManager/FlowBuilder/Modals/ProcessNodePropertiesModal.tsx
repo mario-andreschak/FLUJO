@@ -43,6 +43,7 @@ import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjusted path
 import { createLogger } from '@/utils/logger';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
@@ -85,6 +86,17 @@ const readStoredTaskToolsWidth = (): number => {
     return DEFAULT_TASK_TOOLS_WIDTH;
   }
 };
+
+export function getInitialProcessSection(
+  authoringMode: FlowAuthoringMode,
+  promptTemplate: unknown,
+): SectionKey {
+  return authoringMode === 'guided'
+    && typeof promptTemplate === 'string'
+    && promptTemplate.trim().length > 0
+    ? 'task'
+    : 'basic';
+}
 
 export const ProcessNodePropertiesModal = ({
   open,
@@ -370,9 +382,11 @@ export const ProcessNodePropertiesModal = ({
     }
 
     // Reset both navigation levels whenever the modal target or open state changes.
-    // FlowBuilder creates a draft before opening this modal, so caller-provided
-    // mode is the reliable distinction between create and edit sessions.
-    const initialSection: SectionKey = mode === 'create' ? 'basic' : 'task';
+    // Guided edit sessions with an authored task open directly on Task; new and
+    // advanced sessions start on Basic.
+    const initialSection: SectionKey = mode === 'create'
+      ? 'basic'
+      : getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate);
     setActiveSection(initialSection);
     setActiveTab('server');
     isProgrammaticScroll.current = true;
@@ -391,7 +405,7 @@ export const ProcessNodePropertiesModal = ({
     };
     // sectionRefs is stable for the lifetime of this modal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node, open, mode]);
+  }, [node, open, mode, authoringMode]);
 
   // Issue #300: keep the active tab in sync with the section scrolled into view.
   useEffect(() => {
@@ -447,6 +461,13 @@ export const ProcessNodePropertiesModal = ({
     if (nextWidth === null) return;
     event.preventDefault();
     setTaskToolsWidth(clampTaskToolsWidth(nextWidth, containerWidth));
+  };
+
+  const handleDialogEntered = () => {
+    if (activeSection !== 'task') return;
+    isProgrammaticScroll.current = true;
+    taskRef.current?.scrollIntoView({ block: 'start' });
+    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 0);
   };
 
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
@@ -668,6 +689,7 @@ export const ProcessNodePropertiesModal = ({
     <Dialog
       open={open}
       onClose={onClose}
+      slotProps={{ transition: { onEntered: handleDialogEntered } }}
       maxWidth="xl"
       fullWidth
       PaperProps={{

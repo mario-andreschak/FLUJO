@@ -44,7 +44,23 @@ export interface EnvDeclaration {
   secretRef?: string;
   /** Host `${global:VAR}` name that supplies this value at runtime. */
   globalVar?: string;
+  /**
+   * A value containing one or more host-global references, for example
+   * `Bearer ${global:GITHUB_TOKEN}`. Unlike a literal config value, this is
+   * safe and portable because it contains references rather than their values.
+   */
+  globalTemplate?: string;
 }
 
 /** Declaration of ONE custom HTTP header (same shape/rules as EnvDeclaration). */
 export type HeaderDeclaration = EnvDeclaration;
+
+/**
+ * A portable override for one stdio argument that contains host-global
+ * references. The index preserves its position in the registry-provided
+ * argument list without packaging the command or unrelated arguments.
+ */
+export interface McpArgTemplate {
+  index: number;
+  value: string;
+}

@@ -249,9 +249,10 @@ class ChatService {
   }
 
   /** Snapshot the latest editable, vendored Flow Generator for a modal session. */
-  async synthesizeFlowGenerator(payload: {
-    conversationId: string;
-    modelId: string;
+    async synthesizeFlowGenerator(payload: {
+      conversationId: string;
+      modelId: string;
+      allowInstall?: boolean;
   }): Promise<{ conversationId: string; flow: Flow }> {
     const response = await fetch('/api/flow/generator', {
       method: 'POST',

@@ -2,9 +2,16 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { extractText, extractImageParts, toAnthropicImageMediaType, parseToolArgs } from './messageUtils';
+import {
+  extractText,
+  extractMediaParts,
+  toAnthropicImageMediaType,
+  parseToolArgs,
+} from './messageUtils';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import { v4 as uuidv4 } from 'uuid';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { mediaTypeFromMime } from '@/shared/types/model/media';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -241,8 +248,8 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
 
     if (msg.role === 'user') {
       const text = extractText(msg.content);
-      const images = extractImageParts(msg.content);
-      if (images.length === 0) {
+      const media = extractMediaParts(msg.content);
+      if (media.length === 0) {
         out.push({ role: 'user', content: text });
         continue;
       }
@@ -251,14 +258,37 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
       // Anthropic's URL image source.
       const blocks: Anthropic.ContentBlockParam[] = [];
       if (text) blocks.push({ type: 'text', text });
-      for (const img of images) {
-        if (img.base64) {
+      for (const item of media) {
+        if (item.type === 'image' && item.data) {
           blocks.push({
             type: 'image',
-            source: { type: 'base64', media_type: toAnthropicImageMediaType(img.mimeType), data: img.base64 },
+            source: {
+              type: 'base64',
+              media_type: toAnthropicImageMediaType(item.mimeType),
+              data: item.data,
+            },
           });
+        } else if (item.type === 'image' && item.url) {
+          blocks.push({ type: 'image', source: { type: 'url', url: item.url } });
+        } else if (item.type === 'file' && item.mimeType === 'application/pdf' && item.data) {
+          blocks.push({
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: item.data,
+            },
+          } as Anthropic.ContentBlockParam);
+        } else if (item.type === 'file' && item.mimeType === 'application/pdf' && item.url) {
+          blocks.push({
+            type: 'document',
+            source: { type: 'url', url: item.url },
+          } as Anthropic.ContentBlockParam);
         } else {
-          blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+          blocks.push({
+            type: 'text',
+            text: `[Unsupported ${item.type} attachment${item.name ? `: ${item.name}` : ''}]`,
+          });
         }
       }
       out.push({ role: 'user', content: blocks });
@@ -421,9 +451,10 @@ export function applyCacheBreakpoints(input: {
 function toChatCompletion(
   fallbackModel: string,
   resp: Anthropic.Message
-): OpenAI.Chat.Completions.ChatCompletion {
+): { completion: OpenAI.Chat.Completions.ChatCompletion; media: ModelMediaPart[] } {
   let text = '';
   const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+  const media: ModelMediaPart[] = [];
 
   for (const block of resp.content) {
     if (block.type === 'text') {
@@ -437,6 +468,29 @@ function toChatCompletion(
           arguments: JSON.stringify(block.input ?? {}),
         },
       });
+    } else {
+      const nativeBlock = block as unknown as Record<string, any>;
+      if (['image', 'audio', 'video', 'file', 'document'].includes(nativeBlock.type)) {
+        const source = nativeBlock.source ?? nativeBlock;
+        const mimeType =
+          source.media_type ??
+          source.mime_type ??
+          source.mimeType ??
+          (nativeBlock.type === 'image' ? 'image/png' : undefined);
+        const data = source.data;
+        const url = source.url;
+        if (typeof data === 'string' || typeof url === 'string') {
+          media.push({
+            type: nativeBlock.type === 'document'
+              ? 'file'
+              : mediaTypeFromMime(mimeType),
+            ...(typeof data === 'string' ? { data } : {}),
+            ...(typeof url === 'string' ? { url } : {}),
+            ...(mimeType ? { mimeType } : {}),
+            ...(nativeBlock.name ? { name: nativeBlock.name } : {}),
+          });
+        }
+      }
     }
   }
 
@@ -460,7 +514,7 @@ function toChatCompletion(
         ? 'length'
         : 'stop';
 
-  return {
+  const completion: OpenAI.Chat.Completions.ChatCompletion = {
     id: resp.id,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
@@ -488,6 +542,7 @@ function toChatCompletion(
       ...(reportsCache ? { prompt_tokens_details: { cached_tokens: cacheRead } } : {}),
     },
   };
+  return { completion, media };
 }
 
 /**
@@ -651,7 +706,7 @@ export class AnthropicAdapter implements CompletionAdapter {
       try {
         const result = await send(client, params, options);
         return {
-          completion: toChatCompletion(model.name, result.message),
+          ...toChatCompletion(model.name, result.message),
           liveMessageId: result.liveMessageId,
         };
       } catch (err) {

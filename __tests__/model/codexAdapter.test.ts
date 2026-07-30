@@ -259,11 +259,22 @@ describe('CodexAdapter — transcript & usage', () => {
       baseInput({ onModelDelta: delta => deltas.push(delta) }),
     );
 
+    const streamedMessageId = (deltas[0] as { messageId: string }).messageId;
+    expect(streamedMessageId).toMatch(/^stream_codex_\d+_[0-9a-f-]+_a1$/);
     expect(deltas).toEqual([
-      expect.objectContaining({ messageId: 'stream_codex_a1', contentDelta: 'hel' }),
-      expect.objectContaining({ messageId: 'stream_codex_a1', contentDelta: 'lo' }),
+      expect.objectContaining({ messageId: streamedMessageId, contentDelta: 'hel' }),
+      expect.objectContaining({ messageId: streamedMessageId, contentDelta: 'lo' }),
     ]);
-    expect(transcript?.[0].id).toBe('stream_codex_a1');
+    expect(transcript?.[0].id).toBe(streamedMessageId);
+  });
+
+  it('namespaces reused SDK item ids across model calls', async () => {
+    const first = await new CodexAdapter().createCompletion(baseInput());
+    const second = await new CodexAdapter().createCompletion(baseInput());
+
+    expect(first.transcript?.[0].id).toMatch(/^stream_codex_/);
+    expect(second.transcript?.[0].id).toMatch(/^stream_codex_/);
+    expect(second.transcript?.[0].id).not.toBe(first.transcript?.[0].id);
   });
 
   it("surfaces the built-in shell's command executions as synthetic tool pairs", async () => {

@@ -4,6 +4,7 @@ import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
 import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 /**
  * Captured run resources for oversized PRIOR tool results/args, keyed by the
@@ -27,6 +28,8 @@ export interface ToolResourceMarker {
 export interface ModelStreamDelta {
   messageId: string;
   contentDelta?: string;
+  /** A complete media item discovered during a native provider stream. */
+  mediaPart?: ModelMediaPart;
   toolCallDelta?: {
     index: number;
     id?: string;
@@ -191,6 +194,8 @@ export interface CompletionInput {
  */
 export interface CompletionResult {
   completion: OpenAI.Chat.Completions.ChatCompletion;
+  /** Direct model media normalized from the provider-native response. */
+  media?: ModelMediaPart[];
   /** Stable id used by `onModelDelta` for the final assistant response. */
   liveMessageId?: string;
   /**

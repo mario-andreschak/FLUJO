@@ -16,7 +16,11 @@ import {
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
-import { toAnthropicImageMediaType } from './messageUtils';
+import {
+  extractMediaParts,
+  extractNativeMediaParts,
+  toAnthropicImageMediaType,
+} from './messageUtils';
 import { normalizeMessageInput, isMalformedToolCallProse } from './messageNormalization';
 import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
@@ -170,7 +174,14 @@ export function buildUserMessage(
   content: string | Anthropic.ContentBlockParam[];
 } {
   const normalized = normalizeMessageInput(messages, resourceMarkers);
-  if (normalized.images.length === 0) {
+  const documents = messages.flatMap(message => {
+    if (message.role !== 'user') return [];
+    return extractMediaParts(message.content).filter(
+      item => item.type === 'file' && item.mimeType === 'application/pdf',
+    );
+  });
+
+  if (normalized.images.length === 0 && documents.length === 0) {
     return { systemPrompt: normalized.systemPrompt, content: normalized.text };
   }
 
@@ -188,6 +199,23 @@ export function buildUserMessage(
       });
     } else {
       blocks.push({ type: 'image', source: { type: 'url', url: image.url } });
+    }
+  }
+  for (const document of documents) {
+    if (document.data) {
+      blocks.push({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: document.data,
+        },
+      } as Anthropic.ContentBlockParam);
+    } else if (document.url) {
+      blocks.push({
+        type: 'document',
+        source: { type: 'url', url: document.url },
+      } as Anthropic.ContentBlockParam);
     }
   }
   return { systemPrompt: normalized.systemPrompt, content: blocks };
@@ -212,7 +240,10 @@ interface ToolInteraction {
 }
 
 type ToolUi = NonNullable<FlujoChatMessage['ui']>;
-type TranscriptMessage = OpenAI.ChatCompletionMessageParam & { ui?: ToolUi };
+type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
+  ui?: ToolUi;
+  media?: import('@/shared/types/model/media').ModelMediaPart[];
+};
 
 /**
  * Claude Subscription adapter — drives a Claude Pro/Max subscription through the
@@ -815,6 +846,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
+          const turnMedia = extractNativeMediaParts(content);
           let turnHandoffUses = 0;
           if (Array.isArray(content)) {
             for (const block of content) {
@@ -838,7 +870,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Mid-spawn narration (between successive spawn calls) is mid-action
           // plumbing, not the node's answer — the routing turn's own prose
           // (before any handoff was recorded) is still preserved below.
-          if (turnText && handoffCalls.length === 0) {
+          if ((turnText || turnMedia.length > 0) && handoffCalls.length === 0) {
             if (isMalformedClaudeToolCallProse(turnText)) {
               // Quarantine the complete contaminated SDK turn. Keeping adjacent
               // prose would require guessing a safe boundary; skipping it keeps
@@ -855,7 +887,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               // blocks precede tool_use within a turn, so this lands in the right
               // order: turn text -> tool pair -> next turn text -> ...
               recordMessage(
-                { role: 'assistant', content: turnText },
+                {
+                  role: 'assistant',
+                  content: turnText,
+                  ...(turnMedia.length ? { media: turnMedia } : {}),
+                },
                 `stream_claude_${message.uuid}`,
               );
               streamedText = true;

@@ -60,7 +60,7 @@ describe('POST /api/flow/generate', () => {
       modelId: 'm1',
       maxRepairs: undefined,
       allowInstall: false,
-      allowSubflows: false,
+      allowSubflows: true,
       maxDepth: undefined,
     });
   });
@@ -75,7 +75,13 @@ describe('POST /api/flow/generate', () => {
     expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowSubflows: true, maxDepth: 3 }));
   });
 
-  it('coerces allowSubflows to an explicit boolean (only literal true enables it)', async () => {
+  it('enables subflows by default and accepts only explicit booleans when provided', async () => {
+    await POST(req({ description: 'x', modelId: 'm1' }));
+    expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowSubflows: true }));
+    generateFlowMock.mockClear();
+    await POST(req({ description: 'x', modelId: 'm1', allowSubflows: false }));
+    expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowSubflows: false }));
+    generateFlowMock.mockClear();
     await POST(req({ description: 'x', modelId: 'm1', allowSubflows: 'yes' }));
     expect(generateFlowMock).toHaveBeenCalledWith(expect.objectContaining({ allowSubflows: false }));
   });
@@ -106,7 +112,7 @@ describe('POST /api/flow/generate', () => {
     generateFlowMock.mockResolvedValue({ success: false, error: 'A flow description is required', statusCode: 400 });
     const res = await POST(req({}));
     expect(res.status).toBe(400);
-    expect(generateFlowMock).toHaveBeenCalledWith({ description: '', modelId: '', maxRepairs: undefined, allowInstall: false, allowSubflows: false, maxDepth: undefined });
+    expect(generateFlowMock).toHaveBeenCalledWith({ description: '', modelId: '', maxRepairs: undefined, allowInstall: false, allowSubflows: true, maxDepth: undefined });
   });
 
   it('is gated by the encryption lock', async () => {

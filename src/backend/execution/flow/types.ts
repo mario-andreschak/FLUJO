@@ -1158,6 +1158,13 @@ export interface ProcessNodeExecResult extends BaseExecResult {
      *  (issue #253). post() writes it onto SharedState.turnBudgets so runFlow
      *  can enforce the cap on the request/response tool loop. */
     effectiveMaxTurns?: number;
+    /**
+     * The provider rejected tool use, so execCore safely retried this node
+     * without its handoff-only tool block. post() uses this marker to traverse
+     * a sole unconditional control edge without requiring a handoff call.
+     * Conditioned edges continue through their normal deterministic router.
+     */
+    usedToolFreeFallback?: boolean;
 }
 
 // FinishNode exec result

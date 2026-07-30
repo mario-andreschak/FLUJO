@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null) as {
     conversationId?: unknown;
     modelId?: unknown;
+    allowInstall?: unknown;
   } | null;
   const conversationId =
     typeof body?.conversationId === 'string' ? body.conversationId.trim() : '';
@@ -26,7 +27,9 @@ export async function POST(request: NextRequest) {
     if (!(context.compile.models ?? []).some((model) => model.id === modelId)) {
       return json({ error: `Unknown generator model "${modelId}"` }, 400);
     }
-    const flow = await buildFlowGeneratorSnapshot(conversationId, modelId);
+    const flow = await buildFlowGeneratorSnapshot(conversationId, modelId, {
+      allowInstall: body?.allowInstall === true,
+    });
     return json({ conversationId, flow });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 422);

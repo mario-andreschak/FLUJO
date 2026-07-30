@@ -1,0 +1,11 @@
+{
+  "voiceKey": "lily",
+  "voiceName": "Lily",
+  "voiceId": "pFZP5JQG7iQjIQuC4Bku",
+  "modelId": "eleven_v3",
+  "stability": 0.42,
+  "similarityBoost": 0.8,
+  "targetDuration": 141.92,
+  "finalDuration": 141.92,
+  "outputFile": "flujo-voiceover-lily.mp3"
+}

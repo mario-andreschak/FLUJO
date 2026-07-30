@@ -42,6 +42,7 @@ export interface ChatCompletionMetadata {
 }
 
 import OpenAI from 'openai';
+import type { ModelMediaPart } from './model/media';
 
 /** One app's latest `ui/update-model-context` payload. */
 export interface McpAppModelContext {
@@ -138,4 +139,11 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
      */
     cacheReadTokens?: number;
   };
+
+  /**
+   * Provider-neutral media attached to or generated with this message.
+   * Generated payloads are normally persisted as run resources, leaving only
+   * a lightweight URL/resourceUri here rather than base64 in conversation JSON.
+   */
+  media?: ModelMediaPart[];
 };

@@ -49,7 +49,11 @@ export async function POST(request: NextRequest) {
       modelId: body.modelId ?? '',
       maxRepairs: body.maxRepairs,
       allowInstall: body.allowInstall === true,
-      allowSubflows: body.allowSubflows === true,
+      // Multi-level generation is the safe/default authoring mode. A caller can
+      // still explicitly disable it; malformed truthy values do not enable it.
+      allowSubflows: body.allowSubflows === undefined
+        ? true
+        : body.allowSubflows === true,
       maxDepth: body.maxDepth,
     });
 

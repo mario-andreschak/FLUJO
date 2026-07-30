@@ -38,7 +38,10 @@ import type {
   HeaderDeclaration,
   McpInstallOrigin,
 } from '@/shared/types/package/installOrigin';
-import type { PackageSecret } from '@/shared/types/package/secrets';
+import {
+  collectSecretPlaceholdersDeep,
+  type PackageSecret,
+} from '@/shared/types/package/secrets';
 import type { SecretSubstitution } from '@/shared/types/package/secretProposal';
 import { applySecretSubstitutions, backstopScan, deriveSecretProposals } from './deriveSecrets';
 import type { DeriveResult } from './deriveSecrets';
@@ -48,6 +51,8 @@ import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 import type { PlannedExecution } from '@/shared/types/plannedExecution';
+import { isSecretEnvVar, isSecretHeaderKey } from '@/utils/shared/common';
+import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('backend/services/packages/buildPackage');
 
@@ -94,13 +99,17 @@ export function previewPackageGlobals(
   for (const server of packagedMcp.packaged) {
     for (const declaration of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
       if (declaration.globalVar) names.add(declaration.globalVar);
+      if (declaration.globalTemplate) collectGlobalsDeep(declaration.globalTemplate, names);
+    }
+    for (const template of server.argTemplates ?? []) {
+      collectGlobalsDeep(template.value, names);
     }
   }
   return Array.from(names, (name) => ({
       name,
       description: `Global variable ${name} required by this package`,
       required: true,
-      isSecret: false,
+      isSecret: entities.globalVariables?.[name]?.isSecret === true,
     }));
 }
 
@@ -165,6 +174,8 @@ export interface PackageEntities {
   models: Model[];
   mcpServers: MCPServerConfig[];
   plannedExecutions: PlannedExecution[];
+  /** Secret metadata only; global values are never included in package entities. */
+  globalVariables?: Record<string, { isSecret: boolean }>;
 }
 
 export type PackageEntityType = 'flow' | 'model' | 'mcpServer' | 'plannedExecution';
@@ -348,10 +359,10 @@ function isSecretValue(value: EnvVarValue | undefined): boolean {
   return typeof value === 'object' && value !== null && value.metadata?.isSecret === true;
 }
 
-/** The literal string value of a plain (non-secret) env entry, if any. */
+/** The literal string carried by either the legacy string or metadata object shape. */
 function literalValue(value: EnvVarValue | undefined): string | undefined {
   if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && !value.metadata?.isSecret && typeof value.value === 'string') {
+  if (value && typeof value === 'object' && typeof value.value === 'string') {
     return value.value;
   }
   return undefined;
@@ -361,16 +372,29 @@ function literalValue(value: EnvVarValue | undefined): string | undefined {
  * Build env/header DECLARATIONS (names + isSecret, never a literal secret
  * value). A literal `${global:VAR}` value IS preserved as a `globalVar`
  * binding (not a value) — otherwise it is silently dropped on install, same
- * class of bug as an unrecorded model API key global-var binding.
+ * class of bug as an unrecorded model API key global-var binding. Legacy
+ * plain-string entries have no metadata, so infer their secret status from the
+ * key exactly as the MCP editors/masking layer do. Explicit object metadata
+ * remains authoritative, including an intentional `isSecret: false`.
  */
-function declarationsFrom(record: Record<string, EnvVarValue> | undefined): EnvDeclaration[] {
+function declarationsFrom(
+  record: Record<string, EnvVarValue> | undefined,
+  inferLegacySecret: (name: string) => boolean,
+): EnvDeclaration[] {
   if (!record) return [];
   return Object.entries(record).map(([name, value]) => {
-    const globalMatch = !isSecretValue(value) ? GLOBAL_VAR_REGEX.exec(literalValue(value) ?? '') : null;
+    const hasExplicitMetadata =
+      typeof value === 'object' &&
+      value !== null &&
+      typeof value.metadata?.isSecret === 'boolean';
+    const literal = literalValue(value) ?? '';
+    const globalMatch = GLOBAL_VAR_REGEX.exec(literal);
+    const embeddedGlobalNames = collectGlobalsDeep(literal);
     return {
       name,
-      isSecret: isSecretValue(value),
+      isSecret: hasExplicitMetadata ? isSecretValue(value) : inferLegacySecret(name),
       ...(globalMatch ? { globalVar: globalMatch[1] } : {}),
+      ...(!globalMatch && embeddedGlobalNames.size > 0 ? { globalTemplate: literal } : {}),
     };
   });
 }
@@ -409,7 +433,15 @@ export function validateMcpSelection(
       continue;
     }
     const headers = (config as { headers?: Record<string, EnvVarValue> }).headers;
-    const headerDeclarations: HeaderDeclaration[] = declarationsFrom(headers);
+    const headerDeclarations: HeaderDeclaration[] = declarationsFrom(headers, isSecretHeaderKey);
+    const argTemplates =
+      config.transport === 'stdio' && Array.isArray(config.args)
+        ? config.args.flatMap((value, index) =>
+            typeof value === 'string' && collectGlobalsDeep(value).size > 0
+              ? [{ index, value }]
+              : [],
+          )
+        : [];
     packaged.push({
       name: config.name,
       transport: config.transport,
@@ -417,8 +449,9 @@ export function validateMcpSelection(
       ...(config.autoApprove && config.autoApprove.length ? { autoApprove: config.autoApprove } : {}),
       ...(config.folder ? { folder: config.folder } : {}),
       installOrigin,
-      envDeclarations: declarationsFrom(config.env),
+      envDeclarations: declarationsFrom(config.env, isSecretEnvVar),
       ...(headerDeclarations.length ? { headerDeclarations } : {}),
+      ...(argTemplates.length ? { argTemplates } : {}),
     });
   }
 
@@ -473,7 +506,10 @@ export function deriveMcpSecrets(servers: PackagedMcpServer[]): PackageSecret[] 
   const seen = new Set<string>();
   const addFor = (serverName: string, decls: EnvDeclaration[] | undefined) => {
     for (const decl of decls ?? []) {
-      if (!decl.isSecret || decl.secretRef) continue;
+      // A global binding already supplies the value on the installing host. It
+      // may still be marked secret (PAT/API-key globals should be), but must not
+      // also create an install-time secret prompt.
+      if (!decl.isSecret || decl.secretRef || decl.globalVar || decl.globalTemplate) continue;
       const secretName = toSecretName('MCP', `${serverName}_${decl.name}`);
       decl.secretRef = secretName;
       if (!seen.has(secretName)) {
@@ -494,15 +530,46 @@ export function deriveMcpSecrets(servers: PackagedMcpServer[]): PackageSecret[] 
 }
 
 /**
- * Preview the secrets a resolved selection will declare (model API keys + MCP
- * secret env/header declarations), WITHOUT building the whole manifest. Powers
- * the wizard's "Secret review" step. Pure.
+ * Rebuild declarations for placeholders already embedded in packageable
+ * content. This is required when re-exporting entities installed from another
+ * package: install resolves provided values, but unresolved optional values can
+ * legitimately remain as `{{secret.NAME}}` references in the saved entity.
+ */
+function deriveEmbeddedContentSecrets(
+  flows: Flow[],
+  models: Model[],
+  plannedExecutions: PlannedExecution[],
+): PackageSecret[] {
+  const modelsWithoutApiKeys = models.map(({ ApiKey: _dropped, ...model }) => model);
+  const executionsWithoutWebhookTokens = plannedExecutions.map((execution) => {
+    if (execution.trigger?.type !== 'webhook') return execution;
+    const { token: _dropped, ...trigger } = execution.trigger;
+    return { ...execution, trigger };
+  });
+  const names = collectSecretPlaceholdersDeep({
+    flows,
+    models: modelsWithoutApiKeys,
+    plannedExecutions: executionsWithoutWebhookTokens,
+  });
+  return names.map((name) => ({
+    name,
+    description: `Secret "${name}" referenced by packaged content`,
+    required: true,
+  }));
+}
+
+/**
+ * Preview the secrets a resolved selection will declare (embedded content
+ * placeholders + model API keys + MCP secret env/header declarations), WITHOUT
+ * building the whole manifest. Powers the wizard's "Secret review" step. Pure.
  */
 export function previewPackageSecrets(
   resolved: ResolvedSelection,
   entities: PackageEntities,
 ): PackageSecret[] {
+  const flowById = new Map(entities.flows.map((flow) => [flow.id, flow]));
   const modelById = new Map(entities.models.map((m) => [m.id, m]));
+  const plannedById = new Map(entities.plannedExecutions.map((execution) => [execution.id, execution]));
   const secrets: PackageSecret[] = [];
   const seen = new Set<string>();
   const push = (s?: PackageSecret) => {
@@ -518,6 +585,16 @@ export function previewPackageSecrets(
   }
   const mcp = validateMcpSelection(resolved.mcpServerNames, entities.mcpServers);
   for (const s of deriveMcpSecrets(mcp.packaged)) push(s);
+  const selectedFlows = resolved.flowIds
+    .map((id) => flowById.get(id))
+    .filter((flow): flow is Flow => Boolean(flow));
+  const selectedModels = resolved.modelIds
+    .map((id) => modelById.get(id))
+    .filter((model): model is Model => Boolean(model));
+  const selectedExecutions = resolved.plannedExecutionIds
+    .map((id) => plannedById.get(id))
+    .filter((execution): execution is PlannedExecution => Boolean(execution));
+  for (const s of deriveEmbeddedContentSecrets(selectedFlows, selectedModels, selectedExecutions)) push(s);
   return secrets;
 }
 
@@ -603,12 +680,15 @@ export function buildManifestFromEntities(
 
   for (const s of deriveMcpSecrets(mcp.packaged)) pushSecret(s);
   excludeMcpSecrets(mcp.packaged, excludedSecretNames);
+  const embeddedSecrets = deriveEmbeddedContentSecrets(flows, models, plannedExecutions);
+  const embeddedSecretNames = new Set(embeddedSecrets.map((secret) => secret.name));
   for (let i = secrets.length - 1; i >= 0; i -= 1) {
-    if (excludedSecretNames.has(secrets[i].name)) {
+    if (excludedSecretNames.has(secrets[i].name) && !embeddedSecretNames.has(secrets[i].name)) {
       secretNames.delete(secrets[i].name);
       secrets.splice(i, 1);
     }
   }
+  for (const secret of embeddedSecrets) pushSecret(secret);
 
   // requiredGlobals: every `${global:VAR}` this package expects the INSTALLING
   // host to already have set — model API keys bound to a global var, plus any
@@ -621,12 +701,23 @@ export function buildManifestFromEntities(
   for (const server of mcp.packaged) {
     for (const decl of [...server.envDeclarations, ...(server.headerDeclarations ?? [])]) {
       if (decl.globalVar) requiredGlobals.add(decl.globalVar);
+      if (decl.globalTemplate) {
+        collectGlobalsDeep(decl.globalTemplate, requiredGlobals);
+      }
+    }
+    for (const template of server.argTemplates ?? []) {
+      collectGlobalsDeep(template.value, requiredGlobals);
     }
   }
   const globals = normalizeGlobalDeclarations(
     previewPackageGlobals(resolved, entities),
     globalDeclarations,
   );
+  // Keep the legacy compatibility field complete. New installers should use
+  // globals[].required, but older installers only inspect requiredGlobals.
+  for (const global of globals) {
+    if (global.required) requiredGlobals.add(global.name);
+  }
 
   if (errors.length > 0) {
     return { ok: false, resolved, errors, warnings };
@@ -674,18 +765,30 @@ export async function loadPackageableEntities(): Promise<PackageEntities> {
   const { modelService } = await import('@/backend/services/model');
   const { loadServerConfigs } = await import('@/backend/services/mcp/config');
   const { getSchedulerService } = await import('@/backend/services/scheduler');
+  const { loadItem } = await import('@/utils/storage/backend');
 
-  const [flows, models, serverConfigsRaw, peList] = await Promise.all([
+  const [flows, models, serverConfigsRaw, peList, storedGlobals] = await Promise.all([
     flowService.loadFlows(),
     modelService.loadModels(),
     loadServerConfigs(),
     getSchedulerService().list(),
+    loadItem<Record<string, unknown>>(StorageKey.GLOBAL_ENV_VARS, {}),
   ]);
 
   const mcpServers = Array.isArray(serverConfigsRaw) ? serverConfigsRaw : [];
   const plannedExecutions = peList.map((entry) => entry.execution);
+  const globalVariables = Object.fromEntries(
+    Object.entries(storedGlobals).map(([name, raw]) => {
+      const value = raw as { value?: unknown; metadata?: { isSecret?: unknown } } | string;
+      const isSecret =
+        (typeof value === 'object' && value !== null && value.metadata?.isSecret === true) ||
+        (typeof value === 'string' &&
+          (value.startsWith('encrypted:') || value.startsWith('encrypted_failed:')));
+      return [name, { isSecret }];
+    }),
+  );
 
-  return { flows, models, mcpServers, plannedExecutions };
+  return { flows, models, mcpServers, plannedExecutions, globalVariables };
 }
 
 /** Resolve a selection against the live entities (I/O wrapper). */

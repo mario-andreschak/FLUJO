@@ -234,7 +234,7 @@ export const NodePalette: React.FC<{ authoringMode?: FlowAuthoringMode }> = ({
       </Typography>
       <Box display="flex" flexDirection="column" gap={2}>
         {nodeTypes
-          .filter((node) => authoringMode === 'advanced' || ['process', 'finish', 'subflow'].includes(node.type))
+          .filter((node) => authoringMode === 'advanced' || ['process', 'finish', 'mcp', 'subflow'].includes(node.type))
           .map((node) => (
           <NodeItem
             key={node.type}

@@ -61,7 +61,6 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
     const completion = await client.chat.completions.create({
       model: modelName,
       messages: TEST_MESSAGES,
-      temperature: 0,
     });
     const durationMs = Date.now() - started;
 
@@ -137,7 +136,7 @@ async function attemptViaAxios(modelName: string, baseUrl: string | undefined, a
   try {
     const response = await axios.post(
       url,
-      { model: modelName, messages: TEST_MESSAGES, temperature: 0 },
+      { model: modelName, messages: TEST_MESSAGES },
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,

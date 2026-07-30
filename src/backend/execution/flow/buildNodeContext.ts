@@ -364,8 +364,26 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
  */
 export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
   return stripHandoffPlumbing(messages).map(
-    ({ id, timestamp, disabled, processNodeId, depth, usage, injected, ...rest }) =>
-      rest as OpenAI.ChatCompletionMessageParam
+    ({ id, timestamp, disabled, processNodeId, depth, usage, injected, media, ...rest }) => {
+      // Assistant media is stored separately on FlujoChatMessage. The
+      // OpenAI Chat Completions schema permits multipart image/audio content on
+      // USER messages, but assistant content remains text-only. Generated-image
+      // bubbles keep an image_url array for display compatibility, so collapse
+      // that array to its text parts at the strict provider boundary.
+      if (rest.role === 'assistant' && Array.isArray(rest.content)) {
+        const text = rest.content
+          .filter((part): part is OpenAI.ChatCompletionContentPartText =>
+            !!part && (part as { type?: string }).type === 'text'
+          )
+          .map(part => part.text)
+          .join('');
+        return {
+          ...rest,
+          content: text || null,
+        } as OpenAI.ChatCompletionMessageParam;
+      }
+      return rest as OpenAI.ChatCompletionMessageParam;
+    }
   );
 }
 

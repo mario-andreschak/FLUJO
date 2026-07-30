@@ -216,6 +216,29 @@ describe('projectMessages (conversation-as-projection)', () => {
     expect(projected[1].content).toBe('final answer');
   });
 
+  it('preserves distinct messages that reused legacy Codex SDK-local item ids', () => {
+    const legacyId = 'stream_codex_item_0';
+    const projected = projectMessages([
+      messageEvent(convId, msg(legacyId, 'assistant', 'first model turn')),
+      messageEvent(convId, msg('tool-pair', 'assistant', 'between turns')),
+      messageEvent(convId, msg(legacyId, 'assistant', 'second model turn')),
+      messageEvent(convId, msg(legacyId, 'assistant', 'third model turn')),
+    ]);
+
+    expect(projected.map((message) => message.id)).toEqual([
+      legacyId,
+      'tool-pair',
+      `${legacyId}_legacy_2`,
+      `${legacyId}_legacy_3`,
+    ]);
+    expect(projected.map((message) => message.content)).toEqual([
+      'first model turn',
+      'between turns',
+      'second model turn',
+      'third model turn',
+    ]);
+  });
+
   it('tags subflow child messages (event depth > 0) with depth, inlined in order', () => {
     const projected = projectMessages([
       messageEvent(convId, msg('u1', 'user', 'task')),

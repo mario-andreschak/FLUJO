@@ -1476,11 +1476,11 @@ export function flowToSpec(flow: Flow): FlowSpec {
  * compile API and MCP authoring tools keep the runtime defaults — full-history /
  * full-conversation — so hand-authored specs behave exactly as documented).
  *
- * Auto-generated flows default every process node the spec left unset to
- * inputMode 'latest-message' and outputMode 'latest-message': each step runs
- * scoped to the current task and stops re-sending its tool calls/results to
- * every later step. The generator's system prompt tells the model about these
- * defaults so it can opt back into full-history/full-conversation explicitly.
+ * Auto-generated flows always give process nodes the full conversation as
+ * input. An omitted or explicitly generated 'latest-message' inputMode is
+ * normalized to 'full-history'; advanced 'isolated' inputs remain explicit.
+ * Output still defaults to 'latest-message' so later steps do not re-receive
+ * this node's tool calls/results unless the spec opts into full-conversation.
  */
 export function applyGenerationDefaults(flow: Flow): void {
   for (const node of flow.nodes) {
@@ -1494,7 +1494,9 @@ export function applyGenerationDefaults(flow: Flow): void {
 
     if (node.type !== 'process') continue;
     const properties = (node.data.properties ?? {}) as Record<string, unknown>;
-    if (properties.inputMode === undefined) properties.inputMode = 'latest-message';
+    if (properties.inputMode === undefined || properties.inputMode === 'latest-message') {
+      properties.inputMode = 'full-history';
+    }
     if (properties.outputMode === undefined) properties.outputMode = 'latest-message';
     node.data.properties = properties;
   }

@@ -38,6 +38,12 @@ import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { mediaTypeFromMime } from '@/shared/types/model/media';
+import {
+  extractAssistantMedia,
+  parseDataUrl,
+} from '@/backend/services/model/adapters/messageUtils';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
@@ -53,6 +59,91 @@ import { v4 as uuidv4 } from 'uuid'; // Import uuid
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
 );
+
+type GeneratedImagePart = {
+  type: 'image_url';
+  image_url: { url: string };
+};
+
+/**
+ * OpenRouter image-capable Chat Completions return generated images beside
+ * `content`, in the non-OpenAI `message.images` extension. Keep this boundary
+ * tolerant because the OpenAI SDK types intentionally do not declare it.
+ */
+export function extractGeneratedImageParts(message: unknown): GeneratedImagePart[] {
+  return extractAssistantMedia(message).flatMap((part): GeneratedImagePart[] => {
+    if (part.type !== 'image') return [];
+    const url = part.url ?? (
+      part.data
+        ? `data:${part.mimeType ?? 'image/png'};base64,${part.data}`
+        : undefined
+    );
+    return url ? [{ type: 'image_url', image_url: { url } }] : [];
+  });
+}
+
+function mediaResourceKind(part: ModelMediaPart): 'image' | 'audio' | 'blob' {
+  if (part.type === 'image') return 'image';
+  if (part.type === 'audio') return 'audio';
+  return 'blob';
+}
+
+async function persistModelMedia(
+  parts: ModelMediaPart[],
+  conversationId?: string,
+  nodeId?: string,
+): Promise<ModelMediaPart[]> {
+  const deduped = parts.filter((part, index, all) => {
+    const key = `${part.type}|${part.url ?? ''}|${part.data ?? ''}|${part.mimeType ?? ''}`;
+    return all.findIndex(candidate =>
+      `${candidate.type}|${candidate.url ?? ''}|${candidate.data ?? ''}|${candidate.mimeType ?? ''}` === key
+    ) === index;
+  });
+  if (!conversationId) return deduped;
+
+  return Promise.all(deduped.map(async (part) => {
+    const parsed = part.url ? parseDataUrl(part.url) : undefined;
+    const data = part.data ?? parsed?.base64;
+    const mimeType =
+      part.mimeType ??
+      parsed?.mimeType ??
+      (part.type === 'image' ? 'image/png'
+        : part.type === 'audio' ? 'audio/mpeg'
+          : part.type === 'video' ? 'video/mp4'
+            : 'application/octet-stream');
+    if (!data) return { ...part, mimeType };
+
+    try {
+      const written = await writeRunResource({
+        conversationId,
+        name: part.name,
+        mimeType,
+        kind: mediaResourceKind({ ...part, mimeType }),
+        data: { base64: data },
+        producedBy: { source: 'model-output', nodeId },
+      });
+      if ('skipped' in written) return { ...part, mimeType };
+      return {
+        type: mediaTypeFromMime(mimeType),
+        mimeType,
+        ...(part.name ? { name: part.name } : {}),
+        ...(part.transcript ? { transcript: part.transcript } : {}),
+        resourceUri: written.uri,
+        url:
+          `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
+          `/resources/${encodeURIComponent(written.id)}/content`,
+      };
+    } catch (error) {
+      log.warn('Failed to persist direct model media; keeping it inline', {
+        conversationId,
+        nodeId,
+        type: part.type,
+        error,
+      });
+      return { ...part, mimeType };
+    }
+  }));
+}
 
 /**
  * Issue #252: default per-server cap on concurrent tool calls within a single
@@ -943,6 +1034,14 @@ export class ModelHandler {
             type: 'model:delta',
             messageId: delta.messageId,
             delta: delta.contentDelta,
+            // Never push large base64 blobs through the live SSE channel.
+            // Binary media is persisted and delivered with the durable message.
+            mediaPart:
+              delta.mediaPart &&
+              !delta.mediaPart.data &&
+              !delta.mediaPart.url?.startsWith('data:')
+                ? delta.mediaPart
+                : undefined,
             toolCallDelta: delta.toolCallDelta,
             node: nodeId ? { nodeId } : undefined,
           });
@@ -1108,6 +1207,10 @@ export class ModelHandler {
 
     const modelResponse = response.value;
     const content = modelResponse.content || '';
+    const rawResponseMedia = modelResponse.media?.length
+      ? modelResponse.media
+      : extractAssistantMedia(modelResponse.fullResponse?.choices?.[0]?.message);
+    const responseMedia = await persistModelMedia(rawResponseMedia, conversationId, nodeId);
     // Start from the (possibly compacted) send view, not the raw input: when
     // summarizing compaction (issue #248) ran pre-flight, `effectiveMessages`
     // carries the anchored summary head in place of the summarized older turns,
@@ -1157,8 +1260,12 @@ export class ModelHandler {
       // results are visible, attaching usage to the final message.
       const baseTs = Date.now();
       const transcript = modelResponse.transcript;
-      transcript.forEach((msg, idx) => {
+      for (let idx = 0; idx < transcript.length; idx++) {
+        const msg = transcript[idx];
         const isLast = idx === transcript.length - 1;
+        const transcriptMedia = msg.media?.length
+          ? await persistModelMedia(msg.media, conversationId, nodeId)
+          : undefined;
         finalMessages.push({
           ...msg,
           // Preserve the id/timestamp the adapter assigned (and live-emitted via
@@ -1170,15 +1277,35 @@ export class ModelHandler {
           ...(projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls)
             ? { mcpToolCalls: projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls) }
             : {}),
+          ...(transcriptMedia?.length ? { media: transcriptMedia } : {}),
           ...(isLast && usage ? { usage } : {}),
         } as FlujoChatMessage);
-      });
+      }
     } else {
+      const generatedImageParts = responseMedia.flatMap((part): GeneratedImagePart[] => {
+        if (part.type !== 'image') return [];
+        const url = part.url ?? (
+          part.data
+            ? `data:${part.mimeType ?? 'image/png'};base64,${part.data}`
+            : undefined
+        );
+        return url ? [{ type: 'image_url', image_url: { url } }] : [];
+      });
+      const assistantContent = generatedImageParts.length
+        ? [
+            ...(prefixedContent
+              ? [{ type: 'text' as const, text: prefixedContent }]
+              : []),
+            ...generatedImageParts,
+          ]
+        : prefixedContent;
+
       // Create the assistant message with timestamp and ID
-      const assistantMessage: FlujoChatMessage = {
+      const assistantMessage = {
         id: modelResponse.liveMessageId ?? uuidv4(),
         role: 'assistant',
-        content: prefixedContent,
+        content: assistantContent,
+        ...(responseMedia.length ? { media: responseMedia } : {}),
         // IMPORTANT: Include tool_calls if they exist in the raw response
         tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
         ...(projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls)
@@ -1187,7 +1314,7 @@ export class ModelHandler {
         timestamp: Date.now(), // Add timestamp
         processNodeId: nodeId, // Attach the process node ID
         ...(usage ? { usage } : {}),
-      };
+      } as unknown as FlujoChatMessage;
       finalMessages.push(assistantMessage);
     }
 
@@ -1218,6 +1345,7 @@ export class ModelHandler {
       success: true,
       value: {
         content, // Final assistant text (from the model response / adapter)
+        media: responseMedia,
         messages: finalMessages, // Include the new assistant message (now FlujoChatMessage[])
         fullResponse: modelResponse.fullResponse,
         toolCalls, // Pass the structured tool calls info
@@ -1556,6 +1684,7 @@ export class ModelHandler {
           let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
           let transcript: FlujoChatMessage[] | undefined;
           let liveMessageId: string | undefined;
+          let media: ModelMediaPart[] | undefined;
           try {
             // --- Auto-unload Ollama (opt-in feature, issue #242) ---
             // When enabled and this is an Ollama model, wrap the completion
@@ -1601,7 +1730,7 @@ export class ModelHandler {
             };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
-              ({ completion: chatCompletion, transcript, liveMessageId } = await withOllamaLock(
+              ({ completion: chatCompletion, transcript, liveMessageId, media } = await withOllamaLock(
                 ollamaRootForUnload,
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
@@ -1617,7 +1746,7 @@ export class ModelHandler {
                 }
               ));
             } else {
-              ({ completion: chatCompletion, transcript, liveMessageId } = await issueCompletion());
+              ({ completion: chatCompletion, transcript, liveMessageId, media } = await issueCompletion());
             }
           } finally {
             stopCancelWatch();
@@ -1700,19 +1829,26 @@ export class ModelHandler {
           }
 
           // A model that reports it is done (finish_reason 'stop') but produced
-          // neither text nor a tool call is not a valid completion — it's a
+          // neither text, generated images, nor a tool call is not a valid
+          // completion — it's a
           // provider-side malfunction (issue #288). Surfacing it as an error
           // instead of a silent empty message keeps the flow from advancing on
           // nothing.
           const hasToolCalls = !!choice.message?.tool_calls?.length;
-          const isEmptyContent = !choice.message?.content || choice.message.content.trim().length === 0;
-          if (choice.finish_reason === 'stop' && !hasToolCalls && isEmptyContent) {
-            log.error('API reported finish_reason "stop" with an empty message and no tool calls.', { response: chatCompletion });
+          const fallbackMedia = extractAssistantMedia(choice.message);
+          const generatedMedia = media?.length ? media : fallbackMedia;
+          const hasGeneratedMedia = generatedMedia.length > 0;
+          const hasTextContent =
+            (typeof choice.message?.content === 'string' &&
+              choice.message.content.trim().length > 0) ||
+            (Array.isArray(choice.message?.content) && choice.message.content.length > 0);
+          if (choice.finish_reason === 'stop' && !hasToolCalls && !hasGeneratedMedia && !hasTextContent) {
+            log.error('API reported finish_reason "stop" with an empty message, no media, and no tool calls.', { response: chatCompletion });
             return {
               success: false,
               error: createModelError(
                 'api_error',
-                'Model reported completion (finish_reason "stop") but returned an empty message with no tool calls.',
+                'Model reported completion (finish_reason "stop") but returned an empty message with no media or tool calls.',
                 modelId,
                 undefined,
                 { rawResponse: chatCompletion }
@@ -1725,6 +1861,7 @@ export class ModelHandler {
             // Use the validated choice object
             value: {
               content: choice.message?.content || '',
+              media: generatedMedia,
               messages: [...messages], // Return original messages with timestamps
               fullResponse: chatCompletion, // Return the full original response
               transcript, // Present only for self-orchestrating adapters (Claude subscription)

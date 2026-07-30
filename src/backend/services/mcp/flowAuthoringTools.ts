@@ -25,9 +25,11 @@
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
+import type { FlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { SIMPLE_FLOW_SPEC_SCHEMA } from '@/utils/shared/simpleFlowSpec';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
+import { compileGeneratedDraft } from '@/backend/services/flow/generationDraft';
 import { searchRegistry, installRegistryServer, installBestForCapability } from '@/backend/services/mcp/registryInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
@@ -40,6 +42,7 @@ export const AUTHORING_TOOL_NAMES = [
   'get_flow_authoring_guide',
   'validate_flow_spec',
   'draft_flow',
+  'draft_generated_flow',
   'create_flow',
   'search_mcp_marketplace',
   'install_mcp_server',
@@ -117,6 +120,22 @@ export function authoringToolDefinitions(): Tool[] {
       description:
         'Compile and validate a flow WITHOUT saving and return the complete draft bundle for review or opening in the Flow Builder.',
       inputSchema: specInputSchema(),
+    },
+    {
+      name: 'draft_generated_flow',
+      description:
+        'Run the production Flow Generator post-processing pipeline on a complete advanced FlowSpec: scratchpad safety guard, structural auto-repair, bounded nested compilation, generated-flow defaults, and whole-bundle validation. Returns the complete UNSAVED draft and hardened spec.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          spec: {
+            type: 'object',
+            description: 'A complete advanced FlowSpec authored using get_flow_authoring_guide(profile="advanced").',
+          },
+        },
+        required: ['spec'],
+      },
     },
     {
       name: 'create_flow',
@@ -322,6 +341,40 @@ export async function authoringCallTool(
         { ...result, ...(verificationWarning ? { verificationWarning } : {}) },
         !result.installed
       );
+    }
+
+    if (toolName === 'draft_generated_flow') {
+      const spec = extractSpec(args);
+      if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+        return textResult({ error: 'Provide a complete advanced FlowSpec object in "spec".' }, true);
+      }
+      const context = await gatherGenerationContext();
+      const result = compileGeneratedDraft(spec as FlowSpec, context);
+      if (!result.success) {
+        return textResult({
+          error: 'The generated specification could not be compiled.',
+          spec: result.spec,
+          issues: result.issues,
+          hardening: {
+            guardChanges: result.guardChanges,
+            repairChanges: result.repairChanges,
+          },
+        }, true);
+      }
+      return textResult({
+        profile: 'advanced',
+        pipeline: 'production-generator',
+        saved: false,
+        rootFlowId: result.flow.id,
+        flow: result.flow,
+        flows: result.flows.map((entry) => entry.flow),
+        spec: result.spec,
+        validation: result.validation,
+        hardening: {
+          guardChanges: result.guardChanges,
+          repairChanges: result.repairChanges,
+        },
+      });
     }
 
     if (toolName === 'validate_flow_spec' || toolName === 'draft_flow' || toolName === 'create_flow') {

@@ -5,6 +5,41 @@ import { ModelProvider } from '@/shared/types/model/provider';
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/provider');
 
+function discoverProviderMetadata(model: any): Partial<NormalizedModel> {
+  const supportedParameters = Array.isArray(model.supported_parameters)
+    ? model.supported_parameters.filter((value: unknown): value is string => typeof value === 'string')
+    : undefined;
+  const contextWindow =
+    typeof model.context_length === 'number' && Number.isFinite(model.context_length)
+      ? model.context_length
+      : undefined;
+  const maxTokens =
+    typeof model.top_provider?.max_completion_tokens === 'number' &&
+    Number.isFinite(model.top_provider.max_completion_tokens)
+      ? model.top_provider.max_completion_tokens
+      : typeof model.max_completion_tokens === 'number' &&
+          Number.isFinite(model.max_completion_tokens)
+        ? model.max_completion_tokens
+        : undefined;
+  const inputModalities = Array.isArray(model.architecture?.input_modalities)
+    ? model.architecture.input_modalities.filter((value: unknown): value is string => typeof value === 'string')
+    : undefined;
+  const outputModalities = Array.isArray(model.architecture?.output_modalities)
+    ? model.architecture.output_modalities.filter((value: unknown): value is string => typeof value === 'string')
+    : undefined;
+
+  return {
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(supportedParameters !== undefined ? {
+      supportedParameters,
+      supportsTools: supportedParameters.includes('tools'),
+    } : {}),
+    ...(inputModalities !== undefined ? { inputModalities } : {}),
+    ...(outputModalities !== undefined ? { outputModalities } : {}),
+  };
+}
+
 /**
  * Determine the provider from the base URL
  * Maps each URL pattern to its corresponding provider
@@ -57,7 +92,9 @@ export function isLitellmUrl(baseUrl: string): boolean {
  */
 export async function fetchOpenRouterModels(): Promise<NormalizedModel[]> {
   log.debug('fetchOpenRouterModels: Entering method');
-  const response = await fetch('https://openrouter.ai/api/v1/models', {
+  // OpenRouter's default catalogue can omit image-output-only models. Asking
+  // for all output modalities gives the picker one complete capability list.
+  const response = await fetch('https://openrouter.ai/api/v1/models?output_modalities=all', {
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
@@ -77,7 +114,8 @@ export async function fetchOpenRouterModels(): Promise<NormalizedModel[]> {
   return data.data.map((model: any) => ({
     id: model.id,
     name: model.name || model.id,
-    description: model.description
+    description: model.description,
+    ...discoverProviderMetadata(model),
   }));
 }
 
@@ -158,7 +196,8 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
         .map((model: any) => ({
           id: model.id,
           name: model.name || model.id,
-          description: model.description || `Model ${model.id}`
+          description: model.description || `Model ${model.id}`,
+          ...discoverProviderMetadata(model),
         }));
     }
     // Fallback for Ollama format

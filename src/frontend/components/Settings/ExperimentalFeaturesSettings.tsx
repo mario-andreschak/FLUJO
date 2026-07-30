@@ -65,6 +65,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleFlowBasedGeneratorChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Flow-based generator toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        flowBasedGenerator: event.target.checked,
+      },
+    });
+  };
+
   const handleProtectedPathsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Protected paths toggled: ${event.target.checked}`);
     updateSettings({
@@ -83,6 +94,17 @@ export default function ExperimentalFeaturesSettings() {
       experimental: {
         ...experimental,
         snapshotsEnabled: event.target.checked,
+      },
+    });
+  };
+
+  const handleShowModelsWithoutToolsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Show models without tool capabilities toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        showModelsWithoutToolCapabilities: event.target.checked,
       },
     });
   };
@@ -151,6 +173,24 @@ export default function ExperimentalFeaturesSettings() {
         <FormControlLabel
           control={
             <Switch
+              checked={experimental.showModelsWithoutToolCapabilities ?? false}
+              onChange={handleShowModelsWithoutToolsChange}
+              name="showModelsWithoutToolCapabilities"
+            />
+          }
+          label="Show Models without tool capabilities"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Provider model lists hide models explicitly known not to support tool
+          calls. Turn this on to reveal image generators and other non-tool
+          models. Models with unknown capabilities remain visible either way.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
               checked={experimental.mcpBetaProtocol ?? false}
               onChange={handleMcpBetaProtocolChange}
               name="mcpBetaProtocol"
@@ -167,6 +207,27 @@ export default function ExperimentalFeaturesSettings() {
           release; if a server misbehaves with this on, turn it off and reconnect.
           Websocket servers always use the stable SDK. Changing this rebuilds
           server connections on their next use.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.flowBasedGenerator ?? false}
+              onChange={handleFlowBasedGeneratorChange}
+              name="flowBasedGenerator"
+              disabled={!experimental.enabled}
+            />
+          }
+          label="Flow-based Flow Generator"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Run Generate Flow through an editable, multi-stage FLUJO Flow. Its
+          architect inventories real building blocks and authors the complete
+          specification; its compiler validates, repairs, and returns an unsaved
+          draft. The proven generator plus AI-Improve remains the default when
+          this is off.
         </Typography>
       </FormControl>
 

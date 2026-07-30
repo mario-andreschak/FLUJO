@@ -48,6 +48,7 @@ import type {
 import type { EnvDeclaration } from '@/shared/types/package/installOrigin';
 import { fetchPackageManifest } from './packageRegistry';
 import { installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { installGithubServer } from '@/backend/services/mcp/githubInstall';
 import { modelService } from '@/backend/services/model';
 import { flowService } from '@/backend/services/flow';
 import { mcpService } from '@/backend/services/mcp';
@@ -89,6 +90,8 @@ export interface InstallPreview {
   flows: Array<{ name: string }>;
   plannedExecutions: Array<{ name: string }>;
   secrets: Array<{ key: string; label?: string; required: boolean; provided: boolean }>;
+  /** Host-global declarations whose values may be collected before install. */
+  globals: NonNullable<FlujoPackage['globals']>;
   /**
    * `${global:VAR}` names this package expects the host to already have set
    * (in Settings), that are NOT currently set. Unlike `secrets[]` these are
@@ -253,10 +256,14 @@ function resolveSecretPlaceholders<T>(value: T, secrets: Record<string, string>)
 // ---------------------------------------------------------------------------
 
 /** Which of `requiredGlobals` are NOT currently set as a host global env var. */
-async function computeMissingGlobals(requiredGlobals: string[] | undefined): Promise<string[]> {
-  if (!requiredGlobals || requiredGlobals.length === 0) return [];
+async function computeMissingGlobals(manifest: Pick<FlujoPackage, 'requiredGlobals' | 'globals'>): Promise<string[]> {
+  const requiredGlobals = new Set(manifest.requiredGlobals ?? []);
+  for (const global of manifest.globals ?? []) {
+    if (global.required) requiredGlobals.add(global.name);
+  }
+  if (requiredGlobals.size === 0) return [];
   const stored = await loadItem<Record<string, unknown>>(StorageKey.GLOBAL_ENV_VARS, {});
-  return requiredGlobals.filter((name) => !Object.prototype.hasOwnProperty.call(stored, name));
+  return [...requiredGlobals].filter((name) => !Object.prototype.hasOwnProperty.call(stored, name));
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +322,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       package: { name: manifest.name, version: manifest.version, ...(manifest.publisher ? { publisher: manifest.publisher } : {}) },
       preview: {
         ...await buildPreview(manifest, secretProvided),
-        missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
+        missingGlobals: await computeMissingGlobals(manifest),
       },
       created: [],
       updated: [],
@@ -348,7 +355,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     disabled: [],
     servers: [],
     errors: [],
-    missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
+    missingGlobals: await computeMissingGlobals(manifest),
   };
 
   // Resolve {{secret.NAME}} placeholders in free-text content (prompts,
@@ -677,6 +684,7 @@ async function buildPreview(manifest: FlujoPackage, secretProvided: (name: strin
       required: s.required === true,
       provided: secretProvided(s.name),
     })),
+    globals: manifest.globals ?? [],
   };
 }
 
@@ -719,9 +727,16 @@ function resolveDeclarations(
       }
     } else if (decl.globalVar) {
       values[decl.name] = `\${global:${decl.globalVar}}`;
+      // Preserve the secret classification on the installed config even
+      // though the value is a portable global reference rather than a package
+      // secret. This keeps masking/encryption and future re-exports correct.
+      if (decl.isSecret) secretNames.add(decl.name);
+    } else if (decl.globalTemplate) {
+      values[decl.name] = decl.globalTemplate;
+      if (decl.isSecret) secretNames.add(decl.name);
     }
-    // Neither secretRef nor globalVar: nothing to resolve — the declaration is
-    // metadata-only (e.g. documents a var the server reads from its own env).
+    // No binding: nothing to resolve — the declaration is metadata-only (e.g.
+    // documents a var the server reads from its own environment).
   }
   return { values, secretNames, missingRequired };
 }
@@ -739,6 +754,7 @@ async function adoptAndConfigureServer(
   missingRequired: string[],
   resolvedEnv: Record<string, string>,
   secretEnvNames: Set<string>,
+  resolvedHeaders: Record<string, MCPHeaderValue> = {},
 ): Promise<void> {
   const { packageFolder, summary, ledgerEntities, existingServerConfigs } = ctx;
   const source = serverSource(server);
@@ -759,10 +775,38 @@ async function adoptAndConfigureServer(
   for (const [envName, value] of Object.entries(resolvedEnv)) {
     mergedEnv[envName] = secretEnvNames.has(envName) ? { value, metadata: { isSecret: true } } : value;
   }
+  const existingArgs = (existingConfig as { args?: string[] }).args;
+  const mergedArgs = Array.isArray(existingArgs) ? [...existingArgs] : [];
+  for (const template of server.argTemplates ?? []) {
+    if (
+      template.index > mergedArgs.length ||
+      (template.index < mergedArgs.length &&
+        !/\$\{global:[A-Za-z0-9_.-]+\}/.test(mergedArgs[template.index]))
+    ) {
+      const error =
+        `argument template index ${template.index} cannot replace a static existing argument`;
+      summary.servers.push({ localName: server.name, source, installed: false, error });
+      summary.skipped.push({ type: 'server', name: server.name, note: error });
+      return;
+    }
+    mergedArgs[template.index] = template.value;
+  }
 
   const saved = await mcpService.updateServerConfig(
     server.name,
-    { env: mergedEnv, folder: packageFolder } as Partial<MCPServerConfig>,
+    {
+      env: mergedEnv,
+      ...(Object.keys(resolvedHeaders).length > 0
+        ? {
+            headers: {
+              ...('headers' in existingConfig ? (existingConfig.headers ?? {}) : {}),
+              ...resolvedHeaders,
+            },
+          }
+        : {}),
+      folder: packageFolder,
+      ...(server.argTemplates?.length ? { args: mergedArgs } : {}),
+    } as Partial<MCPServerConfig>,
   );
   const failed =
     !Array.isArray(saved) &&
@@ -812,12 +856,41 @@ async function installServer(
   }
 
   if (origin.sourceType === 'github') {
-    // No automated github clone/build install path exists server-side yet
-    // (that flow currently only runs client-side in the GitHub tab wizard).
-    summary.servers.push({ localName: server.name, source, installed: false,
-      error: 'GitHub-sourced servers are not auto-installable yet — install manually from the MCP page' });
-    summary.skipped.push({ type: 'server', name: server.name,
-      note: 'GitHub-sourced servers require manual install' });
+    if (!origin.ref) {
+      summary.servers.push({ localName: server.name, source, installed: false, error: 'missing GitHub repository URL' });
+      summary.skipped.push({ type: 'server', name: server.name, note: 'installOrigin has no GitHub ref' });
+      return;
+    }
+    if (missingRequired.length > 0) {
+      summary.disabled.push({ type: 'server', name: server.name, note: `missing required secret(s) for: ${missingRequired.join(', ')}` });
+      summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
+      return;
+    }
+    const result = await installGithubServer({
+      name: server.name,
+      repositoryUrl: origin.ref,
+      env: env.values,
+      folder: ctx.packageFolder,
+    });
+    summary.servers.push({
+      localName: server.name,
+      source,
+      installed: result.installed,
+      ...(result.serverName ? { serverName: result.serverName } : {}),
+      ...(result.alreadyExisted ? { alreadyExisted: true } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    });
+    if (result.installed) {
+      ledgerEntities.servers.push(result.serverName ?? server.name);
+      const ref = { type: 'server' as const, name: server.name, id: result.serverName ?? server.name };
+      if (result.alreadyExisted) summary.updated.push(ref);
+      else {
+        ledgerCreated.servers.push(result.serverName ?? server.name);
+        summary.created.push(ref);
+      }
+    } else {
+      summary.skipped.push({ type: 'server', name: server.name, note: result.error ?? 'GitHub install failed' });
+    }
     return;
   }
 
@@ -832,7 +905,14 @@ async function installServer(
     // ADOPT-AND-CONFIGURE: if a server with this name already exists, merge env
     // into it rather than installing a new server from the registry.
     if (existingServerNames.has(server.name)) {
-      await adoptAndConfigureServer(server, ctx, missingRequired, env.values, env.secretNames);
+      await adoptAndConfigureServer(
+        server,
+        ctx,
+        missingRequired,
+        env.values,
+        env.secretNames,
+        resolvedHeaders,
+      );
       return;
     }
 
@@ -842,7 +922,11 @@ async function installServer(
       summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
       return;
     }
-    const result = await installRegistryServer(registryName, env.values);
+    const result = await installRegistryServer(registryName, env.values, {
+      preferredTransport: server.transport,
+      headerOverrides: resolvedHeaders,
+      ...(server.argTemplates?.length ? { argTemplates: server.argTemplates } : {}),
+    });
     const entry: InstallServerResult = {
       localName: server.name,
       source,

@@ -1,5 +1,5 @@
 import { Model } from '@/shared/types';
-import { ModelTestResult } from '@/shared/types/model/response';
+import { ModelTestResult, NormalizedModel } from '@/shared/types/model/response';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/model');
@@ -392,7 +392,7 @@ class ModelService {
     modelId: string,
     searchTerm?: string,
     apiKey?: string
-  ): Promise<Array<{id: string, name: string, description?: string}>> {
+  ): Promise<NormalizedModel[]> {
     try {
       log.debug('Fetching provider models', {
         baseUrl,

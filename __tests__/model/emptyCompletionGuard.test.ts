@@ -30,7 +30,8 @@ const conversationStates = FlowExecutor.conversationStates as Map<string, Shared
 
 const completion = (
   content: string | null,
-  toolCalls?: OpenAI.ChatCompletionMessageToolCall[]
+  toolCalls?: OpenAI.ChatCompletionMessageToolCall[],
+  images?: Array<{ type: 'image_url'; image_url: { url: string } }>,
 ) => ({
   completion: {
     id: 'chatcmpl-test',
@@ -46,6 +47,7 @@ const completion = (
         content,
         refusal: null,
         ...(toolCalls ? { tool_calls: toolCalls } : {}),
+        ...(images ? { images } : {}),
       },
     }],
   },
@@ -128,5 +130,34 @@ describe('empty stopped completion guard (#288)', () => {
 
     expect(result.success).toBe(true);
     if (result.success) expect(result.value.content).toBe('Done.');
+  });
+
+  it('allows and materializes an OpenRouter image-only completion', async () => {
+    const url = 'data:image/jpeg;base64,/9j/test';
+    createCompletionMock.mockResolvedValue(completion(null, undefined, [{
+      type: 'image_url',
+      image_url: { url },
+    }]));
+    seedState('conv-image');
+
+    const result = await callModel('conv-image');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const assistant = result.value.messages[result.value.messages.length - 1];
+      expect(assistant.role).toBe('assistant');
+      expect(assistant.media).toEqual([
+        expect.objectContaining({
+          type: 'image',
+          mimeType: 'image/jpeg',
+          resourceUri: expect.stringMatching(/^flujo:\/\/run\/conv-image\//),
+          url: expect.stringContaining('/v1/chat/conversations/conv-image/resources/'),
+        }),
+      ]);
+      expect(assistant.content).toEqual([{
+        type: 'image_url',
+        image_url: { url: assistant.media?.[0].url },
+      }]);
+    }
   });
 });

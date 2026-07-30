@@ -45,7 +45,7 @@ interface HeaderRow {
   showWarning?: boolean;
 }
 
-const GLOBAL_BINDING_RE = /^\$\{global:([^}]+)\}$/;
+const GLOBAL_BINDING_RE = /^\$\{global:([A-Za-z0-9_.-]+)\}$/;
 
 const toRows = (headers: Record<string, MCPHeaderValue>): HeaderRow[] =>
   Object.entries(headers || {}).map(([key, raw]) => {
@@ -111,8 +111,18 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
   };
 
   const handleValueChange = (index: number, value: string) => {
+    const bindingMatch = value.match(GLOBAL_BINDING_RE);
     commit(rows.map((row, i) =>
-      i === index ? { ...row, value, isMasked: false, showWarning: false } : row
+      i === index
+        ? {
+            ...row,
+            value,
+            isBound: !!bindingMatch,
+            boundTo: bindingMatch?.[1],
+            isMasked: false,
+            showWarning: false,
+          }
+        : row
     ));
   };
 

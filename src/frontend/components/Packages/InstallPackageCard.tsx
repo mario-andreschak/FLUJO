@@ -86,6 +86,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<InstallSummary | null>(null);
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  const [globalValues, setGlobalValues] = useState<Record<string, string>>({});
   const [modelMappings, setModelMappings] = useState<Record<string, string>>({});
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [showInstalledModels, setShowInstalledModels] = useState(false);
@@ -143,6 +144,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setPreview(null);
     setResult(null);
     setSecretValues({});
+    setGlobalValues({});
     setModelMappings({});
     setActiveModelId(null);
     setShowInstalledModels(false);
@@ -177,6 +179,28 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     setLoading(true);
     setError(null);
     try {
+      const variables = Object.fromEntries(
+        (preview.preview?.globals ?? [])
+          .map((global) => [
+            global.name,
+            {
+              value: globalValues[global.name]?.trim() ?? '',
+              metadata: { isSecret: global.isSecret === true },
+            },
+          ] as const)
+          .filter(([, entry]) => entry.value.length > 0),
+      );
+      if (Object.keys(variables).length > 0) {
+        const envResponse = await fetch('/api/env', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'setAll', variables }),
+        });
+        if (!envResponse.ok) {
+          const body = await envResponse.json().catch(() => ({}));
+          throw new Error(body?.error || `Failed to save package globals (HTTP ${envResponse.status})`);
+        }
+      }
       const summary = await packageService.installFromRegistry({
         packageId: selected.id,
         version: selected.latestVersion,
@@ -193,13 +217,14 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     } finally {
       setLoading(false);
     }
-  }, [selected, preview, secretValues, modelMappings, onInstalled]);
+  }, [selected, preview, secretValues, globalValues, modelMappings, onInstalled]);
 
   const closeDialog = useCallback(() => {
     setSelected(null);
     setPreview(null);
     setResult(null);
     setSecretValues({});
+    setGlobalValues({});
     setModelMappings({});
     setActiveModelId(null);
     setShowInstalledModels(false);
@@ -714,7 +739,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         Review and install
                       </Typography>
                       <Typography variant="body1" color="text.secondary">
-                        Check your model choices and add any package secrets.
+                        Check your model choices and add the package configuration.
                       </Typography>
                     </Box>
                     {manifest.models.length > 0 && (
@@ -777,12 +802,47 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                     </Alert>
                   )}
 
-                  {manifest.missingGlobals.length > 0 && (
-                    <Alert severity="warning" sx={{ mb: 1.5 }}>
-                      This package expects host global variable(s) that aren&apos;t set yet:{' '}
-                      {manifest.missingGlobals.join(', ')}. Set them in Settings after install, or the
-                      bound model(s)/server(s) won&apos;t have a working API key.
-                    </Alert>
+                  {manifest.globals.length > 0 && (
+                    <>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                        Global variables requested by this package
+                      </Typography>
+                      <Stack spacing={1.5} sx={{ mb: 2.5 }}>
+                        {manifest.globals.map((global) => (
+                          <TextField
+                            key={global.name}
+                            size="small"
+                            type={global.isSecret && !visibleSecrets[`global:${global.name}`] ? 'password' : 'text'}
+                            label={global.name}
+                            helperText={`${global.description ?? (global.required ? 'Required' : 'Optional')}${manifest.missingGlobals.includes(global.name) ? ' — not currently set' : ' — leave blank to keep the current value'}`}
+                            value={globalValues[global.name] ?? ''}
+                            onChange={(e) => setGlobalValues((prev) => ({ ...prev, [global.name]: e.target.value }))}
+                            fullWidth
+                            InputProps={global.isSecret ? {
+                              endAdornment: (
+                                <InputAdornment position="end">
+                                  <IconButton
+                                    size="small"
+                                    tabIndex={-1}
+                                    aria-label={visibleSecrets[`global:${global.name}`] ? 'Hide global' : 'Show global'}
+                                    onClick={() =>
+                                      setVisibleSecrets((prev) => ({
+                                        ...prev,
+                                        [`global:${global.name}`]: !prev[`global:${global.name}`],
+                                      }))
+                                    }
+                                  >
+                                    {visibleSecrets[`global:${global.name}`]
+                                      ? <VisibilityOff fontSize="small" />
+                                      : <Visibility fontSize="small" />}
+                                  </IconButton>
+                                </InputAdornment>
+                              ),
+                            } : undefined}
+                          />
+                        ))}
+                      </Stack>
+                    </>
                   )}
 
                   <Divider sx={{ my: 2.5 }} />

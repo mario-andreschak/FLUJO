@@ -65,8 +65,8 @@ export interface ClientWithBetaMarker { __flujoBeta?: boolean }
 const log = createLogger('backend/services/mcp/connection');
 
 /**
- * Flatten + resolve a remote server's custom headers to plain string values for the live
- * connection (#84). Header values may be stored as plain strings (legacy/non-secret),
+ * Flatten + resolve a server's env values and custom headers to plain strings for the live
+ * connection (#84). Values may be stored as plain strings (legacy/non-secret),
  * `{ value, metadata }` objects, `encrypted:` secrets, or `${global:VAR}` bindings.
  * `resolveAndDecryptApiKey` handles decryption and global-var resolution for every case
  * (plain values pass through unchanged); values that fail to resolve are dropped.
@@ -78,12 +78,33 @@ const log = createLogger('backend/services/mcp/connection');
  * because the resolved header material — and thus the key — changes.
  */
 export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCPServerConfig> {
+  let resolvedConfig = config;
+
+  // Environment bindings must remain portable in storage and be resolved fresh
+  // for each connection. Previously updateServerConfig baked `${global:VAR}` into
+  // the saved config, so rotating the global had no effect and package re-export
+  // could no longer see the binding.
+  if (config.env && typeof config.env === 'object') {
+    const resolvedEnv: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(config.env)) {
+      if (!key) continue;
+      const value =
+        raw && typeof raw === 'object' && 'value' in raw
+          ? (raw as { value?: string }).value ?? ''
+          : (raw as string) ?? '';
+      if (!value || isMaskedHeaderValue(value)) continue;
+      const out = await resolveAndDecryptApiKey(value);
+      if (out) resolvedEnv[key] = out;
+    }
+    resolvedConfig = { ...resolvedConfig, env: resolvedEnv } as MCPServerConfig;
+  }
+
   if (config.transport !== 'streamable' && config.transport !== 'sse') {
-    return config;
+    return resolvedConfig;
   }
   const c = config as unknown as { headers?: Record<string, MCPHeaderValue> };
   if (!c.headers || typeof c.headers !== 'object') {
-    return config;
+    return resolvedConfig;
   }
   const resolved: Record<string, string> = {};
   for (const [key, raw] of Object.entries(c.headers)) {
@@ -100,7 +121,7 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
       resolved[key] = out;
     }
   }
-  return { ...config, headers: resolved } as MCPServerConfig;
+  return { ...resolvedConfig, headers: resolved } as MCPServerConfig;
 }
 
 /**
@@ -229,7 +250,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '3.33.0',
+      version: '3.38.0',
     },
     {
       capabilities: {

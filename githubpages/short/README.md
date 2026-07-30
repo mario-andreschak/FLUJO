@@ -1,0 +1,42 @@
+# FLUJO — Your AI. In Flow.
+
+A 2:28 HTML5 animated product film for FLUJO. It is a zero-build, dependency-free
+web experience with deterministic scene timing, an ElevenLabs narration track,
+procedural Web Audio scoring, captions, seeking, fullscreen playback, and a
+responsive 16:9 stage.
+
+## Watch it
+
+From this folder, start a local web server:
+
+```powershell
+python -m http.server 8765
+```
+
+Then open <http://127.0.0.1:8765/>.
+
+The film needs a click on the opening play button so the browser can start audio.
+
+## Controls
+
+- `Space`: play or pause
+- `Left` / `Right`: seek five seconds
+- `C`: captions
+- `AI` microphone button: toggle the ElevenLabs voiceover; text narration stays on when disabled
+- `Narrator`: switch live between Brian, Sarah, Lily, and George
+- `M`: mute
+- `F`: fullscreen
+- Timeline arrows: seek three seconds (`Shift` seeks ten)
+
+## Production files
+
+- `index.html` — all eight scenes and accessible playback controls
+- `styles.css` — layout, art direction, scene UI, responsive scaling
+- `app.js` — deterministic 148-second renderer, transitions, audio sync, particles
+- `assets/audio/flujo-voiceover-elevenlabs.mp3` — final Brian / Eleven v3 narration
+- `assets/audio/flujo-voiceover-{sarah,lily,george}.mp3` — alternate Eleven v3 narrators
+- `assets/audio/voiceover-scenes.json` — narration script and exact scene cues
+- `assets/img/` — FLUJO brand and application references
+
+For visual QA, append `?t=62` (or any second from `0` to `148`) to open directly
+on a specific frame without starting playback.

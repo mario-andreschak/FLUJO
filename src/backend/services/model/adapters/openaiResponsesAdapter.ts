@@ -4,6 +4,9 @@ import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { mediaTypeFromMime } from '@/shared/types/model/media';
+import { parseDataUrl } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter');
 
@@ -139,6 +142,15 @@ function userContent(content: unknown): ResponseInputItem {
         type?: string;
         text?: string;
         image_url?: { url?: string; detail?: 'auto' | 'low' | 'high' };
+        input_audio?: { data?: string; format?: string };
+        audio_url?: { url?: string };
+        video_url?: { url?: string };
+        file?: {
+          url?: string;
+          file_data?: string;
+          name?: string;
+          filename?: string;
+        };
       };
       if (p?.type === 'text' && typeof p.text === 'string') {
         return { type: 'input_text' as const, text: p.text };
@@ -150,11 +162,46 @@ function userContent(content: unknown): ResponseInputItem {
           detail: p.image_url.detail ?? ('auto' as const),
         };
       }
+      if (p?.type === 'input_audio' && typeof p.input_audio?.data === 'string') {
+        return {
+          type: 'input_audio' as const,
+          data: p.input_audio.data,
+          format: p.input_audio.format === 'mp3' ? 'mp3' as const : 'wav' as const,
+        };
+      }
+      if (p?.type === 'audio_url' && typeof p.audio_url?.url === 'string') {
+        const parsed = parseDataUrl(p.audio_url.url);
+        if (parsed) {
+          return {
+            type: 'input_audio' as const,
+            data: parsed.base64,
+            format: parsed.mimeType === 'audio/mpeg' ? 'mp3' as const : 'wav' as const,
+          };
+        }
+      }
+      if (p?.type === 'file' || p?.type === 'video_url') {
+        const source = p.type === 'file'
+          ? p.file?.file_data ?? p.file?.url
+          : p.video_url?.url;
+        if (typeof source === 'string') {
+          return {
+            type: 'input_file' as const,
+            file_data: source,
+            filename:
+              p.file?.filename ??
+              p.file?.name ??
+              (p.type === 'video_url' ? 'video' : 'attachment'),
+          };
+        }
+      }
       return undefined;
     })
     .filter((p): p is NonNullable<typeof p> => p !== undefined);
 
-  return { role: 'user', content: parts };
+  return {
+    role: 'user',
+    content: parts,
+  } as unknown as ResponseInputItem;
 }
 
 /**
@@ -289,19 +336,58 @@ function finishReasonOf(
 export function fromResponse(
   response: OpenAI.Responses.Response,
   modelName: string,
-): { completion: OpenAI.Chat.Completions.ChatCompletion; reasoning: ReasoningItem[] } {
+): {
+  completion: OpenAI.Chat.Completions.ChatCompletion;
+  reasoning: ReasoningItem[];
+  media: ModelMediaPart[];
+} {
   const textParts: string[] = [];
   const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
   const reasoning: ReasoningItem[] = [];
+  const media: ModelMediaPart[] = [];
 
   for (const item of response.output ?? []) {
-    if (item.type === 'message') {
-      for (const part of item.content ?? []) {
+    const nativeItem = item as unknown as Record<string, any>;
+    if (nativeItem.type === 'message') {
+      for (const part of nativeItem.content ?? []) {
         if (part.type === 'output_text' && typeof part.text === 'string') {
           textParts.push(part.text);
         } else if (part.type === 'refusal' && typeof part.refusal === 'string') {
           textParts.push(part.refusal);
+        } else if (part.type === 'output_audio' && typeof part.data === 'string') {
+          media.push({
+            type: 'audio',
+            data: part.data,
+            mimeType: part.mime_type ?? 'audio/mpeg',
+            ...(typeof part.transcript === 'string' ? { transcript: part.transcript } : {}),
+          });
         }
+      }
+    } else if (nativeItem.type === 'image_generation_call' && typeof nativeItem.result === 'string') {
+      media.push({ type: 'image', data: nativeItem.result, mimeType: 'image/png' });
+    } else if (nativeItem.type === 'video_generation_call') {
+      const url = nativeItem.url ?? nativeItem.result?.url;
+      const data = nativeItem.data ?? nativeItem.result?.data;
+      if (typeof url === 'string' || typeof data === 'string') {
+        media.push({
+          type: 'video',
+          ...(typeof url === 'string' ? { url } : {}),
+          ...(typeof data === 'string' ? { data } : {}),
+          mimeType: nativeItem.mime_type ?? nativeItem.result?.mime_type ?? 'video/mp4',
+        });
+      }
+    } else if (nativeItem.type === 'file' || nativeItem.type === 'output_file') {
+      const url = nativeItem.url ?? nativeItem.file_url;
+      const data = nativeItem.data;
+      const mimeType = nativeItem.mime_type ?? nativeItem.mimeType;
+      if (typeof url === 'string' || typeof data === 'string') {
+        media.push({
+          type: mediaTypeFromMime(mimeType),
+          ...(typeof url === 'string' ? { url } : {}),
+          ...(typeof data === 'string' ? { data } : {}),
+          ...(mimeType ? { mimeType } : {}),
+          ...(nativeItem.filename ? { name: nativeItem.filename } : {}),
+        });
       }
     } else if (item.type === 'function_call') {
       toolCalls.push({
@@ -357,7 +443,7 @@ export function fromResponse(
       : {}),
   };
 
-  return { completion, reasoning };
+  return { completion, reasoning, media };
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +543,12 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
 
     const input = toResponsesInput(messages, carried);
     const responsesTools = toResponsesTools(tools);
-
+    const wantsImage = (model.outputModalities ?? [])
+      .some(modality => modality.toLowerCase() === 'image');
+    const allTools: OpenAI.Responses.Tool[] = [
+      ...(responsesTools ?? []),
+      ...(wantsImage ? [{ type: 'image_generation' as const }] : []),
+    ];
     const pk = paramKey(model);
     const dropped = unsupportedParams.get(pk) ?? new Set<Droppable>();
 
@@ -467,7 +558,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       // Stateless by design — FLUJO owns the history and rewrites it every turn,
       // which an append-only server-side thread cannot represent.
       store: false,
-      ...(responsesTools ? { tools: responsesTools } : {}),
+      ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
       ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
@@ -521,7 +612,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       throw new Error('OpenAI Responses API rejected every supported parameter combination');
     }
 
-    const { completion, reasoning } = fromResponse(response, model.name);
+    const { completion, reasoning, media } = fromResponse(response, model.name);
 
     // Stash this turn's reasoning against its first tool call, so the next
     // iteration of the loop can hand it back. Nothing to carry when the turn made
@@ -535,7 +626,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       });
     }
 
-    return { completion };
+    return { completion, media };
   }
 
   async createStreamCompletion({
@@ -560,16 +651,23 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     const carried = key ? reasoningBySession.get(key) : undefined;
     const input = toResponsesInput(messages, carried);
     const responsesTools = toResponsesTools(tools);
+    const wantsImage = (model.outputModalities ?? [])
+      .some(modality => modality.toLowerCase() === 'image');
+    const allTools: OpenAI.Responses.Tool[] = [
+      ...(responsesTools ?? []),
+      ...(wantsImage ? [{ type: 'image_generation' as const }] : []),
+    ];
     const pk = paramKey(model);
     const dropped = unsupportedParams.get(pk) ?? new Set<Droppable>();
     const liveMessageId = `stream_${uuidv4()}`;
+    let streamedMedia: ModelMediaPart[] = [];
 
     const buildBody = (omit: Set<Droppable>): Record<string, unknown> => ({
       model: model.name,
       input,
       store: false,
       stream: true,
-      ...(responsesTools ? { tools: responsesTools } : {}),
+      ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
       ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
@@ -585,10 +683,16 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       let response: OpenAI.Responses.Response | undefined;
       const toolIndexes = new Map<string, number>();
       let nextToolIndex = 0;
+      const audioChunks: string[] = [];
+      let audioTranscript = '';
 
       for await (const event of stream) {
         if (event.type === 'response.output_text.delta' && event.delta) {
           onModelDelta?.({ messageId: liveMessageId, contentDelta: event.delta });
+        } else if (event.type === 'response.audio.delta') {
+          audioChunks.push(event.delta);
+        } else if (event.type === 'response.audio.transcript.delta') {
+          audioTranscript += event.delta;
         } else if (
           event.type === 'response.output_item.added' &&
           event.item.type === 'function_call'
@@ -623,6 +727,16 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         }
       }
       if (!response) throw new Error('OpenAI Responses stream ended without a terminal response');
+      streamedMedia = audioChunks.length > 0
+        ? [{
+            type: 'audio',
+            data: Buffer.concat(
+              audioChunks.map(chunk => Buffer.from(chunk, 'base64')),
+            ).toString('base64'),
+            mimeType: 'audio/mpeg',
+            ...(audioTranscript ? { transcript: audioTranscript } : {}),
+          }]
+        : [];
       return response;
     };
 
@@ -648,11 +762,23 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       throw new Error('OpenAI Responses API rejected every supported parameter combination');
     }
 
-    const { completion, reasoning } = fromResponse(response, model.name);
+    const { completion, reasoning, media } = fromResponse(response, model.name);
+    for (const part of streamedMedia) {
+      if (!media.some(existing =>
+        existing.type === part.type &&
+        existing.data === part.data &&
+        existing.url === part.url
+      )) {
+        media.push(part);
+      }
+    }
+    for (const part of media) {
+      onModelDelta?.({ messageId: liveMessageId, mediaPart: part });
+    }
     const firstCallId = completion.choices[0]?.message?.tool_calls?.[0]?.id;
     if (key && firstCallId && reasoning.length > 0) {
       stashReasoning(key, firstCallId, reasoning);
     }
-    return { completion, liveMessageId };
+    return { completion, liveMessageId, media };
   }
 }

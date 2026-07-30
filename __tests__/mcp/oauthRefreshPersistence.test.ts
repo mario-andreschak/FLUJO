@@ -97,6 +97,18 @@ describe('MCPOAuthClientProvider.tokens() with an expired access token', () => {
 });
 
 describe('MCPService.getServerStatus with expired OAuth tokens', () => {
+  it('reports connected when a static Authorization header works despite leftover OAuth scopes', async () => {
+    const config = streamableServer('github', undefined);
+    config.headers = { Authorization: 'Bearer rotated-pat' };
+    serverConfigs.push(config);
+    global.__mcp_clients!.set('github', { transport: {} } as any);
+    const svc = new MCPService();
+
+    const status = await svc.getServerStatus('github');
+
+    expect(status.status).toBe('connected');
+  });
+
   it('does NOT demand re-authentication when a refresh_token is stored', async () => {
     serverConfigs.push(streamableServer('asana', {
       access_token: 'expired-access',

@@ -22,26 +22,48 @@ beforeEach(() => {
 });
 
 describe('vendored Flow Generator', () => {
-  it('builds an editable flow with a stable role and only guided authoring tools', () => {
+  it('builds editable architect and compiler stages with advanced authoring tools', () => {
     const flow = buildVendoredFlowGenerator();
     expect(flow.id).toBe(FLOW_GENERATOR_ID);
-    const designer = flow.nodes.find((node) => node.type === 'process')!;
-    expect(designer.data.properties).toEqual(expect.objectContaining({
-      systemRole: FLOW_GENERATOR_ROLE,
-      maxTurns: 16,
-    }));
-    const mcp = flow.nodes.find((node) => node.type === 'mcp')!;
-    expect(mcp.data.properties?.enabledTools).toEqual([
+    const stages = flow.nodes.filter((node) => node.type === 'process');
+    expect(stages).toHaveLength(2);
+    expect(stages.map((stage) => stage.data.properties)).toEqual([
+      expect.objectContaining({
+        systemRole: FLOW_GENERATOR_ROLE,
+        systemStage: 'architect',
+        systemFlowVersion: 3,
+        maxTurns: 12,
+      }),
+      expect.objectContaining({
+        systemRole: FLOW_GENERATOR_ROLE,
+        systemStage: 'compiler',
+        systemFlowVersion: 3,
+        maxTurns: 16,
+      }),
+    ]);
+    const enabledTools = flow.nodes
+      .filter((node) => node.type === 'mcp')
+      .flatMap((node) => node.data.properties?.enabledTools ?? []);
+    expect(enabledTools).toEqual(expect.arrayContaining([
       'list_flow_building_blocks',
       'get_flow_authoring_guide',
-      'draft_flow',
-    ]);
-    expect(designer.data.properties?.boundModel).toBeUndefined();
-    expect(flow.permissionRules).toEqual([
-      { action: 'list_flow_building_blocks', resource: '*', effect: 'allow' },
-      { action: 'get_flow_authoring_guide', resource: '*', effect: 'allow' },
-      { action: 'draft_flow', resource: '*', effect: 'allow' },
-    ]);
+      'draft_generated_flow',
+      'search_mcp_marketplace',
+    ]));
+    expect(enabledTools).not.toEqual(expect.arrayContaining([
+      'install_mcp_server',
+      'install_best_mcp_server',
+    ]));
+    expect(stages.every((stage) => stage.data.properties?.boundModel === undefined)).toBe(true);
+    expect(flow.permissionRules?.map((rule) => rule.action)).toEqual(expect.arrayContaining([
+      'list_flow_building_blocks',
+      'get_flow_authoring_guide',
+      'draft_generated_flow',
+      'search_mcp_marketplace',
+    ]));
+    expect(flow.permissionRules?.map((rule) => rule.action)).not.toEqual(
+      expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server'])
+    );
   });
 
   it('seeds only when missing and never overwrites an edited flow', async () => {
@@ -56,19 +78,66 @@ describe('vendored Flow Generator', () => {
     expect(saveFlowMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([1, 2])('upgrades incomplete v%s through the versioned save path', async (version) => {
+    const legacy = buildVendoredFlowGenerator();
+    for (const stage of legacy.nodes.filter((node) => node.type === 'process')) {
+      stage.data.properties = {
+        ...(stage.data.properties ?? {}),
+        systemFlowVersion: version,
+      };
+    }
+    getFlowMock.mockResolvedValueOnce(legacy);
+
+    const upgraded = await ensureVendoredFlowGenerator();
+
+    expect(upgraded.nodes.filter((node) => node.type === 'process'))
+      .toHaveLength(2);
+    expect(saveFlowMock).toHaveBeenCalledWith(expect.objectContaining({
+      id: FLOW_GENERATOR_ID,
+    }));
+  });
+
   it('restores only through the explicit restore operation', async () => {
     await restoreVendoredFlowGenerator();
     expect(saveFlowMock).toHaveBeenCalledWith(expect.objectContaining({ id: FLOW_GENERATOR_ID }));
   });
 
-  it('clones the latest edited flow and patches the selected model only in the snapshot', async () => {
+  it('clones the latest edited flow, binds both stages, and strips install tools by default', async () => {
     const source = buildVendoredFlowGenerator();
     getFlowMock.mockResolvedValue(source);
     const snapshot = await buildFlowGeneratorSnapshot('conversation-1', 'model-9');
     expect(snapshot.id).toBe('quickchat-flow-generator-conversation-1');
-    expect(snapshot.nodes.find((node) => node.type === 'process')?.data.properties?.boundModel)
-      .toBe('model-9');
-    expect(source.nodes.find((node) => node.type === 'process')?.data.properties?.boundModel)
-      .toBeUndefined();
+    expect(snapshot.nodes
+      .filter((node) => node.type === 'process')
+      .every((node) => node.data.properties?.boundModel === 'model-9')).toBe(true);
+    expect(source.nodes
+      .filter((node) => node.type === 'process')
+      .every((node) => node.data.properties?.boundModel === undefined)).toBe(true);
+    expect(snapshot.nodes
+      .filter((node) => node.type === 'mcp')
+      .flatMap((node) => node.data.properties?.enabledTools ?? []))
+      .not.toEqual(expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server']));
+    expect(snapshot.permissionRules?.map((rule) => rule.action))
+      .not.toEqual(expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server']));
+    expect(snapshot.nodes.find((node) => node.type === 'start')
+      ?.data.properties?.promptTemplate).toContain('NOT opted in');
+  });
+
+  it('retains install tools only for an explicitly opted-in session snapshot', async () => {
+    getFlowMock.mockResolvedValue(buildVendoredFlowGenerator());
+    const snapshot = await buildFlowGeneratorSnapshot(
+      'conversation-install',
+      'model-9',
+      { allowInstall: true },
+    );
+    const enabled = snapshot.nodes
+      .filter((node) => node.type === 'mcp')
+      .flatMap((node) => node.data.properties?.enabledTools ?? []);
+    expect(enabled).toEqual(expect.arrayContaining([
+      'install_mcp_server',
+      'install_best_mcp_server',
+    ]));
+    expect(snapshot.nodes.find((node) => node.type === 'start')
+      ?.data.properties?.promptTemplate).toContain('explicitly opted in');
   });
 });

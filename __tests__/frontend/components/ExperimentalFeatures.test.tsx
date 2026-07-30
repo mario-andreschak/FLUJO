@@ -94,6 +94,56 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     });
   });
 
+  it('keeps the Flow-based generator off by default and persists its opt-in', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, mcpBetaProtocol: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+    const toggle = screen.getByRole('checkbox', { name: /Flow-based Flow Generator/i });
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        flowBasedGenerator: true,
+      },
+    });
+  });
+
+  it('hides explicitly tool-less provider models by default and persists the reveal toggle', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, mcpBetaProtocol: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+    const toggle = screen.getByRole('checkbox', {
+      name: /Show Models without tool capabilities/i,
+    });
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        showModelsWithoutToolCapabilities: true,
+      },
+    });
+  });
+
   it('defaults protected paths to off', () => {
     mockStorageValue = {
       settings: { speech: { enabled: true } },

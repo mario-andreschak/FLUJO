@@ -115,8 +115,37 @@ export const envDeclarationSchema = z
     isSecret: z.boolean(),
     secretRef: z.string().optional(),
     globalVar: z.string().optional(),
+    globalTemplate: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((declaration, ctx) => {
+    if (
+      declaration.globalTemplate !== undefined &&
+      !/\$\{global:[A-Za-z0-9_.-]+\}/.test(declaration.globalTemplate)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['globalTemplate'],
+        message: 'globalTemplate must contain at least one ${global:NAME} reference',
+      });
+    }
+  });
+
+export const mcpArgTemplateSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    value: z.string().min(1),
+  })
+  .strict()
+  .superRefine((template, ctx) => {
+    if (!/\$\{global:[A-Za-z0-9_.-]+\}/.test(template.value)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['value'],
+        message: 'argument template must contain at least one ${global:NAME} reference',
+      });
+    }
+  });
 
 export const packagedMcpServerSchema = z
   .object({
@@ -128,6 +157,7 @@ export const packagedMcpServerSchema = z
     installOrigin: mcpInstallOriginSchema,
     envDeclarations: z.array(envDeclarationSchema),
     headerDeclarations: z.array(envDeclarationSchema).optional(),
+    argTemplates: z.array(mcpArgTemplateSchema).optional(),
   })
   // strict: reject raw `command`/`args`/`rootPath`/`serverUrl`/OAuth/server files.
   .strict();

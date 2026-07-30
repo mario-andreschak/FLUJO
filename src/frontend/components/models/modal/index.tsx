@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createLogger } from '@/utils/logger';
 import {
@@ -26,6 +26,7 @@ import { Link as LinkIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { Model } from '@/shared/types';
+import { NormalizedModel } from '@/shared/types/model/response';
 import {
   ModelProvider,
   ModelAdapter,
@@ -40,6 +41,15 @@ const log = createLogger('frontend/components/models/modal');
 
 import { ModelResult } from '@/frontend/services/model';
 
+const discoveredModelMetadata = (model: NormalizedModel): Partial<Model> => ({
+  ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+  ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+  ...(model.supportsTools !== undefined ? { supportsTools: model.supportsTools } : {}),
+  ...(model.supportedParameters !== undefined ? { supportedParameters: model.supportedParameters } : {}),
+  ...(model.inputModalities !== undefined ? { inputModalities: model.inputModalities } : {}),
+  ...(model.outputModalities !== undefined ? { outputModalities: model.outputModalities } : {}),
+});
+
 export interface ModelModalProps {
   open: boolean;
   model: Model;  // Never null: edit mode passes the loaded model, add mode an in-memory draft
@@ -49,14 +59,14 @@ export interface ModelModalProps {
 
 export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
   const router = useRouter();
-  const { globalEnvVars } = useStorage();
+  const { globalEnvVars, settings } = useStorage();
   const [formState, setFormState] = useState<Partial<Model>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<string | null>(null);
   const [isApiKeyBound, setIsApiKeyBound] = useState(false);
   const [boundToGlobalVar, setBoundToGlobalVar] = useState<string | null>(null);
   const [showBindModal, setShowBindModal] = useState(false);
-  const [openRouterModels, setOpenRouterModels] = useState<Array<{id: string, name: string, description?: string}>>([]);
+  const [openRouterModels, setOpenRouterModels] = useState<NormalizedModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -140,6 +150,17 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       
       if (Array.isArray(fetchedModels)) {
         setOpenRouterModels(fetchedModels);
+        // Editing an existing model should discover metadata too; requiring the
+        // user to re-select the already-exact technical name would not be
+        // automatic. Provider values intentionally refresh stale catalogue
+        // metadata, while custom display text remains untouched.
+        const exactModel = fetchedModels.find(candidate => candidate.id === formState.name);
+        if (exactModel) {
+          setFormState(prev => prev.name === exactModel.id ? {
+            ...prev,
+            ...discoveredModelMetadata(exactModel),
+          } : prev);
+        }
         log.info("Models set in state", { 
           count: fetchedModels.length,
           searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
@@ -215,6 +236,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     formState.provider,
     formState.adapter,
     formState.name,
+  );
+  const visibleProviderModels = useMemo(
+    () => settings?.experimental?.showModelsWithoutToolCapabilities
+      ? openRouterModels
+      : openRouterModels.filter(candidate => candidate.supportsTools !== false),
+    [openRouterModels, settings?.experimental?.showModelsWithoutToolCapabilities],
   );
 
   // Apply a provider profile: pins the vendor (provider) and SDK (adapter) and
@@ -317,6 +344,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
           ? (formState.serviceTier || 'default')
           : undefined,
         contextWindow: formState.contextWindow,
+        supportsTools: formState.supportsTools,
+        supportedParameters: formState.supportedParameters,
+        inputModalities: formState.inputModalities,
+        outputModalities: formState.outputModalities,
         maxTurns: formState.maxTurns,
         maxTokens: configurationCapabilities.maxOutputTokens ? formState.maxTokens : undefined,
       } as Model);
@@ -468,12 +499,21 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   loading={isLoadingModels}
                   options={
                     currentProfile.showBaseUrl
-                      ? openRouterModels.map(model => model.id)
+                      ? visibleProviderModels.map(model => model.id)
                       : (currentProfile.defaultModels ?? [])
                   }
                   value={formState.name || ''}
                   onChange={(_, newValue) => {
-                    handleChange('name', newValue || '');
+                    const selected = openRouterModels.find(candidate => candidate.id === newValue);
+                    setFormState(prev => ({
+                      ...prev,
+                      name: newValue || '',
+                      ...(selected ? {
+                        description: selected.description ?? prev.description,
+                        ...discoveredModelMetadata(selected),
+                      } : {}),
+                    }));
+                    setErrors(prev => ({ ...prev, name: '' }));
                   }}
                   onInputChange={(_, newValue) => {
                     handleChange('name', newValue);
@@ -685,7 +725,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       contextWindow: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
                     }));
                   }}
-                  helperText="Optional. Enables the context-usage meter in chat (e.g. 200000 for Claude, 128000 for GPT-4o)."
+                  helperText="Discovered automatically when the provider advertises it; you can override it manually."
                 />
 
                 <TextField

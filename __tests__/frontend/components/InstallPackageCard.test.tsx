@@ -59,6 +59,7 @@ describe('InstallPackageCard', () => {
             provided: false,
           },
         ],
+        globals: [],
         missingGlobals: [],
       },
       created: [],
@@ -139,6 +140,7 @@ describe('InstallPackageCard', () => {
           flows: [{ name: 'Example flow' }],
           plannedExecutions: [],
           secrets: [],
+          globals: [],
           missingGlobals: [],
         },
         created: [],
@@ -186,5 +188,87 @@ describe('InstallPackageCard', () => {
         consentGranted: true,
       }));
     });
+  });
+
+  it('saves declared globals with their secret metadata before install', async () => {
+    installFromRegistryMock
+      .mockResolvedValueOnce({
+        ok: true,
+        dryRun: true,
+        package: { name: 'Example package', version: '1.0.0' },
+        preview: {
+          servers: [],
+          models: [],
+          installedModels: [],
+          flows: [],
+          plannedExecutions: [],
+          secrets: [],
+          globals: [
+            { name: 'REPOSITORY_URL', description: 'Repository URL', required: true, isSecret: false },
+            { name: 'API_TOKEN', description: 'API token', required: true, isSecret: true },
+          ],
+          missingGlobals: ['REPOSITORY_URL', 'API_TOKEN'],
+        },
+        created: [],
+        updated: [],
+        skipped: [],
+        disabled: [],
+        servers: [],
+        errors: [],
+        missingGlobals: [],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        dryRun: false,
+        package: { name: 'Example package', version: '1.0.0' },
+        created: [],
+        updated: [],
+        skipped: [],
+        disabled: [],
+        servers: [],
+        errors: [],
+        missingGlobals: [],
+      });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    });
+    Object.defineProperty(global, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    render(<InstallPackageCard />);
+    fireEvent.click(await screen.findByText('Example package'));
+    fireEvent.change(await screen.findByLabelText('REPOSITORY_URL'), {
+      target: { value: 'https://github.com/example/repo' },
+    });
+    fireEvent.change(screen.getByLabelText('API_TOKEN'), {
+      target: { value: 'secret-token' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install package' }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/api/env', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'setAll',
+          variables: {
+            REPOSITORY_URL: {
+              value: 'https://github.com/example/repo',
+              metadata: { isSecret: false },
+            },
+            API_TOKEN: {
+              value: 'secret-token',
+              metadata: { isSecret: true },
+            },
+          },
+        }),
+      })),
+    );
+    await waitFor(() => expect(installFromRegistryMock).toHaveBeenCalledTimes(2));
+    delete (global as { fetch?: unknown }).fetch;
   });
 });

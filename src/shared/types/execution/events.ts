@@ -179,6 +179,8 @@ export interface ModelDeltaEvent extends ExecutionEventBase {
   messageId: string;
   /** Append-only assistant text delta. */
   delta?: string;
+  /** Complete provider-neutral media item produced during the stream. */
+  mediaPart?: import('@/shared/types/model/media').ModelMediaPart;
   /** Append-only function-call metadata/argument delta. */
   toolCallDelta?: {
     index: number;

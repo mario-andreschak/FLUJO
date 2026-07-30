@@ -46,7 +46,7 @@ function mcpNode(serverName: string): FlowNode {
     id: `n-mcp-${serverName}`,
     type: 'mcp',
     position: { x: 0, y: 0 },
-    data: { type: 'mcp', properties: { mcpServer: serverName } },
+    data: { type: 'mcp', properties: { boundServer: serverName } },
   } as unknown as FlowNode;
 }
 
@@ -64,6 +64,20 @@ function registryServer(name: string, env?: Record<string, unknown>): MCPServerC
     transport: 'stdio',
     source: { type: 'registry', registryName: 'ai.example/thing' },
     env: env ?? {},
+  } as unknown as MCPServerConfig;
+}
+
+function registryHttpServer(
+  name: string,
+  headers: Record<string, unknown>,
+): MCPServerConfig {
+  return {
+    name,
+    transport: 'streamable',
+    serverUrl: 'https://example.test/mcp',
+    source: { type: 'registry', registryName: 'ai.example/http' },
+    env: {},
+    headers,
   } as unknown as MCPServerConfig;
 }
 
@@ -163,6 +177,48 @@ describe('validateMcpSelection', () => {
     expect(logDecl?.isSecret).toBe(false);
   });
 
+  it('infers legacy plain-string API keys and Authorization headers as secrets', () => {
+    const envServer = registryServer('env-web', {
+      API_KEY: 'legacy-plain-env-secret',
+      PUBLIC_ORIGIN: 'https://example.test',
+    });
+    const headerServer = registryHttpServer('header-web', {
+      Authorization: 'Bearer legacy-plain-header-secret',
+      'X-Client': 'desktop',
+    });
+
+    const { packaged, errors } = validateMcpSelection(
+      ['env-web', 'header-web'],
+      [envServer, headerServer],
+    );
+
+    expect(errors).toEqual([]);
+    expect(packaged[0].envDeclarations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'API_KEY', isSecret: true }),
+      expect.objectContaining({ name: 'PUBLIC_ORIGIN', isSecret: false }),
+    ]));
+    expect(packaged[1].headerDeclarations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Authorization', isSecret: true }),
+      expect.objectContaining({ name: 'X-Client', isSecret: false }),
+    ]));
+    // Config values are declarations only; neither plaintext value may leak.
+    expect(JSON.stringify(packaged)).not.toContain('legacy-plain-env-secret');
+    expect(JSON.stringify(packaged)).not.toContain('legacy-plain-header-secret');
+  });
+
+  it('honours explicit non-secret metadata even when the legacy key heuristic would match', () => {
+    const { packaged } = validateMcpSelection(
+      ['web'],
+      [registryServer('web', {
+        API_KEY: { value: 'intentionally-public', metadata: { isSecret: false } },
+      })],
+    );
+
+    expect(packaged[0].envDeclarations).toContainEqual(
+      expect.objectContaining({ name: 'API_KEY', isSecret: false }),
+    );
+  });
+
   it('reports a missing server', () => {
     const { errors } = validateMcpSelection(['nope'], []);
     expect(errors.join(' ')).toMatch(/not found/i);
@@ -214,12 +270,60 @@ describe('deriveMcpSecrets', () => {
     const decl = packaged[0].envDeclarations.find((d) => d.name === 'API_TOKEN');
     expect(decl?.secretRef).toBe(secrets[0].name);
   });
+
+  it('declares secrets for legacy plain-string env and header credentials', () => {
+    const servers = [
+      registryServer('env-web', { API_KEY: 'legacy-env-secret' }),
+      registryHttpServer('header-web', { Authorization: 'legacy-header-secret' }),
+    ];
+    const { packaged } = validateMcpSelection(['env-web', 'header-web'], servers);
+    const secrets = deriveMcpSecrets(packaged);
+
+    expect(secrets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'MCP_ENV-WEB_API_KEY' }),
+      expect.objectContaining({ name: 'MCP_HEADER-WEB_AUTHORIZATION' }),
+    ]));
+  });
+
+  it('does not create a second secret prompt for a secret global binding', () => {
+    const { packaged } = validateMcpSelection(
+      ['web'],
+      [registryServer('web', {
+        GITHUB_TOKEN: {
+          value: '${global:GITHUB_TOKEN}',
+          metadata: { isSecret: true },
+        },
+      })],
+    );
+
+    const secrets = deriveMcpSecrets(packaged);
+    expect(secrets).toEqual([]);
+    expect(packaged[0].envDeclarations).toContainEqual({
+      name: 'GITHUB_TOKEN',
+      isSecret: true,
+      globalVar: 'GITHUB_TOKEN',
+    });
+  });
 });
 
 describe('previewPackageSecrets', () => {
-  it('previews model + MCP secrets for a resolved selection', () => {
+  it('previews embedded placeholders + model + MCP secrets for a resolved selection', () => {
     const ents: PackageEntities = {
-      flows: [flow('f', 'F', [processNode('m1'), mcpNode('web')])],
+      flows: [
+        flow('f', 'F', [
+          processNode('m1'),
+          mcpNode('web'),
+          {
+            id: 'prompt',
+            type: 'process',
+            position: { x: 0, y: 0 },
+            data: {
+              type: 'process',
+              properties: { promptTemplate: 'Use {{secret.PATH_REPO}}' },
+            },
+          } as unknown as FlowNode,
+        ]),
+      ],
       models: [model('m1', 'Keyed', 'sk-abc')],
       mcpServers: [registryServer('web', secretEnv())],
       plannedExecutions: [],
@@ -227,8 +331,29 @@ describe('previewPackageSecrets', () => {
     const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
     const secrets = previewPackageSecrets(resolved, ents);
     expect(secrets.length).toBeGreaterThanOrEqual(2);
+    expect(secrets).toContainEqual(expect.objectContaining({ name: 'PATH_REPO', required: true }));
     expect(JSON.stringify(secrets)).not.toContain('sk-abc');
     expect(JSON.stringify(secrets)).not.toContain('super-secret');
+  });
+
+  it('previews a legacy plain-string credential on an MCP server bound by a flow', () => {
+    const ents: PackageEntities = {
+      flows: [flow('f', 'F', [mcpNode('github')])],
+      models: [],
+      mcpServers: [registryHttpServer('github', {
+        Authorization: 'Bearer legacy-token',
+      })],
+      plannedExecutions: [],
+    };
+    const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
+    const secrets = previewPackageSecrets(resolved, ents);
+
+    expect(resolved.mcpServerNames).toEqual(['github']);
+    expect(secrets).toContainEqual(expect.objectContaining({
+      name: 'MCP_GITHUB_AUTHORIZATION',
+      required: true,
+    }));
+    expect(JSON.stringify(secrets)).not.toContain('legacy-token');
   });
 });
 
@@ -259,7 +384,7 @@ describe('buildManifestFromEntities', () => {
     expect(result.package!.secrets.some((s) => s.name === (pkgModel.apiKeyRef as { secret: string }).secret)).toBe(true);
   });
 
-  it('turns globals used in packaged flows into required package secrets', () => {
+  it('preserves globals used in packaged flows and declares them as package globals', () => {
     const flowWithGlobals = flow('f', 'F', [
       {
         id: 'prompt',
@@ -283,17 +408,64 @@ describe('buildManifestFromEntities', () => {
     const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
     const result = buildManifestFromEntities(resolved, ents, metadata);
 
+    expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
-    expect(result.package!.secrets).toEqual([
+    expect(result.package!.secrets).toEqual([]);
+    expect(result.package!.globals).toEqual([
       expect.objectContaining({ name: 'API_TOKEN', required: true }),
       expect.objectContaining({ name: 'API_BASE', required: true }),
     ]);
-    expect(result.package!.requiredGlobals).toBeUndefined();
+    expect(result.package!.requiredGlobals).toEqual(['API_TOKEN', 'API_BASE']);
     expect(JSON.stringify(result.package!.flows)).toContain(
-      'Use {{secret.API_TOKEN}} at {{secret.API_BASE}}; again {{secret.API_TOKEN}}',
+      'Use ${global:API_TOKEN} at ${global:API_BASE}; again ${global:API_TOKEN}',
     );
-    expect(JSON.stringify(result.package!.flows)).not.toContain('${global:');
     expect(JSON.stringify(flowWithGlobals)).toContain('${global:API_TOKEN}');
+  });
+
+  it('re-declares placeholders when re-exporting installed flows and executions', () => {
+    const flowWithPlaceholder = flow('f', 'F', [
+      {
+        id: 'prompt',
+        type: 'process',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'process',
+          properties: { promptTemplate: 'Repository: {{secret.PATH_REPO}}' },
+        },
+      } as unknown as FlowNode,
+    ]);
+    const execution = {
+      id: 'pe',
+      name: 'AP implementation',
+      flowId: 'f',
+      enabled: false,
+      prompt: 'Run in {{secret.PATH_REPO}}',
+      trigger: { type: 'manual' },
+    } as unknown as PlannedExecution;
+    const ents: PackageEntities = {
+      flows: [flowWithPlaceholder],
+      models: [],
+      mcpServers: [],
+      plannedExecutions: [execution],
+    };
+
+    const resolved = resolveDependencies({ plannedExecutionIds: ['pe'] }, ents);
+    const result = buildManifestFromEntities(
+      resolved,
+      ents,
+      metadata,
+      [],
+      [],
+      ['PATH_REPO'],
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.package!.secrets).toEqual([
+      expect.objectContaining({ name: 'PATH_REPO', required: true }),
+    ]);
+    expect(JSON.stringify(result.package!.flows)).toContain('{{secret.PATH_REPO}}');
+    expect(JSON.stringify(result.package!.plannedExecutions)).toContain('{{secret.PATH_REPO}}');
   });
 
   it('records a global-var-bound model API key in requiredGlobals (not silently dropped)', () => {
@@ -327,6 +499,105 @@ describe('buildManifestFromEntities', () => {
     const decl = result.package!.mcpServers[0].envDeclarations.find((d) => d.name === 'API_BASE');
     expect(decl?.globalVar).toBe('MY_API_BASE');
     expect(decl?.isSecret).toBe(false);
+  });
+
+  it('keeps a secret MCP global binding portable without adding an install secret', () => {
+    const ents: PackageEntities = {
+      flows: [],
+      models: [],
+      mcpServers: [registryHttpServer('github', {
+        Authorization: {
+          value: '${global:GITHUB_TOKEN}',
+          metadata: { isSecret: true },
+        },
+      })],
+      plannedExecutions: [],
+    };
+    const resolved = resolveDependencies({ mcpServerNames: ['github'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.requiredGlobals).toEqual(['GITHUB_TOKEN']);
+    expect(result.package!.secrets).toEqual([]);
+    expect(result.package!.mcpServers[0].headerDeclarations).toContainEqual({
+      name: 'Authorization',
+      isSecret: true,
+      globalVar: 'GITHUB_TOKEN',
+    });
+  });
+
+  it('preserves an embedded secret-global header template and reviews the global as secret', () => {
+    const ents: PackageEntities = {
+      flows: [],
+      models: [],
+      mcpServers: [registryHttpServer('github', {
+        Authorization: {
+          value: 'Bearer ${global:softwaredev_github_api_key}',
+          metadata: { isSecret: false },
+        },
+      })],
+      plannedExecutions: [],
+      globalVariables: {
+        softwaredev_github_api_key: { isSecret: true },
+      },
+    };
+    const resolved = resolveDependencies({ mcpServerNames: ['github'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.requiredGlobals).toEqual(['softwaredev_github_api_key']);
+    expect(result.package!.globals).toContainEqual(expect.objectContaining({
+      name: 'softwaredev_github_api_key',
+      required: true,
+      isSecret: true,
+    }));
+    expect(result.package!.secrets).toEqual([]);
+    expect(result.package!.mcpServers[0].headerDeclarations).toContainEqual({
+      name: 'Authorization',
+      isSecret: false,
+      globalTemplate: 'Bearer ${global:softwaredev_github_api_key}',
+    });
+    expect(result.json).not.toContain('encrypted:');
+  });
+
+  it('preserves global templates embedded in MCP env values and stdio arguments', () => {
+    const server = registryServer('templated', {
+      API_ORIGIN: {
+        value: 'https://${global:API_HOST}/v1',
+        metadata: { isSecret: false },
+      },
+    });
+    (server as MCPServerConfig & { args: string[] }).args = [
+      '-y',
+      '@example/server',
+      '--token=${global:API_TOKEN}',
+    ];
+    const ents: PackageEntities = {
+      flows: [],
+      models: [],
+      mcpServers: [server],
+      plannedExecutions: [],
+      globalVariables: {
+        API_HOST: { isSecret: false },
+        API_TOKEN: { isSecret: true },
+      },
+    };
+    const resolved = resolveDependencies({ mcpServerNames: ['templated'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.package!.globals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'API_HOST', isSecret: false }),
+      expect.objectContaining({ name: 'API_TOKEN', isSecret: true }),
+    ]));
+    expect(result.package!.mcpServers[0].envDeclarations).toContainEqual({
+      name: 'API_ORIGIN',
+      isSecret: false,
+      globalTemplate: 'https://${global:API_HOST}/v1',
+    });
+    expect(result.package!.mcpServers[0].argTemplates).toEqual([
+      { index: 2, value: '--token=${global:API_TOKEN}' },
+    ]);
   });
 
   it('fails the build when a local-only MCP server is included', () => {

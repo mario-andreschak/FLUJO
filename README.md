@@ -1,23 +1,23 @@
-<img width="720" height="405" alt="output" src="https://github.com/user-attachments/assets/87ff1b2c-fec2-4652-a049-98e5ee699e00" />
 
-### ▶ FLUJO in 60 seconds
+### ▶ FLUJO — Your AI. In Flow.
 
-[![Watch: FLUJO in 60 seconds — animated short](githubpages/img/short-poster.jpeg)](https://mario-andreschak.github.io/FLUJO/githubpages/short.html)
+[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://mario-andreschak.github.io/FLUJO/githubpages/short/)
 
-*Click to watch*
+*Click to watch the 2:28 interactive product film*
 
 ## ⚡ Quick Install (recommended)
 
-One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and sets up a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
+The installer sets up everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
 
-**Windows** — press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
+**Windows installer (recommended)** — click below to download the latest `flujo-setup.exe`:
+
+[![Download Setup.exe — Windows Installer](docs/images/readme/download-setup.png)](https://github.com/mario-andreschak/FLUJO/releases/latest/download/flujo-setup.exe)
+
+**Windows PowerShell** — alternatively, press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
 
 ```powershell
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
 ```
-
-Prefer a graphical installer? Download `flujo-setup.exe` from the
-[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) instead.
 
 **Linux / macOS** — paste into a terminal:
 
@@ -45,7 +45,7 @@ For *anything* that you struggle with (MCP Installation, Application Issues, Usa
 # FLUJO
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.33.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.38.0-green.svg)](package.json)
 
 FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
 

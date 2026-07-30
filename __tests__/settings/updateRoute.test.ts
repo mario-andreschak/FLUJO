@@ -20,6 +20,7 @@ jest.mock('simple-git', () => {
     fetch: jest.fn(),
     status: jest.fn(),
     pull: jest.fn(),
+    raw: jest.fn(),
   };
   return {
     __esModule: true,
@@ -28,10 +29,22 @@ jest.mock('simple-git', () => {
   };
 });
 
+jest.mock('child_process', () => ({
+  ...jest.requireActual('child_process'),
+  execSync: jest.fn(),
+  spawn: jest.fn(() => ({
+    on: jest.fn(),
+    unref: jest.fn(),
+  })),
+}));
+
 import { GET, POST } from '@/app/api/update/route';
 import { makeLocalRequest } from '../utils/localRequest';
 
 const { __git: mockGit, default: simpleGitFactory } = jest.requireMock('simple-git') as any;
+const { execSync: mockExecSync } = jest.requireMock('child_process') as {
+  execSync: jest.Mock;
+};
 
 const postReq = (body: unknown) => makeLocalRequest({ body });
 // GET is guarded by the fail-closed origin guard (#142); it reads only Host/Origin.
@@ -39,6 +52,7 @@ const getReq = () => makeLocalRequest();
 
 const ENV_KEYS = ['FLUJO_CONTAINER', 'FLUJO_NPM'] as const;
 const saved: Record<string, string | undefined> = {};
+const originalPlatform = process.platform;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -49,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Object.defineProperty(process, 'platform', { value: originalPlatform });
   for (const key of ENV_KEYS) {
     if (saved[key] === undefined) {
       delete process.env[key];
@@ -155,5 +170,53 @@ describe('POST /api/update', () => {
     expect(res.status).toBe(400);
     expect(body.success).toBe(false);
     expect(mockGit.pull).not.toHaveBeenCalled();
+  });
+
+  it('restores installer-generated lockfile drift and installs with npm ci', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    mockGit.checkIsRepo.mockResolvedValue(true);
+    mockGit.status.mockResolvedValue({
+      files: [{ path: 'package-lock.json', index: ' ', working_dir: 'M' }],
+    });
+    mockGit.raw.mockResolvedValue('');
+    mockGit.pull.mockResolvedValue({});
+
+    const res = await POST(postReq({ action: 'apply' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(mockGit.raw).toHaveBeenCalledWith([
+      'restore', '--source=HEAD', '--staged', '--worktree', '--', 'package-lock.json',
+    ]);
+    expect(mockGit.pull).toHaveBeenCalled();
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      1,
+      'npm ci --include=dev',
+      expect.objectContaining({ cwd: process.cwd(), encoding: 'utf8' }),
+    );
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      2,
+      'npm run build',
+      expect.objectContaining({ cwd: process.cwd(), encoding: 'utf8' }),
+    );
+  });
+
+  it('does not discard a lockfile when package.json also has dependency edits', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    mockGit.checkIsRepo.mockResolvedValue(true);
+    mockGit.status.mockResolvedValue({
+      files: [
+        { path: 'package.json', index: ' ', working_dir: 'M' },
+        { path: 'package-lock.json', index: ' ', working_dir: 'M' },
+      ],
+    });
+    mockGit.pull.mockResolvedValue({});
+
+    const res = await POST(postReq({ action: 'apply' }));
+
+    expect(res.status).toBe(200);
+    expect(mockGit.raw).not.toHaveBeenCalled();
+    expect(mockGit.pull).toHaveBeenCalled();
   });
 });

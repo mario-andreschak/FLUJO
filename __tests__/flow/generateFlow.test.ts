@@ -517,7 +517,11 @@ describe('generateFlow — multi-level (issue #94)', () => {
 
   it('does NOT expand generateSubflow when allowSubflows is off (surfaces as a compile error)', async () => {
     createCompletionMock.mockResolvedValue(completionWith(JSON.stringify(rootSpecWithGen)));
-    const result = await generateFlow({ description: 'x', modelId: 'model-gen' }); // allowSubflows default false
+    const result = await generateFlow({
+      description: 'x',
+      modelId: 'model-gen',
+      allowSubflows: false,
+    });
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.flows).toHaveLength(1);
@@ -606,7 +610,7 @@ describe('generateFlow — scratchpad-var guard (issue #217)', () => {
     expect(result.validation.issues.some((i) => i.code === 'var-dangling')).toBe(true);
   });
 
-  it('converts a var read by an isolated step into a run resource', async () => {
+  it('moves an isolated var reader to full history instead of synthesizing a passive resource', async () => {
     const varSpec = {
       name: 'report_flow',
       description: 'writer then isolated critic',
@@ -634,7 +638,9 @@ describe('generateFlow — scratchpad-var guard (issue #217)', () => {
     if (!result.success) return;
     const flat = JSON.stringify(result.flow);
     expect(flat).not.toContain('${var:report}');
-    expect(flat).toContain('${res:report}');
-    expect(result.validation.issues.some((i) => i.code === 'var-resource')).toBe(true);
+    const critic = result.flow.nodes.find((node) => node.data.properties?.boundModel === 'model-abc' &&
+      node.data.properties?.promptTemplate === '');
+    expect(critic?.data.properties?.inputMode).toBe('full-history');
+    expect(result.validation.issues.some((i) => i.code === 'var-history')).toBe(true);
   });
 });

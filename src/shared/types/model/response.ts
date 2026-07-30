@@ -1,5 +1,6 @@
 import { Model } from './model';
 import OpenAI from 'openai';
+import type { ModelMediaPart } from './media';
 
 /**
  * Base response interface for model service operations
@@ -29,6 +30,7 @@ export interface ModelOperationResponse extends ModelServiceResponse {
  */
 export interface CompletionResponse extends ModelServiceResponse {
   content?: string;
+  media?: ModelMediaPart[];
   fullResponse?: OpenAI.ChatCompletion;  // Use OpenAI type instead of any
   toolCalls?: Array<{
     name: string;
@@ -104,4 +106,19 @@ export interface NormalizedModel {
   id: string;
   name: string;
   description?: string;
+  /** Provider-advertised input context limit, in tokens. */
+  contextWindow?: number;
+  /** Provider-advertised maximum completion size, in tokens. */
+  maxTokens?: number;
+  /**
+   * Whether the provider explicitly advertises function/tool calling.
+   * Undefined means the provider's model-list endpoint did not expose enough
+   * metadata to decide.
+   */
+  supportsTools?: boolean;
+  /** Raw provider capability names, when advertised. */
+  supportedParameters?: string[];
+  /** Provider-advertised input/output modalities. */
+  inputModalities?: string[];
+  outputModalities?: string[];
 }

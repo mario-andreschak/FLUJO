@@ -138,7 +138,11 @@ describe('installPackage — happy path', () => {
     expect(summary.dryRun).toBe(false);
 
     // Server: registry install called with the resolved env, recorded as created.
-    expect(installRegistryServerMock).toHaveBeenCalledWith('ai.keenable/web-search', { WEB_KEY: 'sk-1' });
+    expect(installRegistryServerMock).toHaveBeenCalledWith(
+      'ai.keenable/web-search',
+      { WEB_KEY: 'sk-1' },
+      { preferredTransport: 'stdio', headerOverrides: {} },
+    );
     expect(summary.servers[0]).toEqual(expect.objectContaining({ localName: 'web', installed: true, serverName: 'web-search' }));
     expect(updateServerConfigMock).toHaveBeenCalledWith('web-search', { folder: 'my-pkg' });
 
@@ -407,6 +411,142 @@ describe('installPackage — adopt-and-configure', () => {
     expect(config.env['API_KEY']).toEqual({ value: 'sk-1', metadata: { isSecret: true } });
     expect(config.folder).toBe('remote-pkg');
   });
+
+  it('Test E: secret global env/header bindings stay references and retain secret metadata', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-global-server-id',
+      name: 'global-server-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['GITHUB_TOKEN'],
+      secrets: [],
+      mcpServers: [
+        {
+          name: 'github',
+          transport: 'streamable',
+          installOrigin: { sourceType: 'remote', url: 'https://example.com/mcp' },
+          envDeclarations: [
+            { name: 'GITHUB_TOKEN', isSecret: true, globalVar: 'GITHUB_TOKEN' },
+          ],
+          headerDeclarations: [
+            { name: 'Authorization', isSecret: true, globalVar: 'GITHUB_TOKEN' },
+          ],
+        },
+      ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'global-server-pkg',
+      consentGranted: true,
+    });
+
+    const config = updateServerConfigMock.mock.calls[0][1] as {
+      env: Record<string, unknown>;
+      headers: Record<string, unknown>;
+    };
+    expect(config.env.GITHUB_TOKEN).toEqual({
+      value: '${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
+    expect(config.headers.Authorization).toEqual({
+      value: '${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
+  });
+
+  it('preserves an embedded global template when installing a non-secret header', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-global-template-id',
+      name: 'global-template-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['GITHUB_TOKEN'],
+      globals: [
+        { name: 'GITHUB_TOKEN', required: true, isSecret: true },
+      ],
+      secrets: [],
+      mcpServers: [
+        {
+          name: 'github',
+          transport: 'streamable',
+          installOrigin: { sourceType: 'remote', url: 'https://example.com/mcp' },
+          envDeclarations: [],
+          headerDeclarations: [
+            {
+              name: 'Authorization',
+              isSecret: false,
+              globalTemplate: 'Bearer ${global:GITHUB_TOKEN}',
+            },
+          ],
+        },
+      ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'global-template-pkg',
+      consentGranted: true,
+    });
+
+    const config = updateServerConfigMock.mock.calls[0][1] as {
+      headers: Record<string, unknown>;
+    };
+    expect(config.headers.Authorization).toBe('Bearer ${global:GITHUB_TOKEN}');
+  });
+
+  it('passes stdio global argument templates to a new registry install', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-arg-template-id',
+      name: 'arg-template-pkg',
+      version: '1.0.0',
+      requiredGlobals: ['GITHUB_TOKEN'],
+      globals: [{ name: 'GITHUB_TOKEN', required: true, isSecret: true }],
+      secrets: [],
+      mcpServers: [
+        {
+          name: 'web-search',
+          transport: 'stdio',
+          installOrigin: { sourceType: 'registry', ref: 'ai.keenable/web-search' },
+          envDeclarations: [],
+          argTemplates: [
+            { index: 2, value: '--token=${global:GITHUB_TOKEN}' },
+          ],
+        },
+      ],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+    loadServerConfigsMock.mockResolvedValue([]);
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'arg-template-pkg',
+      consentGranted: true,
+    });
+
+    expect(installRegistryServerMock).toHaveBeenCalledWith(
+      'ai.keenable/web-search',
+      {},
+      {
+        argTemplates: [
+          { index: 2, value: '--token=${global:GITHUB_TOKEN}' },
+        ],
+        preferredTransport: 'stdio',
+        headerOverrides: {},
+      },
+    );
+  });
 });
 
 describe('installPackage — {{secret.NAME}} placeholder resolution', () => {
@@ -604,5 +744,30 @@ describe('installPackage — requiredGlobals / missingGlobals', () => {
 
     const preview = await installPackage({ source: 'registry', packageId: 'globals-pkg-2' });
     expect(preview.preview!.missingGlobals).toEqual([]);
+  });
+
+  it('treats required globals[] declarations as required without the legacy field', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-declared-globals-id',
+      name: 'declared-globals',
+      version: '1.0.0',
+      globals: [
+        { name: 'REPOSITORY_URL', required: true, isSecret: false },
+        { name: 'OPTIONAL_LABEL', required: false, isSecret: false },
+      ],
+      secrets: [],
+      mcpServers: [],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+
+    const preview = await installPackage({ source: 'registry', packageId: 'declared-globals' });
+    expect(preview.preview!.globals).toEqual([
+      { name: 'REPOSITORY_URL', required: true, isSecret: false },
+      { name: 'OPTIONAL_LABEL', required: false, isSecret: false },
+    ]);
+    expect(preview.preview!.missingGlobals).toEqual(['REPOSITORY_URL']);
   });
 });

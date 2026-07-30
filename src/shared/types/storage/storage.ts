@@ -112,6 +112,19 @@ export interface ExperimentalSettings {
   /** When true, experimental UI (e.g. the Waves nav entry) is revealed. */
   enabled: boolean;
   /**
+   * Reveal models that the provider explicitly reports as lacking tool-call
+   * support in provider catalogue/picker results. Off by default. Models whose
+   * provider exposes no capability metadata remain visible.
+   */
+  showModelsWithoutToolCapabilities?: boolean;
+  /**
+   * Run Generate Flow through the editable, multi-stage system Flow instead of
+   * the production generate/improve services. Off by default: the Flow-based
+   * implementation is intentionally an experimental alternative while the
+   * sophisticated service-backed generator remains the reliable default.
+   */
+  flowBasedGenerator?: boolean;
+  /**
    * When true, the Claude Subscription adapter REUSES its Agent SDK session
    * across turns of the same single-node Flow — resuming the persisted session
    * (`resume`) and sending only the per-turn delta instead of re-flattening the

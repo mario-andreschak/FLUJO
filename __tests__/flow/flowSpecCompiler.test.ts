@@ -681,17 +681,34 @@ describe('compileFlowSpec — node rules', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyGenerationDefaults', () => {
-  it("fills inputMode/outputMode 'latest-message' on process nodes that left them unset", () => {
+  it("fills process inputMode 'full-history' and outputMode 'latest-message' when unset", () => {
     const { flow } = compileFlowSpec(happySpec, context);
     applyGenerationDefaults(flow!);
     const research = flow!.nodes.find((n) => n.data.label === 'Researcher')!;
-    expect(research.data.properties!.inputMode).toBe('latest-message');
+    expect(research.data.properties!.inputMode).toBe('full-history');
     expect(research.data.properties!.outputMode).toBe('latest-message');
     // Non-process nodes are untouched.
     const sub = flow!.nodes.find((n) => n.type === 'subflow')!;
     expect(sub.data.properties!.outputMode).toBe('final-only');
     const finish = flow!.nodes.find((n) => n.type === 'finish')!;
     expect(finish.data.properties).not.toHaveProperty('inputMode');
+  });
+
+  it("upgrades an explicitly generated process inputMode 'latest-message' to full history", () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'p', type: 'process', model: 'model-abc', inputMode: 'latest-message' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p' },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const { flow } = compileFlowSpec(spec, context);
+    applyGenerationDefaults(flow!);
+    expect(flow!.nodes.find((n) => n.type === 'process')!.data.properties!.inputMode).toBe('full-history');
   });
 
   it('never overrides modes the spec set explicitly', () => {
@@ -717,6 +734,23 @@ describe('applyGenerationDefaults', () => {
     const p = flow!.nodes.find((n) => n.type === 'process')!;
     expect(p.data.properties!.inputMode).toBe('full-history');
     expect(p.data.properties!.outputMode).toBe('full-conversation');
+  });
+
+  it("preserves the advanced process inputMode 'isolated'", () => {
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'p', type: 'process', model: 'model-abc', inputMode: 'isolated', isolatedPrompt: 'Only this.' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'p' },
+        { from: 'p', to: 'f' },
+      ],
+    };
+    const { flow } = compileFlowSpec(spec, context);
+    applyGenerationDefaults(flow!);
+    expect(flow!.nodes.find((n) => n.type === 'process')!.data.properties!.inputMode).toBe('isolated');
   });
 });
 

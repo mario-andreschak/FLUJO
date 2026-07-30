@@ -75,6 +75,44 @@ describe('searchRegistry', () => {
 });
 
 describe('installRegistryServer', () => {
+  it('restores an exported remote transport even when a local package is listed first', async () => {
+    const entry = npmEntry('io.github.github/github-mcp-server');
+    entry.server.remotes = [
+      {
+        type: 'streamable-http',
+        url: 'https://api.githubcopilot.com/mcp/',
+        headers: [{ name: 'Authorization', isRequired: true, isSecret: true }],
+      },
+    ];
+    registryGetJsonMock.mockResolvedValue({ servers: [entry] });
+
+    const result = await installRegistryServer(entry.server.name, undefined, {
+      preferredTransport: 'streamable',
+      headerOverrides: {
+        Authorization: { value: 'Bearer ${global:GITHUB_TOKEN}', metadata: { isSecret: true } },
+      },
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.transport).toBe('streamable');
+    expect(config.serverUrl).toBe('https://api.githubcopilot.com/mcp/');
+    expect(config.headers.Authorization).toEqual({
+      value: 'Bearer ${global:GITHUB_TOKEN}',
+      metadata: { isSecret: true },
+    });
+  });
+
+  it('does not silently fall back from an exported remote server to local execution', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      preferredTransport: 'streamable',
+    });
+    expect(result.installed).toBe(false);
+    expect(result.error).toContain('Confirm local execution');
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
   it('installs an npm package end-to-end: config saved (which connects), tools returned', async () => {
     registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
     const result = await installRegistryServer('io.github.acme/voice');
@@ -108,6 +146,17 @@ describe('installRegistryServer', () => {
     const config = updateServerConfigMock.mock.calls[0][1];
     // Secret shape is preserved so the encrypted env handling applies on save.
     expect(config.env.THE_API_KEY).toEqual({ value: 'sk-123', metadata: { isSecret: true } });
+  });
+
+  it('applies portable global templates to existing stdio argument positions', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      argTemplates: [{ index: 2, value: '--token=${global:API_TOKEN}' }],
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.args).toEqual(['-y', '@example/voice@1.0.0', '--token=${global:API_TOKEN}']);
   });
 
   it('resolveOnly returns the resolved plan WITHOUT spawning (no updateServerConfig)', async () => {
