@@ -164,6 +164,8 @@ export interface NodeChangedFilesEvent extends ExecutionEventBase {
   startSnapshot: string;
   endSnapshot: string;
   changedFiles: SnapshotChangedFile[];
+  /** Persisted unified patch for this root, when storage caps allowed it. */
+  patchResourceUri?: string;
 }
 export interface ModelStartEvent extends ExecutionEventBase {
   type: 'model:start';
@@ -314,8 +316,15 @@ export interface ResourceWriteEvent extends ExecutionEventBase {
   name?: string;
   mimeType?: string;
   size?: number;
-  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args';
+  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args' | 'snapshot';
   toolCallId?: string;
+  /** Snapshot metadata used by the first-party DevCanvas diff view. */
+  snapshot?: {
+    root: string;
+    startSnapshot: string;
+    endSnapshot: string;
+    changedFiles: SnapshotChangedFile[];
+  };
 }
 export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';

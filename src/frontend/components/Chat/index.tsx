@@ -1335,6 +1335,35 @@ const Chat: React.FC = () => {
         // canvas). resource:write also bumps resourceVersion so the run-data
         // panel refetches.
         const kind = event.type === 'resource:read' ? 'read' as const : 'write' as const;
+        if (
+          event.type === 'resource:write'
+          && event.source === 'snapshot'
+          && event.snapshot
+          && event.node?.nodeId
+          && event.conversationId === currentConversationIdRef.current
+        ) {
+          const nodeId = event.node.nodeId;
+          const root = event.snapshot.root;
+          setCanvasStateOwnerId(event.conversationId);
+          setCanvasState((prev) => openCanvasApp(prev, {
+            serverName: 'filesystem',
+            uri: 'ui://devcanvas/diff',
+            instanceKey: `snapshot::${nodeId}::${root}`,
+            toolName: 'snapshot_diff',
+            resultContent: JSON.stringify({
+              snapshotDiff: {
+                nodeId,
+                nodeName: event.node?.nodeName,
+                root,
+                startSnapshot: event.snapshot?.startSnapshot,
+                endSnapshot: event.snapshot?.endSnapshot,
+                changedFiles: event.snapshot?.changedFiles,
+                resourceUri: event.uri,
+              },
+            }),
+            updateId: event.seq,
+          }, Date.now(), Number.MAX_SAFE_INTEGER).state);
+        }
         touchActivity(draft => {
           const now = Date.now();
           if (event.node?.nodeId) {

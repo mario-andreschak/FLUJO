@@ -199,7 +199,7 @@ export class FlowExecutor {
       execResult = runResult.execResult;
 
       // --- Filesystem snapshot: END capture + changed-files emit (issue #250) ---
-      await captureAfterAndEmit(node, snapshotCtx, emit);
+      await captureAfterAndEmit(node, snapshotCtx, sharedState, emit);
 
       emit?.({ type: 'node:exit', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type }, action });
 

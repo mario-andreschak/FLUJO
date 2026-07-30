@@ -29,7 +29,7 @@ export type RunResourceKind = 'text' | 'image' | 'audio' | 'blob' | 'link';
  *  - 'tool-args': oversized tool-call PARAMETERS captured for later dereference
  *    (issue #168), keyed by the producing `toolCallId`.
  */
-export type RunResourceSource = 'tool-result' | 'capture' | 'mcp-link' | 'tool-args';
+export type RunResourceSource = 'tool-result' | 'capture' | 'mcp-link' | 'tool-args' | 'snapshot';
 
 export interface RunResourceProducer {
   source: RunResourceSource;

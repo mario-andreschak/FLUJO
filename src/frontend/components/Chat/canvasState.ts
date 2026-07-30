@@ -79,6 +79,8 @@ export function canvasKey(serverName: string, uri: string): string {
 export interface CanvasAppInput {
   serverName: string;
   uri: string;
+  /** Optional stable identity for multiple instances of the same app URI. */
+  instanceKey?: string;
   toolName?: string;
   /** JSON string of the tool arguments. */
   toolArgs?: string;
@@ -167,7 +169,7 @@ export function openCanvasApp(
   now: number = Date.now(),
   cap: number = DEFAULT_CANVAS_TAB_CAP,
 ): CanvasMutationResult {
-  const key = canvasKey(input.serverName, input.uri);
+  const key = input.instanceKey ?? canvasKey(input.serverName, input.uri);
   const existing = state.entries[key];
   const entry: CanvasAppEntry = {
     key,
@@ -214,7 +216,7 @@ export function updateCanvasApp(
   input: CanvasAppInput,
   now: number = Date.now(),
 ): CanvasState {
-  const key = canvasKey(input.serverName, input.uri);
+  const key = input.instanceKey ?? canvasKey(input.serverName, input.uri);
   const existing = state.entries[key];
   if (!existing) return state;
 
@@ -261,7 +263,7 @@ export function syncCanvasAppResult(
   now: number = Date.now(),
   cap: number = DEFAULT_CANVAS_TAB_CAP,
 ): CanvasMutationResult {
-  const key = canvasKey(input.serverName, input.uri);
+  const key = input.instanceKey ?? canvasKey(input.serverName, input.uri);
   if (state.entries[key]) {
     return { state: updateCanvasApp(state, input, now), evicted: [] };
   }

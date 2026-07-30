@@ -16,6 +16,7 @@ import { createLogger } from '@/utils/logger';
 import { ResolvedNode } from '@/backend/execution/flow/engine/FlowEngine';
 import { SharedState } from '@/backend/execution/flow/types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { writeRunResource } from '@/backend/services/runResources';
 import { shadowRepoService } from './ShadowRepoService';
 
 const log = createLogger('backend/services/snapshot/snapshotHook');
@@ -107,6 +108,7 @@ export async function captureBefore(
 export async function captureAfterAndEmit(
   node: ResolvedNode,
   ctx: SnapshotContext | null,
+  sharedState: SharedState,
   emit?: EmitFn
 ): Promise<void> {
   if (!ctx) return;
@@ -120,6 +122,47 @@ export async function captureAfterAndEmit(
       if (startSha && endSha) {
         const changedFiles = await shadowRepoService.files(root, startSha, endSha);
         if (changedFiles.length > 0) {
+          let patchResourceUri: string | undefined;
+          const conversationId = sharedState.conversationId;
+          if (conversationId) {
+            try {
+              const patch = await shadowRepoService.diff(root, startSha, endSha);
+              if (patch.trim().length > 0) {
+                const written = await writeRunResource({
+                  conversationId,
+                  kind: 'text',
+                  mimeType: 'text/x-patch',
+                  data: { text: patch },
+                  producedBy: {
+                    source: 'snapshot',
+                    nodeId: node.id,
+                    nodeName: node.name,
+                  },
+                });
+                if (!('skipped' in written)) {
+                  patchResourceUri = written.uri;
+                  emit?.({
+                    type: 'resource:write',
+                    node: nodeRef(node),
+                    server: 'flujo',
+                    uri: written.uri,
+                    name: written.name,
+                    mimeType: written.mimeType,
+                    size: written.size,
+                    source: 'snapshot',
+                    snapshot: {
+                      root,
+                      startSnapshot: startSha,
+                      endSnapshot: endSha,
+                      changedFiles,
+                    },
+                  });
+                }
+              }
+            } catch (err) {
+              log.warn('Snapshot patch persistence failed', { root, err });
+            }
+          }
           emit?.({
             type: 'node:changed-files',
             node: nodeRef(node),
@@ -127,6 +170,7 @@ export async function captureAfterAndEmit(
             startSnapshot: startSha,
             endSnapshot: endSha,
             changedFiles,
+            patchResourceUri,
           });
         }
       }

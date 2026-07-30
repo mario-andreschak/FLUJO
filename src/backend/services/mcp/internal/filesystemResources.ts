@@ -545,6 +545,30 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
     if (!payload && !args) return;
     var p = payload || {};
     var a = args || {};
+    if (p.snapshotDiff) {
+      var sd = p.snapshotDiff;
+      var files = Array.isArray(sd.changedFiles) ? sd.changedFiles : [];
+      var change = {
+        path: (sd.nodeName || sd.nodeId || "Snapshot") + " — " + (sd.root || ""),
+        mode: "snapshot",
+        stat: files.length + " file(s)",
+        body: files.map(function (f) { return (f.status || "?") + "  " + (f.path || ""); }).join("\n")
+          + (sd.resourceUri ? "\n\nPatch resource: " + sd.resourceUri : "")
+      };
+      changes.push(change);
+      render();
+      if (sd.resourceUri) {
+        rpc("resources/read", { uri: sd.resourceUri }).then(function (result) {
+          var contents = result && result.contents;
+          var text = contents && contents[0] && contents[0].text;
+          if (typeof text === "string" && text.length) {
+            change.body = text;
+            render();
+          }
+        }).catch(function () {});
+      }
+      return;
+    }
     var change = { path: p.path || a.path || "", mode: p.mode || (a.edits ? "edit" : (a.diff ? "diff" : undefined)), stat: "", body: "" };
     if (p.diff && (typeof p.diff.added === "number" || typeof p.diff.removed === "number")) {
       change.stat = "+" + (p.diff.added || 0) + " -" + (p.diff.removed || 0);
