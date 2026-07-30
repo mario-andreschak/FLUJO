@@ -187,7 +187,7 @@ class FlowService {
           description,
           modelId,
           allowInstall: options?.allowInstall === true,
-          allowSubflows: options?.allowSubflows === true,
+          allowSubflows: options?.allowSubflows !== false,
           ...(typeof options?.maxDepth === 'number' ? { maxDepth: options.maxDepth } : {}),
         })
       });
@@ -241,12 +241,15 @@ class FlowService {
     flow: Flow,
     description: string,
     modelId: string,
-    options?: { allowInstall?: boolean }
+    options?: { allowInstall?: boolean; relatedFlows?: Flow[] }
   ): Promise<
     | {
         success: true;
         flow: Flow;
         validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean };
+        /** The preserved draft bundle, dependency order (descendants first). */
+        flows: Array<{ flow: Flow; validation: { issues: Array<{ severity: string; code: string; message: string }>; errorCount: number; warningCount: number; isRunnable: boolean } }>;
+        rootFlowId: string;
         attempts: number;
         installedServers: Array<{ name: string; tools: string[]; alreadyExisted?: boolean }>;
       }
@@ -261,6 +264,7 @@ class FlowService {
         },
         body: JSON.stringify({
           flow,
+          relatedFlows: options?.relatedFlows,
           description,
           modelId,
           allowInstall: options?.allowInstall === true,
@@ -285,6 +289,10 @@ class FlowService {
         success: true,
         flow: data.flow as Flow,
         validation: data.validation,
+        flows: Array.isArray(data.flows) && data.flows.length > 0
+          ? data.flows
+          : [{ flow: data.flow as Flow, validation: data.validation }],
+        rootFlowId: data.rootFlowId ?? (data.flow as Flow)?.id,
         attempts: data.attempts,
         installedServers: data.installedServers ?? []
       };

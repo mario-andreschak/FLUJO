@@ -8,16 +8,17 @@
 
 ## ⚡ Quick Install (recommended)
 
-One command installs everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and sets up a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
+The installer sets up everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
 
-**Windows** — press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
+**Windows installer (recommended)** — click below to download the latest `flujo-setup.exe`:
+
+[![Download Setup.exe — Windows Installer](docs/images/readme/download-setup.png)](https://github.com/mario-andreschak/FLUJO/releases/latest/download/flujo-setup.exe)
+
+**Windows PowerShell** — alternatively, press Start, type powershell, press Enter, copy & paste the command below and press Enter again:
 
 ```powershell
 irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.ps1 | iex
 ```
-
-Prefer a graphical installer? Download `flujo-setup.exe` from the
-[latest release](https://github.com/mario-andreschak/FLUJO/releases/latest) instead.
 
 **Linux / macOS** — paste into a terminal:
 

@@ -43,13 +43,16 @@ import {
   MAX_GENERATED_FLOWS,
 } from '@/utils/shared/flowSpecCompiler';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
-import { repairFlowSpec, RepairChange } from '@/utils/shared/flowAutoRepair';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { gatherGenerationContext, mergeIssues, GenerationContext } from './generationContext';
-import { guardGeneratedFlowSpec } from './generationGuard';
+import {
+  compileGeneratedDraft,
+  DEFAULT_GENERATED_SUBFLOW_DEPTH,
+  GENERATED_FLOW_AUTHORING_POLICY,
+} from './generationDraft';
 
 const log = createLogger('backend/services/flow/generateFlow');
 
@@ -59,7 +62,7 @@ const MAX_REPAIRS_CAP = 2;
 /** Search/install tool-calling turns allowed within one attempt. */
 const MAX_TOOL_TURNS = 8;
 /** Default nesting depth for multi-level generation (issue #94); hard cap is MAX_SUBFLOW_DEPTH. */
-const DEFAULT_MAX_DEPTH = 2;
+const DEFAULT_MAX_DEPTH = DEFAULT_GENERATED_SUBFLOW_DEPTH;
 
 function clampDepth(value: number | undefined): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return DEFAULT_MAX_DEPTH;
@@ -83,8 +86,8 @@ export interface GenerateFlowInput {
   /**
    * Let the generator author MULTI-LEVEL flows (issue #94): a subflow node may carry an
    * inline child spec (`subflowSpec`) or a recursive generation instruction
-   * (`generateSubflow`), producing a whole BUNDLE of draft flows. Off by default; when
-   * off, subflows may only reference existing flows.
+   * (`generateSubflow`), producing a whole BUNDLE of draft flows. On by default; when
+   * explicitly disabled, subflows may only reference existing flows.
    */
   allowSubflows?: boolean;
   /** Max subflow nesting depth (default 2, hard cap MAX_SUBFLOW_DEPTH). Only used with allowSubflows. */
@@ -177,13 +180,7 @@ OUTPUT FORMAT — when you are done (after any tool use), respond with ONLY one 
 
 ${FLOWSPEC_DOC}
 
-GENERATED-FLOW DEFAULTS (context saving): process nodes you leave without an explicit inputMode/outputMode are compiled with inputMode "latest-message" and outputMode "latest-message" — each step sees only the current task and later steps see only its final response, not its tool calls/results. When a step genuinely needs the whole conversation or later steps need its intermediate work, set "full-history" / "full-conversation" explicitly.
-
-GENERATED-FLOW DATA-FLOW POLICY (IMPORTANT — carry data through the conversation, NOT scratchpad variables):
-1. PREFER CONVERSATION HISTORY. For a later step to use an earlier step's output, keep that output in the thread: give the earlier (producer) step outputMode "full-conversation" (or leave "latest-message" when only its final text matters) and give the later (consumer) step inputMode "full-history" so it actually sees the producer's turn. This is the default, robust way to move data forward.
-2. DO NOT emit \${var:NAME} in generated prompts. The scratchpad variable feature (captureVariable + \${var:NAME}) is a valid HAND-AUTHORING tool, but for AUTO-GENERATED flows it is a footgun: a missing/late capture silently bakes an EMPTY string into the reading step's prompt and breaks the run. Do not use \${var:NAME} just to shuttle ordinary text one step forward — use history (rule 1).
-3. DO NOT emit passive "captureResource" on a process node. Process artifacts require an explicit Resource node connected from the producing process; the model writes the artifact through the supplied write_resource tool. Use that advanced graph-visible protocol only when the artifact itself must be tracked. Ordinary generated flows should use history.
-4. Any \${var:NAME} you emit anyway will be automatically rewritten to history (or removed if nothing captures it).
+${GENERATED_FLOW_AUTHORING_POLICY}
 
 ${acquisition}
 
@@ -425,7 +422,7 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
     return { success: false, error: 'A generator model id is required', statusCode: 400 };
   }
   const allowInstall = input.allowInstall === true;
-  const allowSubflows = input.allowSubflows === true;
+  const allowSubflows = input.allowSubflows !== false;
   // No nesting allowed when the option is off (0 caps any stray subflowSpec the model emits).
   const maxDepth = allowSubflows ? clampDepth(input.maxDepth) : 0;
 
@@ -584,70 +581,28 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
       state.contextDirty = false;
     }
 
-    // Issue #217: steer generated flows OFF the ${var:NAME} scratchpad footgun. Rewrite
-    // unsafe references to flow through conversation history / tracked run resources BEFORE
-    // compiling, so a dangling or empty-baked variable can never reach execution. Mutates the
-    // spec (incl. inline subflow children) in place; best effort.
-    let guardIssues: Array<{ severity: 'warning'; code: string; message: string }> = [];
-    try {
-      const guarded = guardGeneratedFlowSpec(spec);
-      if (guarded.changes.length > 0) {
-        log.info(`Attempt ${attempts}: scratchpad-var guard rewrote ${guarded.changes.length} reference(s)`);
-        guardIssues = guarded.changes.map((c) => ({ severity: 'warning' as const, code: c.code, message: c.message }));
-      }
-    } catch (err) {
-      log.warn('Scratchpad-var guard failed; compiling the spec as-is', err);
-    }
-
-    // Forgiving generation: deterministically add a missing start/finish and chain
-    // disconnected steps in author order BEFORE compiling, so common wiring omissions the
-    // model makes don't burn its repair budget (recurses into inline subflow children). Best
-    // effort — a repair failure just compiles the spec as-is.
-    let specToCompile: FlowSpec = spec;
-    let repairChanges: RepairChange[] = [];
-    try {
-      const repaired = repairFlowSpec(spec);
-      if (repaired.changes.length > 0) {
-        specToCompile = repaired.spec;
-        repairChanges = repaired.changes;
-        log.info(`Attempt ${attempts}: auto-repair adjusted the spec (${repairChanges.length} change(s))`);
-      }
-    } catch (err) {
-      log.warn('Auto-repair of the generated spec failed; compiling the spec as-is', err);
-    }
-    const repairIssues = repairChanges.map((c) => ({ severity: 'warning' as const, code: c.code, message: c.message }));
-
-    const compiled = compileFlowSpec(specToCompile, context.compile, { maxDepth, maxFlows: MAX_GENERATED_FLOWS });
-    if (!compiled.flow) {
+    // The production and editable Flow-based generators share this exact deterministic
+    // hardening pipeline. Prompt tuning can change the authored design without losing
+    // scratchpad safety, structural repair, generated defaults, or bundle validation.
+    const compiled = compileGeneratedDraft(spec, context, {
+      maxDepth,
+      maxFlows: MAX_GENERATED_FLOWS,
+    });
+    if (!compiled.success) {
       messages.push(
         { role: 'assistant', content: raw },
         { role: 'user', content: `The specification could not be compiled:\n${issueLines(compiled.issues)}\nFix these problems and re-emit the COMPLETE corrected JSON (only the JSON).` }
       );
       continue;
     }
-    // Generation-only context-saving defaults (announced in the system prompt): process
-    // nodes without an explicit inputMode/outputMode run scoped to the latest message and
-    // hide their tool exchanges from later steps. Applied to EVERY flow in the bundle.
-    for (const f of compiled.flows) applyGenerationDefaults(f);
-
-    const perFlow: GeneratedFlowEntry[] = compiled.flows.map((f) => ({
-      flow: f,
-      validation: validateFlow(f, {
-        models: context.compile.models,
-        servers: context.validatorServers,
-        serverTools: context.compile.serverTools,
-      }),
-    }));
-    // One merged result across the WHOLE bundle (auto-repair changes + compile issues + every
-    // flow's validation) drives the repair loop and the caller's error/warning counts. The
-    // auto-repair warnings tell the reviewer what wiring was added for them.
-    const validation = mergeIssues([...guardIssues, ...repairIssues, ...compiled.issues], {
-      issues: perFlow.flatMap((p) => p.validation.issues),
-      errorCount: 0,
-      warningCount: 0,
-      isRunnable: true,
-    });
-    best = { flows: perFlow, rootFlow: compiled.flow, validation };
+    if (compiled.guardChanges.length > 0) {
+      log.info(`Attempt ${attempts}: scratchpad-var guard rewrote ${compiled.guardChanges.length} reference(s)`);
+    }
+    if (compiled.repairChanges.length > 0) {
+      log.info(`Attempt ${attempts}: auto-repair adjusted the spec (${compiled.repairChanges.length} change(s))`);
+    }
+    const validation = compiled.validation;
+    best = { flows: compiled.flows, rootFlow: compiled.flow, validation };
 
     if (validation.errorCount === 0) break;
 
@@ -707,6 +662,11 @@ export interface ImproveFlowInput {
    * as {@link generateFlow} — strictly opt-in per request. Searching is always allowed.
    */
   allowInstall?: boolean;
+  /**
+   * Other unsaved flows in the draft bundle. They are compile-time references only:
+   * the improver edits `flow`, preserves these descendants, and never persists them.
+   */
+  relatedFlows?: Flow[];
 }
 
 /**
@@ -740,6 +700,18 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
   if (!flow || typeof flow !== 'object' || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
     return { success: false, error: 'A valid flow to improve is required', statusCode: 400 };
   }
+  const relatedFlows = (Array.isArray(input.relatedFlows) ? input.relatedFlows : [])
+    .filter((candidate): candidate is Flow => (
+      !!candidate &&
+      typeof candidate === 'object' &&
+      typeof candidate.id === 'string' &&
+      candidate.id !== flow.id &&
+      Array.isArray(candidate.nodes) &&
+      Array.isArray(candidate.edges)
+    ))
+    .filter((candidate, index, all) => (
+      all.findIndex((other) => other.id === candidate.id) === index
+    ));
 
   const model = await modelService.getModel(input.modelId);
   if (!model) {
@@ -775,12 +747,23 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
 
   // The flow's own id is dropped from the compile context each round (see above): keep the
   // name, forbid self-subflow. Recomputed after any install re-gathers the context.
-  const compileContextFor = (ctx: GenerationContext) => ({
-    models: ctx.compile.models,
-    servers: ctx.compile.servers,
-    serverTools: ctx.compile.serverTools,
-    flows: (ctx.compile.flows ?? []).filter((f) => f.id !== flow.id),
-  });
+  const compileContextFor = (ctx: GenerationContext) => {
+    const references = new Map(
+      (ctx.compile.flows ?? [])
+        .filter((candidate) => candidate.id !== flow.id)
+        .map((candidate) => [candidate.id, candidate])
+    );
+    // Prefer the current unsaved bundle over a stored flow with the same id/name.
+    for (const related of relatedFlows) {
+      references.set(related.id, { id: related.id, name: related.name });
+    }
+    return {
+      models: ctx.compile.models,
+      servers: ctx.compile.servers,
+      serverTools: ctx.compile.serverTools,
+      flows: [...references.values()],
+    };
+  };
 
   const userPrompt = `EXISTING FLOW (modify this — keep unchanged parts intact, and KEEP each node's "key" for any node you do NOT restructure so its canvas position is preserved):\n${JSON.stringify(
     currentSpec
@@ -852,7 +835,19 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
       serverTools: context.compile.serverTools,
     });
     const validation = mergeIssues(compiled.issues, flowValidation);
-    best = { flows: [{ flow: compiled.flow, validation: flowValidation }], rootFlow: compiled.flow, validation };
+    const relatedEntries = relatedFlows.map((related) => ({
+      flow: related,
+      validation: validateFlow(related, {
+        models: context.compile.models,
+        servers: context.validatorServers,
+        serverTools: context.compile.serverTools,
+      }),
+    }));
+    best = {
+      flows: [...relatedEntries, { flow: compiled.flow, validation: flowValidation }],
+      rootFlow: compiled.flow,
+      validation,
+    };
 
     if (validation.errorCount === 0) break;
 

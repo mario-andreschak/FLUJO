@@ -194,6 +194,33 @@ describe('draft_flow', () => {
   });
 });
 
+describe('draft_generated_flow', () => {
+  it('uses the production generator hardening pipeline and never saves', async () => {
+    const incompleteSpec = {
+      name: 'harden_me',
+      nodes: [
+        { key: 'work', type: 'process', model: 'worker', prompt: 'Do the work' },
+      ],
+      edges: [],
+    };
+    const result = await authoringCallTool('draft_generated_flow', { spec: incompleteSpec });
+    expect(result.isError).toBeUndefined();
+    const body = payload(result);
+    expect(body.pipeline).toBe('production-generator');
+    expect(body.saved).toBe(false);
+    expect(body.spec.nodes.map((node: { type: string }) => node.type))
+      .toEqual(expect.arrayContaining(['start', 'process', 'finish']));
+    expect(body.hardening.repairChanges.length).toBeGreaterThan(0);
+    const process = body.flow.nodes.find((node: { type: string }) => node.type === 'process');
+    expect(process.data.properties).toEqual(expect.objectContaining({
+      inputMode: 'latest-message',
+      outputMode: 'latest-message',
+    }));
+    expect(body.validation.errorCount).toBe(0);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('create_flow', () => {
   it('saves a clean spec and reports how to call it', async () => {
     const result = await authoringCallTool('create_flow', { spec: goodSpec });
