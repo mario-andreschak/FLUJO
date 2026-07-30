@@ -308,6 +308,10 @@ the sandbox beneath FLUJO's own origin, and do not point the browser directly at
 port `4201` from an HTTPS page—the listener expects TLS termination at the
 separate proxy origin.
 
+See [MCP Apps host support](docs/features/mcp/apps.md) for protocol behavior,
+security guarantees, display modes, compatibility limits, and the versioned
+compliance matrix.
+
 ### Run via npx (npm package)
 
 ```bash
