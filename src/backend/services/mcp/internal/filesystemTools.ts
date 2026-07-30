@@ -43,6 +43,9 @@ const log = createLogger('backend/services/mcp/internal/filesystemTools');
 
 /** Output cap so a huge file/listing can't flood the model's context. */
 const MAX_READ_CHARS = 200_000;
+/** #316: bound batch fan-out and its cumulative serialized response size. */
+const MAX_BATCH_READ_FILES = 25;
+const MAX_BATCH_READ_CHARS = 1_000_000;
 const MAX_SEARCH_RESULTS = 1_000;
 const DEFAULT_TREE_DEPTH = 3;
 const MAX_TREE_DEPTH = 10;
@@ -146,23 +149,34 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'read_file',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Read a text file and return its content. Optionally read only a line range with "from"/"to" (1-based, inclusive). ' +
+        'Read one text file with "path", or up to 25 files in input order with mutually exclusive "paths". Optional "from"/"to" (1-based, inclusive) and "pattern" settings apply to every target. ' +
         `For large files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
-        'Returns { path, from, to, totalLines, content, truncated, contentHash, matches? }. Pass the returned contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
+        'Single reads return { path, from, to, totalLines, content, truncated, contentHash, matches? } unchanged. Batch reads return { files }, with one ordered success or { requestedPath, path?, error } record per input; individual failures do not discard successful reads. Batch output is limited to 1,000,000 serialized characters. Pass contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
       inputSchema: {
         type: 'object',
         properties: {
           path: pathProp,
+          paths: {
+            type: 'array',
+            minItems: 1,
+            maxItems: MAX_BATCH_READ_FILES,
+            items: { type: 'string' },
+            description: 'File paths to read in input order. Mutually exclusive with "path".',
+          },
           from: { type: 'number', description: 'Optional 1-based first line to return (inclusive).' },
           to: { type: 'number', description: 'Optional 1-based last line to return (inclusive).' },
           pattern: { type: 'string', description: 'Case-insensitive substring to grep for. Required to read a large file whole without a "from"/"to" range; matching lines (plus context) are returned instead of the full body. Use "*" to read the whole large file anyway.' },
         },
-        required: ['path'],
       },
       outputSchema: {
         type: 'object',
         properties: {
           path: { type: 'string' },
+          files: {
+            type: 'array',
+            description: 'Ordered batch results. Successful entries use the single-file payload; failures include requestedPath and error.',
+            items: { type: 'object' },
+          },
           from: { type: 'number' },
           to: { type: 'number' },
           totalLines: { type: 'number' },
@@ -178,7 +192,6 @@ export function filesystemToolDefinitions(): Tool[] {
             },
           },
         },
-        required: ['path', 'from', 'to', 'totalLines', 'truncated', 'content'],
       },
     },
     {
@@ -534,7 +547,7 @@ async function grepFileLines(
   return { matches, truncated };
 }
 
-async function readFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
+async function readSingleFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const filePath = await resolvePath(args.path, roots);
 
   const hasRange = typeof args.from === 'number' || typeof args.to === 'number';
@@ -551,7 +564,7 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
   if (stat && !stat.isFile()) {
     throw new Error('Expected a regular file to read.');
   }
-  const size = stat?.size ?? 0;
+  const size = Number(stat?.size ?? 0);
 
   if (size > LARGE_FILE_BYTES && !hasRange && !pattern) {
     return errorResult(
@@ -629,6 +642,69 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
   }
   recordTouchedFile(filePath, 'read', size);
   return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out, contentHash: contentHash(content) });
+}
+
+function resultPayload(result: CallToolResult): Record<string, unknown> {
+  const structured = (result as StructuredResult).structuredContent;
+  if (structured) return structured;
+  const text = result.content.find((item) => item.type === 'text');
+  if (!text || text.type !== 'text') return { error: 'File read failed.' };
+  try {
+    const parsed: unknown = JSON.parse(text.text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : { error: text.text };
+  } catch {
+    return { error: text.text };
+  }
+}
+
+async function readFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
+  const hasPath = Object.prototype.hasOwnProperty.call(args, 'path');
+  const hasPaths = Object.prototype.hasOwnProperty.call(args, 'paths');
+  if (hasPath && hasPaths) throw new Error('Provide either "path" or "paths", not both.');
+  if (!hasPaths) return await readSingleFileTool(args, roots);
+
+  if (!Array.isArray(args.paths) || args.paths.length === 0) {
+    throw new Error('Provide a non-empty "paths" array.');
+  }
+  if (args.paths.length > MAX_BATCH_READ_FILES) {
+    throw new Error(`Provide at most ${MAX_BATCH_READ_FILES} paths.`);
+  }
+  if (args.paths.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error('Every entry in "paths" must be a non-empty string.');
+  }
+
+  const files: Array<Record<string, unknown>> = [];
+  for (const requestedPath of args.paths as string[]) {
+    let resolvedPath: string | undefined;
+    let record: Record<string, unknown>;
+    try {
+      resolvedPath = await resolvePath(requestedPath, roots);
+      const result = await readSingleFileTool({ ...args, path: requestedPath, paths: undefined }, roots);
+      const payload = resultPayload(result);
+      record = result.isError
+        ? { requestedPath, path: resolvedPath, error: String(payload.error ?? 'File read failed.') }
+        : payload;
+    } catch (err) {
+      record = {
+        requestedPath,
+        ...(resolvedPath ? { path: resolvedPath } : {}),
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    const candidate = { files: [...files, record] };
+    if (JSON.stringify(candidate).length > MAX_BATCH_READ_CHARS) {
+      record = {
+        requestedPath,
+        ...(resolvedPath ? { path: resolvedPath } : {}),
+        error: `Batch response limit of ${MAX_BATCH_READ_CHARS} serialized characters exceeded.`,
+      };
+    }
+    files.push(record);
+  }
+  return dualResult({ files });
 }
 
 async function writeFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
