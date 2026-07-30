@@ -112,6 +112,9 @@ export async function ensureFlujoStdioBridge(): Promise<{ endpoint: string; toke
       server.listen(state.endpoint, () => {
         server.off('error', reject);
         server.on('error', (error) => log.warn('FLUJO stdio bridge error', error));
+        // The bridge is auxiliary to the backend and must not keep Node/Jest alive
+        // after all MCP clients and other application work have finished.
+        server.unref();
         resolve();
       });
     }).finally(() => {
@@ -123,11 +126,17 @@ export async function ensureFlujoStdioBridge(): Promise<{ endpoint: string; toke
 }
 
 export async function closeFlujoStdioBridge(): Promise<void> {
-  const state = bridgeState();
+  const state = global.__flujo_stdio_bridge;
+  if (!state) return;
+
+  // Avoid leaking a listener when shutdown races the initial listen callback.
+  if (state.starting) await state.starting.catch(() => undefined);
+
   const server = state.server;
   state.server = undefined;
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   if (process.platform !== 'win32') {
     try { fs.unlinkSync(state.endpoint); } catch { /* already removed */ }
   }
+  global.__flujo_stdio_bridge = undefined;
 }
