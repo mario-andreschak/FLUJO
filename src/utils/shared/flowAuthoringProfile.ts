@@ -36,8 +36,8 @@ const ADVANCED_SUBFLOW_PROPERTIES = new Set([
 ]);
 
 /** True when Guided mode would hide authored behavior on this flow. */
-export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'permissionRules' | 'unattended'>): boolean {
-  if (flow.unattended !== undefined || flow.permissionRules !== undefined) return true;
+export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'permissionRules'>): boolean {
+  if (flow.permissionRules !== undefined) return true;
   for (const node of flow.nodes ?? []) {
     if (!['start', 'process', 'finish', 'subflow', 'mcp'].includes(node.type ?? '')) return true;
     const properties = node.data?.properties ?? {};

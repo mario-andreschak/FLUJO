@@ -109,6 +109,7 @@ export async function flowToolsCallTool(
     const result = await runFlow({
       flowId,
       prompt: input,
+      source: 'mcp',
       mode: 'ephemeral',
       flujo: true,
       requireApproval: false,

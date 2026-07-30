@@ -687,6 +687,7 @@ export class SubflowNode extends BaseNode {
     const result = await runFlow({
       flowId: prepResult.subflowId,
       ...runInput,
+      source: 'subflow',
       // Debugging (issue #125): persist this subflow's own run as a sidebar
       // conversation when opted in, via the sanctioned runFlow mode (never a
       // persistConversationState call-site bypass). Default stays ephemeral.
@@ -781,6 +782,7 @@ export class SubflowNode extends BaseNode {
         const r = await runFlow({
           flowId: lane.subflowId,
           ...(lane.input ?? runInput),
+          source: 'subflow',
           mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
           ...(laneConversationId ? { conversationId: laneConversationId } : {}),
           ...(prepResult.persistConversation && laneTitle ? { title: laneTitle } : {}),

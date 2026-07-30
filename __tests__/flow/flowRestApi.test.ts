@@ -90,6 +90,26 @@ describe('Flow REST API', () => {
     await expect(afterList.json()).resolves.toHaveLength(1);
   });
 
+  it('strips legacy unattended input from create and update responses/storage', async () => {
+    const legacyCreate = {
+      ...flowFixture(),
+      unattended: true,
+    } as Flow & { unattended?: boolean };
+
+    const createRes = await createFlow(req(legacyCreate));
+    expect(createRes.status).toBe(201);
+    await expect(createRes.json()).resolves.not.toHaveProperty('unattended');
+    expect(collections.flows.f1).not.toHaveProperty('unattended');
+
+    const updateRes = await putFlow(req({
+      ...flowFixture({ name: 'Updated' }),
+      unattended: false,
+    }), ctx('f1'));
+    expect(updateRes.status).toBe(200);
+    await expect(updateRes.json()).resolves.not.toHaveProperty('unattended');
+    expect(collections.flows.f1).not.toHaveProperty('unattended');
+  });
+
   it('POST /api/flow rejects a missing id with 400', async () => {
     const res = await createFlow(req(flowFixture({ id: undefined })));
     expect(res.status).toBe(400);

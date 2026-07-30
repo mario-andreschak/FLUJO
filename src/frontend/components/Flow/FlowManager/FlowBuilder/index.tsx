@@ -165,10 +165,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
   const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
-  // Unattended execution (#218): when ON, a Process node that stops on plain
-  // text is driven forward to its single next step instead of silently ending
-  // the run. `undefined` = follow the source default (scheduled ON, chat OFF).
-  const [flowUnattended, setFlowUnattended] = useState<boolean>(initialFlow?.unattended ?? false);
   const [authoringMode, setAuthoringMode] = useUiPreference<FlowAuthoringMode>(
     'flujo-ui:flow-builder:mode',
     'guided',
@@ -193,7 +189,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const hasHiddenAdvancedFeatures = flowUsesAdvancedFeatures({
     nodes,
     edges,
-    unattended: initialFlow?.unattended,
     permissionRules: initialFlow?.permissionRules,
   });
 
@@ -292,7 +287,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges(validEdges);
       setFlowName(initialFlow.name);
       setFlowDescription(initialFlow.description || '');
-      setFlowUnattended(initialFlow.unattended ?? false);
       setPermissionRules((initialFlow.permissionRules || []).map(createPermissionRuleDraft));
       setPermissionRulesConfigured(initialFlow.permissionRules !== undefined);
       setPermissionRulesError(null);
@@ -312,7 +306,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges([]);
       setFlowName('NewFlow');
       setFlowDescription('');
-      setFlowUnattended(false);
       setPermissionRules([]);
       setPermissionRulesConfigured(false);
       setPermissionRulesError(null);
@@ -439,13 +432,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setHasUnsavedChanges(true);
   };
 
-  // Handle unattended toggle (#218). Like the description, it isn't tracked by
-  // the nodes/edges history effect, so flag unsaved changes explicitly.
-  const handleFlowUnattendedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFlowUnattended(e.target.checked);
-    setHasUnsavedChanges(true);
-  };
-
   const updatePermissionRule = (id: string, changes: Partial<PermissionRule>) => {
     setPermissionRules(rules => rules.map(rule => rule.id === id ? { ...rule, ...changes } : rule));
     setPermissionRulesConfigured(true);
@@ -532,7 +518,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       id: initialFlow?.id || uuidv4(),
       name: flowName,
       description: flowDescription,
-      unattended: flowUnattended,
       nodes: flowNodes,
       edges,
       folder: initialFlow?.folder,    // Preserve folder assignment
@@ -544,7 +529,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     onSave(flow);
     setHasUnsavedChanges(false);
     return 'saved';
-  }, [flowName, flowDescription, flowUnattended, nodes, edges, initialFlow, onSave, allFlows, getPermissionRulesForSave, validatePermissionRules]);
+  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave, allFlows, getPermissionRulesForSave, validatePermissionRules]);
 
   // Navigation guard: the parent must route "leave the builder" actions
   // (back to dashboard, switching flows) through here so unsaved changes get
@@ -635,7 +620,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(restored.edges || []));
     setFlowName(restored.name);
     setFlowDescription(restored.description || '');
-    setFlowUnattended(restored.unattended ?? false);
     setPermissionRules((restored.permissionRules || []).map(createPermissionRuleDraft));
     setPermissionRulesConfigured(restored.permissionRules !== undefined);
     setFlowNameError(validateFlowName(restored.name));
@@ -656,7 +640,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       id: initialFlow?.id || '',
       name: flowName,
       description: flowDescription,
-      unattended: flowUnattended,
       nodes,
       edges,
       folder: initialFlow?.folder,
@@ -682,7 +665,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       severity: 'success',
       message: `Repaired the flow — ${parts.join(', ')}. Review the changes (Undo reverts them), then Save to keep them.`,
     });
-  }, [initialFlow, flowName, flowDescription, flowUnattended, nodes, edges, filterInvalidEdges, getPermissionRulesForSave]);
+  }, [initialFlow, flowName, flowDescription, nodes, edges, filterInvalidEdges, getPermissionRulesForSave]);
 
   // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
   // it, so model selection / install opt-in / result handling are all reused.
@@ -701,7 +684,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       id: uuidv4(), // Generate a new ID
       name: newName,
       description: flowToCopy.description,
-      unattended: flowToCopy.unattended,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
       folder: flowToCopy.folder,    // Preserve folder assignment
@@ -751,7 +733,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         id: initialFlow?.id || uuidv4(),
         name: newFlowName,
         description: flowDescription,
-        unattended: flowUnattended,
         nodes,
         edges,
         folder: initialFlow?.folder,
@@ -1139,23 +1120,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             </Tooltip>
 
             {authoringMode === 'advanced' && <>
-            <Tooltip
-              arrow
-              title="Unattended: if a step's model stops without handing off, the engine drives the conversation forward to the next step instead of silently ending the run. Recommended for scheduled/headless flows; leave off for interactive chat."
-            >
-              <FormControlLabel
-                control={
-                  <Switch
-                    size="small"
-                    checked={flowUnattended}
-                    onChange={handleFlowUnattendedChange}
-                  />
-                }
-                label="Unattended"
-                sx={{ whiteSpace: 'nowrap', ml: 0.5 }}
-              />
-            </Tooltip>
-
             <Button
               variant="outlined"
               onClick={() => setPermissionRulesDialogOpen(true)}
@@ -1426,7 +1390,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           id: initialFlow?.id || '',
           name: flowName,
           description: flowDescription,
-          unattended: flowUnattended,
           folder: initialFlow?.folder,
           favorite: initialFlow?.favorite,
           permissionRules: getPermissionRulesForSave(),
@@ -1456,7 +1419,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           id: initialFlow?.id || '',
           name: flowName,
           description: flowDescription,
-          unattended: flowUnattended,
           permissionRules: getPermissionRulesForSave(),
           nodes,
           edges,

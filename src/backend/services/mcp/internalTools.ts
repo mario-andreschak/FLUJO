@@ -452,6 +452,7 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     const result = await runFlow({
       flowId: flow.id,
       prompt: String(args?.input ?? ''),
+      source: 'internal',
       mode: 'ephemeral',
       flujo: true,
       requireApproval: false,

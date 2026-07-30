@@ -93,10 +93,13 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
-import { runFlow } from '@/backend/execution/flow/runFlow';
+import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow/index';
+
+const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
+  runFlowWithContext({ ...input, source: 'api' });
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -107,6 +110,15 @@ beforeEach(() => {
 });
 
 describe('runFlow keystone', () => {
+  it('rejects a caller that omits the invocation context', async () => {
+    await expect(runFlowWithContext({
+      flowId: FLOW_ID,
+      prompt: 'ambiguous origin',
+      mode: 'ephemeral',
+    } as FlowRunInput)).rejects.toThrow(/explicit invocation source/i);
+    expect(FlowExecutor.executeStep as jest.Mock).not.toHaveBeenCalled();
+  });
+
   it('maps `prompt` to a user message and runs to completion (flowId input)', async () => {
     const result = await runFlow({
       flowId: FLOW_ID,

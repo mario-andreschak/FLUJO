@@ -13,6 +13,9 @@ import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import {
   SharedState,
+  type FlowInvocationSource,
+  isFlowInvocationSource,
+  isUnattendedFlowInvocation,
   TOOL_CALL_ACTION,
   FINAL_RESPONSE_ACTION,
   ERROR_ACTION,
@@ -64,28 +67,6 @@ const MAX_EVENT_OUTPUT_CHARS = 4096;
  *  run. The single-forward-successor case never nudges — it auto-advances. */
 const UNATTENDED_MAX_NUDGES = 1;
 
-/**
- * Resolve whether this run is UNATTENDED (issue #218), memoized on the state.
- * Precedence: the flow's explicit `unattended` flag, else a source default —
- * scheduled/headless runs default ON (no human to nudge them past a stall),
- * interactive chat defaults OFF (a plain-text answer legitimately waits for the
- * user). A flow load failure falls back to the source default. Never throws.
- */
-async function resolveUnattended(state: SharedState): Promise<boolean> {
-  if (typeof state.unattended === 'boolean') return state.unattended;
-  let flag: boolean | undefined;
-  try {
-    const flow = state.flowSnapshot
-      ?? (state.flowId ? (await flowService.getFlow(state.flowId)) ?? undefined : undefined);
-    flag = flow?.unattended;
-  } catch (err) {
-    log.debug('resolveUnattended: flow load failed; using source default', { err });
-  }
-  const resolved = typeof flag === 'boolean' ? flag : state.source === 'schedule';
-  state.unattended = resolved;
-  return resolved;
-}
-
 type UnattendedOutcome = 'advanced' | 'nudged' | 'complete';
 
 /**
@@ -110,7 +91,7 @@ async function unattendedDriveForward(
   emit: EmitFn,
   nudges: Map<string, number>,
 ): Promise<UnattendedOutcome> {
-  if (!(await resolveUnattended(state))) return 'complete';
+  if (!state.unattended) return 'complete';
 
   const nodeId = state.currentNodeId;
   if (!nodeId) return 'complete';
@@ -213,8 +194,8 @@ async function publishRunFlowEvent(
     } catch {
       /* best-effort name resolution */
     }
-    // 'schedule' is filtered out before this is ever called.
-    const firedBy: FlowRunFiredBy = state.source === 'api' ? 'api' : 'chat';
+    // Scheduled/triggered runs are filtered out before this is ever called.
+    const firedBy: FlowRunFiredBy = state.source === 'chat' ? 'chat' : 'api';
     const trimmed =
       outputText && outputText.length > MAX_EVENT_OUTPUT_CHARS
         ? `${outputText.slice(0, MAX_EVENT_OUTPUT_CHARS)}…`
@@ -297,11 +278,11 @@ export interface FlowRunInput {
   parentRunId?: string;
   depth?: number;
 
-  /** Where this run originated (issue #113). Recorded on SharedState at run
-   *  start and surfaced read-only by GET /api/runs/active so a suspend-when-idle
-   *  orchestrator can tell scheduled runs apart from ad-hoc API/chat runs.
-   *  Optional/back-compat: omitted callers report an undefined source. */
-  source?: 'schedule' | 'chat' | 'api';
+  /** Explicit invocation context (issue #113/#339). Required at the runFlow
+   *  boundary so unattended behavior can never depend on an omitted default or
+   *  a persisted flow property. Chat/API are attended; schedule/trigger,
+   *  subflow, MCP, and internal-tool execution are unattended. */
+  source: FlowInvocationSource;
   /** For scheduler-originated runs: the planned execution id that fired this
    *  run (issue #113). Only meaningful when `source === 'schedule'`. */
   plannedExecutionId?: string;
@@ -350,6 +331,12 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  if (!isFlowInvocationSource(input.source)) {
+    throw new TypeError(
+      `runFlow requires an explicit invocation source (${String(input.source)} is invalid)`,
+    );
+  }
+
   const startTime = Date.now();
 
   const flujo = input.flujo ?? true;
@@ -518,12 +505,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // The conversation's approval setting (single source of truth).
   sharedState.requireApproval = requireApproval;
 
-  // Tag the run's origin (issue #113) so GET /api/runs/active can distinguish
-  // scheduled fires from ad-hoc API/chat runs. Only overwrite when the caller
-  // supplied one, so a resumed run keeps the source it was first tagged with.
-  if (input.source) {
-    sharedState.source = input.source;
-  }
+  // Tag the explicit invocation origin and derive the run-local unattended flag
+  // from it (issue #339). Overwrite both on every call so a legacy persisted
+  // state or flow-level `unattended` property can never influence this run.
+  sharedState.source = input.source;
+  sharedState.unattended = isUnattendedFlowInvocation(input.source);
   if (input.plannedExecutionId) {
     sharedState.plannedExecutionId = input.plannedExecutionId;
   }
@@ -1795,7 +1781,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // triggers can react to chat/API/manual runs. Scheduler-fired runs are
     // announced by SchedulerService.fire() instead (de-dup), and subflow stages
     // (runDepth > 0) must NOT emit or a composed flow sprays one event per stage.
-    if (sharedState.source !== 'schedule' && (sharedState.runDepth ?? 0) === 0) {
+    if (
+      sharedState.source !== 'schedule' &&
+      sharedState.source !== 'trigger' &&
+      (sharedState.runDepth ?? 0) === 0
+    ) {
       const lastMsg = sharedState.messages[sharedState.messages.length - 1];
       const outputText =
         lastMsg && lastMsg.role === 'assistant' && typeof lastMsg.content === 'string'

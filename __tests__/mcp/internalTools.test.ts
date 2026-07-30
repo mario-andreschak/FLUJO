@@ -244,7 +244,7 @@ describe('execute_flow', () => {
     const r = await internalCallTool(makeService(), 'execute_flow', { flow: 'My Flow', input: 'hi' });
 
     expect(runFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ flowId: 'f1', prompt: 'hi', mode: 'ephemeral' })
+      expect.objectContaining({ flowId: 'f1', prompt: 'hi', source: 'internal', mode: 'ephemeral' })
     );
     expect(r.isError).toBeUndefined();
     expect(text(r)).toBe('done');

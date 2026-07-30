@@ -29,6 +29,14 @@ describe('flowUsesAdvancedFeatures', () => {
     })).toBe(false);
   });
 
+  it('ignores a historical unattended flag when deciding authoring mode', () => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [node('start'), node('process'), node('finish')],
+      edges: [],
+      unattended: true,
+    } as never)).toBe(false);
+  });
+
   it.each([
     ['resource node', { nodes: [node('resource')], edges: [] }],
     ['process capture', { nodes: [node('process', { captureVariable: 'result' })], edges: [] }],

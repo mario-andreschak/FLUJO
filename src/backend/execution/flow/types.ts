@@ -9,6 +9,31 @@ import OpenAI from 'openai';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
+/**
+ * Explicit origin for every runFlow invocation (issue #339). Chat and direct
+ * API calls have an interactive caller; scheduled/triggered, subflow, MCP, and
+ * internal-tool runs are headless and therefore unattended.
+ */
+export const FLOW_INVOCATION_SOURCES = [
+  'chat',
+  'api',
+  'schedule',
+  'trigger',
+  'subflow',
+  'mcp',
+  'internal',
+] as const;
+
+export type FlowInvocationSource = typeof FLOW_INVOCATION_SOURCES[number];
+
+export function isFlowInvocationSource(value: unknown): value is FlowInvocationSource {
+  return typeof value === 'string' &&
+    (FLOW_INVOCATION_SOURCES as readonly string[]).includes(value);
+}
+
+export function isUnattendedFlowInvocation(source: FlowInvocationSource): boolean {
+  return source !== 'chat' && source !== 'api';
+}
 
 // --- Debugger Types ---
 
@@ -772,12 +797,11 @@ export interface SharedState {
      * but cannot override a flow-level deny.
      */
     savedPermissionRules?: SavedPermissionRule[];
-    /** Unattended execution (issue #218), resolved once per run from the flow's
-     *  `unattended` flag (falling back to a source default: headless/scheduled
-     *  ON, interactive chat OFF). When true, a Process node that ends its turn
-     *  on plain text is driven forward along its single non-returning successor
-     *  instead of silently completing the run — see runFlow's FINAL_RESPONSE
-     *  handling. Memoized here so resolution (a flow load) happens at most once. */
+    /** Unattended execution (issue #218/#339), derived for this run solely from
+     *  its invocation source. When true, a Process node that ends its turn on
+     *  plain text is driven forward along its single non-returning successor
+     *  instead of silently completing the run. Runtime-only: persisted flow
+     *  definitions cannot override this value. */
     unattended?: boolean;
     /** Node IDs with an active breakpoint (used by the visual debugger). */
     breakpoints?: string[];
@@ -859,14 +883,12 @@ export interface SharedState {
     rootConversationId?: string;
 
     /**
-     * Where this run originated (issue #113): 'schedule' for a planned-execution
-     * fire, 'api' for an ad-hoc /v1/chat/completions call, 'chat' for the in-app
-     * chat UI. Set by runFlow from FlowRunInput.source at run start and surfaced
-     * read-only by GET /api/runs/active so a suspend-when-idle orchestrator can
-     * tell in-flight scheduled runs apart from ad-hoc ones. Undefined for legacy
-     * callers that don't tag a source.
+     * Where this run originated (issue #113/#339). Set by runFlow from the
+     * required FlowRunInput.source at every run boundary and surfaced read-only
+     * by GET /api/runs/active. Optional only for persisted legacy states created
+     * before the invocation-context contract existed.
      */
-    source?: 'schedule' | 'chat' | 'api';
+    source?: FlowInvocationSource;
 
     /**
      * For scheduler-originated runs (source === 'schedule'): the planned

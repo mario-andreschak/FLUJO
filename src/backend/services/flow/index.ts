@@ -34,8 +34,13 @@ export interface ConvertProcessToSubflowResponse extends FlowServiceResponse {
   conflict?: boolean;
 }
 
-/** Remove edge-derived runtime data before a flow crosses the persistence boundary. */
-function stripDerivedAttachmentProperties(flow: Flow): void {
+/** Remove runtime/legacy data before a flow crosses the persistence boundary. */
+function stripNonPersistedProperties(flow: Flow): void {
+  // Issue #339: unattended behavior is derived from the invocation source. A
+  // legacy request/file may still carry this removed field; mutate it away so
+  // it cannot be re-persisted or returned by save routes.
+  delete (flow as Flow & { unattended?: unknown }).unattended;
+
   for (const node of flow.nodes) {
     if (node.type !== 'process' || !node.data?.properties) continue;
     const properties = node.data.properties as Record<string, unknown>;
@@ -214,7 +219,7 @@ export class FlowService { // Add export keyword here
       // mcpNodes/resourceNodes are compiled from attachment edges at runtime and
       // must never become persisted source-of-truth data. This also cleans legacy
       // files the next time they are saved.
-      stripDerivedAttachmentProperties(flow);
+      stripNonPersistedProperties(flow);
 
       // Version history: when this save OVERWRITES an existing flow, archive
       // the definition being replaced (skipping no-op saves). Best-effort —

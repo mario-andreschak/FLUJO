@@ -77,6 +77,7 @@ jest.mock('@/utils/storage/backend', () => ({
 const flowGraph = {
   id: FLOW_ID,
   name: 'UnattendedFlow',
+  // Legacy persisted value: issue #339 requires runtime to ignore it.
   unattended: true,
   nodes: [
     { id: START, type: 'start' },
@@ -123,13 +124,15 @@ beforeEach(() => {
   getFlowMock.mockResolvedValue(flowGraph);
 });
 
-describe('unattended drive-forward (#218)', () => {
-  it('auto-advances a stalled process node to its single forward successor', async () => {
+describe('unattended drive-forward (#218/#339)', () => {
+  it.each(['schedule', 'trigger', 'subflow', 'mcp', 'internal'] as const)(
+    '%s origin auto-advances a stalled process node to its single forward successor',
+    async (source) => {
     const result = await runFlow({
       flowId: FLOW_ID,
       prompt: 'do the work',
       mode: 'ephemeral',
-      source: 'schedule',
+      source,
     });
 
     // The run did not silently stop at the stalled process node: it was driven
@@ -144,37 +147,41 @@ describe('unattended drive-forward (#218)', () => {
     // process). Node identity can't be read off the call args because every
     // call shares the one mutated sharedState reference, so assert the count.
     expect((FlowExecutor.executeStep as jest.Mock).mock.calls.length).toBe(3);
-  });
+    },
+  );
 
-  it('does NOT drive forward for an interactive (non-unattended) run', async () => {
-    // A flow with no explicit flag + a non-schedule source stays interactive:
-    // a plain-text turn completes the run at the process node (today's behavior).
-    getFlowMock.mockResolvedValue({ ...flowGraph, unattended: undefined } as any);
-
+  it.each(['chat', 'api'] as const)(
+    'does NOT drive forward for attended %s runs',
+    async (source) => {
+    // Even though the legacy flow JSON says unattended:true, the interactive
+    // invocation context wins and plain text completes at the process node.
     const result = await runFlow({
       flowId: FLOW_ID,
       prompt: 'hello',
       mode: 'ephemeral',
-      source: 'chat',
+      source,
     });
 
     expect(result.status).toBe('completed');
+    expect(result.sharedState.unattended).toBe(false);
     expect(result.sharedState.currentNodeId).toBe(PROCESS);
     // Stopped at the process node: only start + process ran, no drive-forward.
     expect((FlowExecutor.executeStep as jest.Mock).mock.calls.length).toBe(2);
-  });
+    },
+  );
 
-  it('honors an explicit unattended:false even for a scheduled run', async () => {
+  it('ignores legacy unattended:false for a scheduled run', async () => {
     getFlowMock.mockResolvedValue({ ...flowGraph, unattended: false } as any);
 
     const result = await runFlow({
       flowId: FLOW_ID,
-      prompt: 'scheduled but pinned interactive',
+      prompt: 'scheduled and derived unattended',
       mode: 'ephemeral',
       source: 'schedule',
     });
 
     expect(result.status).toBe('completed');
-    expect(result.sharedState.currentNodeId).toBe(PROCESS);
+    expect(result.sharedState.unattended).toBe(true);
+    expect(result.sharedState.currentNodeId).toBe(FOLLOWUP);
   });
 });
