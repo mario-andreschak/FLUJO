@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
 import { transcribe } from '@/frontend/services/transcription';
 import { useStorage } from '@/frontend/contexts/StorageContext';
@@ -34,6 +34,7 @@ import FlowNodePicker from './FlowNodePicker';
 // eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
+import GlobalReferenceEditor from '@/frontend/components/shared/GlobalReferenceEditor';
 
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
@@ -81,7 +82,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onSaveEdit,
   onCancelEdit
 }) => {
-  const { settings } = useStorage();
+  const { settings, globalEnvVars } = useStorage();
+  const globalNames = useMemo(
+    () => Object.keys(globalEnvVars).sort((a, b) => a.localeCompare(b)),
+    [globalEnvVars],
+  );
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -121,9 +126,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [transcriptionStatus, setTranscriptionStatus] = useState('');
   
   // Handle text input change (routes to the parent while editing).
-  const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isEditing) onEditingContentChange?.(e.target.value);
-    else setMessage(e.target.value);
+  const handleMessageChange = (value: string) => {
+    if (isEditing) onEditingContentChange?.(value);
+    else setMessage(value);
   };
 
   // Save the in-progress edit (only when there's content).
@@ -461,23 +466,21 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
         {/* Input area */}
         <Box sx={{ display: 'flex', alignItems: 'flex-end' }}>
-          <TextField
-            fullWidth
-            multiline
-            maxRows={isEditing ? 12 : 4}
-            data-tour="chat-input"
-            placeholder={isEditing ? 'Edit message...' : 'Type a message...'}
+          <GlobalReferenceEditor
             value={isEditing ? (editing?.content ?? '') : message}
             onChange={handleMessageChange}
+            globalNames={globalNames}
+            multiline
+            minRows={1}
+            maxRows={isEditing ? 12 : 4}
+            dataTour="chat-input"
+            ariaLabel={isEditing ? 'Edit message' : 'Message'}
+            placeholder={isEditing ? 'Edit message...' : 'Type a message...'}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
             disabled={isEditing ? false : disabled}
-            variant="outlined"
             autoFocus={isEditing}
-            sx={{ mr: 1 }}
-            InputProps={{
-              sx: { borderRadius: 2 }
-            }}
+            containerSx={{ mr: 1, flex: 1 }}
           />
 
           {/* Compose-only controls (attachments, audio) are hidden while editing. */}
