@@ -228,14 +228,42 @@ async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
  * boundary. Known limitation: shell variable expansions (e.g. `$HOME/AppData`)
  * are not resolved.
  */
+function maskGlobOptionValues(command: string): string {
+  const chars = [...command];
+  const tokens = [...command.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)];
+  let maskNext = false;
+  for (const match of tokens) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    const unquoted = raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
+      ? raw.slice(1, -1)
+      : raw;
+    let valueOffset = 0;
+    if (maskNext) {
+      maskNext = false;
+    } else if (unquoted === '-g' || unquoted === '--glob' || unquoted === '--iglob') {
+      maskNext = true;
+      continue;
+    } else {
+      if (!/^(?:--glob|--iglob)=/.test(unquoted)) continue;
+      valueOffset = raw.indexOf('=') + 1;
+    }
+    for (let i = start + valueOffset; i < start + raw.length; i += 1) chars[i] = ' ';
+  }
+  return chars.join('');
+}
+
 async function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): Promise<string[]> {
   const warnings: string[] = [];
   const protectedPathsEnabled = await isProtectedPathsEnabled();
   const seen = new Set<string>();
+  // Ripgrep glob values are patterns, not filesystem paths. Mask only option
+  // values so a real path elsewhere in the same command is still inspected.
+  const commandForPathScan = maskGlobOptionValues(command);
   // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
   // POSIX (/foo), and ~-prefixed home paths.
   const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
-  const matches = (command.match(tokenRe) ?? []).filter(
+  const matches = (commandForPathScan.match(tokenRe) ?? []).filter(
     // A single-letter slash token is a Windows command switch, not a POSIX path.
     // Keep longer tokens so genuine POSIX absolute paths remain advisory notices.
     (token) => !(process.platform === 'win32' && /^\/[A-Za-z]$/.test(token))
@@ -300,17 +328,62 @@ function getManagedUtilsDir(): string {
   return path.join(getDataDir(), 'bash-utils');
 }
 
+const CODEX_RIPGREP_TARGETS: Partial<Record<NodeJS.Platform, Partial<Record<string, [string, string]>>>> = {
+  win32: {
+    x64: ['@openai/codex-win32-x64', 'x86_64-pc-windows-msvc'],
+    arm64: ['@openai/codex-win32-arm64', 'aarch64-pc-windows-msvc'],
+  },
+  darwin: {
+    x64: ['@openai/codex-darwin-x64', 'x86_64-apple-darwin'],
+    arm64: ['@openai/codex-darwin-arm64', 'aarch64-apple-darwin'],
+  },
+  linux: {
+    x64: ['@openai/codex-linux-x64', 'x86_64-unknown-linux-musl'],
+    arm64: ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl'],
+  },
+};
+
+/** Resolve the ripgrep binary already bundled with FLUJO's Codex dependency. */
+function getBundledRipgrepDir(): string | null {
+  const target = CODEX_RIPGREP_TARGETS[process.platform]?.[process.arch];
+  if (!target) return null;
+  try {
+    const packageJson = require.resolve(`${target[0]}/package.json`);
+    const dir = path.join(path.dirname(packageJson), 'vendor', target[1], 'codex-path');
+    const executable = path.join(dir, process.platform === 'win32' ? 'rg.exe' : 'rg');
+    return fs.statSync(executable).isFile() ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build the child process environment. By default only the minimal allow-list is
  * passed (secrets never leave the backend). Setting `FLUJO_BASH_INHERIT_ENV` to a
  * truthy value restores full `process.env` inheritance for power users.
  */
 function buildChildEnv(): NodeJS.ProcessEnv {
-  if (isTruthyEnv(process.env.FLUJO_BASH_INHERIT_ENV)) return process.env;
-  const out = {} as NodeJS.ProcessEnv;
-  for (const key of Object.keys(process.env)) {
-    if (ENV_ALLOWLIST.has(key) || /^LC_/.test(key)) {
-      out[key] = process.env[key];
+  const out: NodeJS.ProcessEnv = isTruthyEnv(process.env.FLUJO_BASH_INHERIT_ENV)
+    ? { ...process.env }
+    : Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => ENV_ALLOWLIST.has(key) || /^LC_/.test(key))
+      ) as NodeJS.ProcessEnv;
+  const currentPath = getEnvCaseInsensitive('PATH') ?? '';
+  const utilityDirs = [getManagedUtilsDir(), getBundledRipgrepDir()]
+    .filter((dir): dir is string => Boolean(dir))
+    .filter((dir) => {
+      try {
+        return fs.statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+  out.PATH = [...utilityDirs, currentPath].filter(Boolean).join(path.delimiter);
+  if (process.platform === 'win32') {
+    // Node de-duplicates Windows environment keys case-insensitively; retain a
+    // single spelling so the augmented value is the one passed to the child.
+    for (const key of Object.keys(out)) {
+      if (key !== 'PATH' && key.toLowerCase() === 'path') delete out[key];
     }
   }
   return out;

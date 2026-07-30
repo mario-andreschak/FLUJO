@@ -85,6 +85,27 @@ describe('bash run (foreground)', () => {
     const r = await bashCallTool('run', { command: 'echo hi', normalizeNewlines: true });
     expect(text(r)).not.toContain('\r');
   });
+
+  it('makes the ripgrep bundled with the Codex dependency available on PATH', async () => {
+    const r = await bashCallTool('run', { command: 'rg --version' });
+    expect(r.isError).toBeUndefined();
+    expect(parse(r).output as string).toMatch(/^ripgrep \d+/);
+  });
+
+  it.each([
+    "rg needle -g '/.git/**' .",
+    "rg needle --glob '!/.git/**' .",
+    "rg needle --glob='/.git/**' .",
+    "rg needle --iglob '/.git/**' .",
+  ])('does not treat a ripgrep glob as an external path: %s', async (command) => {
+    const r = await bashCallTool('run', { command });
+    expect(parse(r).warnings).toBeUndefined();
+  });
+
+  it('continues warning about genuine absolute paths', async () => {
+    const r = await bashCallTool('run', { command: 'echo /.git/config' });
+    expect(parse(r).warnings).toBeDefined();
+  });
 });
 
 describe('bash shell selection (issue #225)', () => {
