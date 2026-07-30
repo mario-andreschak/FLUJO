@@ -6,12 +6,13 @@ import {
   Connection
 } from '@xyflow/react';
 import { styled, useTheme } from '@mui/material/styles';
-import { 
-  Paper, 
-  Typography, 
-  Box, 
-  IconButton, 
-  Collapse
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Paper,
+  Typography,
+  Box,
 } from '@mui/material';
 import ChatIcon from '@mui/icons-material/Chat';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -21,8 +22,8 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import type { NodeType } from '@/frontend/types/flow/flow';
+import { buildNodeInformation } from './nodeInformation';
 
 // Resource nodes (Tier 3) use a teal literal — the MUI palette slots are all
 // taken (secondary=process, success=finish, info=mcp, warning=subflow) and the
@@ -101,13 +102,6 @@ const NodeDetails = styled(Box)(({ theme }) => ({
   fontSize: '0.8rem',
 }));
 
-const PropertyRow = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  justifyContent: 'space-between',
-  padding: theme.spacing(0.5, 0),
-  borderBottom: `1px dashed ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-}));
-
 interface CustomNodeProps extends NodeProps {
   nodeType: NodeType;
 }
@@ -175,31 +169,18 @@ const getResourceHandleStyle = (theme: any) => ({
   borderWidth: 2
 });
 
-const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?: boolean }) => {
+const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { selected?: boolean }) => {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
-  const nodeData = data || { label: 'No Label', properties: {} };
-  const properties = (nodeData.properties || {}) as Record<string, unknown>;
-  // Signal nodes (issue #164) are just a *named* signal: the display name IS the
-  // signal name (topic). Stay defensive so freshly-dropped / legacy nodes still
-  // render a sensible caption when the topic hasn't been set yet.
-  const label =
-    nodeType === 'signal'
-      ? (typeof properties.topic === 'string' && properties.topic.trim()
-          ? properties.topic.trim()
-          : (typeof nodeData.label === 'string' && nodeData.label ? nodeData.label : 'Signal'))
-      : (typeof nodeData.label === 'string' ? nodeData.label : 'No Label');
-  // For signal nodes the topic is already shown as the header/display name, so
-  // hide it from the expandable property rows to avoid showing it twice.
-  const displayProperties =
-    nodeType === 'signal'
-      ? Object.fromEntries(Object.entries(properties).filter(([key]) => key !== 'topic'))
-      : properties;
-  const propCount = Object.keys(displayProperties).length;
-  
-  const handleExpand = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpanded(!expanded);
+  const information = buildNodeInformation(data, nodeType);
+
+  const stopNodeInteraction = (event: React.SyntheticEvent) => {
+    event.stopPropagation();
+  };
+
+  const handleDetailsChange = (event: React.SyntheticEvent, isExpanded: boolean) => {
+    event.stopPropagation();
+    setExpanded(isExpanded);
   };
   
   // Render different handle configurations based on node type
@@ -402,59 +383,88 @@ const CustomNode = ({ data, nodeType, selected }: CustomNodeProps & { selected?:
           <NodeContent>
             {getNodeIcon(nodeType)}
             <Typography variant="subtitle2" fontWeight="bold">
-              {label}
+              {information.label}
             </Typography>
           </NodeContent>
-          
-          {propCount > 0 && (
-            <IconButton 
-              size="small" 
-              onClick={handleExpand}
-              sx={{ padding: 0.5 }}
-            >
-              {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-            </IconButton>
-          )}
         </NodeHeader>
-        
-        {/* Display description if available
-        {data.description as string && (
-          <Typography 
-            variant="caption" 
-            color="text.secondary" 
-            sx={{ 
-              display: 'block', 
-              mt: 0.5, 
-              mb: 1,
-              fontStyle: 'italic',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis'
-            }}
-          >
-          </Typography>
-        )} */}
-        
-        <Collapse in={expanded}>
-          <NodeDetails>
-            {Object.entries(displayProperties).map(([key, value]) => (
-              <PropertyRow key={key}>
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
-                  {key}:
+
+        {information.summary.length > 0 && (
+          <NodeDetails aria-label="Node summary">
+            {information.summary.map((entry) => (
+              <Box key={entry.key} sx={{ mb: 0.5 }}>
+                <Typography
+                  component="span"
+                  variant="caption"
+                  sx={{ fontWeight: 'bold', mr: 0.5 }}
+                >
+                  {entry.label}:
                 </Typography>
-                <Typography variant="caption">
-                  {String(value).substring(0, 30)}{String(value).length > 30 ? '...' : ''}
+                <Typography
+                  component="span"
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    whiteSpace: entry.multiline ? 'pre-line' : 'normal',
+                    overflowWrap: 'anywhere',
+                  }}
+                >
+                  {entry.value}
                 </Typography>
-              </PropertyRow>
+              </Box>
             ))}
           </NodeDetails>
-        </Collapse>
-        
-        {propCount > 0 && !expanded && (
-          <Typography variant="caption" color="text.secondary">
-            {`${propCount} properties configured`}
-          </Typography>
         )}
+
+        <Accordion
+          disableGutters
+          elevation={0}
+          expanded={expanded}
+          onChange={handleDetailsChange}
+          onClick={stopNodeInteraction}
+          onPointerDown={stopNodeInteraction}
+          className="nodrag nowheel"
+          sx={{
+            mt: 1,
+            backgroundColor: 'transparent',
+            '&::before': { display: 'none' },
+          }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon fontSize="small" />}
+            aria-controls={`${id}-technical-details`}
+            sx={{
+              minHeight: 28,
+              px: 0,
+              '& .MuiAccordionSummary-content': { my: 0.25 },
+            }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              Technical details
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails
+            id={`${id}-technical-details`}
+            sx={{ p: 0 }}
+          >
+            <Box
+              component="pre"
+              sx={{
+                m: 0,
+                p: 1,
+                maxHeight: 220,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+                fontSize: '0.7rem',
+                lineHeight: 1.35,
+                backgroundColor: 'action.hover',
+                borderRadius: 1,
+              }}
+            >
+              {information.technicalText}
+            </Box>
+          </AccordionDetails>
+        </Accordion>
       </NodeContainer>
     </>
   );
