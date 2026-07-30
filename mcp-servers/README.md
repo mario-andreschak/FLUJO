@@ -8,7 +8,7 @@ This workspace contains the stdio MCP processes managed by FLUJO:
 | `@flujo-ai/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
 | `@flujo-ai/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground and background shell execution with process-tree cleanup. |
 
-Each package builds to `dist/index.js`, uses `StdioServerTransport`, and reserves stdout for MCP protocol frames. Diagnostics are written to stderr. FLUJO launches the compiled entrypoints with Node and manages connection, restart, roots notifications, and shutdown through the same client lifecycle used for external MCP servers.
+Each package builds to `dist/index.js`, uses `StdioServerTransport`, and reserves stdout for MCP protocol frames. Diagnostics are written to stderr. FLUJO persists portable `npx --no-install <executable>` configurations and resolves them from the runtime-only `FLUJO_APP_ROOT`; no checkout or install path is stored in user data. Connection, restart, roots notifications, and shutdown use the same client lifecycle as external MCP servers.
 
 ## Development
 
@@ -29,6 +29,12 @@ node mcp-servers/bash/dist/index.js
 ```
 
 `mcp-flujo` is independently executable and uses `FLUJO_BASE_URL` to reach the running FLUJO instance. When the variable is absent it defaults to `http://127.0.0.1:4200`; FLUJO supplies the effective custom-port URL to managed child processes automatically.
+
+## Release synchronization
+
+`flujo-ai`, `@flujo-ai/mcp-flujo`, `@flujo-ai/mcp-filesystem`, and `@flujo-ai/mcp-bash` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the three package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the three MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
+
+`npm run validate:mcp-release` rejects version drift, non-exact root pins, missing executable output, or an npm tarball that omits a required manifest/binary. The Docker publishing workflow runs the same validation before building the image.
 
 ## Roots and operator policy
 

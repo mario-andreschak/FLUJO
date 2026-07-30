@@ -11,17 +11,24 @@
  * Backend handlers stay behind the bridge and are loaded dynamically, preserving
  * the module-cycle break around runFlow / flowAuthoringTools / registryInstall.
  */
-import path from 'node:path';
 import { MCPStdioConfig } from '@/shared/types/mcp';
 
 export const INTERNAL_SERVER_NAME = 'flujo';
 
-export function builtInStdioEntrypoint(name: string): string {
-  return path.join(process.cwd(), 'mcp-servers', name, 'dist', 'index.js');
+const BUILT_IN_STDIO_COMMANDS: Record<string, string> = {
+  flujo: 'flujo-mcp-flujo',
+  filesystem: 'flujo-mcp-filesystem',
+  bash: 'flujo-mcp-bash',
+};
+
+export function builtInStdioCommand(name: string): string {
+  const command = BUILT_IN_STDIO_COMMANDS[name];
+  if (!command) throw new Error(`Unknown built-in MCP server: ${name}`);
+  return command;
 }
 
-export function builtInStdioCwd(name: string): string {
-  return path.dirname(builtInStdioEntrypoint(name));
+export function builtInStdioArgs(name: string): string[] {
+  return ['--no-install', builtInStdioCommand(name)];
 }
 
 /**
@@ -34,6 +41,18 @@ export function builtInStdioEnv(name: string): Record<string, string> {
   const env: Record<string, string> = {
     FLUJO_DATA_DIR: process.env.FLUJO_DATA_DIR ?? process.cwd(),
   };
+  const commonForwarded = [
+    'FLUJO_BASE_URL',
+    'FLUJO_EXTRA_CA_CERTS',
+    'NODE_EXTRA_CA_CERTS',
+    'NODE_OPTIONS',
+    'NODE_TLS_REJECT_UNAUTHORIZED',
+    'SSL_CERT_FILE',
+  ];
+  for (const key of commonForwarded) {
+    const value = process.env[key];
+    if (typeof value === 'string') env[key] = value;
+  }
   const bashInherits = name === 'bash' && /^(1|true|yes|on)$/i.test(
     process.env.FLUJO_BASH_INHERIT_ENV?.trim() ?? '',
   );
@@ -59,10 +78,12 @@ export function internalServerConfig(): MCPStdioConfig {
   return {
     name: INTERNAL_SERVER_NAME,
     transport: 'stdio',
-    command: process.execPath,
-    args: [builtInStdioEntrypoint(INTERNAL_SERVER_NAME)],
+    command: 'npx',
+    args: builtInStdioArgs(INTERNAL_SERVER_NAME),
     env: builtInStdioEnv(INTERNAL_SERVER_NAME),
-    cwd: builtInStdioCwd(INTERNAL_SERVER_NAME),
+    // Built-ins resolve this portable empty marker to FLUJO_APP_ROOT at launch.
+    // Persisting an install-specific absolute path would break upgrades/relocation.
+    cwd: '',
     disabled: false,
     autoApprove: [],
     rootPath: '',

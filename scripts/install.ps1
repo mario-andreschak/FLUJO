@@ -449,6 +449,9 @@ try {
     Write-Step "Building FLUJO (npm run build)"
     npm run build
 
+    Write-Step "Validating bundled offline MCP packages"
+    npm run validate:mcp-release
+
     Write-Ok "Build complete."
 
     # Register the global 'flujo' command (works from any folder).

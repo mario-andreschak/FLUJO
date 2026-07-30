@@ -16,9 +16,11 @@ services:
       # MCP Apps sandbox proxy: a separate browser origin, still loopback-only.
       - "127.0.0.1:4201:4201"
     volumes:
-      # User data persists across `down`/`up` in named volumes.
-      - flujo-db:/app/db
-      - flujo-mcp-servers:/app/mcp-servers
+      # User data persists across `down`/`up` in named volumes. These mounts
+      # stay below FLUJO_DATA_DIR and do not hide /app/mcp-servers, which holds
+      # the immutable offline built-in packages used by npx --no-install.
+      - flujo-db:/app/data/db
+      - flujo-mcp-servers:/app/data/mcp-servers
       # To use the fileWatch trigger, bind-mount the watched host folder, e.g.:
       # - /path/on/host/watched:/data/watched
       # To browse host files via the filesystem file-browser MCP App, bind-mount a

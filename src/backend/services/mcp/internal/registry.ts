@@ -6,8 +6,7 @@
 import { MCPStdioConfig } from '@/shared/types/mcp';
 import {
   INTERNAL_SERVER_NAME,
-  builtInStdioCwd,
-  builtInStdioEntrypoint,
+  builtInStdioArgs,
   builtInStdioEnv,
   internalServerConfig,
 } from '../internalServerConfig';
@@ -59,10 +58,11 @@ function builtInStdioConfig(name: string): MCPStdioConfig {
   return {
     name,
     transport: 'stdio',
-    command: process.execPath,
-    args: [builtInStdioEntrypoint(name)],
+    command: 'npx',
+    args: builtInStdioArgs(name),
     env: builtInStdioEnv(name),
-    cwd: builtInStdioCwd(name),
+    // Resolved to FLUJO_APP_ROOT only at launch; never persist an install path.
+    cwd: '',
     disabled: false,
     autoApprove: [],
     rootPath: '',

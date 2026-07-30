@@ -6,9 +6,10 @@ node_modules
 .git
 .github
 
-# User data — must come from mounted volumes, never the image.
+# Legacy checkout user data — must never enter the image. The repository's
+# mcp-servers/ directory is package source and must remain in the build context;
+# container user data is mounted separately below /app/data.
 db
-mcp-servers
 
 # Docs / site assets not needed at runtime.
 docs/images

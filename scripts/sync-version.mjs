@@ -6,7 +6,41 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+const rootPackagePath = path.join(root, 'package.json');
+const rootPackage = JSON.parse(readFileSync(rootPackagePath, 'utf8'));
+const { version } = rootPackage;
+
+const publicMcpPackages = [
+  { directory: 'bash', name: '@flujo-ai/mcp-bash' },
+  { directory: 'filesystem', name: '@flujo-ai/mcp-filesystem' },
+  { directory: 'flujo', name: '@flujo-ai/mcp-flujo' },
+];
+
+function writeJson(file, value) {
+  writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// The three public MCP packages are released atomically with flujo-ai. Keep both
+// their manifests and the root's exact production dependency pins synchronized.
+for (const { directory, name } of publicMcpPackages) {
+  const packagePath = path.join(root, 'mcp-servers', directory, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+  packageJson.version = version;
+  writeJson(packagePath, packageJson);
+  rootPackage.dependencies[name] = version;
+  console.log(`sync-version: ${name} -> ${version}`);
+}
+writeJson(rootPackagePath, rootPackage);
+
+const lockPath = path.join(root, 'package-lock.json');
+const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+lock.version = version;
+lock.packages[''].version = version;
+for (const { directory, name } of publicMcpPackages) {
+  lock.packages[''].dependencies[name] = version;
+  lock.packages[`mcp-servers/${directory}`].version = version;
+}
+writeJson(lockPath, lock);
 
 const targets = [
   {

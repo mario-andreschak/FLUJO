@@ -1,6 +1,6 @@
 {
   "name": "@flujo-ai/mcp-flujo",
-  "version": "0.1.0",
+  "version": "3.38.0",
   "description": "FLUJO's standalone application MCP server",
   "type": "module",
   "main": "dist/index.js",

@@ -5,8 +5,10 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(),
 }));
 
+import path from 'node:path';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
+import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import {
   INTERNAL_SERVER_NAME,
   builtInStdioEnv,
@@ -83,26 +85,66 @@ describe('persisted internal configs', () => {
 });
 
 describe('standalone stdio configuration', () => {
-  it('launches the flujo package through Node', () => {
-    const config = internalServerConfig();
-    expect(config.command).toBe(process.execPath);
-    expect(config.args).toHaveLength(1);
-    expect(config.args[0]).toMatch(/mcp-servers[\\/]flujo[\\/]dist[\\/]index\.js$/);
-    expect(config.cwd).toMatch(/mcp-servers[\\/]flujo[\\/]dist$/);
-    expect(config.env?.FLUJO_DATA_DIR).toBeTruthy();
+  it('persists portable offline package-runner commands for every built-in', () => {
+    const expectedCommands: Record<string, string> = {
+      flujo: 'flujo-mcp-flujo',
+      filesystem: 'flujo-mcp-filesystem',
+      bash: 'flujo-mcp-bash',
+    };
+    for (const [name, executable] of Object.entries(expectedCommands)) {
+      const config = builtInServerConfig(name);
+      expect(config.command).toBe('npx');
+      expect(config.args).toEqual(['--no-install', executable]);
+      expect(config.cwd).toBe('');
+      expect(config.internalPackage).toBe(`@flujo-ai/mcp-${name}`);
+      expect(config.env?.FLUJO_DATA_DIR).toBeTruthy();
+    }
   });
 
-  it('forwards operator ceilings without leaking unrelated environment values', () => {
+  it('resolves a built-in app root at launch without coupling it to the data directory', () => {
+    const previousAppRoot = process.env.FLUJO_APP_ROOT;
+    const previousDataDir = process.env.FLUJO_DATA_DIR;
+    const appRoot = path.join(process.cwd(), 'read-only-app');
+    const dataDir = path.join(process.cwd(), 'relocated-data');
+    process.env.FLUJO_APP_ROOT = appRoot;
+    process.env.FLUJO_DATA_DIR = dataDir;
+    try {
+      const launch = resolveStdioLaunch(builtInServerConfig('filesystem'));
+      expect(launch.cwd).toBe(path.resolve(appRoot));
+      expect(launch.cwd).not.toBe(path.resolve(dataDir));
+      expect(launch.args).toEqual(['--no-install', 'flujo-mcp-filesystem']);
+      expect(launch.env.FLUJO_DATA_DIR).toBe(dataDir);
+    } finally {
+      if (previousAppRoot === undefined) delete process.env.FLUJO_APP_ROOT;
+      else process.env.FLUJO_APP_ROOT = previousAppRoot;
+      if (previousDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
+      else process.env.FLUJO_DATA_DIR = previousDataDir;
+    }
+  });
+
+  it('forwards launch context and operator ceilings without leaking unrelated values', () => {
     const previousRoot = process.env.FLUJO_FS_ROOTS;
+    const previousBaseUrl = process.env.FLUJO_BASE_URL;
+    const previousTls = process.env.NODE_EXTRA_CA_CERTS;
     const previousSecret = process.env.FLUJO_TEST_SECRET;
     process.env.FLUJO_FS_ROOTS = 'operator-root';
+    process.env.FLUJO_BASE_URL = 'https://127.0.0.1:4443';
+    process.env.NODE_EXTRA_CA_CERTS = 'test-ca.pem';
     process.env.FLUJO_TEST_SECRET = 'do-not-forward';
     try {
-      expect(builtInStdioEnv('filesystem')).toMatchObject({ FLUJO_FS_ROOTS: 'operator-root' });
+      expect(builtInStdioEnv('filesystem')).toMatchObject({
+        FLUJO_FS_ROOTS: 'operator-root',
+        FLUJO_BASE_URL: 'https://127.0.0.1:4443',
+        NODE_EXTRA_CA_CERTS: 'test-ca.pem',
+      });
       expect(builtInStdioEnv('filesystem')).not.toHaveProperty('FLUJO_TEST_SECRET');
     } finally {
       if (previousRoot === undefined) delete process.env.FLUJO_FS_ROOTS;
       else process.env.FLUJO_FS_ROOTS = previousRoot;
+      if (previousBaseUrl === undefined) delete process.env.FLUJO_BASE_URL;
+      else process.env.FLUJO_BASE_URL = previousBaseUrl;
+      if (previousTls === undefined) delete process.env.NODE_EXTRA_CA_CERTS;
+      else process.env.NODE_EXTRA_CA_CERTS = previousTls;
       if (previousSecret === undefined) delete process.env.FLUJO_TEST_SECRET;
       else process.env.FLUJO_TEST_SECRET = previousSecret;
     }

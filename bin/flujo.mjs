@@ -62,6 +62,12 @@ try {
 
 // Tell the running server it was installed via npm so it reports the right update mode.
 process.env.FLUJO_NPM = '1';
+// Keep install-specific paths runtime-only. Built-in MCP configs persist a portable
+// `npx --no-install` command and resolve it from this root when each child starts.
+process.env.FLUJO_APP_ROOT = packageRoot;
+if (!process.env.FLUJO_BASE_URL || process.env.FLUJO_BASE_URL.trim().length === 0) {
+  process.env.FLUJO_BASE_URL = `http://127.0.0.1:${port}`;
+}
 
 // --- build env (TLS/CA), reusing the launcher's single source of truth ------
 const { buildLaunchEnv } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'launch-next.mjs')).href);
