@@ -89,6 +89,8 @@ export interface InstallPreview {
   flows: Array<{ name: string }>;
   plannedExecutions: Array<{ name: string }>;
   secrets: Array<{ key: string; label?: string; required: boolean; provided: boolean }>;
+  /** Host-global declarations whose values may be collected before install. */
+  globals: NonNullable<FlujoPackage['globals']>;
   /**
    * `${global:VAR}` names this package expects the host to already have set
    * (in Settings), that are NOT currently set. Unlike `secrets[]` these are
@@ -253,10 +255,14 @@ function resolveSecretPlaceholders<T>(value: T, secrets: Record<string, string>)
 // ---------------------------------------------------------------------------
 
 /** Which of `requiredGlobals` are NOT currently set as a host global env var. */
-async function computeMissingGlobals(requiredGlobals: string[] | undefined): Promise<string[]> {
-  if (!requiredGlobals || requiredGlobals.length === 0) return [];
+async function computeMissingGlobals(manifest: Pick<FlujoPackage, 'requiredGlobals' | 'globals'>): Promise<string[]> {
+  const requiredGlobals = new Set(manifest.requiredGlobals ?? []);
+  for (const global of manifest.globals ?? []) {
+    if (global.required) requiredGlobals.add(global.name);
+  }
+  if (requiredGlobals.size === 0) return [];
   const stored = await loadItem<Record<string, unknown>>(StorageKey.GLOBAL_ENV_VARS, {});
-  return requiredGlobals.filter((name) => !Object.prototype.hasOwnProperty.call(stored, name));
+  return [...requiredGlobals].filter((name) => !Object.prototype.hasOwnProperty.call(stored, name));
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +321,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       package: { name: manifest.name, version: manifest.version, ...(manifest.publisher ? { publisher: manifest.publisher } : {}) },
       preview: {
         ...await buildPreview(manifest, secretProvided),
-        missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
+        missingGlobals: await computeMissingGlobals(manifest),
       },
       created: [],
       updated: [],
@@ -348,7 +354,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     disabled: [],
     servers: [],
     errors: [],
-    missingGlobals: await computeMissingGlobals(manifest.requiredGlobals),
+    missingGlobals: await computeMissingGlobals(manifest),
   };
 
   // Resolve {{secret.NAME}} placeholders in free-text content (prompts,
@@ -677,6 +683,7 @@ async function buildPreview(manifest: FlujoPackage, secretProvided: (name: strin
       required: s.required === true,
       provided: secretProvided(s.name),
     })),
+    globals: manifest.globals ?? [],
   };
 }
 

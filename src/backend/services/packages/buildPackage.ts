@@ -713,6 +713,11 @@ export function buildManifestFromEntities(
     previewPackageGlobals(resolved, entities),
     globalDeclarations,
   );
+  // Keep the legacy compatibility field complete. New installers should use
+  // globals[].required, but older installers only inspect requiredGlobals.
+  for (const global of globals) {
+    if (global.required) requiredGlobals.add(global.name);
+  }
 
   if (errors.length > 0) {
     return { ok: false, resolved, errors, warnings };

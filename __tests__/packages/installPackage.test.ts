@@ -739,4 +739,29 @@ describe('installPackage — requiredGlobals / missingGlobals', () => {
     const preview = await installPackage({ source: 'registry', packageId: 'globals-pkg-2' });
     expect(preview.preview!.missingGlobals).toEqual([]);
   });
+
+  it('treats required globals[] declarations as required without the legacy field', async () => {
+    fetchPackageManifestMock.mockResolvedValue({
+      schemaVersion: 1,
+      id: 'pkg-declared-globals-id',
+      name: 'declared-globals',
+      version: '1.0.0',
+      globals: [
+        { name: 'REPOSITORY_URL', required: true, isSecret: false },
+        { name: 'OPTIONAL_LABEL', required: false, isSecret: false },
+      ],
+      secrets: [],
+      mcpServers: [],
+      models: [],
+      flows: [],
+      plannedExecutions: [],
+    });
+
+    const preview = await installPackage({ source: 'registry', packageId: 'declared-globals' });
+    expect(preview.preview!.globals).toEqual([
+      { name: 'REPOSITORY_URL', required: true, isSecret: false },
+      { name: 'OPTIONAL_LABEL', required: false, isSecret: false },
+    ]);
+    expect(preview.preview!.missingGlobals).toEqual(['REPOSITORY_URL']);
+  });
 });

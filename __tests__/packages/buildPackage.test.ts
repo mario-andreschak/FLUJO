@@ -415,7 +415,7 @@ describe('buildManifestFromEntities', () => {
       expect.objectContaining({ name: 'API_TOKEN', required: true }),
       expect.objectContaining({ name: 'API_BASE', required: true }),
     ]);
-    expect(result.package!.requiredGlobals).toBeUndefined();
+    expect(result.package!.requiredGlobals).toEqual(['API_TOKEN', 'API_BASE']);
     expect(JSON.stringify(result.package!.flows)).toContain(
       'Use ${global:API_TOKEN} at ${global:API_BASE}; again ${global:API_TOKEN}',
     );
