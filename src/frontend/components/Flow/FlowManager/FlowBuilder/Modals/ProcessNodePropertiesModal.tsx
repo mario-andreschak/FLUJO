@@ -59,34 +59,6 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: 'advanced', label: 'Advanced' },
 ];
 
-const TASK_TOOLS_WIDTH_STORAGE_KEY = 'flujo.processNode.taskToolsPaneWidth';
-const DEFAULT_TASK_TOOLS_WIDTH = 340;
-const MIN_TASK_TOOLS_WIDTH = 260;
-const MAX_TASK_TOOLS_WIDTH = 640;
-const MIN_TASK_EDITOR_WIDTH = 360;
-const TASK_DIVIDER_WIDTH = 12;
-const TASK_RESIZE_STEP = 24;
-
-const clampTaskToolsWidth = (width: number, containerWidth = 0): number => {
-  const viewportMaximum = containerWidth > 0
-    ? Math.max(MIN_TASK_TOOLS_WIDTH, containerWidth - MIN_TASK_EDITOR_WIDTH - TASK_DIVIDER_WIDTH)
-    : MAX_TASK_TOOLS_WIDTH;
-  const maximum = Math.min(MAX_TASK_TOOLS_WIDTH, viewportMaximum);
-  return Math.min(Math.max(width, MIN_TASK_TOOLS_WIDTH), maximum);
-};
-
-const readStoredTaskToolsWidth = (): number => {
-  if (typeof window === 'undefined') return DEFAULT_TASK_TOOLS_WIDTH;
-  try {
-    const stored = Number(window.localStorage.getItem(TASK_TOOLS_WIDTH_STORAGE_KEY));
-    return Number.isFinite(stored) && stored > 0
-      ? clampTaskToolsWidth(stored)
-      : DEFAULT_TASK_TOOLS_WIDTH;
-  } catch {
-    return DEFAULT_TASK_TOOLS_WIDTH;
-  }
-};
-
 export function getInitialProcessSection(
   authoringMode: FlowAuthoringMode,
   promptTemplate: unknown,
@@ -135,8 +107,6 @@ export const ProcessNodePropertiesModal = ({
   const [activeTab, setActiveTab] = useState<string>('server');
   // Issue #300: the currently active top-level section tab.
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
-  const [taskToolsWidth, setTaskToolsWidth] = useState(readStoredTaskToolsWidth);
-  const [isResizingTaskPanes, setIsResizingTaskPanes] = useState(false);
   const visibleSections = authoringMode === 'advanced'
     ? SECTIONS
     : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section.key));
@@ -149,9 +119,6 @@ export const ProcessNodePropertiesModal = ({
   const ioRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<HTMLDivElement>(null);
   const advancedRef = useRef<HTMLDivElement>(null);
-  const taskSplitContainerRef = useRef<HTMLDivElement>(null);
-  const taskToolsWidthRef = useRef(taskToolsWidth);
-  const taskResizeStartRef = useRef({ pointerX: 0, width: taskToolsWidth });
   const sectionRefs: Record<SectionKey, React.RefObject<HTMLDivElement | null>> = {
     basic: basicRef,
     model: modelRef,
@@ -169,51 +136,6 @@ export const ProcessNodePropertiesModal = ({
     }
     if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
   }, [activeSection, activeTab, authoringMode]);
-
-  useEffect(() => {
-    taskToolsWidthRef.current = taskToolsWidth;
-    try {
-      window.localStorage.setItem(TASK_TOOLS_WIDTH_STORAGE_KEY, String(taskToolsWidth));
-    } catch {
-      // localStorage can be unavailable in privacy-restricted browser contexts.
-    }
-  }, [taskToolsWidth]);
-
-  useEffect(() => {
-    const clampToContainer = () => {
-      const containerWidth = taskSplitContainerRef.current?.getBoundingClientRect().width ?? 0;
-      setTaskToolsWidth((current) => clampTaskToolsWidth(current, containerWidth));
-    };
-    clampToContainer();
-    window.addEventListener('resize', clampToContainer);
-    return () => window.removeEventListener('resize', clampToContainer);
-  }, [open]);
-
-  useEffect(() => {
-    if (!isResizingTaskPanes) return;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      if (!Number.isFinite(event.clientX)) return;
-      const containerWidth = taskSplitContainerRef.current?.getBoundingClientRect().width ?? 0;
-      const nextWidth = taskResizeStartRef.current.width
-        + event.clientX - taskResizeStartRef.current.pointerX;
-      setTaskToolsWidth(clampTaskToolsWidth(nextWidth, containerWidth));
-    };
-    const finishResize = () => setIsResizingTaskPanes(false);
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', finishResize);
-    window.addEventListener('pointercancel', finishResize);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', finishResize);
-      window.removeEventListener('pointercancel', finishResize);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizingTaskPanes]);
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
     open,
@@ -439,28 +361,6 @@ export const ProcessNodePropertiesModal = ({
     }
     // Re-enable observer once the smooth scroll has settled.
     window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
-  };
-
-  const handleTaskDividerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!Number.isFinite(event.clientX)) return;
-    event.preventDefault();
-    taskResizeStartRef.current = {
-      pointerX: event.clientX,
-      width: taskToolsWidthRef.current,
-    };
-    setIsResizingTaskPanes(true);
-  };
-
-  const handleTaskDividerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const containerWidth = taskSplitContainerRef.current?.getBoundingClientRect().width ?? 0;
-    let nextWidth: number | null = null;
-    if (event.key === 'ArrowLeft') nextWidth = taskToolsWidthRef.current - TASK_RESIZE_STEP;
-    if (event.key === 'ArrowRight') nextWidth = taskToolsWidthRef.current + TASK_RESIZE_STEP;
-    if (event.key === 'Home') nextWidth = MIN_TASK_TOOLS_WIDTH;
-    if (event.key === 'End') nextWidth = MAX_TASK_TOOLS_WIDTH;
-    if (nextWidth === null) return;
-    event.preventDefault();
-    setTaskToolsWidth(clampTaskToolsWidth(nextWidth, containerWidth));
   };
 
   const handleDialogEntered = () => {
@@ -789,75 +689,15 @@ export const ProcessNodePropertiesModal = ({
             />
           </Box>}
 
-          {/* Task — independently scrollable tools/editor panes with a persisted
-              accessible splitter. The prompt editor remains mounted once. */}
+          {/* Task — tool panels on the LEFT, editor on the RIGHT (as big as
+              possible), single mounted editor (issue #300 feedback). */}
           <Box ref={taskRef} data-section="task" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>Task</Typography>
-            <Box
-              ref={taskSplitContainerRef}
-              data-testid="process-task-split-container"
-              sx={{
-                display: 'flex',
-                flexDirection: { xs: 'column', md: 'row' },
-                flexGrow: 1,
-                minHeight: 480,
-                height: { xs: 'auto', md: 'clamp(480px, 62vh, 680px)' },
-                overflow: 'hidden',
-              }}
-            >
-              <Box
-                data-testid="process-task-tools-pane"
-                sx={{
-                  flex: { xs: '0 0 auto', md: `0 0 ${taskToolsWidth}px` },
-                  width: { xs: '100%', md: `${taskToolsWidth}px` },
-                  minWidth: 0,
-                  minHeight: { xs: 320, md: 0 },
-                  maxHeight: { xs: 420, md: 'none' },
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                }}
-              >
+            <Box sx={{ display: 'flex', gap: 2, flexGrow: 1, minHeight: 480 }}>
+              <Box sx={{ flex: '0 0 340px', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 {toolPanels}
               </Box>
-              <Box
-                role="separator"
-                aria-label="Resize Task tools and prompt editor panes"
-                aria-orientation="vertical"
-                aria-valuemin={MIN_TASK_TOOLS_WIDTH}
-                aria-valuemax={MAX_TASK_TOOLS_WIDTH}
-                aria-valuenow={Math.round(taskToolsWidth)}
-                tabIndex={0}
-                onPointerDown={handleTaskDividerPointerDown}
-                onKeyDown={handleTaskDividerKeyDown}
-                sx={{
-                  display: { xs: 'none', md: 'flex' },
-                  flex: `0 0 ${TASK_DIVIDER_WIDTH}px`,
-                  cursor: 'col-resize',
-                  alignItems: 'stretch',
-                  justifyContent: 'center',
-                  touchAction: 'none',
-                  bgcolor: isResizingTaskPanes ? 'action.selected' : 'transparent',
-                  '&::after': {
-                    content: '""',
-                    width: 2,
-                    borderRadius: 1,
-                    bgcolor: 'divider',
-                  },
-                  '&:hover, &:focus-visible': { bgcolor: 'action.hover', outline: 'none' },
-                }}
-              />
-              <Box
-                data-testid="process-task-editor-scroll"
-                sx={{
-                  flex: '1 1 auto',
-                  minWidth: 0,
-                  minHeight: { xs: 420, md: 0 },
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'auto',
-                }}
-              >
+              <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 <PromptTemplateEditor
                   ref={promptBuilderRef}
                   promptTemplate={promptTemplate}

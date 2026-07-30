@@ -27,7 +27,7 @@ import {
   recordCodexSession,
   invalidateCodexSession,
 } from './codexSessionStore';
-import { extractNativeMediaParts } from './messageUtils';
+import { extractMediaParts, extractNativeMediaParts } from './messageUtils';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -529,6 +529,14 @@ export class CodexAdapter implements CompletionAdapter {
       }
     }
 
+    for (const message of messages) {
+      if (message.role !== 'user') continue;
+      for (const media of extractMediaParts(message.content)) {
+        if (media.type !== 'file' || media.mimeType !== 'application/pdf') continue;
+        inputItems.push({
+          type: 'text',
+          text: '[PDF document attachment supplied; this Codex SDK version cannot attach non-image files.]',
+        });
       }
     }
 
