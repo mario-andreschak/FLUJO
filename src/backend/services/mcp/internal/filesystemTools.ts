@@ -542,12 +542,16 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
 
   // #287: guard whole-file reads of large files. Stat first so we never buffer a
   // huge file just to reject it. An explicit line range or a `pattern` opts out.
-  let size = 0;
+  let stat: Awaited<ReturnType<typeof fs.stat>> | undefined;
   try {
-    size = (await fs.stat(filePath)).size;
+    stat = await fs.stat(filePath);
   } catch {
     // fall through: fs.readFile below surfaces the real ENOENT/EACCES error.
   }
+  if (stat && !stat.isFile()) {
+    throw new Error('Expected a regular file to read.');
+  }
+  const size = stat?.size ?? 0;
 
   if (size > LARGE_FILE_BYTES && !hasRange && !pattern) {
     return errorResult(

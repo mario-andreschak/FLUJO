@@ -120,6 +120,18 @@ describe('filesystem operations', () => {
     expect(out.to).toBe(3);
   });
 
+  it.each([
+    ['whole-file', {}],
+    ['pattern', { pattern: 'needle' }],
+    ['range', { from: 1, to: 2 }],
+  ])('rejects a directory target for a %s read', async (_mode, options) => {
+    const result = await filesystemCallTool('read_file', { path: dir, ...options });
+
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toEqual({ error: 'Expected a regular file to read.' });
+    expect(structured(result)).toEqual({ error: 'Expected a regular file to read.' });
+  });
+
   it('applies a diff edit and rejects a missing oldText', async () => {
     const p = path.join(dir, 'c.txt');
     await filesystemCallTool('write_file', { path: p, content: 'hello world' });
