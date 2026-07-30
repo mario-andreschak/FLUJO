@@ -199,10 +199,13 @@ describe('MCP REST API', () => {
     expect(rename.status).toBe(409);
   });
 
-  it('reports the built-in server as connected and lists its tools without a process', async () => {
+  it('reports the built-in stdio child as available and lists its tools', async () => {
     const status = await getStatus(req(), ctx('flujo'));
     expect(status.status).toBe(200);
-    await expect(status.json()).resolves.toMatchObject({ status: 'connected' });
+    const statusBody = await status.json();
+    // The REST request may race the enabled-server startup sweep. Unlike the old
+    // in-process short circuit, the standalone child has a real connecting phase.
+    expect(['connecting', 'connected']).toContain(statusBody.status);
 
     const tools = await getTools(req(), ctx('flujo'));
     expect(tools.status).toBe(200);

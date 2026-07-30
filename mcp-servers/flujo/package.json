@@ -1,0 +1,27 @@
+{
+  "name": "@flujo-ai/mcp-flujo",
+  "version": "0.1.0",
+  "description": "FLUJO's standalone application MCP server",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "flujo-mcp-flujo": "dist/index.js"
+  },
+  "files": ["dist/**/*"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.30",
+    "typescript": "5.8.3"
+  }
+}

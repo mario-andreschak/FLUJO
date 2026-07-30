@@ -1,6 +1,9 @@
 {
   "name": "flujo-ai",
   "version": "3.33.0",
+  "workspaces": [
+    "mcp-servers/*"
+  ],
   "bin": {
     "flujo": "bin/flujo.mjs"
   },
@@ -10,12 +13,18 @@
     "public/**/*",
     "scripts/launch-next.mjs",
     "bin/**/*",
+    "mcp-servers/README.md",
+    "mcp-servers/*/dist/**/*",
+    "mcp-servers/*/package.json",
     "next.config.mjs"
   ],
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev -p 4200",
     "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
-    "build": "next build",
+    "build": "npm run build:mcp && next build",
+    "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @flujo-ai/mcp-filesystem && npm run build -w @flujo-ai/mcp-bash && npm run build -w @flujo-ai/mcp-flujo",
+    "typecheck:mcp": "npm run typecheck --workspaces --if-present",
+    "test:mcp": "npm run test --workspaces --if-present",
     "start": "node scripts/launch-next.mjs start -p 4200",
     "check:parallel-mcp:no-oauth": "node scripts/check-parallel-mcp-no-oauth.mjs",
     "lint": "next lint",

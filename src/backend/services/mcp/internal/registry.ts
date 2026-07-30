@@ -18,7 +18,13 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { MCPStdioConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
-import { INTERNAL_SERVER_NAME, internalServerConfig } from '../internalServerConfig';
+import {
+  INTERNAL_SERVER_NAME,
+  builtInStdioCwd,
+  builtInStdioEntrypoint,
+  builtInStdioEnv,
+  internalServerConfig,
+} from '../internalServerConfig';
 
 const log = createLogger('backend/services/mcp/internal/registry');
 
@@ -43,9 +49,10 @@ function builtInStdioConfig(name: string): MCPStdioConfig {
   return {
     name,
     transport: 'stdio',
-    command: '',
-    args: [],
-    env: {},
+    command: process.execPath,
+    args: [builtInStdioEntrypoint(name)],
+    env: builtInStdioEnv(name),
+    cwd: builtInStdioCwd(name),
     disabled: false,
     autoApprove: [],
     rootPath: '',

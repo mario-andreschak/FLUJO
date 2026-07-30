@@ -131,7 +131,8 @@ dist
 
 node_modules
 dist
-mcp-servers
+# Standalone MCP package sources/manifests are tracked; their compiled dist
+# directories remain covered by the generic dist rule above.
 build
 .vscode
 *.code-workspace

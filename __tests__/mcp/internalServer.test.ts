@@ -1,7 +1,7 @@
 /**
  * Tests for the built-in internal server's integration into MCPService:
- * synthetic config injection (stored config wins), connect/status short-circuits,
- * CRUD guards, tool dispatch, and the never-persist rule in saveConfig.
+ * synthetic stdio config injection (stored config wins), CRUD guards, and the
+ * never-persist rule in saveConfig.
  */
 
 // Self-contained factories (no closing over outer consts — see jest-test-harness notes).
@@ -9,29 +9,19 @@ jest.mock('@/utils/storage/backend', () => ({
   loadItem: jest.fn(async () => ({})),
   saveItem: jest.fn(async () => undefined),
 }));
-// The dispatcher module reaches into runFlow/authoring/scheduler; MCPService loads
-// it via dynamic import, which jest.mock intercepts all the same.
-jest.mock('@/backend/services/mcp/internalTools', () => ({
-  internalToolDefinitions: () => [
-    { name: 'ping', description: 'test tool', inputSchema: { type: 'object', properties: {} } },
-  ],
-  internalCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'pong' }] })),
-}));
-
-import { promises as fsp } from 'fs';
-import os from 'os';
-import path from 'path';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
-import { INTERNAL_SERVER_NAME, internalServerConfig } from '@/backend/services/mcp/internalServerConfig';
-import { _setRunResourcesDirForTests } from '@/backend/services/runResources';
+import {
+  INTERNAL_SERVER_NAME,
+  builtInStdioEnv,
+  internalServerConfig,
+} from '@/backend/services/mcp/internalServerConfig';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { MCPServerConfig } from '@/shared/types/mcp';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
-const internalCallToolMock = (jest.requireMock('@/backend/services/mcp/internalTools') as { internalCallTool: jest.Mock }).internalCallTool;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -62,65 +52,49 @@ describe('loadServerConfigs injection', () => {
   });
 });
 
-describe('connection short-circuits', () => {
-  it('connectServer succeeds instantly without creating a client', async () => {
-    const result = await mcpService.connectServer(INTERNAL_SERVER_NAME);
-    expect(result.success).toBe(true);
-    expect((global as { __mcp_clients?: Map<string, unknown> }).__mcp_clients?.has(INTERNAL_SERVER_NAME)).toBe(false);
+describe('standalone stdio configuration', () => {
+  it('launches the flujo package through Node instead of short-circuiting in process', () => {
+    const config = internalServerConfig();
+    expect(config.command).toBe(process.execPath);
+    expect(config.args).toHaveLength(1);
+    expect(config.args[0]).toMatch(/mcp-servers[\\/]flujo[\\/]dist[\\/]index\.js$/);
+    expect(config.cwd).toMatch(/mcp-servers[\\/]flujo[\\/]dist$/);
+    expect(config.env?.FLUJO_DATA_DIR).toBeTruthy();
   });
 
-  it('getServerStatus reports connected', async () => {
-    const status = await mcpService.getServerStatus(INTERNAL_SERVER_NAME);
-    expect(status.status).toBe('connected');
-  });
-
-  it('disconnectServer and forceReconnect are successful no-ops', async () => {
-    expect((await mcpService.disconnectServer(INTERNAL_SERVER_NAME)).success).toBe(true);
-    expect((await mcpService.forceReconnect(INTERNAL_SERVER_NAME)).success).toBe(true);
-  });
-
-  it('does not short-circuit when a stored server shadows the name', async () => {
-    loadItemMock.mockResolvedValue({ [INTERNAL_SERVER_NAME]: { transport: 'stdio', command: 'x' } });
-    // A shadowed name takes the normal path: no client exists and no live connect
-    // is attempted here, so the status is the regular "configured but not
-    // connected" error rather than the built-in's synthetic "connected".
-    const status = await mcpService.getServerStatus(INTERNAL_SERVER_NAME);
-    expect(status.status).not.toBe('connected');
-  });
-});
-
-describe('tool listing and dispatch', () => {
-  it('listServerTools returns the internal tool definitions', async () => {
-    const { tools, error } = await mcpService.listServerTools(INTERNAL_SERVER_NAME);
-    expect(error).toBeUndefined();
-    expect(tools.map((t) => t.name)).toEqual(['ping']);
-  });
-
-  it('callTool dispatches in-process and wraps the CallToolResult in data', async () => {
-    const result = await mcpService.callTool(INTERNAL_SERVER_NAME, 'ping', { a: 1 });
-    expect(internalCallToolMock).toHaveBeenCalledWith(mcpService, 'ping', { a: 1 }, 'host');
-    expect(result.success).toBe(true);
-    expect(result.data).toEqual({ content: [{ type: 'text', text: 'pong' }] });
-  });
-
-  it('listServerResources/Prompts return empty without errors', async () => {
-    // The internal server's listServerResources reads the REAL on-disk Tier-3
-    // run-resource store (db/run-resources), so isolate it to an empty temp dir
-    // via the store's test seam to make the emptiness assertion deterministic on
-    // any machine that has ever produced run artifacts.
-    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-internal-'));
-    const prevDir = _setRunResourcesDirForTests(tmp);
+  it('forwards operator ceilings without leaking unrelated environment values', () => {
+    const previousRoot = process.env.FLUJO_FS_ROOTS;
+    const previousSecret = process.env.FLUJO_TEST_SECRET;
+    process.env.FLUJO_FS_ROOTS = 'operator-root';
+    process.env.FLUJO_TEST_SECRET = 'do-not-forward';
     try {
-      const resources = await mcpService.listServerResources(INTERNAL_SERVER_NAME);
-      expect(resources.error).toBeUndefined();
-      expect(Array.isArray(resources.resources)).toBe(true);
-      expect(resources.resources).toEqual([]);
-      const prompts = await mcpService.listServerPrompts(INTERNAL_SERVER_NAME);
-      expect(prompts.prompts).toEqual([]);
-      expect(prompts.error).toBeUndefined();
+      expect(builtInStdioEnv('filesystem')).toMatchObject({
+        FLUJO_FS_ROOTS: 'operator-root',
+      });
+      expect(builtInStdioEnv('filesystem')).not.toHaveProperty('FLUJO_TEST_SECRET');
     } finally {
-      _setRunResourcesDirForTests(prevDir);
-      await fsp.rm(tmp, { recursive: true, force: true });
+      if (previousRoot === undefined) delete process.env.FLUJO_FS_ROOTS;
+      else process.env.FLUJO_FS_ROOTS = previousRoot;
+      if (previousSecret === undefined) delete process.env.FLUJO_TEST_SECRET;
+      else process.env.FLUJO_TEST_SECRET = previousSecret;
+    }
+  });
+
+  it('retains bash full-environment inheritance only with the explicit opt-in', () => {
+    const previousInherit = process.env.FLUJO_BASH_INHERIT_ENV;
+    const previousSecret = process.env.FLUJO_TEST_SECRET;
+    process.env.FLUJO_BASH_INHERIT_ENV = '1';
+    process.env.FLUJO_TEST_SECRET = 'explicitly-forwarded';
+    try {
+      expect(builtInStdioEnv('bash')).toMatchObject({
+        FLUJO_BASH_INHERIT_ENV: '1',
+        FLUJO_TEST_SECRET: 'explicitly-forwarded',
+      });
+    } finally {
+      if (previousInherit === undefined) delete process.env.FLUJO_BASH_INHERIT_ENV;
+      else process.env.FLUJO_BASH_INHERIT_ENV = previousInherit;
+      if (previousSecret === undefined) delete process.env.FLUJO_TEST_SECRET;
+      else process.env.FLUJO_TEST_SECRET = previousSecret;
     }
   });
 });
@@ -221,19 +195,13 @@ describe('multiple built-in servers (issue #170)', () => {
     expect(error).toMatch(/disabled/i);
   });
 
-  it('lists real filesystem tools when enabled', async () => {
-    const { tools, error } = await mcpService.listServerTools('filesystem');
-    expect(error).toBeUndefined();
-    expect(tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(['read_file', 'write_file', 'edit_file', 'list_dir', 'search'])
-    );
-  });
-
-  it('lists real bash tools when enabled', async () => {
-    const { tools } = await mcpService.listServerTools('bash');
-    expect(tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(['run', 'start', 'status', 'wait', 'kill'])
-    );
+  it('configures filesystem and bash as real stdio child processes', async () => {
+    const configs = (await mcpService.loadServerConfigs()) as MCPServerConfig[];
+    for (const name of ['filesystem', 'bash']) {
+      const config = configs.find((candidate) => candidate.name === name);
+      expect(config?.command).toBe(process.execPath);
+      expect(config?.args?.[0]).toMatch(new RegExp(`mcp-servers[\\\\/]${name}[\\\\/]dist[\\\\/]index\\.js$`));
+    }
   });
 });
 

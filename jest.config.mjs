@@ -12,6 +12,12 @@ const createJestConfig = nextJest({ dir: './' });
 // Shared across both projects: the "@/" alias.
 const moduleNameMapper = {
   '^@/(.*)$': '<rootDir>/src/$1',
+  // Direct backend compatibility tests retain their existing mocked policy
+  // modules; subprocess tests still load the compiled standalone package.
+  '^@flujo-ai/mcp-shared$': '<rootDir>/__tests__/mcp/mcpSharedJestAdapter.ts',
+  // NodeNext source imports retain their runtime .js suffix. Resolve the
+  // filesystem package's colocated TypeScript resource module under Jest.
+  '^\\./resources\\.js$': '<rootDir>/mcp-servers/filesystem/src/resources.ts',
 };
 
 // The fast backend/engine suite. Runs under node (no DOM). Collects every

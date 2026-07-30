@@ -1,0 +1,28 @@
+{
+  "name": "@flujo-ai/mcp-bash",
+  "version": "0.1.0",
+  "description": "FLUJO's standalone cross-platform shell MCP server",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "flujo-mcp-bash": "dist/index.js"
+  },
+  "files": ["dist/**/*"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../embed-shared.mjs bash",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@flujo-ai/mcp-shared": "0.1.0",
+    "@types/node": "^20.17.30",
+    "typescript": "5.8.3"
+  }
+}
