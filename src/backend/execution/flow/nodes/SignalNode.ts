@@ -29,10 +29,29 @@ const log = createLogger('backend/flow/execution/nodes/SignalNode');
  *    wherever placed. Loop safety comes from the shared `chainDepth`.
  */
 export class SignalNode extends BaseNode {
-  async prep(_sharedState: SharedState, node_params?: SignalNodeParams): Promise<{ topic: string; payloadTemplate: string }> {
+  async prep(sharedState: SharedState, node_params?: SignalNodeParams): Promise<{ topic: string; payloadTemplate: string }> {
     const topic = (node_params?.properties?.topic ?? '').trim();
-    const payloadTemplate = node_params?.properties?.payloadTemplate ?? '';
-    log.info('prep() started', { nodeId: node_params?.id, topic, payloadTemplateLength: payloadTemplate.length });
+    const authoredPayloadTemplate = node_params?.properties?.payloadTemplate ?? '';
+    const handoffInput = sharedState.handoffInput;
+    const isCallerHandoff =
+      handoffInput?.fromHandoffTool === true &&
+      handoffInput.targetNodeId === node_params?.id;
+    const callerBody = handoffInput?.signalBody?.trim() ?? '';
+
+    if (isCallerHandoff) {
+      sharedState.handoffInput = undefined;
+      if (!callerBody) {
+        throw new Error('Process-to-Signal handoff requires a non-empty body argument.');
+      }
+    }
+
+    const payloadTemplate = isCallerHandoff ? callerBody : authoredPayloadTemplate;
+    log.info('prep() started', {
+      nodeId: node_params?.id,
+      topic,
+      payloadTemplateLength: payloadTemplate.length,
+      callerSuppliedPayload: isCallerHandoff,
+    });
     return { topic, payloadTemplate };
   }
 

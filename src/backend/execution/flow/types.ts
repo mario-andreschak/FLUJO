@@ -694,6 +694,11 @@ export interface SharedState {
     handoffInput?: {
         targetNodeId: string;
         prompt: string;
+        /** Process → Signal (#307): caller-supplied event payload. The
+         *  `fromHandoffTool` marker lets SignalNode defensively reject malformed
+         *  legacy/parameterless calls without affecting direct traversal. */
+        signalBody?: string;
+        fromHandoffTool?: boolean;
         /** Spawn-with-brief (issue #156): one entry per handoff tool call the
          *  routing model made to this target in the SAME assistant turn, each the
          *  call's `task` brief. N entries => the target subflow runs N PARALLEL
@@ -808,6 +813,9 @@ export interface SharedState {
      * stripping the prefix.
      */
     handoffNameMap?: Record<string, string>;
+    /** Target node types keyed by node id, populated alongside handoffNameMap so
+     *  transition handling can enforce target-specific runtime contracts. */
+    handoffTargetTypes?: Record<string, string>;
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */

@@ -101,6 +101,7 @@ export class ProcessNode extends BaseNode {
     // name -> node-id mapping so routing still works.
     const nameMap = buildHandoffToolNameMap(targets);
     sharedState.handoffNameMap = sharedState.handoffNameMap || {};
+    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
 
     // Load the containing flow once so descriptions can read each target's
     // user-authored description and full properties (and recurse into subflows).
@@ -118,6 +119,7 @@ export class ProcessNode extends BaseNode {
     for (const target of targets) {
       const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
       sharedState.handoffNameMap[toolName] = target.id;
+      sharedState.handoffTargetTypes[target.id] = target.type;
 
       const flowNode = flowNodesById?.get(target.id);
       const description = flowNode
@@ -170,7 +172,15 @@ export class ProcessNode extends BaseNode {
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
       const descExtras: string[] = [];
-      if (acceptsCallerSpawn) {
+      if (target.type === 'signal') {
+        paramProps.body = {
+          type: "string",
+          minLength: 1,
+          description: "REQUIRED non-empty payload body to emit with the signal. You MUST supply the signal data for this handoff."
+        };
+        requiredParams.push('body');
+        descExtras.push('You MUST pass a non-empty "body" argument; it becomes the emitted signal payload.');
+      } else if (acceptsCallerSpawn) {
         // `task` subsumes `prompt` for spawnable targets (a single spawn with a
         // brief behaves like a caller prompt), so only one param is exposed.
         paramProps.task = {

@@ -26,6 +26,7 @@ const EDGE = `${START}->${WORKER}`;
 
 // Configured per test: the tool_calls the start step's assistant turn carries.
 let assistantToolCalls: any[] = [];
+let targetType: string | undefined;
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const S = 'aaaaaaaa-start';
@@ -43,6 +44,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
         if (nodeId === S) {
           // The routing step: the model answered with handoff tool calls.
           sharedState.handoffNameMap = { handoff_to_worker: W, handoff_to_other: 'cccccccc-other' };
+          sharedState.handoffTargetTypes = targetType ? { [W]: targetType } : {};
           sharedState.messages.push({
             role: 'assistant',
             content: 'Dispatching workers.',
@@ -103,6 +105,7 @@ function spawnCall(id: string, task: string) {
 beforeEach(() => {
   conversationStates.clear();
   assistantToolCalls = [];
+  targetType = undefined;
 });
 
 describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
@@ -184,6 +187,36 @@ describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
     // Both calls still answered.
     const toolResults = result.messages.filter((m: any) => m.role === 'tool');
     expect(toolResults.map((m: any) => m.tool_call_id)).toEqual(['c1', 'c2']);
+  });
+
+  it('captures a Process-to-Signal body in target-scoped handoff state', async () => {
+    targetType = 'signal';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ body: 'signal payload' }) } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      targetNodeId: WORKER,
+      fromHandoffTool: true,
+      signalBody: 'signal payload',
+    });
+  });
+
+  it('marks a parameterless Signal handoff so SignalNode can reject it defensively', async () => {
+    targetType = 'signal';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: '{}' } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      targetNodeId: WORKER,
+      fromHandoffTool: true,
+    });
+    expect(result.sharedState.handoffInput?.signalBody).toBeUndefined();
   });
 
   it('a plain (no-args) single handoff captures nothing (unchanged behavior)', async () => {

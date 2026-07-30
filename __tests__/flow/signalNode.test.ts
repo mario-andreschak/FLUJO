@@ -74,6 +74,59 @@ describe('SignalNode', () => {
     expect(action).toBe('next'); // transparent: first successor
   });
 
+  it('uses a Process handoff body as the payload and resolves run variables', async () => {
+    const events: FlowEvent[] = [];
+    const unsub = getFlowRunEventBus().subscribe((e) => events.push(e));
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 'review-blocked', payloadTemplate: 'authored fallback' });
+    const state = makeState({
+      variables: { reason: 'missing approval' },
+      handoffInput: {
+        targetNodeId: 'sig',
+        prompt: '',
+        fromHandoffTool: true,
+        signalBody: 'Caller says: ${var:reason}',
+      },
+    });
+
+    await node.post(await node.prep(state, p), {}, state, p);
+    unsub();
+
+    expect((events[0] as FlowSignalEvent).payload).toBe('Caller says: missing approval');
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('rejects a malformed Process handoff without a non-empty body', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 'review-blocked', payloadTemplate: 'must not be used' });
+    const state = makeState({
+      handoffInput: { targetNodeId: 'sig', prompt: '', fromHandoffTool: true },
+    });
+
+    await expect(node.prep(state, p)).rejects.toThrow('requires a non-empty body');
+    expect(state.handoffInput).toBeUndefined();
+  });
+
+  it('ignores handoff input scoped to a different node', async () => {
+    const events: FlowEvent[] = [];
+    const unsub = getFlowRunEventBus().subscribe((e) => events.push(e));
+    const node = nodeWithSuccessor();
+    const p = params({ topic: 't', payloadTemplate: 'authored' });
+    const state = makeState({
+      handoffInput: {
+        targetNodeId: 'other-signal',
+        prompt: '',
+        fromHandoffTool: true,
+        signalBody: 'wrong payload',
+      },
+    });
+
+    await node.post(await node.prep(state, p), {}, state, p);
+    unsub();
+
+    expect((events[0] as FlowSignalEvent).payload).toBe('authored');
+  });
+
   it('never mutates the conversation messages', async () => {
     const node = nodeWithSuccessor();
     const p = params({ topic: 't', payloadTemplate: 'x' });

@@ -1569,6 +1569,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               // string must NEVER break routing — parse defensively per call.
               const briefs: string[] = [];
               let callerPrompt = '';
+              let signalBody = '';
               let callerFlows: string[] | undefined;
               let callerConcurrency: number | undefined;
               callsToAnswer.forEach((call, laneIdx) => {
@@ -1577,6 +1578,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                     const parsedArgs = JSON.parse(call.function.arguments || '{}');
                     const task = typeof parsedArgs?.task === 'string' ? parsedArgs.task.trim() : '';
                     const prompt = typeof parsedArgs?.prompt === 'string' ? parsedArgs.prompt.trim() : '';
+                    const body = typeof parsedArgs?.body === 'string' ? parsedArgs.body.trim() : '';
+                    if (!signalBody && body) signalBody = body;
                     // `task` is always a spawn brief; a `prompt` on a MULTI-call
                     // turn clearly means per-instance instructions too. On a
                     // single-call turn `prompt` keeps its issue-#96 meaning.
@@ -1631,16 +1634,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               // `task`-style call still drives an isolated allowCallerPrompt
               // subflow that never opted into spawning.
               if (!callerPrompt && briefs.length === 1) callerPrompt = briefs[0];
-              if (callerPrompt || briefs.length > 0 || (callerFlows && callerFlows.length > 0)) {
+              const isSignalHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'signal';
+              if (isSignalHandoff || signalBody || callerPrompt || briefs.length > 0 || (callerFlows && callerFlows.length > 0)) {
                 sharedState.handoffInput = {
                   targetNodeId: nextNodeId,
                   prompt: callerPrompt,
+                  ...(isSignalHandoff ? { fromHandoffTool: true } : {}),
+                  ...(signalBody ? { signalBody } : {}),
                   ...(briefs.length > 0 ? { tasks: briefs } : {}),
                   ...(callerFlows && callerFlows.length > 0 ? { parallelFlows: callerFlows } : {}),
                   ...(callerConcurrency !== undefined ? { concurrencyLimit: callerConcurrency } : {}),
                 };
                 log.info(`Captured caller handoff input for node ${nextNodeId}`, {
                   promptChars: callerPrompt.length,
+                  signalBodyChars: signalBody.length,
                   spawnBriefs: briefs.length,
                   fanoutCount: callerFlows?.length ?? 0,
                 });
