@@ -5,6 +5,7 @@ import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import { SaveAndAuthenticateResult } from './Modals/ServerModal/types';
 import ServerDetailsModal from './ServerDetailsModal';
+import McpAppsDashboard from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
@@ -29,7 +30,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogContentText,
-  DialogActions
+  DialogActions,
+  Tooltip
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
@@ -47,6 +49,7 @@ import SelectAllIcon from '@mui/icons-material/SelectAll';
 import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import AppsIcon from '@mui/icons-material/Apps';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import {
   groupByFolder,
@@ -100,6 +103,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
   const [toolPrefill, setToolPrefill] = useState<ToolTesterPrefill | undefined>();
+  const [showAppsDashboard, setShowAppsDashboard] = useState(false);
   // Git update status per repository rootPath (locally cloned stdio servers).
   const [updates, setUpdates] = useState<Record<string, ServerUpdateInfo>>({});
 
@@ -729,6 +733,21 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               </>
             )}
             
+            <Tooltip title="Open MCP Apps Dashboard">
+              <IconButton
+                size="small"
+                aria-label="Open MCP Apps Dashboard"
+                onClick={() => setShowAppsDashboard(true)}
+                color={showAppsDashboard ? 'primary' : 'default'}
+                sx={{
+                  border: `1px solid ${theme.palette.divider}`,
+                  backgroundColor: theme.palette.background.default
+                }}
+              >
+                <AppsIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+
             {/* Group-by button (#71 folders / #73 sort-fold) */}
             <IconButton
               size="small"
@@ -981,6 +1000,16 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         onSaveEnv={saveEnv}
         onServerRestart={handleEnvRestart}
         toolPrefill={toolPrefill}
+      />
+
+      <McpAppsDashboard
+        open={showAppsDashboard}
+        onClose={() => setShowAppsDashboard(false)}
+        onOpenToolTester={(serverName, toolName) => {
+          setShowAppsDashboard(false);
+          setToolPrefill({ toolName, arguments: {} });
+          setDetailsServerName(serverName);
+        }}
       />
 
       <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
