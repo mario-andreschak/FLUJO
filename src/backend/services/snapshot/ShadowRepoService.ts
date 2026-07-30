@@ -28,6 +28,8 @@ import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import simpleGit, { SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
+import { loadItem } from '@/utils/storage/backend';
+import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 
 const log = createLogger('backend/services/snapshot/ShadowRepoService');
 
@@ -57,10 +59,21 @@ function resolveShadowRootDir(): string {
   return path.join(getDataDir(), 'snapshots');
 }
 
-/** Snapshots globally on unless the operator switches them off. */
-function snapshotsEnabled(): boolean {
+/** Snapshots globally on unless the operator or user switches them off. */
+async function snapshotsEnabled(): Promise<boolean> {
   const raw = (process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase();
-  return raw !== '0' && raw !== 'false' && raw !== 'off';
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+
+  try {
+    const settings = await loadItem<Settings | undefined>(
+      StorageKey.SPEECH_SETTINGS,
+      undefined,
+    );
+    return settings?.experimental?.snapshotsEnabled !== false;
+  } catch (error) {
+    log.warn('Could not load snapshot setting; keeping snapshots enabled', error);
+    return true;
+  }
 }
 
 /** Deterministic shadow gitdir for a confinement root. */
@@ -89,7 +102,7 @@ class ShadowRepoService {
    * Read-only: `checkIsRepo` inspects the real repo but never mutates it.
    */
   async isEnabledFor(root: string): Promise<boolean> {
-    if (!snapshotsEnabled()) return false;
+    if (!(await snapshotsEnabled())) return false;
     try {
       const abs = path.resolve(root);
       const stat = await fs.stat(abs).catch(() => null);

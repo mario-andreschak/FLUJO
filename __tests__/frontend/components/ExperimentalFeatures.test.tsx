@@ -106,6 +106,43 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     ).not.toBeChecked();
   });
 
+  it('defaults filesystem snapshots to on', () => {
+    mockStorageValue = {
+      settings: { speech: { enabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+    expect(
+      screen.getByRole('checkbox', { name: /Enable filesystem snapshots/i })
+    ).toBeChecked();
+  });
+
+  it('persists disabling snapshots without dropping other settings', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, mcpBetaProtocol: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: /Enable filesystem snapshots/i })
+    );
+
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        snapshotsEnabled: false,
+      },
+    });
+  });
+
   it('persists the protected-path opt-in without dropping other settings', () => {
     mockStorageValue = {
       settings: {

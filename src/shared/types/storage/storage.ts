@@ -150,6 +150,11 @@ export interface ExperimentalSettings {
    */
   protectedPathsEnabled?: boolean;
   /**
+   * When false, filesystem snapshots and snapshot-based revert are disabled.
+   * Missing values default to true to preserve existing installations.
+   */
+  snapshotsEnabled?: boolean;
+  /**
    * Cap, in characters, on each tool DESCRIPTION sent to the model. 0 / undefined
    * disables capping.
    *

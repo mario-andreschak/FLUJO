@@ -16,6 +16,12 @@ import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
 import simpleGit from 'simple-git';
+
+const loadItemMock = jest.fn();
+jest.mock('@/utils/storage/backend', () => ({
+  loadItem: (...args: unknown[]) => loadItemMock(...args),
+}));
+
 import {
   shadowRepoService,
   _setShadowRepoDirForTests,
@@ -48,6 +54,8 @@ describe('ShadowRepoService', () => {
     shadowDir = await mkTemp('flujo-shadow-');
     prevShadow = _setShadowRepoDirForTests(shadowDir);
     delete process.env.FLUJO_SNAPSHOTS;
+    loadItemMock.mockReset();
+    loadItemMock.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -76,6 +84,43 @@ describe('ShadowRepoService', () => {
 
       const diff = await shadowRepoService.diff(repo, before!, after!);
       expect(diff).toContain('changed');
+    } finally {
+      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('disables snapshots when the persisted setting is off', async () => {
+    const repo = await makeRealRepo();
+    try {
+      loadItemMock.mockResolvedValue({
+        experimental: { enabled: false, snapshotsEnabled: false },
+      });
+      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
+      expect(await shadowRepoService.capture(repo)).toBeNull();
+    } finally {
+      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('keeps snapshots enabled when the persisted setting is absent', async () => {
+    const repo = await makeRealRepo();
+    try {
+      loadItemMock.mockResolvedValue({ experimental: { enabled: false } });
+      expect(await shadowRepoService.isEnabledFor(repo)).toBe(true);
+    } finally {
+      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('keeps the environment disable authoritative over the persisted setting', async () => {
+    const repo = await makeRealRepo();
+    try {
+      process.env.FLUJO_SNAPSHOTS = '0';
+      loadItemMock.mockResolvedValue({
+        experimental: { enabled: false, snapshotsEnabled: true },
+      });
+      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
+      expect(loadItemMock).not.toHaveBeenCalled();
     } finally {
       await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
     }

@@ -76,6 +76,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleSnapshotsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Filesystem snapshots toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        snapshotsEnabled: event.target.checked,
+      },
+    });
+  };
+
   return (
     <Box sx={{ p: 2 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -176,6 +187,25 @@ export default function ExperimentalFeaturesSettings() {
           such as Documents, Desktop, Downloads, and credential directories remain
           blocked even when they are included in a configured root. This is off by
           default, so configured roots normally grant access to their full contents.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.snapshotsEnabled ?? true}
+              onChange={handleSnapshotsChange}
+              name="snapshotsEnabled"
+            />
+          }
+          label="Enable filesystem snapshots"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Capture restorable snapshots around built-in <strong>filesystem</strong>
+          {' '}and <strong>bash</strong> writes. Turning this off prevents new
+          captures and snapshot-based revert. An operator can always disable
+          snapshots with <strong>FLUJO_SNAPSHOTS=0</strong>.
         </Typography>
       </FormControl>
 
