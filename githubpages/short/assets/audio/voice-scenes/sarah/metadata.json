@@ -1,0 +1,11 @@
+{
+  "voiceKey": "sarah",
+  "voiceName": "Sarah",
+  "voiceId": "EXAVITQu4vr4xnSDxMaL",
+  "modelId": "eleven_v3",
+  "stability": 0.42,
+  "similarityBoost": 0.8,
+  "targetDuration": 141.92,
+  "finalDuration": 141.92,
+  "outputFile": "flujo-voiceover-sarah.mp3"
+}

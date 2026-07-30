@@ -1,10 +1,10 @@
 <img width="720" height="405" alt="output" src="https://github.com/user-attachments/assets/87ff1b2c-fec2-4652-a049-98e5ee699e00" />
 
-### ▶ FLUJO in 60 seconds
+### ▶ FLUJO — Your AI. In Flow.
 
-[![Watch: FLUJO in 60 seconds — animated short](githubpages/img/short-poster.jpeg)](https://mario-andreschak.github.io/FLUJO/githubpages/short.html)
+[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://mario-andreschak.github.io/FLUJO/githubpages/short/)
 
-*Click to watch*
+*Click to watch the 2:28 interactive product film*
 
 ## ⚡ Quick Install (recommended)
 

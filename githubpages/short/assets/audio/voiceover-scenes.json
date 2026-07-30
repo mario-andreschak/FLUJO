@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "audioFile": "flujo-voiceover-elevenlabs.mp3",
+  "voice": {
+    "provider": "ElevenLabs",
+    "name": "Brian",
+    "voiceId": "nPczCjzI2devNBz1zQrb",
+    "modelId": "eleven_v3",
+    "stability": 0.42,
+    "similarityBoost": 0.8,
+    "outputFormat": "mp3_44100_128"
+  },
+  "sceneGap": 1.2,
+  "totalDuration": 141.92,
+  "loudness": {
+    "integratedTargetLufs": -16,
+    "truePeakTargetDbtp": -1.5,
+    "loudnessRangeTargetLu": 7
+  },
+  "scenes": [
+    {
+      "scene": 1,
+      "start": 0.0,
+      "end": 26.08,
+      "duration": 26.08,
+      "text": "Using Claude Code? Or Codex? Cline? Ollama? Maybe Playwright, Supabase, Context Seven, Azure, Figma… or a WhatsApp M C P? A thousand AI tools. And somehow, you became the integration layer. Copying context. Pasting keys. Repeating yourself. Tired of micromanaging them all?"
+    },
+    {
+      "scene": 2,
+      "start": 27.28,
+      "end": 44.48,
+      "duration": 17.2,
+      "text": "Meet FLUJO. One local-first place to connect the models you choose, the tools you trust, and the workflows that make them useful. Use subscriptions, provider APIs, or local models. Store a key once—encrypted—and bind it anywhere."
+    },
+    {
+      "scene": 3,
+      "start": 45.68,
+      "end": 65.84,
+      "duration": 20.16,
+      "text": "Then design the job. Start with a prompt. Give each agent a role, the context it needs, and two tools—not twenty. Branch. Loop. Hand work to another agent. Or call an entire flow as one reusable step. You decide what every step can see—and what it can do."
+    },
+    {
+      "scene": 4,
+      "start": 67.04,
+      "end": 80.48,
+      "duration": 13.44,
+      "text": "Turn those workflows into a team: research, build, test, review. Let an orchestrator choose who goes next, pass work between specialists, and loop until the result is ready."
+    },
+    {
+      "scene": 5,
+      "start": 81.68,
+      "end": 98.88,
+      "duration": 17.2,
+      "text": "When the work shouldn’t wait for you, add a trigger: every morning, every twenty minutes, on a webhook, when a file or URL changes, when a new message arrives, or when another flow finishes—or fails. FLUJO runs it headlessly and keeps the history."
+    },
+    {
+      "scene": 6,
+      "start": 100.08,
+      "end": 114.0,
+      "duration": 13.92,
+      "text": "Prefer to stay in the loop? Open Chat and choose the same flow. Watch every handoff and tool call live. Check token use. Pause at a breakpoint. Inspect the state. Require approval before a tool acts."
+    },
+    {
+      "scene": 7,
+      "start": 115.2,
+      "end": 131.36,
+      "duration": 16.16,
+      "text": "And FLUJO doesn’t trap your setup. Reuse its M C P servers from Claude Desktop, Cline, Cursor, or other clients. Or expose any flow through an OpenAI-compatible endpoint—and call a whole team like a model."
+    },
+    {
+      "scene": 8,
+      "start": 132.56,
+      "end": 141.92,
+      "duration": 9.36,
+      "text": "Your models. Your tools. Your keys. Your rules. Stop managing AI one prompt at a time. Put your AI in flow."
+    }
+  ]
+}

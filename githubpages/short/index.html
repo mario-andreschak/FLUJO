@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#05080f">
+  <title>FLUJO — Your AI. In Flow.</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="viewport" aria-label="FLUJO animated film">
+    <div id="stage">
+      <canvas id="ambient" width="1600" height="900" aria-hidden="true"></canvas>
+      <div class="aurora aurora-a" aria-hidden="true"></div>
+      <div class="aurora aurora-b" aria-hidden="true"></div>
+      <div class="noise" aria-hidden="true"></div>
+
+      <!-- ACT I · TOOL SPRAWL -->
+      <section class="scene scene-chaos" id="scene-chaos" aria-label="Tool sprawl">
+        <svg class="chaos-lines" viewBox="0 0 1600 900" aria-hidden="true">
+          <defs>
+            <linearGradient id="chaosLine" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#22d3ee" stop-opacity=".2"/>
+              <stop offset=".5" stop-color="#60a5fa" stop-opacity=".8"/>
+              <stop offset="1" stop-color="#a78bfa" stop-opacity=".18"/>
+            </linearGradient>
+          </defs>
+          <g id="chaos-paths"></g>
+        </svg>
+        <div class="hook-kicker" id="hook-kicker">USING</div>
+        <div class="hook-line" id="hook-line">Claude Code?</div>
+        <div class="chaos-tools" id="chaos-tools" aria-hidden="true"></div>
+        <div class="operator-cursor" id="operator-cursor" aria-hidden="true">
+          <span class="cursor-arrow">➤</span>
+          <span class="cursor-label">you</span>
+        </div>
+        <div class="copy-fragment fragment-a">context.md</div>
+        <div class="copy-fragment fragment-b">API_KEY=••••••••</div>
+        <div class="copy-fragment fragment-c">paste configuration</div>
+        <div class="pain-copy" id="pain-copy">
+          <div class="pain-small">A THOUSAND AI TOOLS.</div>
+          <div class="pain-main">AND SOMEHOW, <span>YOU</span> BECAME<br>THE INTEGRATION LAYER.</div>
+        </div>
+      </section>
+
+      <!-- ACT II · FLUJO AS THE CENTER -->
+      <section class="scene scene-gravity" id="scene-gravity" aria-label="FLUJO connects the stack">
+        <div class="gravity-freeze" aria-hidden="true"></div>
+        <div class="gravity-title">
+          <div class="eyebrow">MEET</div>
+          <div class="gravity-word">FLUJO</div>
+          <div class="gravity-tag">YOUR AI STACK, UNDER CONTROL.</div>
+        </div>
+        <svg class="map-lines" viewBox="0 0 1600 900" aria-hidden="true">
+          <defs>
+            <filter id="lineGlow">
+              <feGaussianBlur stdDeviation="3" result="blur"/>
+              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+          <g class="map-line-group">
+            <path d="M800 436 C610 436 550 315 352 315"/>
+            <path d="M800 436 C690 350 650 275 590 234"/>
+            <path d="M800 436 C785 350 795 285 800 244"/>
+            <path d="M800 436 C920 340 1016 274 1080 235"/>
+            <path d="M800 436 C980 400 1160 390 1295 392"/>
+            <path d="M800 436 C975 490 1140 538 1274 568"/>
+            <path d="M800 436 C920 590 965 675 1002 734"/>
+            <path d="M800 436 C700 580 618 668 550 733"/>
+            <path d="M800 436 C610 500 470 530 342 556"/>
+            <path d="M352 315 C300 255 300 218 306 186" class="credential-line"/>
+            <path d="M352 315 C430 258 508 210 626 157" class="credential-line"/>
+            <path d="M1274 568 C1325 660 1328 705 1320 760" class="local-line"/>
+          </g>
+          <g id="map-pulses"></g>
+        </svg>
+        <div class="flujo-core" id="flujo-core">
+          <div class="core-halo halo-one"></div>
+          <div class="core-halo halo-two"></div>
+          <img src="assets/img/flujo-logo.png" alt="FLUJO logo">
+          <div class="core-label">FLUJO</div>
+        </div>
+        <div class="map-node vault-node" data-map-at="7.1">
+          <div class="node-icon">▣</div>
+          <div><strong>Encrypted Vault</strong><small>keys stay server-side</small></div>
+          <span class="status-dot"></span>
+        </div>
+        <div class="secret-stack" data-map-at="8.2">
+          <span>OPENAI_KEY&nbsp;&nbsp;••••••</span>
+          <span>OPENROUTER_KEY&nbsp;&nbsp;••••••</span>
+        </div>
+        <div class="map-node subscription-node" data-map-at="8.8">
+          <div class="node-icon claude-mark">✳</div>
+          <div><strong>Claude</strong><small>Pro / Max subscription</small></div>
+        </div>
+        <div class="map-node gpt-node" data-map-at="9.3">
+          <div class="node-icon">◎</div>
+          <div><strong>GPT</strong><small>provider API</small></div>
+        </div>
+        <div class="map-node gemini-node" data-map-at="9.7">
+          <div class="node-icon">✦</div>
+          <div><strong>Gemini</strong><small>provider API</small></div>
+        </div>
+        <div class="map-node mcp-playwright" data-map-at="10.2">
+          <div class="node-icon">▶</div>
+          <div><strong>Playwright</strong><small>MCP server</small></div>
+        </div>
+        <div class="map-node mcp-supabase" data-map-at="10.6">
+          <div class="node-icon">⚡</div>
+          <div><strong>Supabase</strong><small>MCP server</small></div>
+        </div>
+        <div class="map-node mcp-context" data-map-at="11">
+          <div class="node-icon">7</div>
+          <div><strong>Context7</strong><small>MCP server</small></div>
+        </div>
+        <div class="map-node mcp-figma" data-map-at="11.4">
+          <div class="node-icon">F</div>
+          <div><strong>Figma</strong><small>MCP server</small></div>
+        </div>
+        <div class="map-node mcp-whatsapp" data-map-at="11.8">
+          <div class="node-icon">◉</div>
+          <div><strong>WhatsApp</strong><small>MCP server</small></div>
+        </div>
+        <div class="map-node local-node" data-map-at="12.2">
+          <div class="node-icon">◒</div>
+          <div><strong>Ollama</strong><small>runs locally</small></div>
+        </div>
+        <div class="trust-strip" id="trust-strip">
+          <span>SUBSCRIPTIONS</span><i></i><span>PROVIDER APIs</span><i></i><span>LOCAL MODELS</span>
+        </div>
+      </section>
+
+      <!-- ACT III · VISUAL CONTROL -->
+      <section class="scene scene-control" id="scene-control" aria-label="Build and control a flow">
+        <div class="mini-stack" aria-hidden="true">
+          <img src="assets/img/flujo-logo.png" alt="">
+          <span class="mini-orbit orbit-model"></span>
+          <span class="mini-orbit orbit-mcp"></span>
+          <span class="mini-orbit orbit-key"></span>
+          <div class="mini-label">YOUR STACK</div>
+        </div>
+        <div class="control-headline">
+          <span>YOU HAVE CONTROL.</span>
+          <strong>EVERY STEP OF THE WAY.</strong>
+        </div>
+        <div class="flow-canvas">
+          <div class="canvas-grid"></div>
+          <div class="canvas-badge">FLOW BUILDER</div>
+          <svg class="flow-edges" viewBox="0 0 1180 720" aria-hidden="true">
+            <defs>
+              <marker id="arrowGray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 z" fill="#82909e"/>
+              </marker>
+              <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 z" fill="#3b82f6"/>
+              </marker>
+            </defs>
+            <path class="flow-edge edge-1" d="M500 116 L500 188" marker-end="url(#arrowGray)"/>
+            <path class="flow-edge edge-2" d="M500 266 C500 320 300 304 300 382" marker-end="url(#arrowGray)"/>
+            <path class="flow-edge edge-3" d="M590 228 C720 228 760 228 868 228" marker-end="url(#arrowBlue)"/>
+            <path class="flow-edge edge-4" d="M390 422 C525 422 590 443 694 443" marker-end="url(#arrowGray)"/>
+            <path class="flow-edge edge-5" d="M784 483 L784 578" marker-end="url(#arrowGray)"/>
+            <path class="flow-edge loop-edge" d="M784 402 C760 322 450 326 356 382" marker-end="url(#arrowGray)"/>
+          </svg>
+          <div class="flow-node start-node" data-flow-at="1.4">
+            <div class="node-top"><span class="kind-icon">▤</span><b>Start</b></div>
+            <small>Initial prompt</small>
+          </div>
+          <div class="flow-node process-node planner-node" data-flow-at="3.2">
+            <div class="node-top"><span class="kind-icon">⚙</span><b>Planner</b></div>
+            <small>Claude · scoped context</small>
+            <div class="node-port port-right"></div>
+          </div>
+          <div class="flow-node mcp-node docs-node" data-flow-at="5.2">
+            <div class="node-top"><span class="kind-icon">✦</span><b>Documentation</b></div>
+            <small>Context7 MCP</small>
+          </div>
+          <div class="flow-node subflow-node audit-node" data-flow-at="7">
+            <div class="node-top"><span class="kind-icon">⌘</span><b>Code Audit</b></div>
+            <small>Reusable subflow</small>
+          </div>
+          <div class="flow-node process-node review-node" data-flow-at="8.6">
+            <div class="node-top"><span class="kind-icon">⚙</span><b>Review</b></div>
+            <small>GPT · handoff enabled</small>
+          </div>
+          <div class="flow-node finish-node" data-flow-at="10.4">
+            <div class="node-top"><span class="kind-icon">↪</span><b>Finish</b></div>
+            <small>Final response</small>
+          </div>
+          <div class="tool-scope" id="tool-scope">
+            <div class="scope-head">
+              <span>TOOLS FOR “PLANNER”</span>
+              <b>2 / 5 ALLOWED</b>
+            </div>
+            <div class="scope-tool allowed"><span>✓</span><b>search_docs</b><i>ON</i></div>
+            <div class="scope-tool allowed"><span>✓</span><b>read_file</b><i>ON</i></div>
+            <div class="scope-tool locked"><span>⊘</span><b>write_file</b><i>LOCKED</i></div>
+            <div class="scope-tool locked"><span>⊘</span><b>delete_file</b><i>LOCKED</i></div>
+            <div class="scope-tool locked"><span>⊘</span><b>run_command</b><i>LOCKED</i></div>
+          </div>
+          <div class="flow-caption branch-caption">BRANCH</div>
+          <div class="flow-caption loop-caption">LOOP UNTIL READY</div>
+          <div class="flow-packet packet-a"></div>
+          <div class="flow-packet packet-b"></div>
+        </div>
+      </section>
+
+      <!-- ACT IV · AI TEAM -->
+      <section class="scene scene-team" id="scene-team" aria-label="Build an AI team">
+        <div class="section-heading">
+          <span>BUILD A TEAM.</span>
+          <strong>FLOWS CALL FLOWS.</strong>
+        </div>
+        <svg class="team-lines" viewBox="0 0 1600 900" aria-hidden="true">
+          <path class="team-edge team-e1" d="M800 246 L800 330"/>
+          <path class="team-edge team-e2" d="M800 415 C680 458 525 480 400 516"/>
+          <path class="team-edge team-e3" d="M800 415 L800 516"/>
+          <path class="team-edge team-e4" d="M800 415 C920 458 1075 480 1200 516"/>
+          <path class="team-edge team-e5" d="M800 602 C750 670 665 692 580 714"/>
+          <path class="team-edge team-e6" d="M800 602 C850 670 935 692 1020 714"/>
+          <path class="team-edge team-loop" d="M1020 758 C1150 760 1215 660 1200 602"/>
+        </svg>
+        <div class="master-flow" id="master-flow">
+          <div class="master-glow"></div>
+          <span class="master-icon">⌘</span>
+          <div><small>REUSABLE FLOW</small><strong>RELEASE TEAM</strong></div>
+          <div class="master-badges"><i>Claude</i><i>GitHub</i><i>Playwright</i></div>
+        </div>
+        <div class="team-card orchestrator-card" data-team-at="5.1">
+          <div class="team-role">ORCHESTRATOR</div>
+          <strong>QA Coordinator</strong>
+          <small>chooses the next specialist</small>
+          <div class="inside-badges"><span>GPT</span><span>Context7</span></div>
+        </div>
+        <div class="team-card research-card" data-team-at="7.2">
+          <div class="team-role">SPECIALIST</div>
+          <strong>Research</strong>
+          <small>docs + web context</small>
+          <div class="inside-badges"><span>Claude</span><span>Browser</span></div>
+        </div>
+        <div class="team-card build-card" data-team-at="8">
+          <div class="team-role">SPECIALIST</div>
+          <strong>Implementation</strong>
+          <small>code + filesystem</small>
+          <div class="inside-badges"><span>GPT</span><span>GitHub</span></div>
+        </div>
+        <div class="team-card review-card" data-team-at="8.8">
+          <div class="team-role">SPECIALIST</div>
+          <strong>Review</strong>
+          <small>security + quality</small>
+          <div class="inside-badges"><span>Gemini</span><span>Supabase</span></div>
+        </div>
+        <div class="team-card browser-card" data-team-at="10.2">
+          <div class="team-role">SUBFLOW</div>
+          <strong>Browser Test</strong>
+          <div class="inside-badges"><span>Playwright</span></div>
+        </div>
+        <div class="team-card security-card" data-team-at="10.8">
+          <div class="team-role">SUBFLOW</div>
+          <strong>Security Check</strong>
+          <div class="inside-badges"><span>Filesystem</span></div>
+        </div>
+        <div class="work-packet work-one">TASK</div>
+        <div class="work-packet work-two">RESULT</div>
+        <div class="work-packet work-three">FIX</div>
+      </section>
+
+      <!-- ACT V · AUTOMATION -->
+      <section class="scene scene-triggers" id="scene-triggers" aria-label="Automate flows with triggers">
+        <div class="trigger-heading">
+          <span>LET IT WORK.</span>
+          <strong>WITHOUT YOU BABYSITTING IT.</strong>
+        </div>
+        <div class="trigger-team">
+          <div class="trigger-flujo"><img src="assets/img/flujo-logo.png" alt=""><span>FLUJO</span></div>
+          <div class="trigger-flow-card active-flow">
+            <small>FLOW</small><strong>Release Team</strong><i>RUNNING</i>
+          </div>
+          <div class="trigger-flow-card research-flow">
+            <small>FLOW</small><strong>Research Watch</strong><i>READY</i>
+          </div>
+          <div class="trigger-flow-card triage-flow">
+            <small>FLOW</small><strong>Error Triage</strong><i>READY</i>
+          </div>
+        </div>
+        <svg class="trigger-lines" viewBox="0 0 1600 900" aria-hidden="true">
+          <path d="M600 315 C740 285 850 210 980 210"/>
+          <path d="M600 347 C780 330 900 300 1110 300"/>
+          <path d="M600 460 C740 420 840 390 1000 390"/>
+          <path d="M600 492 C780 505 900 480 1105 480"/>
+          <path d="M600 598 C760 580 850 570 980 570"/>
+          <path d="M600 613 C800 640 930 660 1115 660"/>
+          <path d="M600 628 C720 700 780 750 885 750"/>
+          <path d="M600 643 C800 700 930 750 1130 750"/>
+        </svg>
+        <div class="trigger-list">
+          <div class="trigger-pill schedule-pill" data-trigger-at="2"><span>◷</span><div><b>Daily at 9:00 AM</b><small>Schedule</small></div></div>
+          <div class="trigger-pill interval-pill" data-trigger-at="3.1"><span>↻</span><div><b>Every 20 minutes</b><small>Schedule</small></div></div>
+          <div class="trigger-pill webhook-pill" data-trigger-at="4.2"><span>⌁</span><div><b>Webhook received</b><small>Authenticated HTTP</small></div></div>
+          <div class="trigger-pill file-pill" data-trigger-at="5.3"><span>▤</span><div><b>File changed</b><small>File watcher</small></div></div>
+          <div class="trigger-pill message-pill" data-trigger-at="6.4"><span>◉</span><div><b>New WhatsApp message</b><small>MCP polling</small></div></div>
+          <div class="trigger-pill complete-pill" data-trigger-at="7.5"><span>✓</span><div><b>When a flow finishes</b><small>Flow event</small></div></div>
+          <div class="trigger-pill error-pill" data-trigger-at="8.6"><span>!</span><div><b>On error</b><small>Flow event</small></div></div>
+          <div class="trigger-pill url-pill" data-trigger-at="9.7"><span>◎</span><div><b>When a URL changes</b><small>URL watcher</small></div></div>
+        </div>
+        <div class="run-history">
+          <div class="history-head"><span>RUN HISTORY</span><b>LIVE</b></div>
+          <div class="history-row"><i class="ok"></i><span>Release Team</span><small>Completed · 14:32</small><b>8.4s</b></div>
+          <div class="history-row current"><i class="spin"></i><span>Research Watch</span><small>Running now</small><b>•••</b></div>
+          <div class="history-row"><i class="err"></i><span>Error Triage</span><small>Triggered by failure</small><b>1.2s</b></div>
+        </div>
+      </section>
+
+      <!-- ACT VI · INTERACTIVE CHAT -->
+      <section class="scene scene-chat" id="scene-chat" aria-label="Chat with a flow">
+        <div class="chat-super">OR TALK TO THE SAME TEAM.</div>
+        <div class="browser-shell chat-shell">
+          <div class="browser-top">
+            <div class="window-dots"><i></i><i></i><i></i></div>
+            <div class="browser-tab"><img src="assets/img/flujo-logo.png" alt=""> FLUJO</div>
+            <div class="address-bar">localhost:4200/chat</div>
+          </div>
+          <div class="app-nav">
+            <b>FLUJO</b><span>Models</span><span>MCP</span><span>Flows</span><span class="active">Chat</span><span>Docs</span><span>Settings</span>
+            <i>◐</i>
+          </div>
+          <div class="chat-layout">
+            <aside class="conversation-list">
+              <div class="aside-title">CONVERSATIONS <button>＋</button></div>
+              <div class="conversation active"><i></i><b>Dependency upgrade</b><small>Running flow…</small></div>
+              <div class="conversation"><i></i><b>Release notes</b><small>Yesterday</small></div>
+              <div class="conversation"><i></i><b>API audit</b><small>Tuesday</small></div>
+            </aside>
+            <section class="chat-panel">
+              <div class="flow-select">
+                <span>SELECT FLOW</span>
+                <button><b>⌘</b> Release Team <i>⌄</i></button>
+              </div>
+              <div class="messages">
+                <div class="user-message" id="user-message">What breaks if we upgrade this dependency?</div>
+                <div class="assistant-message" id="assistant-message">
+                  <div class="answer-mark">F</div>
+                  <div>
+                    <strong>2 breaking changes found.</strong>
+                    <p>Tests added. Compatibility issue documented.</p>
+                    <div class="answer-chips"><span>✓ 14 tests passed</span><span>⚠ 2 changes</span><span>↗ issue created</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-input">
+                <span>Ask the Release Team…</span><button>➤</button>
+                <div class="input-options"><i>☑</i> Execute in Debugger <i>☑</i> Require Tool Approvals</div>
+              </div>
+            </section>
+            <section class="debugger-panel">
+              <div class="debug-head"><b>FLOW DEBUGGER</b><span>Live execution</span></div>
+              <div class="debug-body">
+                <svg class="debug-edges" viewBox="0 0 500 560" aria-hidden="true">
+                  <path d="M250 90 L250 150"/>
+                  <path d="M250 220 C250 258 145 248 145 300"/>
+                  <path d="M250 220 C250 258 355 248 355 300"/>
+                  <path d="M145 370 C145 418 250 400 250 455"/>
+                  <path d="M355 370 C355 418 250 400 250 455"/>
+                </svg>
+                <div class="debug-node dbg-start"><b>Start</b></div>
+                <div class="debug-node dbg-plan"><b>Planner</b><small>Claude</small></div>
+                <div class="debug-node dbg-docs"><b>Context7</b><small>MCP</small></div>
+                <div class="debug-node dbg-test"><b>Browser Test</b><small>Subflow</small></div>
+                <div class="debug-node dbg-finish"><b>Finish</b></div>
+                <div class="breakpoint-dot">●</div>
+              </div>
+              <div class="debug-controls"><button>Step</button><button class="primary">Continue</button><button>Stop</button></div>
+            </section>
+          </div>
+          <div class="approval-modal" id="approval-modal">
+            <div class="approval-icon">!</div>
+            <small>TOOL APPROVAL REQUIRED</small>
+            <strong>github.create_issue</strong>
+            <p>Create an issue in <b>mario-andreschak/FLUJO</b>?</p>
+            <div><button>Reject</button><button class="approve">Approve</button></div>
+          </div>
+          <div class="state-inspector" id="state-inspector">
+            <small>BREAKPOINT · QA COORDINATOR</small>
+            <strong>State before step</strong>
+            <code>{ tests: 14, failures: 2,<br> risk: "review" }</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACT VII · EXTERNAL APPS -->
+      <section class="scene scene-ecosystem" id="scene-ecosystem" aria-label="Reuse FLUJO from other apps">
+        <div class="ecosystem-heading">
+          <span>YOUR SETUP, EVERYWHERE.</span>
+          <strong>FLUJO DOESN’T TRAP YOUR TOOLS.</strong>
+        </div>
+        <svg class="ecosystem-lines" viewBox="0 0 1600 900" aria-hidden="true">
+          <defs>
+            <linearGradient id="ecoCyan" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/>
+            </linearGradient>
+            <marker id="ecoArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="#22d3ee"/>
+            </marker>
+          </defs>
+          <path class="eco-edge proxy-edge" d="M646 438 C520 438 425 365 340 365" marker-end="url(#ecoArrow)"/>
+          <path class="eco-edge proxy-edge-two" d="M646 470 C525 505 435 585 348 596" marker-end="url(#ecoArrow)"/>
+          <path class="eco-edge model-edge" d="M954 438 C1070 425 1160 345 1260 352" marker-end="url(#ecoArrow)"/>
+          <path class="eco-edge model-edge-two" d="M954 470 C1075 505 1160 590 1252 596" marker-end="url(#ecoArrow)"/>
+        </svg>
+        <div class="ecosystem-app flujo-app-window">
+          <div class="mini-window-bar"><i></i><i></i><i></i><b>FLUJO</b></div>
+          <img src="assets/img/flujo-flows-dashboard.png" alt="FLUJO flow dashboard">
+          <div class="app-window-core"><img src="assets/img/flujo-logo.png" alt=""><span>LOCAL CONTROL PLANE</span></div>
+        </div>
+        <div class="external-app claude-app" data-eco-at="5">
+          <div class="app-logo claude-logo">✳</div>
+          <strong>Claude Desktop</strong>
+          <small>MCP client</small>
+        </div>
+        <div class="external-app cursor-app" data-eco-at="6.3">
+          <div class="app-logo">◈</div>
+          <strong>Cursor</strong>
+          <small>MCP client</small>
+        </div>
+        <div class="external-app cline-app" data-eco-at="7.6">
+          <div class="app-logo">&lt;/&gt;</div>
+          <strong>VS Code + Cline</strong>
+          <small>OpenAI-compatible</small>
+        </div>
+        <div class="external-app sdk-app" data-eco-at="8.9">
+          <div class="app-logo">{ }</div>
+          <strong>Your App</strong>
+          <small>OpenAI SDK</small>
+        </div>
+        <div class="integration-label proxy-label">
+          <small>MCP PROXY</small>
+          <strong>CONFIGURE ONCE.<br>REUSE EVERYWHERE.</strong>
+          <code>/mcp-proxy/&lt;server&gt;</code>
+        </div>
+        <div class="integration-label model-label">
+          <small>OPENAI-COMPATIBLE API</small>
+          <strong>CALL A WHOLE FLOW<br>LIKE A MODEL.</strong>
+          <code>flow-release-team · /v1</code>
+        </div>
+      </section>
+
+      <!-- ACT VIII · END CARD -->
+      <section class="scene scene-final" id="scene-final" aria-label="FLUJO end card">
+        <canvas id="final-streams" width="1600" height="900" aria-hidden="true"></canvas>
+        <div class="final-copy-top">
+          <span>YOUR MODELS.</span><span>YOUR TOOLS.</span><span>YOUR KEYS.</span><span>YOUR RULES.</span>
+        </div>
+        <div class="final-logo-wrap">
+          <div class="final-ring ring-a"></div>
+          <div class="final-ring ring-b"></div>
+          <img src="assets/img/flujo-logo.png" alt="FLUJO">
+        </div>
+        <div class="final-word">FLUJO</div>
+        <div class="final-tag">YOUR AI. <span>IN FLOW.</span></div>
+        <div class="final-meta">LOCAL-FIRST <i></i> OPEN SOURCE <i></i> MIT</div>
+        <div class="install-pill"><span>$</span> npx flujo-ai</div>
+        <div class="final-url">github.com/mario-andreschak/FLUJO</div>
+      </section>
+
+      <div class="cinema-bars" aria-hidden="true"><i></i><i></i></div>
+      <div id="captions" aria-live="polite"></div>
+      <div class="vignette" aria-hidden="true"></div>
+    </div>
+  </main>
+
+  <div id="poster" class="poster">
+    <div class="poster-orbit orbit-a"></div>
+    <div class="poster-orbit orbit-b"></div>
+    <img src="assets/img/flujo-logo.png" alt="FLUJO">
+    <div class="poster-kicker">AN HTML5 ANIMATED FILM</div>
+    <h1>YOUR AI. <span>IN FLOW.</span></h1>
+    <p>Models, tools, teams and triggers—under your control.</p>
+    <button id="poster-play" class="big-play" type="button" aria-label="Play film">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <div class="poster-hint">BEST WITH SOUND&nbsp;&nbsp;·&nbsp;&nbsp;SPACE TO PAUSE&nbsp;&nbsp;·&nbsp;&nbsp;← → TO SEEK</div>
+  </div>
+
+  <div id="end-overlay" class="poster end-overlay" hidden>
+    <img src="assets/img/flujo-logo.png" alt="FLUJO">
+    <h1>YOUR AI. <span>IN FLOW.</span></h1>
+    <p>Free. Open source. Running on your machine.</p>
+    <button id="replay" class="big-play replay" type="button" aria-label="Replay film">↻</button>
+  </div>
+
+  <footer id="controls" class="controls" aria-label="Video controls">
+    <button id="play-pause" class="control-button" type="button" aria-label="Play">
+      <svg id="play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      <svg id="pause-icon" viewBox="0 0 24 24" hidden><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+    </button>
+    <span id="timecode" class="timecode">0:00 / 2:28</span>
+    <div id="timeline" class="timeline" role="slider" aria-label="Film position" aria-valuemin="0" aria-valuemax="148" aria-valuenow="0" tabindex="0">
+      <div class="timeline-track">
+        <div id="timeline-buffer" class="timeline-buffer"></div>
+        <div id="timeline-fill" class="timeline-fill"></div>
+        <div id="timeline-knob" class="timeline-knob"></div>
+        <div id="timeline-markers" class="timeline-markers"></div>
+      </div>
+    </div>
+    <span id="scene-name" class="scene-name">TOOL SPRAWL</span>
+    <button id="captions-toggle" class="control-button text-button active" type="button" aria-label="Toggle captions" aria-pressed="true">CC</button>
+    <button id="voiceover-toggle" class="control-button voiceover-button active" type="button" aria-label="Disable AI voiceover" aria-pressed="true" title="Disable AI voiceover">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.25a3.25 3.25 0 0 0 3.25-3.25V6a3.25 3.25 0 1 0-6.5 0v5A3.25 3.25 0 0 0 12 14.25Zm-1.25-8.5a1.25 1.25 0 1 1 2.5 0v5a1.25 1.25 0 1 1-2.5 0v-5Zm7 4.75V11a5.75 5.75 0 0 1-4.75 5.66V19h3v2H8v-2h3v-2.34A5.75 5.75 0 0 1 6.25 11v-.5h2v.5a3.75 3.75 0 0 0 7.5 0v-.5h2Z"/></svg>
+      <small>AI</small>
+    </button>
+    <label class="voice-picker" title="Choose narrator">
+      <span>NARRATOR</span>
+      <select id="voice-select" aria-label="Narrator voice">
+        <option value="brian">Brian</option>
+        <option value="sarah">Sarah</option>
+        <option value="lily">Lily</option>
+        <option value="george">George</option>
+      </select>
+    </label>
+    <span id="voice-status" class="sr-only" aria-live="polite">Brian selected</span>
+    <button id="mute" class="control-button" type="button" aria-label="Mute">
+      <svg id="volume-icon" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
+      <svg id="muted-icon" viewBox="0 0 24 24" hidden><path d="M3 9v6h4l5 5V4L7 9H3zm14.3 3 2.4-2.4-1.4-1.4-2.4 2.4-2.4-2.4-1.4 1.4 2.4 2.4-2.4 2.4 1.4 1.4 2.4-2.4 2.4 2.4 1.4-1.4z"/></svg>
+    </button>
+    <button id="fullscreen" class="control-button" type="button" aria-label="Fullscreen">
+      <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7zm-2-4h2V7h3V5H5zm12 7h-3v2h5v-5h-2zm-3-12v2h3v3h2V5z"/></svg>
+    </button>
+  </footer>
+
+  <audio id="voiceover" preload="auto" src="assets/audio/flujo-voiceover-elevenlabs.mp3"></audio>
+  <script src="film-content.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
