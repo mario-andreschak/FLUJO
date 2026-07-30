@@ -212,6 +212,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // Notice shown when the user tries to drop a second Trigger node (one per flow).
   const [triggerDropNotice, setTriggerDropNotice] = useState<string | null>(null);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
+  const [processNodeModalMode, setProcessNodeModalMode] = useState<'create' | 'edit'>('edit');
   // The edge whose properties (Tier 2b routing condition) are being edited.
   const [editingEdge, setEditingEdge] = useState<Edge | null>(null);
 
@@ -900,6 +901,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     
     // Close any open modals
     setProcessModalOpen(false);
+    setProcessNodeModalMode('edit');
     setMcpModalOpen(false);
     setStartModalOpen(false);
     setFinishModalOpen(false);
@@ -958,9 +960,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   }, [nodes, edges]);
 
   // Open the appropriate properties modal based on node type
-  const openNodeProperties = useCallback((node: FlowNode) => {
+  const openNodeProperties = useCallback((node: FlowNode, mode: 'create' | 'edit' = 'edit') => {
     log.debug('Opening properties for node:', node);
     setNodeToEdit(node);
+    if (node.data.type === 'process') {
+      setProcessNodeModalMode(mode);
+    }
 
     if (node.data.type === 'mcp') {
       setMcpModalOpen(true);
@@ -1036,7 +1041,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       });
       
       // Automatically open the edit properties modal for the new node
-      openNodeProperties(newNode);
+      openNodeProperties(newNode, 'create');
       log.debug(`onDrop: Opened properties modal for new node: ${newNode.id}`);
     },
     [reactFlowInstance, openNodeProperties]
@@ -1299,8 +1304,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       <ProcessNodePropertiesModal
         open={processModalOpen}
         node={nodeToEdit}
-        onClose={() => setProcessModalOpen(false)}
+        onClose={() => {
+          setProcessModalOpen(false);
+          setProcessNodeModalMode('edit');
+        }}
         onSave={handleNodeUpdate}
+        mode={processNodeModalMode}
         flowEdges={edges}
         flowNodes={nodes}
         flowId={initialFlow?.id}

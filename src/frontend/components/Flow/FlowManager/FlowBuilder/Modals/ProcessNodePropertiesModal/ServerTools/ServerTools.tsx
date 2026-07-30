@@ -26,6 +26,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { createLogger } from '@/utils/logger';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
@@ -156,8 +158,47 @@ const ServerTools: React.FC<ServerToolsProps> = ({
       onToggleGroup={serverPicker.toggleGroup}
     />
   );
-  // State to track search query
+  // State to track search query and per-server/per-tool detail disclosure.
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [expandedToolKeys, setExpandedToolKeys] = useState<Record<string, boolean>>({});
+
+  const getToolKey = (nodeId: string, toolName: string) => `${nodeId}::${toolName}`;
+
+  const toggleToolDetails = (toolKey: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setExpandedToolKeys((current) => ({
+      ...current,
+      [toolKey]: !current[toolKey],
+    }));
+  };
+
+  const insertToolForSelectedNode = (nodeId: string, serverName: string, toolName: string) => {
+    if (nodeId !== selectedServerNodeId) {
+      log.debug('Node tab not selected, selecting node first', {
+        selectedNodeId: nodeId,
+        serverName,
+        toolName,
+      });
+      handleServerSelect(nodeId);
+      return;
+    }
+    if (serverName && toolName) {
+      log.debug('Inserting tool binding', { serverName, toolName });
+      handleInsertToolBinding(serverName, toolName);
+    } else {
+      log.warn('Cannot insert tool binding, server or tool name is undefined', {
+        serverName,
+        toolName,
+      });
+    }
+  };
+
+  const getParameterSummary = (inputSchema: any): string => {
+    const parameterCount = Object.keys(inputSchema?.properties ?? {}).length;
+    if (parameterCount === 0) return 'No parameters';
+    const requiredCount = Array.isArray(inputSchema?.required) ? inputSchema.required.length : 0;
+    return `${parameterCount} parameter${parameterCount === 1 ? '' : 's'}${requiredCount > 0 ? ` · ${requiredCount} required` : ''}`;
+  };
 
   // Get enabled tools for a specific MCP node instance
   const getEnabledToolsForNode = (nodeId: string): string[] => {
@@ -522,69 +563,101 @@ const ServerTools: React.FC<ServerToolsProps> = ({
 
               return (
                 <List key={nodeId} disablePadding>
-                  {tools.map((tool) => (
-                    <Card
-                      key={tool.name}
-                      variant="outlined"
-                      onClick={() => {
-                        // Ensure the correct node tab is selected before inserting
-                        if (nodeId !== selectedServerNodeId) {
-                          log.debug('Node tab not selected, selecting node first', {
-                            selectedNodeId: nodeId,
-                            serverName: serverName,
-                            toolName: tool.name
-                          });
-                          handleServerSelect(nodeId); // Select the correct tab first
-                          // Don't insert on the first click
-                        } else {
-                          // Node tab is selected, insert the binding
-                          if (serverName && tool.name) {
-                            log.debug('Inserting tool binding', {
-                              serverName: serverName, // Use the actual server name for the binding string
-                              toolName: tool.name
-                            });
-                            handleInsertToolBinding(serverName, tool.name);
-                          } else {
-                            log.warn('Cannot insert tool binding, server or tool name is undefined', {
-                              serverName: serverName,
-                              toolName: tool.name
-                            });
+                  {tools.map((tool) => {
+                    const toolKey = getToolKey(nodeId, tool.name);
+                    const isExpanded = !!expandedToolKeys[toolKey];
+                    const description = tool.description || 'No description available';
+                    const parameterSummary = getParameterSummary(tool.inputSchema);
+                    return (
+                      <Card
+                        key={tool.name}
+                        variant="outlined"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Add ${tool.name} from ${serverName} to prompt`}
+                        onClick={() => insertToolForSelectedNode(nodeId, serverName, tool.name)}
+                        onKeyDown={(event) => {
+                          if (event.target !== event.currentTarget) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            insertToolForSelectedNode(nodeId, serverName, tool.name);
                           }
-                        }
-                      }}
-                      sx={{
-                        mb: 1,
-                        mx: 1,
-                        mt: 1,
-                        cursor: 'pointer',
-                        position: 'relative',
-                        '&:hover': {
-                          boxShadow: 1,
-                          bgcolor: 'action.hover'
-                        }
-                      }}
-                    >
-                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <Box sx={{ width: '100%' }}>
-                            <Typography variant="subtitle2" component="div" sx={{ display: 'flex', alignItems: 'center' }}>
-                              <CodeIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} />
-                              {tool.name}
-                            </Typography>
+                        }}
+                        sx={{
+                          mb: 1,
+                          mx: 1,
+                          mt: 1,
+                          cursor: 'pointer',
+                          '&:hover': {
+                            boxShadow: 1,
+                            bgcolor: 'action.hover'
+                          },
+                          '&:focus-visible': {
+                            outline: '2px solid',
+                            outlineColor: 'primary.main',
+                            outlineOffset: 1,
+                          },
+                        }}
+                      >
+                        <CardContent sx={{ p: 1.25, '&:last-child': { pb: 1.25 } }}>
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                              <Typography variant="subtitle2" component="div" sx={{ display: 'flex', alignItems: 'center' }}>
+                                <CodeIcon fontSize="small" sx={{ mr: 1, color: 'primary.main', flexShrink: 0 }} />
+                                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {tool.name}
+                                </Box>
+                              </Typography>
 
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                              {tool.description || "No description available"}
-                            </Typography>
-
-                            {tool.inputSchema && formatParameterSchema(tool.inputSchema)}
+                              <Tooltip title={description} describeChild placement="top-start">
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                  tabIndex={0}
+                                  sx={{
+                                    mt: 0.5,
+                                    display: '-webkit-box',
+                                    WebkitBoxOrient: 'vertical',
+                                    WebkitLineClamp: 2,
+                                    overflow: 'hidden',
+                                  }}
+                                >
+                                  {description}
+                                </Typography>
+                              </Tooltip>
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                {parameterSummary}
+                              </Typography>
+                            </Box>
+                            <Tooltip title={`${isExpanded ? 'Collapse' : 'Expand'} ${tool.name} details`}>
+                              <IconButton
+                                size="small"
+                                aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${tool.name} details`}
+                                aria-expanded={isExpanded}
+                                aria-controls={`${toolKey}-details`}
+                                onClick={(event) => toggleToolDetails(toolKey, event)}
+                              >
+                                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                              </IconButton>
+                            </Tooltip>
                           </Box>
-                        </Box>
-                      </CardContent>
-                      <Tooltip title={`Add ${tool.name} from ${serverName} to prompt`}>
-                        <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
-                      </Tooltip>
-                    </Card>
-                  ))}
+
+                          {isExpanded && (
+                            <Box
+                              id={`${toolKey}-details`}
+                              sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+                                {description}
+                              </Typography>
+                              {tool.inputSchema && formatParameterSchema(tool.inputSchema)}
+                            </Box>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </List>
               );
             })()}
