@@ -47,6 +47,7 @@ import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
 import RestoreIcon from '@mui/icons-material/Restore';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { ChatMessage } from './index';
 import RevertPreviewDialog from './RevertPreviewDialog';
 import { FEATURES } from '@/config/features';
@@ -479,6 +480,21 @@ const ToolCallTimeline: React.FC<{
           formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
         } catch (e) { /* keep the original string */ }
         const showRaw = !!rawByKey[key];
+        const openInToolTester = pair.mcpDestination
+          ? () => {
+              let args: Record<string, unknown> = {};
+              try {
+                const parsed = JSON.parse(pair.toolCall.function.arguments);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed;
+              } catch { /* malformed arguments safely prefill as an empty object */ }
+              const query = new URLSearchParams({
+                server: pair.mcpDestination!.serverName,
+                tool: pair.mcpDestination!.toolName,
+                args: JSON.stringify(args),
+              });
+              window.location.assign(`/mcp?${query.toString()}`);
+            }
+          : undefined;
 
         return (
           <Collapse key={key} in={expandedKey === key}>
@@ -499,6 +515,17 @@ const ToolCallTimeline: React.FC<{
               }}>
                 {formattedArgs}
               </Box>
+              {openInToolTester && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<PlayArrowIcon />}
+                  onClick={openInToolTester}
+                  sx={{ mt: 0.5 }}
+                >
+                  Execute in Tool Tester
+                </Button>
+              )}
 
               {/* Matching result (or a pending placeholder) */}
               <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>

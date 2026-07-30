@@ -1137,6 +1137,19 @@ export class ModelHandler {
     // unit-tested (see __tests__/model/openaiUsageMapping.test.ts).
     const usage = mapOpenAiUsage(modelResponse.fullResponse?.usage);
 
+    const projectMcpToolCalls = (toolCalls: unknown): FlujoChatMessage['mcpToolCalls'] => {
+      if (!Array.isArray(toolCalls)) return undefined;
+      const projected: NonNullable<FlujoChatMessage['mcpToolCalls']> = {};
+      for (const toolCall of toolCalls) {
+        if (!toolCall || typeof toolCall !== 'object') continue;
+        const call = toolCall as OpenAI.ChatCompletionMessageToolCall;
+        if (call.type !== 'function' || typeof call.id !== 'string') continue;
+        const decoded = decodeToolName(call.function?.name, toolNameMap);
+        if (decoded) projected[call.id] = { serverName: decoded.server, toolName: decoded.tool };
+      }
+      return Object.keys(projected).length > 0 ? projected : undefined;
+    };
+
     if (modelResponse.transcript && modelResponse.transcript.length > 0) {
       // Self-orchestrating adapter (Claude subscription): the adapter already ran
       // the agentic tool loop in-process and handed back the full assistant/tool
@@ -1154,6 +1167,9 @@ export class ModelHandler {
           id: msg.id ?? uuidv4(),
           timestamp: msg.timestamp ?? baseTs + idx, // keep ordering stable
           processNodeId: nodeId,
+          ...(projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls)
+            ? { mcpToolCalls: projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls) }
+            : {}),
           ...(isLast && usage ? { usage } : {}),
         } as FlujoChatMessage);
       });
@@ -1165,6 +1181,9 @@ export class ModelHandler {
         content: prefixedContent,
         // IMPORTANT: Include tool_calls if they exist in the raw response
         tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
+        ...(projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls)
+          ? { mcpToolCalls: projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls) }
+          : {}),
         timestamp: Date.now(), // Add timestamp
         processNodeId: nodeId, // Attach the process node ID
         ...(usage ? { usage } : {}),

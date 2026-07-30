@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ToolManager from '../MCPToolManager';
+import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import CapabilitiesManager from '../MCPCapabilitiesManager';
 import EnvEditor from '../MCPEnvManager/EnvEditor';
 import { EnvVarValue } from '@/shared/types/mcp';
@@ -35,6 +36,7 @@ interface ServerDetailsModalProps {
   onClose: () => void;
   onSaveEnv: (serverName: string, env: EnvRecord) => Promise<boolean> | Promise<void> | void;
   onServerRestart: (serverName: string) => Promise<void> | void;
+  toolPrefill?: ToolTesterPrefill;
 }
 
 type DetailsTab = 'tools' | 'resources' | 'prompts' | 'env';
@@ -58,6 +60,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   onClose,
   onSaveEnv,
   onServerRestart,
+  toolPrefill,
 }) => {
   const [tab, setTab] = useState<DetailsTab>('tools');
 
@@ -108,7 +111,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
       <Divider />
       <DialogContent sx={{ overflow: 'auto' }}>
         {/* Keep the active server name; render only the active tab's content. */}
-        {open && tab === 'tools' && <ToolManager serverName={serverName} />}
+        {open && tab === 'tools' && <ToolManager serverName={serverName} prefill={toolPrefill} />}
         {open && tab === 'resources' && <CapabilitiesManager serverName={serverName} show="resources" />}
         {open && tab === 'prompts' && <CapabilitiesManager serverName={serverName} show="prompts" />}
         {open && tab === 'env' && (

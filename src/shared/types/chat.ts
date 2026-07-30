@@ -72,6 +72,12 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   /** Server-projected, repository-relative changes associated with this message. */
   changedFiles?: Array<{ path: string; status: string }>;
 
+  /** Display-only destination metadata for MCP calls, keyed by tool-call id. */
+  mcpToolCalls?: Record<string, {
+    serverName: string;
+    toolName: string;
+  }>;
+
   /**
    * Subflow nesting depth for display. Absent/0 = a top-level message of this
    * conversation; >0 = a step of a nested subflow run, folded into the parent

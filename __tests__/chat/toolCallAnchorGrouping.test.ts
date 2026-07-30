@@ -243,4 +243,16 @@ describe('groupToolCallsByAnchor', () => {
     expect(pairs[0].result).toBeUndefined();
     expect(g.consumedToolCallIds.has('c1')).toBe(true);
   });
+
+  it('projects persisted MCP destinations onto eligible pairs only', () => {
+    const anchor = narration('Inspecting a file.');
+    const call = assistantToolMessage([{ id: 'c1', name: 'mcp_filesystem_hash' }], '', {
+      mcpToolCalls: { c1: { serverName: 'filesystem', toolName: 'read_file' } },
+    });
+    const ordinary = assistantToolMessage([{ id: 'c2', name: 'question' }]);
+    const g = groupToolCallsByAnchor([anchor, call, ordinary]);
+    const pairs = g.pairsByAnchorId.get(anchor.id)!;
+    expect(pairs[0].mcpDestination).toEqual({ serverName: 'filesystem', toolName: 'read_file' });
+    expect(pairs[1].mcpDestination).toBeUndefined();
+  });
 });

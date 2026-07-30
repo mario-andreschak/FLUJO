@@ -5,6 +5,7 @@ import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import { SaveAndAuthenticateResult } from './Modals/ServerModal/types';
 import ServerDetailsModal from './ServerDetailsModal';
+import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
@@ -98,6 +99,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [importMenuAnchor, setImportMenuAnchor] = useState<null | HTMLElement>(null);
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
+  const [toolPrefill, setToolPrefill] = useState<ToolTesterPrefill | undefined>();
   // Git update status per repository rootPath (locally cloned stdio servers).
   const [updates, setUpdates] = useState<Record<string, ServerUpdateInfo>>({});
 
@@ -152,9 +154,28 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setDetailsServerName(serverName);
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || servers.length === 0) return;
+    const query = new URLSearchParams(window.location.search);
+    const serverName = query.get('server');
+    const toolName = query.get('tool');
+    if (!serverName || !toolName) return;
+    const server = servers.find((candidate) => candidate.name === serverName);
+    if (!server || server.disabled) return;
+    let argumentsPrefill: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(query.get('args') || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
+    } catch { /* malformed query arguments safely become an empty object */ }
+    setToolPrefill({ toolName, arguments: argumentsPrefill });
+    setDetailsServerName(serverName);
+    window.history.replaceState(window.history.state, '', '/mcp');
+  }, [servers]);
+
   const handleCloseDetails = () => {
     const name = detailsServerName;
     setDetailsServerName(null);
+    setToolPrefill(undefined);
     // Opening the modal (Tool tester / resources) self-heals a stale connection via the
     // backend's reconnect-on-use; refresh this card's status so it stops showing a stale
     // "crashed" message without a full page reload.
@@ -959,6 +980,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         onClose={handleCloseDetails}
         onSaveEnv={saveEnv}
         onServerRestart={handleEnvRestart}
+        toolPrefill={toolPrefill}
       />
 
       <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
