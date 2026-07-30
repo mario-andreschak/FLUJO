@@ -23,18 +23,27 @@ async function resolveTarget(conversationId: string, messageId: string): Promise
   const messages = projectMessages(events);
   if (!messages.some(message => message.id === messageId)) return null;
 
-  const latestMessageByNode = new Map<string, string>();
+  let boundaryReached = false;
   let target: RevertTarget | null = null;
+  const changedFiles = new Map<string, NodeChangedFilesEvent['changedFiles'][number]>();
+
   for (const event of events) {
-    if (event.type === 'message' && event.message.processNodeId) {
-      latestMessageByNode.set(event.message.processNodeId, event.message.id);
-    } else if (event.type === 'node:changed-files' && event.node?.nodeId) {
-      const associatedMessageId = latestMessageByNode.get(event.node.nodeId);
-      if (associatedMessageId === messageId) target = { ...event, messageId };
+    if (event.type === 'message' && event.message.id === messageId) {
+      boundaryReached = true;
+      continue;
     }
+    if (!boundaryReached || event.type !== 'node:changed-files') continue;
+    if (!path.isAbsolute(event.root)) return null;
+    if (event.changedFiles.some(file => !SAFE_PATH.test(file.path))) return null;
+    if (target && target.root !== event.root) return null;
+
+    target ??= { ...event, messageId, changedFiles: [] };
+    target.endSnapshot = event.endSnapshot;
+    for (const file of event.changedFiles) changedFiles.set(file.path, file);
   }
-  if (!target || !path.isAbsolute(target.root)) return null;
-  if (target.changedFiles.some(file => !SAFE_PATH.test(file.path))) return null;
+
+  if (!target || changedFiles.size === 0) return null;
+  target.changedFiles = [...changedFiles.values()];
   return target;
 }
 
