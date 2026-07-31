@@ -6,7 +6,7 @@ describe('conversation sidebar origin metadata', () => {
     ['api', 'API'],
     ['schedule', 'Automation'],
     ['trigger', 'Trigger'],
-    ['subflow', 'Subflow'],
+    ['subflow', 'Subagent'],
     ['mcp', 'MCP run'],
     ['internal', 'Internal'],
   ] as const)('maps %s runs to %s', (source, label) => {
@@ -25,7 +25,18 @@ describe('conversation sidebar origin metadata', () => {
     });
     expect(getConversationOrigin({ parentConversationId: 'parent-1' })).toMatchObject({
       key: 'subflow',
-      label: 'Subflow',
+      label: 'Subagent',
+      inferred: true,
+    });
+  });
+
+  it('classifies legacy automation descendants as subagents', () => {
+    expect(getConversationOrigin({
+      plannedExecutionId: 'automation-1',
+      parentConversationId: 'automation-root',
+    })).toMatchObject({
+      key: 'subflow',
+      label: 'Subagent',
       inferred: true,
     });
   });
@@ -37,6 +48,16 @@ describe('conversation sidebar origin metadata', () => {
       parentConversationId: 'parent-1',
     })).toMatchObject({
       key: 'subflow',
+      inferred: false,
+    });
+
+    expect(getConversationOrigin({
+      source: 'schedule',
+      plannedExecutionId: 'plan-1',
+      parentConversationId: 'upstream-automation-run',
+    })).toMatchObject({
+      key: 'schedule',
+      label: 'Automation',
       inferred: false,
     });
   });

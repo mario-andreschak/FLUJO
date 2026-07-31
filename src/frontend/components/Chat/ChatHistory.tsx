@@ -149,6 +149,22 @@ const ORIGIN_COLORS = {
   unknown: 'default',
 } as const satisfies Record<ConversationOriginKey, 'primary' | 'info' | 'secondary' | 'warning' | 'success' | 'default'>;
 
+const originCardColor = (
+  key: ConversationOriginKey,
+  theme: ReturnType<typeof useMuiTheme>,
+): string => {
+  switch (key) {
+    case 'chat': return theme.palette.primary.main;
+    case 'api':
+    case 'mcp': return theme.palette.info.main;
+    case 'schedule':
+    case 'internal': return theme.palette.secondary.main;
+    case 'trigger': return theme.palette.warning.main;
+    case 'subflow': return theme.palette.success.main;
+    default: return theme.palette.text.secondary;
+  }
+};
+
 const ChatHistory: React.FC<ChatHistoryProps> = ({
   conversations,
   currentConversationId,
@@ -406,10 +422,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     const selected = conversation.id === currentConversationId;
     const origin = getConversationOrigin(conversation);
     const OriginIcon = ORIGIN_ICONS[origin.key];
+    const originColor = originCardColor(origin.key, muiTheme);
+    const originWash = muiTheme.palette.mode === 'dark' ? 0.14 : 0.1;
 
     return (
       <ListItem
         key={conversation.id}
+        data-conversation-origin={origin.key}
         disablePadding
         secondaryAction={
           <Box
@@ -460,33 +479,31 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           mb: 0.9,
           border: '1px solid',
           borderColor: selected
-            ? alpha(muiTheme.palette.primary.main, 0.5)
-            : alpha(muiTheme.palette.text.primary, 0.09),
+            ? alpha(originColor, 0.68)
+            : alpha(originColor, 0.32),
           borderRadius: 2.5,
           overflow: 'hidden',
           opacity: 1,
           bgcolor: selected
-            ? alpha(muiTheme.palette.primary.main, 0.11)
-            : alpha(muiTheme.palette.background.paper, 0.46),
-          backgroundImage: selected
-            ? `linear-gradient(135deg, ${alpha(muiTheme.palette.primary.main, 0.14)} 0%, transparent 72%)`
-            : 'none',
+            ? alpha(originColor, originWash + 0.07)
+            : alpha(originColor, originWash),
+          backgroundImage: `linear-gradient(135deg, ${alpha(originColor, selected ? 0.3 : 0.21)} 0%, ${alpha(originColor, selected ? 0.14 : 0.08)} 58%, ${alpha(muiTheme.palette.background.paper, muiTheme.palette.mode === 'dark' ? 0.58 : 0.68)} 100%)`,
           boxShadow: selected
-            ? `0 10px 28px ${alpha(muiTheme.palette.primary.main, 0.16)}`
-            : `0 5px 18px ${alpha(muiTheme.palette.common.black, muiTheme.palette.mode === 'dark' ? 0.14 : 0.05)}`,
+            ? `0 10px 30px ${alpha(originColor, 0.24)}`
+            : `0 5px 20px ${alpha(originColor, muiTheme.palette.mode === 'dark' ? 0.12 : 0.08)}`,
           transition: 'transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease',
           '&::before': {
             content: '""',
             position: 'absolute',
             inset: '10px auto 10px 0',
-            width: 3,
+            width: selected ? 4 : 3,
             borderRadius: '0 4px 4px 0',
-            bgcolor: selected ? 'primary.main' : 'transparent',
+            bgcolor: originColor,
           },
           '&:hover': {
             transform: 'translateY(-1px)',
-            borderColor: alpha(muiTheme.palette.primary.main, 0.28),
-            boxShadow: `0 10px 26px ${alpha(muiTheme.palette.common.black, muiTheme.palette.mode === 'dark' ? 0.2 : 0.09)}`,
+            borderColor: alpha(originColor, 0.58),
+            boxShadow: `0 10px 28px ${alpha(originColor, muiTheme.palette.mode === 'dark' ? 0.2 : 0.14)}`,
             '& .conversation-card-actions': { opacity: 1 },
           },
           '&:focus-within .conversation-card-actions': { opacity: 1 },
@@ -571,7 +588,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                       color={ORIGIN_COLORS[origin.key]}
                       sx={{
                         height: modern ? 22 : 20,
-                        bgcolor: modern ? alpha(muiTheme.palette.background.paper, 0.42) : undefined,
+                        bgcolor: modern ? alpha(originColor, 0.13) : undefined,
                         '& .MuiChip-icon': { fontSize: 14 },
                         '& .MuiChip-label': {
                           px: 0.75,

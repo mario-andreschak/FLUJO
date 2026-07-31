@@ -33,8 +33,8 @@ const ORIGIN_META: Record<ConversationOriginKey, Omit<ConversationOriginMeta, 'k
     description: 'Started by an unattended runtime trigger',
   },
   subflow: {
-    label: 'Subflow',
-    description: 'Spawned by another flow conversation',
+    label: 'Subagent',
+    description: 'Spawned as a subagent by another conversation',
   },
   mcp: {
     label: 'MCP run',
@@ -61,7 +61,11 @@ function meta(key: ConversationOriginKey, inferred: boolean): ConversationOrigin
  */
 export function getConversationOrigin(input: ConversationOriginInput): ConversationOriginMeta {
   if (input.source && input.source in ORIGIN_META) return meta(input.source, false);
-  if (input.plannedExecutionId) return meta('schedule', true);
+  // Legacy persisted subagent runs inherited the scheduler execution id from
+  // their automation parent but did not yet persist `source: "subflow"`.
+  // Parentage is the more specific signal: without this precedence every
+  // descendant in an automation-started fan-out is mislabeled Automation.
   if (input.parentConversationId) return meta('subflow', true);
+  if (input.plannedExecutionId) return meta('schedule', true);
   return meta('unknown', true);
 }
