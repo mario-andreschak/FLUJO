@@ -1,8 +1,8 @@
 /**
- * ShadowRepoService — git-based shadow-repository snapshots for the built-in
- * `filesystem` / `bash` MCP servers (issue #250).
+ * ShadowRepoService — git-based shadow-repository snapshots for installed
+ * host-path MCP packages (issue #250).
  *
- * The built-in servers mutate the host with no undo. Confinement
+ * Those packages can mutate the host with no undo. Confinement
  * (`internal/confinement.ts`) limits *where* writes land but nothing records
  * *what* changed or can put it back — which matters most for scheduled /
  * unattended runs where nobody watches the diff go by.

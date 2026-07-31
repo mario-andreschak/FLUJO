@@ -12,8 +12,8 @@
  *  4. loadEffectiveRoots with callerNodeId that has NO registered roots falls back to global node union (+ server roots)
  */
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
 import path from 'path';
@@ -24,9 +24,9 @@ import {
   _resetNodeRootsForTests,
 } from '@/backend/services/mcp/roots';
 import { loadEffectiveRoots } from '@/backend/services/mcp/internal/confinement';
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 
-const mockedRegistry = getInternalServerRoots as jest.Mock;
+const mockedRegistry = loadServerRoots as jest.Mock;
 
 describe('getNodeRootsForId (per-node root lookup)', () => {
   beforeEach(() => {

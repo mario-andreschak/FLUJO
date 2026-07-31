@@ -1,12 +1,11 @@
 /**
- * Resources capability of FLUJO's built-in internal MCP server ("flujo").
+ * Resources capability of FLUJO's standalone control-plane MCP package.
  *
  * The tools side lives in internalTools.ts; this module is its resources
  * sibling: it publishes the RUN-SCOPED RESOURCES the flow engine captures
  * during runs (auto-captured tool results, `captureResource` node outputs) as
- * standard MCP resources, so both flows (via resource pills bound to the
- * "flujo" server) and external MCP clients (via /mcp-proxy/flujo) can list
- * and read a run's data artifacts.
+ * standard MCP resources, so flows and external MCP clients can list and read
+ * a run's data artifacts through any persisted record for the package.
  *
  * MCPService loads this module via dynamic import, mirroring internalTools —
  * this file itself is dependency-light (run-resource store + event bus), but
@@ -27,7 +26,6 @@ import {
   parseRunResourceUri,
 } from '@/backend/services/runResources';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { INTERNAL_SERVER_NAME } from './internalServerConfig';
 
 const log = createLogger('backend/services/mcp/internalResources');
 
@@ -94,7 +92,7 @@ export async function internalReadResource(uri: string): Promise<MCPServiceRespo
     try {
       executionEventBus.emitterFor(parsed.conversationId)({
         type: 'resource:read',
-        server: INTERNAL_SERVER_NAME,
+        server: 'flujo',
         uri,
         name: read.entry.name,
         mimeType: read.entry.mimeType,

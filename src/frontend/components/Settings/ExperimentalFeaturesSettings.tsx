@@ -243,8 +243,8 @@ export default function ExperimentalFeaturesSettings() {
           label="Protect sensitive home-directory paths"
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Add a defense-in-depth deny list to the built-in <strong>filesystem</strong>
-          {' '}and <strong>bash</strong> MCP servers. When enabled, sensitive locations
+          Add a defense-in-depth deny list to installed <strong>filesystem</strong>
+          {' '}and <strong>bash</strong> MCP packages. When enabled, sensitive locations
           such as Documents, Desktop, Downloads, and credential directories remain
           blocked even when they are included in a configured root. This is off by
           default, so configured roots normally grant access to their full contents.
@@ -263,8 +263,8 @@ export default function ExperimentalFeaturesSettings() {
           label="Enable filesystem snapshots"
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Capture restorable snapshots around built-in <strong>filesystem</strong>
-          {' '}and <strong>bash</strong> writes. Turning this off prevents new
+          Capture restorable snapshots around installed <strong>filesystem</strong>
+          {' '}and <strong>bash</strong> package writes. Turning this off prevents new
           captures and snapshot-based revert. An operator can always disable
           snapshots with <strong>FLUJO_SNAPSHOTS=0</strong>.
         </Typography>

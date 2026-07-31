@@ -1,9 +1,9 @@
 /**
  * Regression: node-level MCP roots (issue 46) contributed by a FlowBuilder MCP
- * node bound to the built-in `filesystem` server must actually confine/allow the
+ * node bound to the shipped `filesystem` package must actually confine/allow the
  * filesystem tools.
  *
- * Built-in servers enforce confinement directly via loadEffectiveRoots — they
+ * Confined server packages enforce roots directly via loadEffectiveRoots — they
  * never go through the `roots/list` protocol handler — so before the fix a root
  * added on an MCP node was silently ignored and every path read as "outside the
  * configured filesystem roots." This locks in that the node overlay is honored,
@@ -14,11 +14,10 @@ import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-// Registry (storage-backed) mocked: no PERSISTED server-level roots, so the only
-// confinement comes from the node overlay under test.
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  FILESYSTEM_SERVER_NAME: 'filesystem',
-  getInternalServerRoots: jest.fn().mockResolvedValue([]),
+// Ordinary persisted-config loader mocked with no server-level roots, so the
+// only confinement comes from the node overlay under test.
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn().mockResolvedValue([]),
 }));
 
 // Keep global-var resolution a pure passthrough (no storage/crypto).

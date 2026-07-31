@@ -1,10 +1,9 @@
 /**
- * Default protected-path denylist for the built-in `filesystem` and `bash`
- * servers (issue #260), modelled on opencode's `protected.ts`.
+ * Default protected-path denylist for confined host-path MCP packages (issue #260), modelled on opencode's `protected.ts`.
  *
  * FLUJO's existing confinement (see `confinement.ts`) is ALLOW-LIST only: when an
  * operator widens `FLUJO_FS_ROOTS`/persisted roots to e.g. `C:\Users\<name>` or
- * `/`, the built-in servers gain unbounded access to home documents, mail,
+ * `/`, those packages gain unbounded access to home documents, mail,
  * browser profiles and SSH keys with no backstop.
  *
  * This module provides an OPTIONAL second deny layer that runs BEFORE the
@@ -35,7 +34,7 @@ function isTruthyEnv(value: string | undefined): boolean {
 export const ALLOW_PROTECTED_PATHS_ENV = 'FLUJO_ALLOW_PROTECTED_PATHS';
 
 /**
- * Whether the optional protected-path layer is enabled for built-in MCP tools.
+ * Whether the optional protected-path layer is enabled for a persisted MCP server.
  *
  * Configured roots are the default authority, so a missing setting or a storage
  * failure leaves this layer OFF. The legacy operator override still wins when

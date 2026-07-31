@@ -3,7 +3,7 @@
  *
  * FlowExecutor.executeStep calls `captureBefore()` just before a Process node
  * runs and `captureAfterAndEmit()` just after, when that node has a binding whose
- * validated package capability declares snapshot-eligible host-path access. Both are BEST-EFFORT and never throw —
+ * persisted config declares snapshot-eligible host-path access. Both are BEST-EFFORT and never throw —
  * a snapshot failure must never abort a run.
  *
  * "Armed" is detected from the COMPILED flow: FlowConverter folds every bound
@@ -18,7 +18,6 @@ import { SharedState } from '@/backend/execution/flow/types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { writeRunResource } from '@/backend/services/runResources';
 import { shadowRepoService } from './ShadowRepoService';
-import { hostPathCapabilityOf } from '@/utils/shared/mcpConstants';
 
 const log = createLogger('backend/services/snapshot/snapshotHook');
 
@@ -73,7 +72,7 @@ async function resolveArmedRoots(
 
     for (const binding of bindings) {
       const config = configs.get(binding.serverName);
-      const capability = hostPathCapabilityOf(config);
+      const capability = config?.hostPathAccess;
       if (!config || capability?.snapshots !== true) continue;
       const roots = await loadEffectiveRoots(
         binding.serverName,

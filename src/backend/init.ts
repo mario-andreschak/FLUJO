@@ -7,7 +7,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
 import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
-import { migrateInternalMcpServers } from '@/backend/services/mcp/internal/migration';
+import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 
 const log = createLogger('backend/init');
 
@@ -100,7 +100,7 @@ async function runInitialization(): Promise<void> {
 
 /**
  * Start the secret-dependent background services exactly once per process, in
- * order: migrate internal MCP configs, run the MCP server sweep, then arm the
+ * order: provision shipped MCP configs, run the MCP server sweep, then arm the
  * scheduler. The scheduler is armed AFTER the MCP sweep so a catch-up or early
  * scheduled run doesn't race servers that are still connecting.
  *
@@ -116,9 +116,9 @@ function startSecretDependentServices(): Promise<void> {
       log.info('Initializing MCP servers');
       try {
         // Issue #346: provisioning must finish before the enabled-server sweep.
-        await migrateInternalMcpServers();
+        await migrateShippedMcpServers();
       } catch (error) {
-        log.error('Failed to migrate internal MCP server configurations:', error);
+        log.error('Failed to provision shipped MCP server configurations:', error);
         // Keep the startup retryable in-process; starting without the durable
         // records would silently omit the shipped servers.
         global.__flujo_secret_services_promise = undefined;

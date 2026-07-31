@@ -34,7 +34,6 @@ import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
-import { hostPathCapabilityOf } from '@/utils/shared/mcpConstants';
 
 const log = createLogger('components/flow/FlowBuilder/FlowValidationButton');
 
@@ -98,7 +97,7 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
       // result; failures remain unknown and suppress conclusions about file access.
       const serverTools: Record<string, string[]> = {};
       const toolListUsability = new Map<string, FileAccessMcpUsability>();
-      const fileAccessConfigs = loadedConfigs?.filter((config) => !!hostPathCapabilityOf(config)) ?? [];
+      const fileAccessConfigs = loadedConfigs?.filter((config) => !!config.hostPathAccess) ?? [];
       const fileAccessNames = new Set(fileAccessConfigs.map((config) => config.name));
       if (loadedConfigs) {
         const disabledByName = new Map(loadedConfigs.map(s => [s.name, !!s.disabled]));

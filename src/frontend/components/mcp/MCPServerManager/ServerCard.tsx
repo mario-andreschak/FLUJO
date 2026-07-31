@@ -199,7 +199,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   };
 
   // Copy a ready-to-paste, single-server MCP config JSON to the clipboard (#110).
-  // Scoped to the exposed/built-in blocks, whose exported shape is proxy-only
+  // Scoped to exposed servers, whose exported shape is proxy-only
   // (`{ type:'http', url }`) — so no env vars, headers or secrets ever leak.
   const handleCopyServerJson = () => {
     const base = typeof window !== 'undefined' ? window.location.origin : '';

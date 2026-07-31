@@ -254,7 +254,7 @@ export interface SnapshotChangedFile {
 }
 /**
  * A filesystem snapshot of a confinement root was taken before/after a Process
- * node that had the built-in `filesystem`/`bash` servers armed (issue #250).
+ * node that had a snapshot-capable host-path server armed (issue #250).
  * `snapshotId` is the shadow-repo commit SHA; `root` is the captured root.
  */
 export interface NodeSnapshotEvent extends ExecutionEventBase {

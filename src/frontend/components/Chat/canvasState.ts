@@ -156,9 +156,8 @@ export function enforceCap(
 }
 
 /**
- * Open (or re-open) a canvas app and FOCUS it. For external apps this is the
- * click-to-mount consent action; trusted first-party apps may reach it through
- * `syncCanvasAppResult`. It adds the entry if new, refreshes its payload, marks
+ * Open (or re-open) a canvas app and FOCUS it. This is the click-to-mount
+ * consent action for every server. It adds the entry if new, refreshes its payload, marks
  * it read, bumps its recency, and enforces the tab cap while protecting the
  * just-opened tab.
  */

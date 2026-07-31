@@ -1,5 +1,5 @@
 /**
- * Tests for the built-in `filesystem` MCP server (issue #170): round-trip
+ * Tests for the shipped `filesystem` MCP package (issue #170): round-trip
  * read/write, line-range read, diff editing, dir listing + depth-limited tree,
  * search by name/content, create/move/delete, and FLUJO_FS_ROOTS confinement.
  */
@@ -8,9 +8,8 @@ import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  FILESYSTEM_SERVER_NAME: 'filesystem',
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
 // `filesystemResources.ts` imports the ESM-only `@modelcontextprotocol/ext-apps`
@@ -20,7 +19,7 @@ jest.mock('@modelcontextprotocol/ext-apps', () => ({
   LATEST_PROTOCOL_VERSION: '2026-01-26',
 }));
 
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 import { filesystemToolDefinitions, filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
 import {
   filesystemListResources,
@@ -29,7 +28,7 @@ import {
   _clearTouchedFilesForTests,
 } from '@/backend/services/mcp/internal/filesystemResources';
 
-const mockedRoots = getInternalServerRoots as jest.Mock;
+const mockedRoots = loadServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };

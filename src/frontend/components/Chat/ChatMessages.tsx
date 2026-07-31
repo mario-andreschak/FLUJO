@@ -135,10 +135,9 @@ interface ChatMessagesProps {
   ) => void;
   /**
    * #216: route a tool result's `ui://` app into the docked canvas surface
-   * instead of rendering it inline. For external apps, clicking the bubble
-   * launcher is the click-to-mount consent gate. FLUJO's built-in apps may
-   * already be open under the first-party trust policy (#331). When omitted,
-   * apps render inline as before.
+   * instead of rendering it inline. Clicking the bubble launcher is the same
+   * click-to-mount consent gate for every server. When omitted, apps render
+   * inline as before.
    */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   /**

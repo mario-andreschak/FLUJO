@@ -1,11 +1,11 @@
 /**
- * Tests for the built-in `bash` server's confinement + env hygiene (issue #175):
+ * Tests for the shipped `bash` package's confinement + env hygiene (issue #175):
  *  - the `cwd` is confined to the same effective-roots model as `filesystem`
  *    (persisted roots + a FLUJO_BASH_ROOTS / FLUJO_FS_ROOTS hard ceiling), and
  *  - spawned commands DO NOT inherit the full backend process.env by default;
  *    a documented opt-in (FLUJO_BASH_INHERIT_ENV) restores it.
  *
- * The registry (storage-backed) is mocked so the effective-roots merge can be
+ * The ordinary config loader is mocked so the effective-roots merge can be
  * exercised without a real storage layer.
  */
 import { promises as fsp } from 'fs';
@@ -13,15 +13,14 @@ import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  BASH_SERVER_NAME: 'bash',
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 import { bashCallTool, _resetBashSessionsForTests } from '@/backend/services/mcp/internal/bashTools';
 
-const mockedRoots = getInternalServerRoots as jest.Mock;
+const mockedRoots = loadServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   return (r.content[0] as { text: string }).text;

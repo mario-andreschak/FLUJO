@@ -30,8 +30,8 @@ jest.mock('@/utils/storage/backend', () => ({
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: { startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a) },
 }));
-jest.mock('@/backend/services/mcp/internal/migration', () => ({
-  migrateInternalMcpServers: (...a: unknown[]) => migrateInternalMcpServersMock(...a),
+jest.mock('@/backend/services/mcp/shippedServerMigration', () => ({
+  migrateShippedMcpServers: (...a: unknown[]) => migrateInternalMcpServersMock(...a),
 }));
 jest.mock('@/backend/services/spotlight', () => ({
   refreshSpotlightServers: (...a: unknown[]) => refreshSpotlightMock(...a),

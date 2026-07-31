@@ -1,8 +1,8 @@
 /**
- * Shared filesystem-confinement helpers for the built-in MCP servers
+ * Shared filesystem-confinement helpers for local MCP server packages
  * (issues #170 + #175).
  *
- * Both the `filesystem` and `bash` built-in servers confine host access with the
+ * The shipped `filesystem` and `bash` packages confine host access with the
  * SAME two-layer model, so the logic lives here once instead of being duplicated
  * (and drifting) across the two tool modules:
  *
@@ -24,7 +24,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createLogger } from '@/utils/logger';
-import { getInternalServerRoots } from './registry';
+import { loadServerRoots } from '../config';
 
 const log = createLogger('backend/services/mcp/internal/confinement');
 
@@ -77,12 +77,12 @@ async function resolveRootToPath(entry: string, dataDir: string): Promise<string
 }
 
 /**
- * The effective confinement roots for a built-in server.
+ * The effective confinement roots for a persisted local server.
  *
  * The candidate set is the UNION of two sources:
  *  - persisted server-level roots (MCP manager override, issue #170), and
  *  - node-level roots contributed by FlowBuilder MCP nodes bound to this server
- *    (issue 46). Built-in servers enforce confinement directly (they never go
+ *    (issue 46). Confined server packages enforce this directly (they never go
  *    through the `roots/list` protocol handler), so without this merge a root
  *    added on an MCP node would be silently ignored.
  *
@@ -106,7 +106,7 @@ export async function loadEffectiveRoots(
 
   const candidates: string[] = [];
   try {
-    for (const r of await getInternalServerRoots(serverName)) {
+    for (const r of await loadServerRoots(serverName)) {
       candidates.push(path.isAbsolute(r) ? path.resolve(r) : path.resolve(dataDir, r));
     }
   } catch (err) {

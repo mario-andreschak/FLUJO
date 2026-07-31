@@ -35,8 +35,8 @@ jest.mock('@/backend/services/mcp/connection', () => ({
 }));
 
 // The experimental beta-protocol gate reads the Settings blob from on-disk
-// storage on every connect (betaClient.ts). Same fake-timer reasoning as the
-// registry mock below: mock it to pure, no-I/O behavior so the gate resolves
+// storage on every connect (betaClient.ts). Mock it to pure, no-I/O behavior
+// so the gate resolves
 // within advanceTimersByTimeAsync — and so this suite is hermetic against the
 // developer's local settings.
 jest.mock('@/backend/services/mcp/betaClient', () => ({
@@ -45,11 +45,6 @@ jest.mock('@/backend/services/mcp/betaClient', () => ({
   createBetaTransport: jest.fn(),
   isBetaClient: jest.fn(() => false),
   negotiatedProtocolVersion: jest.fn(() => undefined),
-}));
-
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  BASH_SERVER_NAME: 'bash',
-  FILESYSTEM_SERVER_NAME: 'filesystem',
 }));
 
 import { MCPService } from '@/backend/services/mcp';

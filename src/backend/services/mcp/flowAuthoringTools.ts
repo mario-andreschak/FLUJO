@@ -1,5 +1,5 @@
 /**
- * Flow-authoring tools for the built-in FLUJO MCP server (#14 follow-up:
+ * Flow-authoring tools for FLUJO's control-plane MCP package (#14 follow-up:
  * FlowSpec as the public authoring contract).
  *
  * Alongside flows-as-tools (flowTools.ts), the `/mcp-flows` server exposes three

@@ -1,5 +1,5 @@
 /**
- * Flows-as-MCP-tools brain for the built-in FLUJO MCP server (issue #38, Item D).
+ * Flows-as-MCP-tools brain for FLUJO's control-plane MCP package (issue #38, Item D).
  *
  * This is the transport-agnostic logic behind `/mcp`: it lists every saved Flow
  * as an MCP tool and, on `tools/call`, runs the chosen flow through the existing

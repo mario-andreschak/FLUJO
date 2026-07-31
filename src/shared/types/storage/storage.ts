@@ -31,6 +31,9 @@ export enum StorageKey {
   // Seeds the browser package for installations whose original built-in migration
   // completed before the browser server shipped (issue #334).
   MCP_INTERNAL_BROWSER_MIGRATION_V3 = 'mcp_internal_browser_migration_v3',
+  // Converts previously provisioned package records to normal stdio launch fields
+  // and removes the legacy internal-package metadata (issue #347).
+  MCP_SHIPPED_SERVERS_MIGRATION_V4 = 'mcp_shipped_servers_migration_v4',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -74,6 +77,7 @@ export const StorageKeys = {
   MCP_INTERNAL_SERVERS_MIGRATION_V1: StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1,
   MCP_INTERNAL_CAPABILITIES_MIGRATION_V2: StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,
   MCP_INTERNAL_BROWSER_MIGRATION_V3: StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
+  MCP_SHIPPED_SERVERS_MIGRATION_V4: StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,
@@ -167,7 +171,7 @@ export interface ExperimentalSettings {
    */
   autoUnloadOllamaModels?: boolean;
   /**
-   * When true, the built-in filesystem and bash MCP servers block sensitive
+   * When true, installed filesystem and bash MCP packages block sensitive
    * home-directory locations even when a configured root would otherwise allow
    * them. Off by default: configured roots are an explicit user grant and take
    * precedence unless this additional defense-in-depth layer is opted into.

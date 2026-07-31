@@ -3,8 +3,8 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(),
 }));
 
-import { migrateInternalMcpServers } from '@/backend/services/mcp/internal/migration';
-import { SHIPPED_SERVER_NAMES } from '@/backend/services/mcp/internal/registry';
+import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
+import { SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
 import { StorageKey } from '@/shared/types/storage';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 
@@ -33,38 +33,33 @@ beforeEach(() => {
   installStorageMocks();
 });
 
-describe('internal MCP server persistence migration (#346)', () => {
-  it('seeds all shipped servers as ordinary configs and writes the marker last', async () => {
-    await migrateInternalMcpServers();
+describe('shipped MCP package migration (#347)', () => {
+  it('seeds complete ordinary stdio records', async () => {
+    await migrateShippedMcpServers();
 
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
-    expect(Object.keys(servers)).toEqual(expect.arrayContaining([...SHIPPED_SERVER_NAMES]));
-    for (const name of SHIPPED_SERVER_NAMES) {
-      expect(servers[name]).toMatchObject({
+    for (const descriptor of SHIPPED_MCP_SERVERS) {
+      expect(servers[descriptor.defaultName]).toMatchObject({
         transport: 'stdio',
-        command: 'npx',
-        disabled: name === 'browser',
+        command: 'node',
+        disabled: descriptor.defaultName === 'browser',
         exposeAsMcpServer: true,
+        enableMcpApps: false,
+        roots: [],
+        source: { type: 'marketplace', id: descriptor.packageId },
       });
-      expect(servers[name]).not.toHaveProperty('name');
-      expect(servers[name]).not.toHaveProperty('builtIn');
+      expect(servers[descriptor.defaultName]).not.toHaveProperty('name');
+      expect(servers[descriptor.defaultName]).not.toHaveProperty('builtIn');
+      expect(servers[descriptor.defaultName]).not.toHaveProperty('internalPackage');
+      expect(servers[descriptor.defaultName]).not.toHaveProperty('packageCapabilities');
     }
-    expect(servers.filesystem).not.toHaveProperty('enableMcpApps');
     expect(storage.get(StorageKey.MCP_INTERNAL_OVERRIDES)).toEqual({});
     expect(storage.get(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1)).toBe(true);
-    expect(storage.get(StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2)).toBe(true);
     expect(storage.get(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3)).toBe(true);
-    expect(saveItemMock.mock.calls.map(([key]) => key)).toEqual([
-      StorageKey.MCP_SERVERS,
-      StorageKey.MCP_INTERNAL_OVERRIDES,
-      StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1,
-      StorageKey.MCP_SERVERS,
-      StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,
-      StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
-    ]);
+    expect(storage.get(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4)).toBe(true);
   });
 
-  it('preserves same-name configs and transfers disabled/roots only to newly seeded entries', async () => {
+  it('preserves a user-owned same-name config and transfers all legacy override fields only to new records', async () => {
     const existingFlujo = {
       transport: 'streamable',
       url: 'https://example.test/custom',
@@ -76,51 +71,91 @@ describe('internal MCP server persistence migration (#346)', () => {
       other: { transport: 'stdio', command: 'other-command' },
     });
     storage.set(StorageKey.MCP_INTERNAL_OVERRIDES, {
-      flujo: { disabled: true, roots: ['must-not-apply'] },
-      filesystem: { disabled: true, roots: ['C:/allowed'] },
+      flujo: { disabled: true, roots: ['must-not-apply'], enableMcpApps: true },
+      filesystem: {
+        disabled: true,
+        roots: ['C:/allowed'],
+        exposeAsMcpServer: false,
+        enableMcpApps: true,
+      },
       bash: { roots: ['/workspace'] },
     });
 
-    await migrateInternalMcpServers();
+    await migrateShippedMcpServers();
 
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
     expect(servers.flujo).toEqual(existingFlujo);
     expect(servers.other).toEqual({ transport: 'stdio', command: 'other-command' });
-    expect(servers.filesystem).toMatchObject({ disabled: true, roots: ['C:/allowed'] });
+    expect(servers.filesystem).toMatchObject({
+      disabled: true,
+      roots: ['C:/allowed'],
+      exposeAsMcpServer: false,
+      enableMcpApps: true,
+    });
     expect(servers.bash).toMatchObject({ disabled: false, roots: ['/workspace'] });
   });
 
-  it('adds browser to installations that already completed earlier migrations', async () => {
-    storage.set(StorageKey.MCP_SERVERS, { flujo: { transport: 'streamable', url: 'https://custom.test' } });
+  it('upgrades a renamed legacy package record without relying on its display name', async () => {
+    storage.set(StorageKey.MCP_SERVERS, {
+      shell: {
+        transport: 'stdio',
+        command: 'npx',
+        args: ['--no-install', 'flujo-mcp-bash'],
+        cwd: '',
+        env: {},
+        disabled: true,
+        roots: ['/workspace'],
+        internalPackage: '@flujo-ai/mcp-bash',
+        packageCapabilities: { mcpApps: true },
+      },
+    });
     storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
-    storage.set(StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2, true);
+    storage.set(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
 
-    await migrateInternalMcpServers();
+    await migrateShippedMcpServers();
+
+    const shell = (storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>).shell;
+    expect(shell).toMatchObject({
+      command: 'node',
+      disabled: true,
+      roots: ['/workspace'],
+      source: { type: 'marketplace', id: '@flujo-ai/mcp-bash' },
+      hostPathAccess: { snapshots: true, protectedPaths: true },
+    });
+    expect(shell).not.toHaveProperty('internalPackage');
+    expect(shell).not.toHaveProperty('packageCapabilities');
+    expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>).bash).toBeUndefined();
+  });
+
+  it('adds browser to installations that completed the original seed migration', async () => {
+    storage.set(StorageKey.MCP_SERVERS, {
+      flujo: { transport: 'streamable', url: 'https://custom.test' },
+    });
+    storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+
+    await migrateShippedMcpServers();
 
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
     expect(servers.flujo).toEqual({ transport: 'streamable', url: 'https://custom.test' });
     expect(servers.browser).toMatchObject({
-      command: 'npx',
-      args: ['--no-install', 'flujo-mcp-browser'],
+      command: 'node',
       disabled: true,
-      internalPackage: '@flujo-ai/mcp-browser',
+      source: { type: 'marketplace', id: '@flujo-ai/mcp-browser' },
     });
-    expect(storage.get(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3)).toBe(true);
   });
 
-  it('coalesces concurrent callers and becomes a no-op after the durable marker', async () => {
-    const first = migrateInternalMcpServers();
-    const second = migrateInternalMcpServers();
+  it('coalesces concurrent callers and becomes a no-op after durable markers', async () => {
+    const first = migrateShippedMcpServers();
+    const second = migrateShippedMcpServers();
     expect(second).toBe(first);
     await Promise.all([first, second]);
-    expect(saveItemMock).toHaveBeenCalledTimes(6);
 
     saveItemMock.mockClear();
-    await migrateInternalMcpServers();
+    await migrateShippedMcpServers();
     expect(saveItemMock).not.toHaveBeenCalled();
   });
 
-  it('restores source overrides and retries when the marker write fails', async () => {
+  it('restores source overrides and retries when the V1 marker write fails', async () => {
     const overrides = { filesystem: { disabled: true, roots: ['C:/retry'] } };
     storage.set(StorageKey.MCP_INTERNAL_OVERRIDES, overrides);
     let failMarker = true;
@@ -132,23 +167,25 @@ describe('internal MCP server persistence migration (#346)', () => {
       storage.set(key, copy(value));
     });
 
-    await expect(migrateInternalMcpServers()).rejects.toThrow('marker failed');
+    await expect(migrateShippedMcpServers()).rejects.toThrow('marker failed');
     expect(storage.get(StorageKey.MCP_INTERNAL_OVERRIDES)).toEqual(overrides);
     expect(storage.has(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1)).toBe(false);
 
-    await migrateInternalMcpServers();
+    await migrateShippedMcpServers();
     expect(storage.get(StorageKey.MCP_INTERNAL_OVERRIDES)).toEqual({});
     expect(storage.get(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1)).toBe(true);
+    expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>).filesystem)
+      .toMatchObject({ disabled: true, roots: ['C:/retry'] });
   });
 
-  it('does not recreate a shipped server deleted after migration', async () => {
-    await migrateInternalMcpServers();
+  it('does not recreate a package deleted after migration', async () => {
+    await migrateShippedMcpServers();
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
     delete servers.filesystem;
     storage.set(StorageKey.MCP_SERVERS, servers);
 
     saveItemMock.mockClear();
-    await migrateInternalMcpServers();
+    await migrateShippedMcpServers();
 
     expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>).filesystem).toBeUndefined();
     expect(saveItemMock).not.toHaveBeenCalled();

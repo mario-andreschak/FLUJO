@@ -1,5 +1,5 @@
 /**
- * Tests for the built-in `bash` MCP server (issue #170): foreground run
+ * Tests for the shipped `bash` MCP package (issue #170): foreground run
  * (output/exit code, non-zero exit, timeout kill) and background sessions
  * (start → wait → result, kill a long runner, unknown-session errors).
  */
@@ -16,12 +16,11 @@ jest.mock('node:child_process', () => {
   return { ...actual, spawn: jest.fn(actual.spawn) };
 });
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  BASH_SERVER_NAME: 'bash',
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 import {
   bashToolDefinitions,
   bashCallTool,
@@ -29,7 +28,7 @@ import {
   _resetBashShellCacheForTests,
 } from '@/backend/services/mcp/internal/bashTools';
 
-const mockedRoots = getInternalServerRoots as jest.Mock;
+const mockedRoots = loadServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };

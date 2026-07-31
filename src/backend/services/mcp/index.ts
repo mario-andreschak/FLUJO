@@ -127,7 +127,6 @@ import {
   negotiatedProtocolVersion,
 } from './betaClient';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
-import { packageCapabilitiesOf } from '@/utils/shared/mcpConstants';
 import {
   ToolCallSource,
   ToolListAudience,
@@ -673,29 +672,18 @@ export class MCPService {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
 
-      if (config.transport === 'stdio') {
-        const capabilities = packageCapabilitiesOf(config);
-        if (capabilities) {
+      if (config.transport === 'stdio' && config.hostPathAccess?.protectedPaths === true) {
           const childEnv: Record<string, string> = {
             ...(config.env as Record<string, string> | undefined),
           };
-          // Security/workflow behavior follows the validated package contract,
-          // never a mutable server display name.
-          if (capabilities.hostPathAccess?.protectedPaths === true) {
+        // The persisted security contract follows the record across renames; no
+        // server display name grants this behavior.
             const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
             childEnv.FLUJO_PROTECTED_PATHS_ENABLED = await isProtectedPathsEnabled(
               config.protectedPathsEnabled,
             ) ? '1' : '0';
-          }
-          if (capabilities.flujoControlPlane === true) {
-            const { ensureFlujoStdioBridge } = await import('./internal/stdioBridge');
-            const bridge = await ensureFlujoStdioBridge();
-            childEnv.FLUJO_MCP_BRIDGE_ENDPOINT = bridge.endpoint;
-            childEnv.FLUJO_MCP_BRIDGE_TOKEN = bridge.token;
-          }
           config = { ...config, env: childEnv };
         }
-      }
 
       // Resolve + decrypt any custom headers (#84) BEFORE anything reads them. The SAME
       // resolved config must drive both shouldRecreateClient() and createTransport(), so the
@@ -1495,8 +1483,8 @@ export class MCPService {
    * Treat the per-server MCP Apps opt-in as a live authorization predicate.
    * Historical chat messages can outlive a config change, so a persisted
    * `ui://` marker must not keep app-originated access after the user opts out.
-   * Persisted internal configs follow the same opt-in rule; notably, the shipped
-   * filesystem server must not gain MCP Apps access during migration.
+   * Every persisted config follows the same opt-in rule; shipped package records
+   * are provisioned with access off until the user explicitly enables it.
    */
   async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
     const config = await this.getServerConfig(serverName);
