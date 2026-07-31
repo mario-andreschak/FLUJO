@@ -39,6 +39,36 @@ describe('chatService REST methods', () => {
     expect(result).toEqual(list);
   });
 
+  it('subscribeToSidebarEvents: uses the filtered global lifecycle stream', () => {
+    const source = {
+      onopen: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent) => void) | null,
+      onerror: null as ((event: Event) => void) | null,
+      close: jest.fn(),
+    };
+    const eventSourceMock = jest.fn(() => source);
+    (global as any).EventSource = eventSourceMock;
+    const onEvent = jest.fn();
+
+    const result = chatService.subscribeToSidebarEvents({ onEvent });
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'run:done',
+        conversationId: 'conversation-1',
+        status: 'completed',
+        seq: 1,
+        timestamp: 2,
+      }),
+    } as MessageEvent);
+
+    expect(eventSourceMock).toHaveBeenCalledWith('/v1/chat/events?scope=sidebar');
+    expect(result).toBe(source);
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'run:done',
+      conversationId: 'conversation-1',
+    }));
+  });
+
   it('getConversation: GET with encoded id', async () => {
     const conv = { id: 'x/y', title: 'T', messages: [], flowId: 'f', createdAt: 1, updatedAt: 2 };
     fetchMock.mockResolvedValueOnce(makeResponse(200, conv));

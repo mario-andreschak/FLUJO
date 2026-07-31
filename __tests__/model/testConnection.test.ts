@@ -21,13 +21,14 @@ jest.mock('@/backend/services/model/openaiClient', () => ({
 // Mock axios so we can drive the cross-check attempt's outcome.
 jest.mock('axios', () => ({
   __esModule: true,
-  default: { post: jest.fn() },
+  default: { post: jest.fn(), get: jest.fn() },
 }));
 
 import axios from 'axios';
 import { testModelConnection } from '@/backend/services/model/testConnection';
 
 const axiosPost = (axios as unknown as { post: jest.Mock }).post;
+const axiosGet = (axios as unknown as { get: jest.Mock }).get;
 
 const okCompletion = { choices: [{ message: { content: 'pong' } }], usage: { total_tokens: 3 } };
 const okAxios = { status: 200, data: okCompletion, headers: {} };
@@ -38,6 +39,7 @@ const run = () =>
 beforeEach(() => {
   sdkCreate.mockReset();
   axiosPost.mockReset();
+  axiosGet.mockReset();
 });
 
 describe('testModelConnection', () => {
@@ -113,5 +115,80 @@ describe('testModelConnection', () => {
 
     expect(result.ok).toBe(false);
     expect(result.diagnosis).toMatch(/auth|key/i);
+  });
+
+  it('validates OpenRouter video models without starting a billable generation', async () => {
+    axiosGet
+      .mockResolvedValueOnce({ status: 200, data: { data: { label: 'test' } }, headers: {} })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { data: [{ id: 'kwaivgi/kling-v3.0-std' }] },
+        headers: {},
+      });
+
+    const result = await testModelConnection({
+      modelName: 'kwaivgi/kling-v3.0-std',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-x',
+      provider: 'openrouter',
+      adapter: 'openai',
+      model: {
+        id: 'kling',
+        name: 'kwaivgi/kling-v3.0-std',
+        ApiKey: 'encrypted',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        provider: 'openrouter',
+        adapter: 'openai',
+        outputModalities: ['video'],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(axiosGet).toHaveBeenNthCalledWith(
+      1,
+      'https://openrouter.ai/api/v1/key',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-x' }),
+      }),
+    );
+    expect(axiosGet).toHaveBeenNthCalledWith(
+      2,
+      'https://openrouter.ai/api/v1/videos/models',
+      expect.any(Object),
+    );
+    expect(sdkCreate).not.toHaveBeenCalled();
+    expect(axiosPost).not.toHaveBeenCalled();
+    expect(result.diagnosis).toMatch(/no billable generation/i);
+  });
+
+  it('reports an invalid OpenRouter media API key without attempting model generation', async () => {
+    axiosGet.mockResolvedValueOnce({
+      status: 401,
+      data: { error: { message: 'Invalid API key' } },
+      headers: {},
+    });
+
+    const result = await testModelConnection({
+      modelName: 'x-ai/grok-imagine-video',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'bad-key',
+      provider: 'openrouter',
+      adapter: 'openai',
+      model: {
+        id: 'grok-video',
+        name: 'x-ai/grok-imagine-video',
+        ApiKey: 'encrypted',
+        provider: 'openrouter',
+        adapter: 'openai',
+        outputModalities: ['video'],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.sdk.status).toBe(401);
+    expect(result.diagnosis).toMatch(/invalid api key/i);
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+    expect(sdkCreate).not.toHaveBeenCalled();
+    expect(axiosPost).not.toHaveBeenCalled();
   });
 });

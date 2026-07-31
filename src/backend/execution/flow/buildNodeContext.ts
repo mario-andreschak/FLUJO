@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot, ModelInputProvenanceEntry } from './types';
+import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 
 /** True when this assistant turn is mid-action (made tool calls). */
 function isToolCallTurn(
@@ -362,29 +363,114 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
  * "400 Bad Request". The wire payload must contain only what the OpenAI chat
  * spec defines.
  */
+function mediaReferencePart(part: ModelMediaPart): Record<string, unknown> | undefined {
+  // Prefer the durable URI over the display URL. The latter is normally a
+  // relative FLUJO HTTP route that a cloud provider cannot fetch; ModelHandler
+  // resolves flujo:// references to private data URLs immediately before the
+  // provider call.
+  const url = part.resourceUri ?? mediaDataUrl(part);
+  if (!url) return undefined;
+  if (part.type === 'image') {
+    return { type: 'image_url', image_url: { url } };
+  }
+  if (part.type === 'audio') {
+    return {
+      type: 'audio_url',
+      audio_url: { url, ...(part.mimeType ? { mime_type: part.mimeType } : {}) },
+    };
+  }
+  if (part.type === 'video') {
+    return {
+      type: 'video_url',
+      video_url: { url, ...(part.mimeType ? { mime_type: part.mimeType } : {}) },
+    };
+  }
+  return {
+    type: 'file',
+    file: {
+      file_data: url,
+      ...(part.name ? { filename: part.name } : {}),
+      ...(part.mimeType ? { mime_type: part.mimeType } : {}),
+    },
+  };
+}
+
+function userContentWithMedia(
+  content: OpenAI.ChatCompletionUserMessageParam['content'],
+  media: ModelMediaPart[],
+): OpenAI.ChatCompletionUserMessageParam['content'] {
+  const parts: Array<Record<string, unknown>> = Array.isArray(content)
+    ? content.map(part => ({ ...(part as unknown as Record<string, unknown>) }))
+    : (content ? [{ type: 'text', text: content }] : []);
+  const seen = new Set(parts.map(part => {
+    const nested = part.image_url ?? part.audio_url ?? part.video_url ?? part.file;
+    return `${String(part.type ?? '')}|${JSON.stringify(nested ?? '')}`;
+  }));
+  for (const item of media) {
+    const reference = mediaReferencePart(item);
+    if (!reference) continue;
+    const nested =
+      reference.image_url ?? reference.audio_url ?? reference.video_url ?? reference.file;
+    const key = `${String(reference.type ?? '')}|${JSON.stringify(nested ?? '')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(reference);
+  }
+  return parts as unknown as OpenAI.ChatCompletionUserMessageParam['content'];
+}
+
 export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
-  return stripHandoffPlumbing(messages).map(
-    ({ id, timestamp, disabled, processNodeId, depth, usage, injected, media, ...rest }) => {
-      // Assistant media is stored separately on FlujoChatMessage. The
-      // OpenAI Chat Completions schema permits multipart image/audio content on
-      // USER messages, but assistant content remains text-only. Generated-image
-      // bubbles keep an image_url array for display compatibility, so collapse
-      // that array to its text parts at the strict provider boundary.
-      if (rest.role === 'assistant' && Array.isArray(rest.content)) {
+  const out: OpenAI.ChatCompletionMessageParam[] = [];
+  let pendingAssistantMedia: ModelMediaPart[] = [];
+
+  for (const message of stripHandoffPlumbing(messages)) {
+    const { id, timestamp, disabled, processNodeId, depth, usage, injected, media, ...rest } = message;
+
+    if (rest.role === 'assistant') {
+      if (Array.isArray(rest.content)) {
         const text = rest.content
           .filter((part): part is OpenAI.ChatCompletionContentPartText =>
             !!part && (part as { type?: string }).type === 'text'
           )
           .map(part => part.text)
           .join('');
-        return {
+        out.push({
           ...rest,
           content: text || null,
-        } as OpenAI.ChatCompletionMessageParam;
+        } as OpenAI.ChatCompletionMessageParam);
+      } else {
+        out.push(rest as OpenAI.ChatCompletionMessageParam);
       }
-      return rest as OpenAI.ChatCompletionMessageParam;
+      if (media?.length) pendingAssistantMedia.push(...media);
+      continue;
     }
-  );
+
+    if (rest.role === 'user' && pendingAssistantMedia.length > 0) {
+      out.push({
+        ...rest,
+        content: userContentWithMedia(rest.content, pendingAssistantMedia),
+      } as OpenAI.ChatCompletionMessageParam);
+      pendingAssistantMedia = [];
+      continue;
+    }
+
+    out.push(rest as OpenAI.ChatCompletionMessageParam);
+  }
+
+  // A flow can hand an image/video-producing node directly to another model
+  // before a new human turn exists. Keep that media reachable with a synthetic
+  // user turn; strict Chat Completions providers also require user-last input.
+  if (pendingAssistantMedia.length > 0) {
+    out.push({
+      role: 'user',
+      content: userContentWithMedia(
+        '[Media generated by the previous assistant]',
+        pendingAssistantMedia,
+      ),
+    } as OpenAI.ChatCompletionMessageParam);
+  }
+
+  return out;
 }
 
 // --- Debugger: explain how a conversation reaches the model (issue #153) ------

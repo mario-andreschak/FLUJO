@@ -103,7 +103,7 @@ const BASH_TERMINAL_APP_HTML = `<!doctype html>
     <div class="row" style="margin-top:7px">
       <input id="command" class="grow" aria-label="Command" placeholder="Command to start in the background" autocomplete="off" />
       <input id="cwd" aria-label="Working directory" placeholder="Working directory (.)" value="." />
-      <select id="shell" aria-label="Shell"><option value="default">Default shell</option><option value="pwsh">PowerShell</option><option value="bash">Bash</option></select>
+      <select id="shell" aria-label="Shell"><option value="default">Automatic</option><option value="pwsh">PowerShell 7+</option><option value="bash">Bash</option><option value="cmd">Windows cmd</option></select>
       <button id="start" class="primary" type="button">Start</button>
     </div>
   </section>

@@ -4,8 +4,9 @@
  * Cross-platform shell execution (grep, curl, …) on Windows/macOS/Linux. It
  * reuses the proven spawn + timeout + process-tree-kill primitives from the
  * legacy `terminal` tool (which this server replaces) and adds:
- *   - shell selection: the OS default shell, or explicit `pwsh` / `bash`
- *     (failing before execution when an explicit shell is invalid or unavailable),
+ *   - shell selection: PowerShell-first on Windows and `/bin/sh` on POSIX, or
+ *     explicit `pwsh` / `bash` / `cmd` (failing before execution when invalid
+ *     or unavailable),
  *   - optional CRLF→LF normalization of captured output,
  *   - background execution: start → status/wait → write_stdin → kill,
  *   - orphan cleanup: every live session is force-killed on FLUJO process exit,
@@ -19,7 +20,8 @@
  * and OS permissions remain the real boundary. Spawned commands also DO NOT
  * inherit the full backend `process.env` by default (which would leak secrets);
  * only a minimal allow-list is passed. Set `FLUJO_BASH_INHERIT_ENV=1` to restore
- * full inheritance.
+ * full inheritance. Individual calls may pass explicit `env` overrides without
+ * enabling full inheritance.
  *
  * Every tool returns a machine-readable JSON envelope in a single text content
  * block; failures come back as `isError: true` rather than thrown.
@@ -62,7 +64,18 @@ const MAX_SESSIONS = 25;
  */
 const SESSION_TTL_MS = 10 * 60_000;
 
-type ShellKind = 'default' | 'pwsh' | 'bash';
+type ShellKind = 'default' | 'pwsh' | 'bash' | 'cmd';
+type EffectiveShell = 'pwsh' | 'powershell' | 'bash' | 'cmd' | 'sh';
+
+export interface BashToolProgress {
+  progress: number;
+  message?: string;
+}
+
+export interface BashExecutionContext {
+  signal?: AbortSignal;
+  onProgress?: (progress: BashToolProgress) => void | Promise<void>;
+}
 
 /**
  * Locate an executable by name on `PATH` ourselves (rather than relying on
@@ -77,71 +90,160 @@ function getEnvCaseInsensitive(name: string): string | undefined {
   return key ? process.env[key] : undefined;
 }
 
-function findExecutableOnPath(name: string): string | null {
+function windowsExecutableExtensions(): string[] {
+  const inherited = (getEnvCaseInsensitive('PATHEXT') ?? '')
+    .split(';')
+    .map((extension) => extension.trim())
+    .filter(Boolean);
+  const required = ['.COM', '.EXE', '.BAT', '.CMD'];
+  return [...new Set([...required, ...inherited].map((extension) =>
+    (extension.startsWith('.') ? extension : `.${extension}`).toUpperCase()
+  ))];
+}
+
+function findExecutablesOnPath(name: string): string[] {
   const pathEnv = getEnvCaseInsensitive('PATH') ?? '';
-  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+  const dirs = pathEnv
+    .split(path.delimiter)
+    .map((dir) => dir.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean);
   const exts = process.platform === 'win32'
-    ? (getEnvCaseInsensitive('PATHEXT') ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    ? windowsExecutableExtensions()
     : [''];
+  const found: string[] = [];
   for (const dir of dirs) {
     for (const ext of exts) {
       const candidate = path.join(dir, `${name}${ext}`);
       try {
-        if (fs.statSync(candidate).isFile()) return candidate;
+        if (fs.statSync(candidate).isFile()) found.push(candidate);
       } catch {
         /* not found here, keep looking */
       }
+    }
+  }
+  return [...new Set(found.map((candidate) => path.resolve(candidate)))];
+}
+
+function findExecutableOnPath(name: string): string | null {
+  return findExecutablesOnPath(name)[0] ?? null;
+}
+
+function firstExistingFile(candidates: Array<string | null | undefined>): string | null {
+  const seen = new Set<string>();
+  for (const rawCandidate of candidates) {
+    if (!rawCandidate) continue;
+    const candidate = path.resolve(rawCandidate);
+    const key = process.platform === 'win32' ? candidate.toLowerCase() : candidate;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* not found here, keep looking */
     }
   }
   return null;
 }
 
 /**
- * Well-known install locations for Git for Windows' `bash.exe`, checked when
- * it isn't on `PATH`. Git for Windows bundles real Unix utilities (grep,
- * find, sed, …) and is already installed on most Windows dev machines, so
- * this is enough to make `shell: "bash"` actually work there without
- * bundling a utilities layer of our own (issue #225).
+ * Well-known install locations for Git for Windows' `bash.exe`. These are
+ * preferred over the legacy System32 WSL launcher, which may exist even when
+ * its Linux `/bin/bash` does not (issues #225 and #327).
  */
 function windowsGitBashCandidates(): string[] {
-  const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LocalAppData]
+  const roots = [
+    getEnvCaseInsensitive('ProgramFiles'),
+    getEnvCaseInsensitive('ProgramFiles(x86)'),
+    getEnvCaseInsensitive('LocalAppData'),
+  ]
     .filter((v): v is string => Boolean(v));
-  return roots.flatMap((root) => [
-    path.join(root, 'Git', 'bin', 'bash.exe'),
-    path.join(root, 'Git', 'usr', 'bin', 'bash.exe'),
-    path.join(root, 'Programs', 'Git', 'bin', 'bash.exe'),
-    path.join(root, 'Programs', 'Git', 'usr', 'bin', 'bash.exe'),
-  ]);
+  const git = findExecutableOnPath('git');
+  const gitRoot = git ? path.dirname(path.dirname(git)) : undefined;
+  return [
+    ...(gitRoot ? [
+      path.join(gitRoot, 'bin', 'bash.exe'),
+      path.join(gitRoot, 'usr', 'bin', 'bash.exe'),
+    ] : []),
+    ...roots.flatMap((root) => [
+      path.join(root, 'Git', 'bin', 'bash.exe'),
+      path.join(root, 'Git', 'usr', 'bin', 'bash.exe'),
+      path.join(root, 'Programs', 'Git', 'bin', 'bash.exe'),
+      path.join(root, 'Programs', 'Git', 'usr', 'bin', 'bash.exe'),
+    ]),
+  ];
+}
+
+function isWindowsWslBashLauncher(candidate: string): boolean {
+  if (process.platform !== 'win32') return false;
+  const systemRoot = getEnvCaseInsensitive('SystemRoot') ?? getEnvCaseInsensitive('windir');
+  if (!systemRoot) return false;
+  return path.resolve(candidate).toLowerCase() === path.resolve(systemRoot, 'System32', 'bash.exe').toLowerCase();
 }
 
 let cachedBashPath: string | null | undefined;
 function resolveBashExecutable(): string | null {
-  if (cachedBashPath !== undefined) return cachedBashPath;
-  let found = findExecutableOnPath('bash');
-  if (!found && process.platform === 'win32') {
-    found = windowsGitBashCandidates().find((candidate) => {
-      try {
-        return fs.statSync(candidate).isFile();
-      } catch {
-        return false;
-      }
-    }) ?? null;
-  }
-  cachedBashPath = found;
-  return found;
+  if (cachedBashPath && firstExistingFile([cachedBashPath])) return cachedBashPath;
+  const candidates = process.platform === 'win32'
+    ? [
+        ...windowsGitBashCandidates(),
+        ...findExecutablesOnPath('bash').filter((candidate) => !isWindowsWslBashLauncher(candidate)),
+      ]
+    : findExecutablesOnPath('bash');
+  cachedBashPath = firstExistingFile(candidates);
+  return cachedBashPath;
+}
+
+function windowsPwshCandidates(): string[] {
+  const localAppData = getEnvCaseInsensitive('LocalAppData');
+  const programFiles = getEnvCaseInsensitive('ProgramFiles');
+  return [
+    ...(localAppData ? [path.join(localAppData, 'Microsoft', 'WindowsApps', 'pwsh.exe')] : []),
+    ...(programFiles ? [
+      path.join(programFiles, 'PowerShell', '7', 'pwsh.exe'),
+      path.join(programFiles, 'PowerShell', '7-preview', 'pwsh.exe'),
+    ] : []),
+  ];
 }
 
 let cachedPwshPath: string | null | undefined;
 function resolvePwshExecutable(): string | null {
-  if (cachedPwshPath !== undefined) return cachedPwshPath;
-  cachedPwshPath = findExecutableOnPath('pwsh');
+  if (cachedPwshPath && firstExistingFile([cachedPwshPath])) return cachedPwshPath;
+  cachedPwshPath = firstExistingFile([
+    ...findExecutablesOnPath('pwsh'),
+    ...(process.platform === 'win32' ? windowsPwshCandidates() : []),
+  ]);
   return cachedPwshPath;
+}
+
+let cachedWindowsPowerShellPath: string | null | undefined;
+function resolveWindowsPowerShellExecutable(): string | null {
+  if (cachedWindowsPowerShellPath && firstExistingFile([cachedWindowsPowerShellPath])) {
+    return cachedWindowsPowerShellPath;
+  }
+  const systemRoot = getEnvCaseInsensitive('SystemRoot') ?? getEnvCaseInsensitive('windir');
+  cachedWindowsPowerShellPath = firstExistingFile([
+    findExecutableOnPath('powershell'),
+    ...(systemRoot
+      ? [path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]
+      : []),
+  ]);
+  return cachedWindowsPowerShellPath;
+}
+
+function resolveCmdExecutable(): string | null {
+  if (process.platform !== 'win32') return null;
+  return firstExistingFile([
+    getEnvCaseInsensitive('ComSpec'),
+    findExecutableOnPath('cmd'),
+    path.join(getEnvCaseInsensitive('SystemRoot') ?? 'C:\\Windows', 'System32', 'cmd.exe'),
+  ]);
 }
 
 /** Test-only: forget cached shell-executable lookups. */
 export function _resetBashShellCacheForTests(): void {
   cachedBashPath = undefined;
   cachedPwshPath = undefined;
+  cachedWindowsPowerShellPath = undefined;
 }
 
 interface BashSession {
@@ -167,12 +269,19 @@ declare global {
   // eslint-disable-next-line no-var
   var __flujo_bash_sessions: Map<string, BashSession> | undefined;
   // eslint-disable-next-line no-var
+  var __flujo_bash_foreground_children: Set<ChildProcess> | undefined;
+  // eslint-disable-next-line no-var
   var __flujo_bash_cleanup_registered: boolean | undefined;
 }
 
 function sessions(): Map<string, BashSession> {
   if (!global.__flujo_bash_sessions) global.__flujo_bash_sessions = new Map<string, BashSession>();
   return global.__flujo_bash_sessions;
+}
+
+function foregroundChildren(): Set<ChildProcess> {
+  if (!global.__flujo_bash_foreground_children) global.__flujo_bash_foreground_children = new Set<ChildProcess>();
+  return global.__flujo_bash_foreground_children;
 }
 
 const ANONYMOUS_OWNER_SCOPE = 'legacy:anonymous';
@@ -195,6 +304,13 @@ function terminalMeta(): Tool['_meta'] {
 
 /** Kill every live session's process tree — used on FLUJO process exit. */
 export function shutdownBashSessions(): void {
+  for (const child of foregroundChildren()) {
+    try {
+      killProcessTree(child);
+    } catch {
+      /* best-effort */
+    }
+  }
   for (const s of sessions().values()) {
     if (s.running) {
       try {
@@ -344,13 +460,16 @@ function isTruthyEnv(value: string | undefined): boolean {
  * cannot read them back (issue #175). `LC_*` locale vars are allowed by prefix.
  */
 const ENV_ALLOWLIST = new Set([
-  'PATH', 'Path',
-  'HOME', 'USERPROFILE',
-  'TMP', 'TEMP', 'TMPDIR',
-  'LANG', 'LC_ALL',
+  'path',
+  'home', 'userprofile', 'homedrive', 'homepath',
+  'appdata', 'localappdata', 'programdata',
+  'tmp', 'temp', 'tmpdir',
+  'lang', 'lc_all', 'term', 'colorterm', 'no_color',
+  'shell', 'user', 'username', 'logname',
   // Windows essentials so the default shell can even start.
-  'SystemRoot', 'windir', 'ComSpec', 'PATHEXT', 'SystemDrive',
-  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE',
+  'systemroot', 'windir', 'comspec', 'pathext', 'systemdrive',
+  'programfiles', 'programfiles(x86)',
+  'number_of_processors', 'processor_architecture',
 ]);
 
 /**
@@ -393,14 +512,17 @@ function getBundledRipgrepDir(): string | null {
 
 /**
  * Build the child process environment. By default only the minimal allow-list is
- * passed (secrets never leave the backend). Setting `FLUJO_BASH_INHERIT_ENV` to a
- * truthy value restores full `process.env` inheritance for power users.
+ * inherited (secrets never leave the backend). Explicit per-command overrides
+ * are then applied. Setting `FLUJO_BASH_INHERIT_ENV` to a truthy value restores
+ * full `process.env` inheritance for power users.
  */
-function buildChildEnv(): NodeJS.ProcessEnv {
+function buildChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = isTruthyEnv(process.env.FLUJO_BASH_INHERIT_ENV)
     ? { ...process.env }
     : Object.fromEntries(
-        Object.entries(process.env).filter(([key]) => ENV_ALLOWLIST.has(key) || /^LC_/.test(key))
+        Object.entries(process.env).filter(([key]) =>
+          ENV_ALLOWLIST.has(key.toLowerCase()) || /^LC_/i.test(key)
+        )
       ) as NodeJS.ProcessEnv;
   const currentPath = getEnvCaseInsensitive('PATH') ?? '';
   const utilityDirs = [getManagedUtilsDir(), getBundledRipgrepDir()]
@@ -418,23 +540,57 @@ function buildChildEnv(): NodeJS.ProcessEnv {
     // single spelling so the augmented value is the one passed to the child.
     for (const key of Object.keys(out)) {
       if (key !== 'PATH' && key.toLowerCase() === 'path') delete out[key];
+      if (key !== 'PATHEXT' && key.toLowerCase() === 'pathext') delete out[key];
     }
+    out.PATHEXT = windowsExecutableExtensions().join(';');
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (process.platform === 'win32') {
+      for (const existing of Object.keys(out)) {
+        if (existing !== key && existing.toLowerCase() === key.toLowerCase()) delete out[existing];
+      }
+    }
+    out[key] = value;
   }
   return out;
+}
+
+type EnvValidation =
+  | { valid: true; env: Record<string, string> }
+  | { valid: false; error: string };
+
+function validateEnv(input: unknown): EnvValidation {
+  if (input === undefined) return { valid: true, env: {} };
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { valid: false, error: '"env" must be an object whose values are strings.' };
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!key || key.includes('=') || key.includes('\0')) {
+      return { valid: false, error: `Invalid environment variable name: ${JSON.stringify(key)}.` };
+    }
+    if (typeof value !== 'string' || value.includes('\0')) {
+      return { valid: false, error: `Environment variable ${JSON.stringify(key)} must be a string without NUL characters.` };
+    }
+    env[key] = value;
+  }
+  return { valid: true, env };
 }
 
 interface SpawnPlan {
   file: string;
   args: string[];
   useShell: boolean;
-  effectiveShell: ShellKind;
+  effectiveShell: EffectiveShell;
+  windowsVerbatimArguments?: boolean;
   /** Explicit shell lookup failed before any user command was executed. */
   unavailableShell?: Exclude<ShellKind, 'default'>;
+  startError?: string;
 }
 
 /**
  * Build the spawn arguments for the requested shell. Returns the command, argv
- * and whether Node's `shell:true` wrapping applies. `pwsh`/`bash` are resolved
+ * and whether Node's `shell:true` wrapping applies. Shells are resolved
  * to a concrete executable path up front (checking Git for Windows' well-known
  * install locations for `bash` when it isn't on `PATH`). An unavailable
  * explicitly requested shell is reported before any user command is executed.
@@ -443,7 +599,7 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
   if (shell === 'pwsh') {
     const resolved = resolvePwshExecutable();
     if (resolved) {
-      return { file: resolved, args: ['-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
+      return { file: resolved, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
     }
     return { file: '', args: [], useShell: false, effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
   }
@@ -454,8 +610,55 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
     }
     return { file: '', args: [], useShell: false, effectiveShell: 'bash', unavailableShell: 'bash' };
   }
-  // Default OS shell via Node's shell wrapper.
-  return { file: command, args: [], useShell: true, effectiveShell: 'default' };
+  if (shell === 'cmd') {
+    const resolved = resolveCmdExecutable();
+    if (resolved) {
+      return {
+        file: resolved,
+        args: ['/d', '/s', '/c', command],
+        useShell: false,
+        effectiveShell: 'cmd',
+        windowsVerbatimArguments: true,
+      };
+    }
+    return { file: '', args: [], useShell: false, effectiveShell: 'cmd', unavailableShell: 'cmd' };
+  }
+  if (process.platform === 'win32') {
+    const pwsh = resolvePwshExecutable();
+    if (pwsh) {
+      return { file: pwsh, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
+    }
+    const windowsPowerShell = resolveWindowsPowerShellExecutable();
+    if (windowsPowerShell) {
+      return { file: windowsPowerShell, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'powershell' };
+    }
+    const cmd = resolveCmdExecutable();
+    if (cmd) {
+      return {
+        file: cmd,
+        args: ['/d', '/s', '/c', command],
+        useShell: false,
+        effectiveShell: 'cmd',
+        windowsVerbatimArguments: true,
+      };
+    }
+    return {
+      file: '',
+      args: [],
+      useShell: false,
+      effectiveShell: 'cmd',
+      startError: 'No usable PowerShell or cmd executable was found.',
+    };
+  }
+  const sh = firstExistingFile(['/bin/sh', findExecutableOnPath('sh')]);
+  if (sh) return { file: sh, args: ['-c', command], useShell: false, effectiveShell: 'sh' };
+  return {
+    file: '',
+    args: [],
+    useShell: false,
+    effectiveShell: 'sh',
+    startError: 'No POSIX /bin/sh executable was found.',
+  };
 }
 
 type ShellValidation =
@@ -478,7 +681,7 @@ function safeRequestedShellValue(input: unknown): unknown {
 
 function validateShell(input: unknown): ShellValidation {
   if (input === undefined) return { valid: true, shell: 'default' };
-  if (input === 'default' || input === 'pwsh' || input === 'bash') {
+  if (input === 'default' || input === 'pwsh' || input === 'bash' || input === 'cmd') {
     return { valid: true, shell: input };
   }
   return { valid: false, requestedShell: safeRequestedShellValue(input) };
@@ -486,7 +689,7 @@ function validateShell(input: unknown): ShellValidation {
 
 function invalidShellResult(requestedShell: unknown): CallToolResult {
   return textResult({
-    error: 'Invalid shell request. Expected one of: "default", "pwsh", or "bash".',
+    error: 'Invalid shell request. Expected one of: "default", "pwsh", "bash", or "cmd".',
     requestedShell,
   }, true);
 }
@@ -494,17 +697,32 @@ function invalidShellResult(requestedShell: unknown): CallToolResult {
 interface SpawnOutcome {
   child?: ChildProcess;
   startError?: string;
-  effectiveShell: ShellKind;
+  effectiveShell: EffectiveShell;
   unavailableShell?: Exclude<ShellKind, 'default'>;
 }
 
-function startChild(command: string, cwd: string, shell: ShellKind): SpawnOutcome {
-  const { file, args, useShell, effectiveShell, unavailableShell } = buildSpawn(command, shell);
+function startChild(command: string, cwd: string, shell: ShellKind, env: Record<string, string>): SpawnOutcome {
+  const {
+    file,
+    args,
+    useShell,
+    effectiveShell,
+    unavailableShell,
+    startError,
+    windowsVerbatimArguments,
+  } = buildSpawn(command, shell);
   if (unavailableShell) return { effectiveShell, unavailableShell };
+  if (startError) return { effectiveShell, startError };
   // POSIX: detached so killProcessTree can signal the whole group (see killProcessTree).
   const detached = process.platform !== 'win32';
   try {
-    const child = spawn(file, args, { cwd, shell: useShell, env: buildChildEnv(), detached });
+    const child = spawn(file, args, {
+      cwd,
+      shell: useShell,
+      env: buildChildEnv(env),
+      detached,
+      ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    });
     return { child, effectiveShell };
   } catch (err) {
     return {
@@ -517,7 +735,10 @@ function startChild(command: string, cwd: string, shell: ShellKind): SpawnOutcom
 function makeAppender(get: () => string, set: (v: string, truncated: boolean) => void) {
   return (chunk: string) => {
     let out = get();
-    if (out.length >= MAX_OUTPUT_CHARS) return;
+    if (out.length >= MAX_OUTPUT_CHARS) {
+      if (chunk) set(out, true);
+      return;
+    }
     out += chunk;
     let truncated = false;
     if (out.length > MAX_OUTPUT_CHARS) {
@@ -528,24 +749,115 @@ function makeAppender(get: () => string, set: (v: string, truncated: boolean) =>
   };
 }
 
+function createCommandProgressReporter(context?: BashExecutionContext): {
+  push: (chunk: string) => void;
+  stop: () => Promise<void>;
+} {
+  const report = context?.onProgress;
+  if (!report) return { push: () => undefined, stop: async () => undefined };
+
+  const startedAt = Date.now();
+  const maxMessageChars = 4_000;
+  let progress = 0;
+  let pending = '';
+  let flushTimer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  let forwardedChars = 0;
+  let liveOutputTruncated = false;
+  let chain = Promise.resolve();
+
+  const deliver = (message: string) => {
+    if (!message) return;
+    const snapshot = progress;
+    chain = chain
+      .then(() => report({ progress: snapshot, message }))
+      .catch((error) => {
+        log.debug('Could not deliver bash progress notification', error);
+      });
+  };
+  const flush = () => {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = undefined;
+    while (pending.length > 0) {
+      const message = pending.slice(0, maxMessageChars);
+      pending = pending.slice(message.length);
+      deliver(message);
+    }
+  };
+  const heartbeat = setInterval(() => {
+    if (stopped) return;
+    if (pending) flush();
+    else deliver(`[command still running: ${Math.max(1, Math.round((Date.now() - startedAt) / 1000))}s]`);
+  }, 10_000);
+  heartbeat.unref?.();
+
+  return {
+    push: (chunk) => {
+      if (stopped || !chunk) return;
+      progress += Buffer.byteLength(chunk, 'utf8');
+      const remaining = Math.max(0, MAX_OUTPUT_CHARS - forwardedChars);
+      if (remaining > 0) {
+        const accepted = chunk.slice(0, remaining);
+        pending += accepted;
+        forwardedChars += accepted.length;
+      }
+      if (chunk.length > remaining && !liveOutputTruncated) {
+        liveOutputTruncated = true;
+        pending += '\n…[live output truncated]';
+      }
+      if (pending.length >= maxMessageChars) {
+        flush();
+      } else if (!flushTimer) {
+        flushTimer = setTimeout(flush, 75);
+        flushTimer.unref?.();
+      }
+    },
+    stop: async () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearInterval(heartbeat);
+      flush();
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          chain,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 1_000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+  };
+}
+
 export function bashToolDefinitions(): Tool[] {
   const shellProp = {
     type: 'string',
-    enum: ['default', 'pwsh', 'bash'],
-    description: 'Which shell to use: "default" (the OS shell), "pwsh" (PowerShell 7+), or "bash". Explicit shells return an error if unavailable.',
+    enum: ['default', 'pwsh', 'bash', 'cmd'],
+    description: 'Command parser. "default" uses PowerShell on Windows and /bin/sh elsewhere. Use "pwsh", "bash", or "cmd" for explicit syntax; unavailable explicit shells return an error.',
   };
-  const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve against the FLUJO data directory. Defaults to the data directory. When bash roots are configured (via the MCP manager, or the FLUJO_BASH_ROOTS / FLUJO_FS_ROOTS env hard ceiling) a cwd outside them is rejected.' };
+  const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve from the FLUJO data directory; configured roots still apply.' };
+  const envProp = {
+    type: 'object',
+    additionalProperties: { type: 'string' },
+    description: 'Environment variables to add or override for this command.',
+  };
   return [
     {
       name: 'run',
       description:
-        'Run a shell command to completion and return combined stdout/stderr plus the exit code. Pipes and chained commands work. Killed if it exceeds the timeout; large output is truncated. Returns { exitCode, cwd, shell, output, timedOut }.',
+        'Run one command to completion. Output is sent as live progress when supported and returned with the exit code; use start/status for a persistent background session.',
       inputSchema: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: 'The command line to execute, e.g. "grep -r foo ." or "curl -s https://…".' },
+          command: { type: 'string', description: 'Command text in the selected shell\'s syntax.' },
           cwd: cwdProp,
           shell: shellProp,
+          env: envProp,
           timeout: { type: 'number', description: 'Timeout in seconds (default 60, max 600).' },
           normalizeNewlines: { type: 'boolean', description: 'If true, CRLF/CR in the captured output are normalized to LF.' },
         },
@@ -554,7 +866,7 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'start',
-      description: 'Start a command in the BACKGROUND and return immediately with a { sessionId }. Use status/wait to observe it, write_stdin to feed it input, and kill to stop it.',
+      description: 'Start an independent background command and return its sessionId. Multiple sessions may run in parallel; use status/wait, write_stdin, or kill.',
       _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
@@ -562,6 +874,7 @@ export function bashToolDefinitions(): Tool[] {
           command: { type: 'string', description: 'The command line to execute in the background.' },
           cwd: cwdProp,
           shell: shellProp,
+          env: envProp,
         },
         required: ['command'],
       },
@@ -578,7 +891,7 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'wait',
-      description: 'Wait until a background session finishes (or the timeout elapses). Returns { sessionId, running, exitCode, output, truncated, timedOut }.',
+      description: 'Wait for a background session, sending new output as live progress when supported. The wait timeout does not kill the session.',
       _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
@@ -626,13 +939,22 @@ function maybeNormalize(text: string, normalize: boolean): string {
   return normalize ? text.replace(/\r\n?/g, '\n') : text;
 }
 
-async function runTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
+async function runTool(
+  args: Record<string, unknown>,
+  roots: string[],
+  context?: BashExecutionContext,
+): Promise<CallToolResult> {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
   const shellValidation = validateShell(args.shell);
   if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
   const requestedShell = shellValidation.shell;
+  const envValidation = validateEnv(args.env);
+  if (!envValidation.valid) return textResult({ error: envValidation.error }, true);
+  if (context?.signal?.aborted) {
+    return textResult({ error: 'Command cancelled before it started.', cancelled: true, requestedShell }, true);
+  }
 
   const cwd = await resolveCwd(args.cwd, roots);
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
@@ -640,56 +962,104 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
   const normalize = args.normalizeNewlines === true;
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
   const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  registerExitCleanup();
 
   return await new Promise<CallToolResult>((resolve) => {
     let output = '';
     let truncated = false;
     let settled = false;
-    let timedOut = false;
 
     const append = makeAppender(() => output, (v, t) => { output = v; truncated = t || truncated; });
+    const progress = createCommandProgressReporter(context);
 
-    const { child, startError, effectiveShell, unavailableShell } = startChild(command, cwd, requestedShell);
+    const { child, startError, effectiveShell, unavailableShell } = startChild(
+      command,
+      cwd,
+      requestedShell,
+      envValidation.env,
+    );
     if (unavailableShell) {
-      resolve(textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true));
+      void progress.stop().then(() => {
+        resolve(textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true));
+      });
       return;
     }
     if (startError || !child) {
-      resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true));
+      void progress.stop().then(() => {
+        resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true));
+      });
       return;
     }
+    foregroundChildren().add(child);
 
     let cancelEscalation: (() => void) | undefined;
-    const timer = setTimeout(() => {
-      timedOut = true;
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
       cancelEscalation = killProcessTree(child);
-    }, timeoutMs);
-
-    const finish = (result: CallToolResult) => {
+      const finalOut = maybeNormalize(output, normalize);
+      void finish(textResult({
+        error: 'Command cancelled.',
+        cancelled: true,
+        cwd,
+        requestedShell,
+        shell: effectiveShell,
+        exitCode: null,
+        truncated,
+        output: finalOut,
+        ...warn,
+      }, true), true);
+    };
+    const finish = async (result: CallToolResult, keepKillEscalation = false) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      cancelEscalation?.();
+      if (timer) clearTimeout(timer);
+      context?.signal?.removeEventListener('abort', onAbort);
+      if (!keepKillEscalation) cancelEscalation?.();
+      await progress.stop();
       resolve(result);
     };
 
-    child.stdout?.on('data', (d: Buffer) => append(d.toString()));
-    child.stderr?.on('data', (d: Buffer) => append(d.toString()));
+    timer = setTimeout(() => {
+      cancelEscalation = killProcessTree(child);
+      const finalOut = maybeNormalize(output, normalize);
+      void finish(textResult({
+        timedOut: true,
+        cwd,
+        requestedShell,
+        shell: effectiveShell,
+        exitCode: null,
+        truncated,
+        output: `${finalOut}${finalOut ? '\n' : ''}[killed after ${timeoutMs / 1000}s timeout]`,
+        ...warn,
+      }, true), true);
+    }, timeoutMs);
+    child.stdout?.on('data', (d: Buffer) => {
+      const chunk = d.toString();
+      append(chunk);
+      progress.push(maybeNormalize(chunk, normalize));
+    });
+    child.stderr?.on('data', (d: Buffer) => {
+      const chunk = d.toString();
+      append(chunk);
+      progress.push(maybeNormalize(chunk, normalize));
+    });
 
     child.on('error', (err: Error) => {
       // ENOENT here means the resolved executable vanished between resolution and spawn.
+      foregroundChildren().delete(child);
       append(`\n${err.message}`);
-      finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, output: maybeNormalize(output, normalize) }, true));
+      void finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, output: maybeNormalize(output, normalize) }, true));
     });
 
     child.on('close', (code: number | null) => {
+      foregroundChildren().delete(child);
+      cancelEscalation?.();
+      if (settled) return;
       const finalOut = maybeNormalize(output, normalize);
-      if (timedOut) {
-        finish(textResult({ timedOut: true, cwd, shell: effectiveShell, exitCode: code, truncated, output: `${finalOut}\n[killed after ${timeoutMs / 1000}s timeout]`, ...warn }, true));
-        return;
-      }
-      finish(textResult({ exitCode: code, cwd, shell: effectiveShell, truncated, output: finalOut, ...warn }, code !== 0));
+      void finish(textResult({ exitCode: code, cwd, requestedShell, shell: effectiveShell, truncated, output: finalOut, ...warn }, code !== 0));
     });
+    if (context?.signal?.aborted) onAbort();
+    else context?.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -701,13 +1071,23 @@ function scheduleReap(session: BashSession): void {
   session.reapTimer.unref?.();
 }
 
-async function startTool(args: Record<string, unknown>, roots: string[], ownerScope: string): Promise<CallToolResult> {
+async function startTool(
+  args: Record<string, unknown>,
+  roots: string[],
+  ownerScope: string,
+  context?: BashExecutionContext,
+): Promise<CallToolResult> {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
   const shellValidation = validateShell(args.shell);
   if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
   const requestedShell = shellValidation.shell;
+  const envValidation = validateEnv(args.env);
+  if (!envValidation.valid) return textResult({ error: envValidation.error }, true);
+  if (context?.signal?.aborted) {
+    return textResult({ error: 'Command cancelled before it started.', cancelled: true, requestedShell }, true);
+  }
 
   // Sweep finished sessions before enforcing the cap so a long-lived process
   // doesn't get blocked by stale completed entries.
@@ -726,7 +1106,12 @@ async function startTool(args: Record<string, unknown>, roots: string[], ownerSc
   const cwd = await resolveCwd(args.cwd, roots);
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
-  const { child, startError, effectiveShell, unavailableShell } = startChild(command, cwd, requestedShell);
+  const { child, startError, effectiveShell, unavailableShell } = startChild(
+    command,
+    cwd,
+    requestedShell,
+    envValidation.env,
+  );
   if (unavailableShell) {
     return textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true);
   }
@@ -765,7 +1150,7 @@ async function startTool(args: Record<string, unknown>, roots: string[], ownerSc
     scheduleReap(session);
   });
 
-  return textResult({ sessionId: id, cwd, shell: effectiveShell, ...warn });
+  return textResult({ sessionId: id, cwd, requestedShell, shell: effectiveShell, ...warn });
 }
 
 function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -786,25 +1171,61 @@ function statusTool(args: Record<string, unknown>, ownerScope: string): CallTool
   return textResult(snapshot(session));
 }
 
-async function waitTool(args: Record<string, unknown>, ownerScope: string): Promise<CallToolResult> {
+async function waitTool(
+  args: Record<string, unknown>,
+  ownerScope: string,
+  context?: BashExecutionContext,
+): Promise<CallToolResult> {
   const id = String(args?.sessionId ?? '');
   const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
   if (!session.running) return textResult(snapshot(session, { timedOut: false }));
+  if (context?.signal?.aborted) {
+    return textResult(snapshot(session, { timedOut: false, cancelled: true }), true);
+  }
 
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
   const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  const progress = createCommandProgressReporter(context);
 
-  const timedOut = await new Promise<boolean>((resolve) => {
-    const start = Date.now();
-    const poll = () => {
-      if (!session.running) return resolve(false);
-      if (Date.now() - start >= timeoutMs) return resolve(true);
-      setTimeout(poll, 100);
+  const outcome = await new Promise<'completed' | 'timedOut' | 'cancelled'>((resolve) => {
+    let settled = false;
+    let pollTimer: NodeJS.Timeout | undefined;
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    let outputOffset = 0;
+    const finish = async (value: 'completed' | 'timedOut' | 'cancelled') => {
+      if (settled) return;
+      settled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      context?.signal?.removeEventListener('abort', onAbort);
+      if (session.output.length > outputOffset) progress.push(session.output.slice(outputOffset));
+      await progress.stop();
+      resolve(value);
     };
+    const onAbort = () => void finish('cancelled');
+    const poll = () => {
+      if (session.output.length > outputOffset) {
+        progress.push(session.output.slice(outputOffset));
+        outputOffset = session.output.length;
+      }
+      if (!session.running) {
+        void finish('completed');
+        return;
+      }
+      pollTimer = setTimeout(poll, 100);
+    };
+    timeoutTimer = setTimeout(() => void finish('timedOut'), timeoutMs);
+    context?.signal?.addEventListener('abort', onAbort, { once: true });
     poll();
   });
-  return textResult(snapshot(session, { timedOut }));
+  return textResult(
+    snapshot(session, {
+      timedOut: outcome === 'timedOut',
+      ...(outcome === 'cancelled' ? { cancelled: true } : {}),
+    }),
+    outcome === 'cancelled',
+  );
 }
 
 function writeStdinTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
@@ -851,22 +1272,23 @@ export async function bashCallTool(
   args: Record<string, unknown>,
   callerNodeId?: string,
   ownerScope?: string,
+  context?: BashExecutionContext,
 ): Promise<CallToolResult> {
   try {
     const scope = effectiveOwnerScope(ownerScope, callerNodeId);
     switch (toolName) {
       case 'run': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
-        return await runTool(args, roots);
+        return await runTool(args, roots, context);
       }
       case 'start': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
-        return await startTool(args, roots, scope);
+        return await startTool(args, roots, scope, context);
       }
       case 'status':
         return statusTool(args, scope);
       case 'wait':
-        return await waitTool(args, scope);
+        return await waitTool(args, scope, context);
       case 'write_stdin':
         return writeStdinTool(args, scope);
       case 'kill':
@@ -885,5 +1307,6 @@ export async function bashCallTool(
 /** Test-only: force-kill and clear all sessions. */
 export function _resetBashSessionsForTests(): void {
   shutdownBashSessions();
+  foregroundChildren().clear();
   sessions().clear();
 }

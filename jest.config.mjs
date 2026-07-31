@@ -15,10 +15,24 @@ const moduleNameMapper = {
   // Direct backend compatibility tests retain their existing mocked policy
   // modules; subprocess tests still load the compiled standalone package.
   '^@flujo-ai/mcp-shared$': '<rootDir>/__tests__/mcp/mcpSharedJestAdapter.ts',
-  // NodeNext source imports retain their runtime .js suffix. Resolve the
-  // filesystem package's colocated TypeScript resource module under Jest.
-  '^\\./resources\\.js$': '<rootDir>/mcp-servers/filesystem/src/resources.ts',
+  // NodeNext source imports retain their runtime .js suffix. During tests the
+  // colocated source is still TypeScript, so let Jest resolve the same relative
+  // path with its transformed extension.
+  '^(\\.{1,2}/.*)\\.js$': '$1',
 };
+
+// Crawl only application/test sources and the five first-party workspaces.
+// Runtime data may contain cloned FLUJO repositories (and therefore duplicate
+// package names), while user-installed MCP servers are independent projects.
+const roots = [
+  '<rootDir>/src',
+  '<rootDir>/__tests__',
+  '<rootDir>/mcp-servers/bash',
+  '<rootDir>/mcp-servers/browser',
+  '<rootDir>/mcp-servers/filesystem',
+  '<rootDir>/mcp-servers/flujo',
+  '<rootDir>/mcp-servers/shared',
+];
 
 // The fast backend/engine suite. Runs under node (no DOM). Collects every
 // __tests__ file (.ts AND .tsx — issue #176) EXCEPT the jsdom-scoped
@@ -26,8 +40,7 @@ const moduleNameMapper = {
 const nodeProject = {
   displayName: 'node',
   testEnvironment: 'node',
-  // The flow engine clones/deep-copies; give a little headroom over default.
-  testTimeout: 15000,
+  roots,
   // Redirect the conversation-log store to a temp dir so bus emissions in
   // tests never write JSONL files into the repo's db/.
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
@@ -40,7 +53,7 @@ const nodeProject = {
 const jsdomProject = {
   displayName: 'jsdom',
   testEnvironment: 'jsdom',
-  testTimeout: 15000,
+  roots,
   setupFilesAfterEnv: [
     '<rootDir>/jest.setup.ts',
     '<rootDir>/jest.setup.jsdom.ts',

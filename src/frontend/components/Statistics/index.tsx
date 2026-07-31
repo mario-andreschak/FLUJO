@@ -398,10 +398,10 @@ export default function Statistics() {
 
   const updateArrayFilter = (field: ArrayFilterKey, values: readonly string[]) => {
     setFilters((current) => ({
-    setFilters((current) => ({
       ...current,
       [field]: values.length > 0 ? Array.from(new Set(values)) : undefined,
     } as StatisticsDashboardFilters));
+  };
 
   const removeFilterValue = (field: ArrayFilterKey, value: string) => {
     const current = (filters[field] as readonly string[] | undefined) ?? [];

@@ -88,6 +88,19 @@ import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 
 const log = createLogger('frontend/components/Chat/index');
 
+/**
+ * Stable function identity with fresh behavior. This is useful at memoized
+ * component boundaries: streamed chat state can re-render the parent without
+ * invalidating event-handler props on the otherwise unchanged sidebar.
+ */
+function useStableCallback<Args extends unknown[], Result>(
+  callback: (...args: Args) => Result,
+): (...args: Args) => Result {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+  return useCallback((...args: Args) => callbackRef.current(...args), []);
+}
+
 // Define types for our chat data
 export interface Attachment {
   id: string;
@@ -263,7 +276,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.parentConversationId === y.parentConversationId &&
       x.rootConversationId === y.rootConversationId &&
       x.createdAt === y.createdAt &&
-      x.updatedAt === y.updatedAt
+      x.updatedAt === y.updatedAt &&
+      x.lastUserMessageAt === y.lastUserMessageAt
     );
   });
 
@@ -594,6 +608,11 @@ const Chat: React.FC = () => {
   // yet): the periodic list refresh must not wipe them, and detail fetches for
   // them would 404. Ids drop out as soon as the backend starts returning them.
   const localOnlyConversationIdsRef = useRef<Set<string>>(new Set());
+  // Silent sidebar refreshes share one request. If an event arrives while that
+  // request is in flight, coalesce all such events into one trailing refresh
+  // rather than overlapping list scans or losing the latest state.
+  const silentListRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const silentListRefreshQueuedRef = useRef(false);
   // Conversations whose DELETE is in flight: a list refresh racing the delete
   // must not re-add them to the sidebar.
   const pendingDeleteIdsRef = useRef<Set<string>>(new Set());
@@ -701,86 +720,109 @@ const Chat: React.FC = () => {
   }, []);
 
   // Fetch conversation list from backend on mount
-  const fetchConversations = useCallback(async (
+  const fetchConversations = useCallback((
     selectIdAfterFetch?: string | null,
     options?: { silent?: boolean }
-  ) => {
+  ): Promise<void> => {
     // `silent` refreshes the list in place (e.g. after a background run finishes
     // to pick up the server-generated title) without flashing the loading
     // spinner or wiping the sidebar on a transient error.
     const silent = options?.silent ?? false;
-    log.debug('Fetching conversation list from backend', { silent });
-    if (!silent) {
-      setIsLoadingHistory(true);
-      setHistoryError(null);
-    }
-    let fetchedList: ConversationListItem[] = [];
-    let fetchFailed = false;
-    try {
-      fetchedList = (await chatService.listConversations())
-        // Never re-add a conversation whose DELETE is still in flight.
-        .filter(c => !pendingDeleteIdsRef.current.has(c.id))
-        .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
-      // Anything the backend returns is no longer client-only.
-      for (const c of fetchedList) localOnlyConversationIdsRef.current.delete(c.id);
-      setConversationList(prev => {
-        // Preserve client-only conversations (an unsent split) — the server
-        // list can't contain them yet.
-        const localOnly = prev.filter(c => localOnlyConversationIdsRef.current.has(c.id));
-        const next = localOnly.length > 0
-          ? [...localOnly, ...fetchedList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
-          : fetchedList;
-        // Keep the previous array identity when nothing changed, so the
-        // periodic silent refresh doesn't re-render the sidebar for no reason.
-        return sameConversationLists(prev, next) ? prev : next;
-      });
-      log.info(`Fetched ${fetchedList.length} conversations for the list`);
-    } catch (err) {
-      fetchFailed = true;
-      log.error('Error fetching conversation list:', err);
+    const run = async (): Promise<void> => {
+      log.debug('Fetching conversation list from backend', { silent });
       if (!silent) {
-        setHistoryError('Failed to load conversation history.');
-        setConversationList([]); // Clear list on error
+        setIsLoadingHistory(true);
+        setHistoryError(null);
       }
-    } finally {
-      if (!silent) setIsLoadingHistory(false);
+      let fetchedList: ConversationListItem[] = [];
+      let fetchFailed = false;
+      try {
+        fetchedList = (await chatService.listConversations())
+          // Never re-add a conversation whose DELETE is still in flight.
+          .filter(c => !pendingDeleteIdsRef.current.has(c.id))
+          .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+        // Anything the backend returns is no longer client-only.
+        for (const c of fetchedList) localOnlyConversationIdsRef.current.delete(c.id);
+        setConversationList(prev => {
+          // Preserve client-only conversations (an unsent split) — the server
+          // list can't contain them yet.
+          const localOnly = prev.filter(c => localOnlyConversationIdsRef.current.has(c.id));
+          const next = localOnly.length > 0
+            ? [...localOnly, ...fetchedList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
+            : fetchedList;
+          // Keep the previous array identity when nothing changed, so a silent
+          // refresh doesn't re-render the sidebar for no reason.
+          return sameConversationLists(prev, next) ? prev : next;
+        });
+        log.info(`Fetched ${fetchedList.length} conversations for the list`);
+      } catch (err) {
+        fetchFailed = true;
+        log.error('Error fetching conversation list:', err);
+        if (!silent) {
+          setHistoryError('Failed to load conversation history.');
+          setConversationList([]); // Clear list on error
+        }
+      } finally {
+        if (!silent) setIsLoadingHistory(false);
 
-      // A silent refresh must never change the current selection.
-      if (silent || fetchFailed) {
-        return;
+        // A silent refresh must never change the current selection.
+        if (silent || fetchFailed) {
+          return;
+        }
+
+        // --- Auto-selection logic ---
+        // Read the live selection from the ref to avoid acting on a stale value
+        // captured when this callback was memoized.
+        const idToSelect = selectIdAfterFetch !== undefined ? selectIdAfterFetch : currentConversationIdRef.current;
+
+        const liveSelection = currentConversationIdRef.current;
+        // Client-only conversations (unsent splits) count as existing too.
+        const idExists = (id: string) =>
+          fetchedList.some(c => c.id === id) || localOnlyConversationIdsRef.current.has(id);
+        if (idToSelect && idExists(idToSelect)) {
+           // If the intended ID exists in the new list, ensure it's selected
+           if (idToSelect !== liveSelection) {
+              log.debug(`Setting currentConversationId to ${idToSelect} after fetch/operation.`);
+              setCurrentConversationId(idToSelect);
+           }
+        } else if (fetchedList.length > 0) {
+           // If intended ID is invalid or null, select the most recent
+           const mostRecentId = fetchedList[0].id;
+           if (mostRecentId !== liveSelection) {
+              log.debug(`Selecting most recent conversation ${mostRecentId} after fetch/operation.`);
+              setCurrentConversationId(mostRecentId);
+           }
+        } else {
+           // No backend conversations left. Don't clear a selection pointing at a
+           // client-only conversation (an unsent split).
+           if (liveSelection !== null && !localOnlyConversationIdsRef.current.has(liveSelection)) {
+              log.debug('No conversations available after fetch/operation, clearing selection.');
+              setCurrentConversationId(null);
+           }
+        }
       }
+    };
 
-      // --- Auto-selection logic ---
-      // Read the live selection from the ref to avoid acting on a stale value
-      // captured when this callback was memoized.
-      const idToSelect = selectIdAfterFetch !== undefined ? selectIdAfterFetch : currentConversationIdRef.current;
+    if (!silent) return run();
 
-      const liveSelection = currentConversationIdRef.current;
-      // Client-only conversations (unsent splits) count as existing too.
-      const idExists = (id: string) =>
-        fetchedList.some(c => c.id === id) || localOnlyConversationIdsRef.current.has(id);
-      if (idToSelect && idExists(idToSelect)) {
-         // If the intended ID exists in the new list, ensure it's selected
-         if (idToSelect !== liveSelection) {
-            log.debug(`Setting currentConversationId to ${idToSelect} after fetch/operation.`);
-            setCurrentConversationId(idToSelect);
-         }
-      } else if (fetchedList.length > 0) {
-         // If intended ID is invalid or null, select the most recent
-         const mostRecentId = fetchedList[0].id;
-         if (mostRecentId !== liveSelection) {
-            log.debug(`Selecting most recent conversation ${mostRecentId} after fetch/operation.`);
-            setCurrentConversationId(mostRecentId);
-         }
-      } else {
-         // No backend conversations left. Don't clear a selection pointing at a
-         // client-only conversation (an unsent split).
-         if (liveSelection !== null && !localOnlyConversationIdsRef.current.has(liveSelection)) {
-            log.debug('No conversations available after fetch/operation, clearing selection.');
-            setCurrentConversationId(null);
-         }
-      }
+    if (silentListRefreshInFlightRef.current) {
+      silentListRefreshQueuedRef.current = true;
+      return silentListRefreshInFlightRef.current;
     }
+
+    const drainRefreshes = async () => {
+      do {
+        silentListRefreshQueuedRef.current = false;
+        await run();
+      } while (silentListRefreshQueuedRef.current);
+    };
+    const trackedRequest = drainRefreshes().finally(() => {
+      if (silentListRefreshInFlightRef.current === trackedRequest) {
+        silentListRefreshInFlightRef.current = null;
+      }
+    });
+    silentListRefreshInFlightRef.current = trackedRequest;
+    return trackedRequest;
      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setCurrentConversationId]); // Include dependencies that affect auto-selection logic if needed
 
@@ -790,23 +832,80 @@ const Chat: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty array ensures this runs only once on mount
 
-  // Keep the sidebar live. New conversations (another tab, the scheduler, API
-  // clients) and status changes only exist server-side, and the SSE streams are
-  // per-conversation — so the LIST needs a lightweight poll. Silent: no
-  // spinner, selection untouched, and the list state keeps its identity when
-  // nothing changed. Paused while the tab is hidden; refreshed immediately on
-  // return to the tab.
+  // Keep the sidebar live from the server's filtered global lifecycle stream.
+  // A slow timeout remains as a safety net for non-execution changes (for
+  // example, another tab creating or renaming an idle conversation). Unlike an
+  // interval, it schedules only after the previous request settles, and all
+  // refreshes pause while the tab is hidden.
   useEffect(() => {
-    const LIST_POLL_MS = 5000;
-    const tick = () => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      fetchConversations(undefined, { silent: true });
+    const FALLBACK_REFRESH_MS = 30_000;
+    const EVENT_DEBOUNCE_MS = 200;
+    const MIN_EVENT_REFRESH_MS = 5_000;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let eventTimer: ReturnType<typeof setTimeout> | null = null;
+    let sidebarEvents: EventSource | null = null;
+    let disposed = false;
+    let lastRefreshStartedAt = 0;
+
+    const clearTimers = () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (eventTimer) clearTimeout(eventTimer);
+      fallbackTimer = null;
+      eventTimer = null;
     };
-    const interval = setInterval(tick, LIST_POLL_MS);
-    document.addEventListener('visibilitychange', tick);
+    const scheduleFallback = () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (disposed || document.visibilityState !== 'visible') return;
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = null;
+        lastRefreshStartedAt = Date.now();
+        void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
+      }, FALLBACK_REFRESH_MS);
+    };
+    const refreshFromEvent = () => {
+      if (disposed || document.visibilityState !== 'visible') return;
+      // One scheduled refresh represents every lifecycle event in its window.
+      // This preserves the old five-second worst-case cadence under a large
+      // subflow fan-out instead of turning each child start/done into a scan.
+      if (eventTimer) return;
+      const sinceLastRefresh = Date.now() - lastRefreshStartedAt;
+      const delay = Math.max(EVENT_DEBOUNCE_MS, MIN_EVENT_REFRESH_MS - sinceLastRefresh);
+      eventTimer = setTimeout(() => {
+        eventTimer = null;
+        lastRefreshStartedAt = Date.now();
+        void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
+      }, delay);
+    };
+    const connect = () => {
+      if (sidebarEvents || disposed || document.visibilityState !== 'visible') return;
+      sidebarEvents = chatService.subscribeToSidebarEvents({
+        onEvent: refreshFromEvent,
+      });
+    };
+    const disconnect = () => {
+      sidebarEvents?.close();
+      sidebarEvents = null;
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        clearTimers();
+        disconnect();
+        return;
+      }
+      connect();
+      lastRefreshStartedAt = Date.now();
+      void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
+    };
+
+    lastRefreshStartedAt = Date.now(); // the mount effect just started the initial list load
+    connect();
+    scheduleFallback();
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', tick);
+      disposed = true;
+      clearTimers();
+      disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [fetchConversations]);
 
@@ -3258,7 +3357,7 @@ const Chat: React.FC = () => {
       await chatService.cancel(conversationId);
       markConvRunning(conversationId, false);
       // Parked runs are finalized by the cancel route immediately; a live run
-      // flips on its next loop iteration — the list poll catches that.
+      // flips on its next loop iteration — the lifecycle stream catches that.
       await fetchConversations(undefined, { silent: true });
     } catch (err) {
       log.error('Error stopping background conversation', { conversationId, err });
@@ -3290,8 +3389,8 @@ const Chat: React.FC = () => {
 
   // The viewed conversation counts as running when THIS client started or
   // re-attached to the run (isLoading/loadingConversationId/runningConvs) OR
-  // when the server says so (sidebar status — kept fresh by the list poll, the
-  // detail fetch, and run events). The status fallback is what keeps the live
+  // when the server says so (sidebar status — kept fresh by lifecycle events,
+  // the fallback refresh, and detail fetches). The status fallback keeps the live
   // indicator + Stop button visible for runs this client didn't start or lost
   // track of (page remount, failed re-attach) — previously the button simply
   // vanished for those, leaving no way to stop the run. The backend list route
@@ -3383,6 +3482,14 @@ const Chat: React.FC = () => {
     viewedConversationStopped,
   ]);
 
+  // ChatHistory is memoized because this parent updates for every streamed chat
+  // event. These wrappers keep its action props stable while always invoking
+  // the latest implementation/closure.
+  const sidebarDeleteConversation = useStableCallback(deleteConversation);
+  const sidebarBulkDeleteConversations = useStableCallback(bulkDeleteConversations);
+  const sidebarStopConversation = useStableCallback(handleStopConversation);
+  const sidebarCreateNewConversation = useStableCallback(createNewConversation);
+  const sidebarOpenQuickChat = useCallback(() => setQuickChatOpen(true), []);
 
 
   return (
@@ -3433,11 +3540,11 @@ const Chat: React.FC = () => {
               flowNames={flowNames}
               currentConversationId={currentConversationId}
               onSelectConversation={setCurrentConversationId}
-              onDeleteConversation={deleteConversation}
-              onBulkDelete={bulkDeleteConversations}
-              onStopConversation={handleStopConversation}
-              onNewConversation={createNewConversation}
-              onQuickChat={() => setQuickChatOpen(true)}
+              onDeleteConversation={sidebarDeleteConversation}
+              onBulkDelete={sidebarBulkDeleteConversations}
+              onStopConversation={sidebarStopConversation}
+              onNewConversation={sidebarCreateNewConversation}
+              onQuickChat={sidebarOpenQuickChat}
               onCollapse={toggleSidebarCollapsed}
             />
           )}

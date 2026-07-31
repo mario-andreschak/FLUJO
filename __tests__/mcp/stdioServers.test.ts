@@ -63,6 +63,32 @@ describe('standalone stdio MCP packages', () => {
       expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions',
       ]));
+      const progressMessages: string[] = [];
+      const command = process.platform === 'win32'
+        ? "Write-Output 'progress-one'; Start-Sleep -Milliseconds 150; Write-Output 'progress-two'"
+        : "printf 'progress-one\\n'; sleep 0.15; printf 'progress-two\\n'";
+      const called = await client.callTool(
+        { name: 'run', arguments: { command, cwd: root, timeout: 10 } },
+        undefined,
+        {
+          timeout: 15_000,
+          resetTimeoutOnProgress: true,
+          onprogress: (progress) => {
+            if (progress.message) progressMessages.push(progress.message);
+          },
+        },
+      );
+      expect(called.isError).not.toBe(true);
+      expect(progressMessages.join('')).toContain('progress-one');
+      expect(progressMessages.join('')).toContain('progress-two');
+
+      const runtime = await client.callTool({
+        name: 'run',
+        arguments: { command: 'node --version', cwd: root, timeout: 10 },
+      });
+      expect(runtime.isError).not.toBe(true);
+      const runtimePayload = JSON.parse((runtime.content[0] as { text: string }).text) as { output?: string };
+      expect(runtimePayload.output).toMatch(/^v\d+/);
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });

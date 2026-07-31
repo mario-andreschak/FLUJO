@@ -27,7 +27,7 @@ function text(r: CallToolResult): string {
 }
 
 /** A command that echoes the seeded secret env var, cross-platform. */
-const ECHO_SECRET = process.platform === 'win32' ? 'echo %FAKE_SECRET%' : 'echo "$FAKE_SECRET"';
+const ECHO_SECRET = process.platform === 'win32' ? 'Write-Output $env:FAKE_SECRET' : 'echo "$FAKE_SECRET"';
 const SECRET = 'super-secret-value-abc123';
 
 describe('bash cwd confinement (issue #175)', () => {

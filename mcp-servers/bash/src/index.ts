@@ -37,13 +37,30 @@ function flujoMetaOf(meta: unknown): { callerNodeId?: string; ownerScope?: strin
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: bashToolDefinitions() }));
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const meta = flujoMetaOf(request.params._meta);
+  const progressToken = request.params._meta?.progressToken;
   return bashCallTool(
     request.params.name,
     request.params.arguments ?? {},
     meta.callerNodeId,
     meta.ownerScope,
+    {
+      signal: extra.signal,
+      ...(progressToken !== undefined
+        ? {
+            onProgress: async (progress) => {
+              await server.notification(
+                {
+                  method: 'notifications/progress',
+                  params: { progressToken, ...progress },
+                },
+                { relatedRequestId: extra.requestId },
+              );
+            },
+          }
+        : {}),
+    },
   );
 });
 server.setRequestHandler(ListResourcesRequestSchema, async () => bashListResources());

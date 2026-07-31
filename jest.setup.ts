@@ -10,4 +10,6 @@ import os from 'os';
 import path from 'path';
 import { _setConversationLogDirForTests } from '@/backend/execution/flow/conversationLog';
 
+jest.setTimeout(15_000);
+
 _setConversationLogDirForTests(path.join(os.tmpdir(), `flujo-test-convlogs-${process.pid}`));

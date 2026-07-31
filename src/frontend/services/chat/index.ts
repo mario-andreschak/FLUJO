@@ -396,6 +396,32 @@ class ChatService {
     };
     return es;
   }
+
+  /**
+   * Subscribe to list-level lifecycle changes across all conversations.
+   * The server filters the global stream before serialization, so token deltas
+   * and other high-volume execution events never reach the sidebar.
+   */
+  subscribeToSidebarEvents(handlers: EventStreamHandlers): EventSource {
+    const es = new EventSource('/v1/chat/events?scope=sidebar');
+    es.onopen = () => {
+      log.debug('Sidebar lifecycle event stream open');
+      handlers.onOpen?.();
+    };
+    es.onmessage = (e) => {
+      try {
+        handlers.onEvent(JSON.parse(e.data) as ExecutionEvent);
+      } catch (err) {
+        log.warn('Failed to parse sidebar lifecycle event', { err });
+      }
+    };
+    es.onerror = (err) => {
+      // EventSource reconnects automatically while the tab remains visible.
+      log.debug('Sidebar lifecycle stream error (browser will retry if still open)');
+      handlers.onError?.(err);
+    };
+    return es;
+  }
 }
 
 export const chatService = new ChatService();

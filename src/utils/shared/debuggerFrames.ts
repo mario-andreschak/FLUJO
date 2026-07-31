@@ -176,7 +176,7 @@ export function buildDebuggerFrames(rootFlowId: string, events: readonly Executi
 export function debuggerFramePath(state: DebuggerFrameState, frameKey: string): DebuggerFrame[] {
   const path: DebuggerFrame[] = [];
   const seen = new Set<string>();
-  let current = state.frames[frameKey];
+  let current: DebuggerFrame | undefined = state.frames[frameKey];
   while (current && !seen.has(current.key) && path.length <= MAX_DEBUGGER_SUBFLOW_DEPTH) {
     path.unshift(current);
     seen.add(current.key);

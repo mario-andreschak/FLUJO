@@ -6,6 +6,7 @@ import { AnthropicAdapter } from './anthropicAdapter';
 import { GeminiAdapter } from './geminiAdapter';
 import { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 import { CodexAdapter } from './codexAdapter';
+import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
@@ -14,6 +15,7 @@ export { AnthropicAdapter } from './anthropicAdapter';
 export { GeminiAdapter } from './geminiAdapter';
 export { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 export { CodexAdapter } from './codexAdapter';
+export { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 
 /**
  * Pick the completion adapter for a model based on its `adapter` field.
@@ -21,6 +23,14 @@ export { CodexAdapter } from './codexAdapter';
  * OpenAI-compatible path, preserving their original behaviour.
  */
 export function getCompletionAdapter(model: Model): CompletionAdapter {
+  const openRouterOutputs = (model.outputModalities ?? [])
+    .map(modality => modality.toLowerCase());
+  if (
+    model.provider === 'openrouter' &&
+    (openRouterOutputs.includes('video') || openRouterOutputs.includes('image'))
+  ) {
+    return new OpenRouterMediaAdapter();
+  }
   switch (model.adapter) {
     case 'openai-responses':
       return new OpenAiResponsesAdapter();

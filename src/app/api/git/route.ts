@@ -16,14 +16,6 @@ import { killProcessTree } from '@/utils/process/killProcessTree';
 
 const log = createLogger('app/api/git/route');
 
-// Single-flight guard for heavy install/build streams. streamCommandInRepo is used
-// ONLY by the installStream and buildStream actions, so this one module-level flag
-// caps concurrent install/build to 1. The Next.js route module is a per-process
-// singleton, so the flag is process-wide. It is reset in finish() (and on every early
-// return), covering success, error, timeout and client-abort, so it can't get stuck.
-// This stops two heavy npm jobs from stacking on the (single) vCPU of a small host.
-let installBuildInFlight = false;
-
 // Hard ceiling for install/build streams: a runaway or hanging npm install|build can
 // otherwise pin the core forever. On timeout we kill the process tree (reusing the
 // existing killProcessTree plumbing) and emit a terminal `result` error. Default
@@ -356,27 +348,8 @@ function streamCommandInRepo(
   request: NextRequest
 ): Response {
   return createNdjsonStreamResponse(async (emit, signal) => {
-    // Single-flight cap: reject a second install/build while one is already running so
-    // two heavy npm jobs can't stack on one core. We emit a terminal `result` error
-    // (rather than an HTTP status) so the existing streaming client handles it exactly
-    // like any other terminal error. Set the flag SYNCHRONOUSLY right after the check
-    // (no await in between) so two near-simultaneous requests can't both pass the guard.
-    if (installBuildInFlight) {
-      log.warn(`Rejecting ${actionName}: another install/build is already running [${requestId}]`);
-      emit({ type: 'result', success: false, error: 'Another install/build is already running. Please wait for it to finish.', commandOutput: '' });
-      return;
-    }
-    installBuildInFlight = true;
-    let inFlightReleased = false;
-    const releaseInFlight = () => {
-      if (inFlightReleased) return;
-      inFlightReleased = true;
-      installBuildInFlight = false;
-    };
-
     if (!savePath) {
       log.error(`Missing repository path [${requestId}]`);
-      releaseInFlight();
       emit({ type: 'result', success: false, error: 'Missing repository path', commandOutput: 'Missing repository path' });
       return;
     }
@@ -386,7 +359,6 @@ function streamCommandInRepo(
     } catch {
       const message = `Directory does not exist: ${savePath}`;
       log.error(`${message} [${requestId}]`);
-      releaseInFlight();
       emit({ type: 'result', success: false, error: message, commandOutput: message });
       return;
     }
@@ -427,7 +399,6 @@ function streamCommandInRepo(
         if (timer) clearTimeout(timer); // stop the ceiling firing on normal completion/abort
         signal.removeEventListener('abort', onAbort);
         cancelEscalation?.();
-        releaseInFlight(); // single-point release: success, error, timeout and abort all pass here
         emit({ type: 'result', success: result.success, error: result.error, commandOutput: buffer });
         resolve();
       };

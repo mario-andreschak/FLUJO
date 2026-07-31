@@ -99,7 +99,7 @@ describe('bundled browser MCP', () => {
     const env = {
       FLUJO_APP_ROOT: process.cwd(),
       FLUJO_BROWSER_ENABLED: '1',
-    } as NodeJS.ProcessEnv;
+    };
 
     for (const descriptor of SHIPPED_MCP_SERVERS) {
       expect(createShippedServerConfig(descriptor, env).enableMcpApps).toBe(
@@ -143,6 +143,10 @@ describe('bundled browser MCP', () => {
   it('closes a partially created context when session opening is cancelled', async () => {
     const controller = new AbortController();
     let rejectNewPage: (reason?: unknown) => void = () => undefined;
+    let markNewPageStarted: () => void = () => undefined;
+    const newPageStarted = new Promise<void>((resolve) => {
+      markNewPageStarted = resolve;
+    });
     const pendingPage = new Promise<never>((_resolve, reject) => {
       rejectNewPage = reject;
     });
@@ -151,7 +155,10 @@ describe('bundled browser MCP', () => {
     });
     const context = {
       close: closeContext,
-      newPage: jest.fn(() => pendingPage),
+      newPage: jest.fn(() => {
+        markNewPageStarted();
+        return pendingPage;
+      }),
       route: jest.fn(),
     };
     const fakeBrowser = {
@@ -163,10 +170,11 @@ describe('bundled browser MCP', () => {
     mockLaunchBrowser.mockResolvedValue(fakeBrowser);
 
     const opening = openSession('cancelled-open', controller.signal);
-    while (context.newPage.mock.calls.length === 0) await Promise.resolve();
+    const cancelledOpening = expect(opening).rejects.toMatchObject({ code: 'CANCELLED' });
+    await newPageStarted;
     controller.abort();
 
-    await expect(opening).rejects.toMatchObject({ code: 'CANCELLED' });
+    await cancelledOpening;
     expect(closeContext).toHaveBeenCalledTimes(1);
   });
 });

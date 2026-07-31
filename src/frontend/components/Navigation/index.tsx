@@ -1,5 +1,5 @@
 "use client"
-import { AppBar, Box, Drawer, IconButton, List, ListItemButton, ListItemText, ListSubheader, Toolbar, Typography, useTheme as useMuiTheme, useMediaQuery } from '@mui/material';
+import { AppBar, Box, Drawer, IconButton, List, ListItemButton, ListItemText, ListSubheader, Tab, Tabs, Toolbar, Typography, useTheme as useMuiTheme, useMediaQuery } from '@mui/material';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { createLogger } from '@/utils/logger';
 
@@ -42,7 +42,7 @@ const navItems: NavItem[] = [
     children: [
       {
         type: 'link',
-        name: 'Triggers',
+        name: 'Trigger',
         path: '/automation/triggers',
         aliases: ['/executions'],
         tour: 'nav-executions',
@@ -134,15 +134,24 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
           );
         }
 
+        const active = item.children.some((child) => isActive(child, pathname));
+        const landingPage = item.children[0];
+
         return (
-          <Box key={item.name} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <Typography variant="caption" sx={{ lineHeight: 1.1, fontWeight: 600, color: 'text.secondary' }}>
-              {item.name}
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1.5 }}>
-              {item.children.map((child) => renderLink(child, true))}
-            </Box>
-          </Box>
+          <Typography
+            key={item.name}
+            component={Link}
+            href={landingPage.path}
+            onClick={onNavigate(landingPage.path)}
+            sx={{
+              color: active ? 'primary.main' : 'text.primary',
+              textDecoration: 'none',
+              fontWeight: active ? 600 : 400,
+              '&:hover': { color: 'primary.main' },
+            }}
+          >
+            {item.name}
+          </Typography>
         );
       })}
     </>
@@ -174,6 +183,12 @@ export default function Navigation() {
     if (children.length > 0) visible.push({ ...item, children });
     return visible;
   }, []);
+  const activeNavGroup = visibleNavItems.find(
+    (item): item is NavGroup =>
+      item.type === 'group' && item.children.some((child) => isActive(child, pathname))
+  );
+  const activeSubtab =
+    activeNavGroup?.children.find((child) => isActive(child, pathname))?.path ?? false;
 
   // Route nav clicks through the navigation guard so a page with unsaved
   // work (e.g. the flow editor) can show its Save/Discard dialog instead of
@@ -245,6 +260,37 @@ export default function Navigation() {
           {isDarkMode ? <Brightness7Icon /> : <Brightness4Icon />}
         </IconButton>
       </Toolbar>
+
+      {/* Desktop section tabs — shown below the primary navbar. */}
+      {activeNavGroup && (
+        <Box
+          sx={{
+            display: { xs: 'none', md: 'flex' },
+            borderTop: 1,
+            borderColor: 'divider',
+            px: 3,
+          }}
+        >
+          <Tabs
+            value={activeSubtab}
+            aria-label={`${activeNavGroup.name} sections`}
+            sx={{ minHeight: 40 }}
+          >
+            {activeNavGroup.children.map((child) => (
+              <Tab
+                key={child.path}
+                component={Link}
+                href={child.path}
+                value={child.path}
+                label={child.name}
+                data-tour={child.tour}
+                onClick={handleNavClick(child.path)}
+                sx={{ minHeight: 40, py: 0, textTransform: 'none' }}
+              />
+            ))}
+          </Tabs>
+        </Box>
+      )}
 
       {/* Mobile navigation drawer */}
       <Drawer

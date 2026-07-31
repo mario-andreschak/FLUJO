@@ -8,8 +8,11 @@
   "bin": {
     "flujo-mcp-browser": "dist/index.js"
   },
-  "files": ["dist/**/*"],
+  "files": [
+    "dist/**/*"
+  ],
   "scripts": {
+    "install": "patchright install chromium",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
@@ -23,6 +26,6 @@
   },
   "devDependencies": {
     "@types/node": "^20.17.30",
-    "typescript": "5.8.3"
+    "typescript": "^5.9.3"
   }
 }

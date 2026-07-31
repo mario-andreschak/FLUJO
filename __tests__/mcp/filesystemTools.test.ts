@@ -171,7 +171,7 @@ describe('filesystem operations', () => {
     const result = await filesystemCallTool('read_file', args);
     expect(result.isError).toBe(true);
     expect(parse(result)).toEqual({ error: message });
-    expect(structured(result)).toEqual({ error: message });
+    expect(structured(result)).toBeUndefined();
   });
 
   it.each([
@@ -183,7 +183,7 @@ describe('filesystem operations', () => {
 
     expect(result.isError).toBe(true);
     expect(parse(result)).toEqual({ error: 'Expected a regular file to read.' });
-    expect(structured(result)).toEqual({ error: 'Expected a regular file to read.' });
+    expect(structured(result)).toBeUndefined();
   });
 
   it('applies a diff edit and rejects a missing oldText', async () => {
@@ -239,6 +239,17 @@ describe('filesystem operations', () => {
     // structuredContent must mirror the JSON text fallback exactly.
     expect(sc).toEqual(parse(r));
     expect((sc as { totalLines: number }).totalLines).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps error results out of successful output schemas', async () => {
+    const missing = path.join(dir, 'missing-directory');
+    const r = await filesystemCallTool('list_dir', { path: missing });
+
+    expect(r.isError).toBe(true);
+    expect(structured(r)).toBeUndefined();
+    expect(parse(r)).toEqual({
+      error: expect.stringContaining('missing-directory'),
+    });
   });
 
   it('write_file appends, inserts and replaces a line range', async () => {

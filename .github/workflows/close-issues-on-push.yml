@@ -10,11 +10,15 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Close referenced LOCAL COMMIT issues
+      - name: Mark referenced pushed issues live
         uses: actions/github-script@v7
         with:
           script: |
-            const LOCAL_COMMIT = 'status: LOCAL COMMIT';
+            const PRE_LIVE = new Set([
+              'status: IN WORK',
+              'status: TESTING',
+              'status: LOCAL COMMIT',
+            ]);
             const LIVE = 'status: LIVE';
 
             // Collect issue numbers from the heading (first line) of each pushed commit.
@@ -51,29 +55,29 @@ jobs:
                 core.info(`#${number}: is a PR; skipping.`);
                 continue;
               }
-              if (issue.state !== 'open') {
-                core.info(`#${number}: already closed; skipping.`);
-                continue;
-              }
-
               const labels = issue.labels.map(l => (typeof l === 'string' ? l : l.name));
-              if (!labels.includes(LOCAL_COMMIT)) {
-                core.info(`#${number}: no "${LOCAL_COMMIT}" label; leaving untouched.`);
+              const staleStatuses = labels.filter(label => PRE_LIVE.has(label));
+              if (staleStatuses.length === 0) {
+                core.info(`#${number}: no pre-live status label; leaving untouched.`);
                 continue;
               }
 
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: number,
-                labels: [LIVE],
-              });
-              await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: number,
-                name: LOCAL_COMMIT,
-              });
+              if (!labels.includes(LIVE)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  labels: [LIVE],
+                });
+              }
+              for (const name of staleStatuses) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  name,
+                });
+              }
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

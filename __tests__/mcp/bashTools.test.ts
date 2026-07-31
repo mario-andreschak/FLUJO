@@ -67,6 +67,17 @@ function mockCompletedChild(output: string): void {
   }) as typeof spawn);
 }
 
+function mockNeverClosingChild(): void {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdin: new PassThrough(),
+    pid: undefined,
+    killed: false,
+  }) as unknown as ChildProcess;
+  mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
+}
+
 async function withResolvedPwsh(run: (executable: string) => Promise<void>): Promise<void> {
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-pwsh-'));
   const executable = path.join(tempDir, isWin ? 'pwsh.EXE' : 'pwsh');
@@ -114,6 +125,11 @@ describe('bash tool definitions', () => {
         ui: { resourceUri: 'ui://bash/terminal' },
       }));
     }
+    const run = tools.find((tool) => tool.name === 'run');
+    expect(run?.description).toContain('live progress');
+    expect(run?.inputSchema.properties?.shell).toEqual(expect.objectContaining({
+      enum: ['default', 'pwsh', 'bash', 'cmd'],
+    }));
   });
 });
 
@@ -176,7 +192,7 @@ describe('bash shell selection (issues #225, #327)', () => {
   it('runs an explicit foreground pwsh request directly with PowerShell arguments', async () => {
     await withResolvedPwsh(async (executable) => {
       mockCompletedChild('pwsh-foreground-marker');
-      const command = "Write-Output 'pwsh-foreground-marker'";
+      const command = "$value = 'a|b&c;d \"quoted\"'; Write-Output $value";
       const r = await bashCallTool('run', { command, shell: 'pwsh' });
 
       expect(r.isError).toBeUndefined();
@@ -187,7 +203,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       }));
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoProfile', '-NonInteractive', '-Command', command],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
         expect.objectContaining({ shell: false })
       );
     });
@@ -205,7 +221,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(started.sessionId).toBeTruthy();
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoProfile', '-NonInteractive', '-Command', command],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
         expect.objectContaining({ shell: false })
       );
 
@@ -253,6 +269,241 @@ describe('bash shell selection (issues #225, #327)', () => {
     if (r.isError) return; // No bash install found on this machine at all — nothing to assert.
     expect(out.shell).toBe('bash');
     expect(out.output as string).toContain('found');
+  });
+
+  it('prefers Git Bash over the Windows WSL bash launcher', async () => {
+    if (!isWin) return;
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-git-bash-'));
+    const gitBash = path.join(tempDir, 'Git', 'bin', 'bash.exe');
+    const fakeSystemRoot = path.join(tempDir, 'Windows');
+    const wslBash = path.join(fakeSystemRoot, 'System32', 'bash.exe');
+    const originalPath = process.env.PATH;
+    const originalProgramFiles = process.env.ProgramFiles;
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalPathExt = process.env.PATHEXT;
+    await fsp.mkdir(path.dirname(gitBash), { recursive: true });
+    await fsp.mkdir(path.dirname(wslBash), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(gitBash, 'git bash placeholder'),
+      fsp.writeFile(wslBash, 'wsl launcher placeholder'),
+    ]);
+    process.env.ProgramFiles = tempDir;
+    process.env.SystemRoot = fakeSystemRoot;
+    process.env.PATH = path.dirname(wslBash);
+    process.env.PATHEXT = '.EXE';
+    try {
+      _resetBashShellCacheForTests();
+      mockCompletedChild('git-bash-marker');
+      const r = await bashCallTool('run', { command: 'printf git-bash-marker', shell: 'bash' });
+      expect(r.isError).toBeUndefined();
+      expect(parse(r).shell).toBe('bash');
+      expect(mockedSpawn).toHaveBeenCalledWith(
+        gitBash,
+        ['-c', 'printf git-bash-marker'],
+        expect.objectContaining({ shell: false }),
+      );
+    } finally {
+      restoreEnv('PATH', originalPath);
+      restoreEnv('ProgramFiles', originalProgramFiles);
+      restoreEnv('SystemRoot', originalSystemRoot);
+      restoreEnv('PATHEXT', originalPathExt);
+      _resetBashShellCacheForTests();
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('finds a WindowsApps pwsh alias even when it is absent from PATH', async () => {
+    if (!isWin) return;
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-windowsapps-pwsh-'));
+    const executable = path.join(tempDir, 'Microsoft', 'WindowsApps', 'pwsh.exe');
+    const originalPath = process.env.PATH;
+    const originalLocalAppData = process.env.LocalAppData;
+    await fsp.mkdir(path.dirname(executable), { recursive: true });
+    process.env.PATH = '';
+    process.env.LocalAppData = tempDir;
+    try {
+      _resetBashShellCacheForTests();
+      const unavailable = await bashCallTool('run', {
+        command: 'Write-Output must-not-run',
+        shell: 'pwsh',
+      });
+      expect(unavailable.isError).toBe(true);
+
+      await fsp.writeFile(executable, 'pwsh app execution alias placeholder');
+      mockCompletedChild('windowsapps-pwsh-marker');
+      const r = await bashCallTool('run', { command: 'Write-Output windowsapps-pwsh-marker', shell: 'pwsh' });
+      expect(r.isError).toBeUndefined();
+      expect(mockedSpawn).toHaveBeenCalledWith(
+        executable,
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Write-Output windowsapps-pwsh-marker'],
+        expect.objectContaining({ shell: false }),
+      );
+    } finally {
+      restoreEnv('PATH', originalPath);
+      restoreEnv('LocalAppData', originalLocalAppData);
+      _resetBashShellCacheForTests();
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores executable extensions when the inherited PATHEXT is incomplete', async () => {
+    if (!isWin) return;
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-pathext-pwsh-'));
+    const executable = path.join(tempDir, 'pwsh.EXE');
+    const originalPath = process.env.PATH;
+    const originalPathExt = process.env.PATHEXT;
+    await fsp.writeFile(executable, 'pwsh executable placeholder');
+    process.env.PATH = tempDir;
+    process.env.PATHEXT = '.CPL';
+    try {
+      _resetBashShellCacheForTests();
+      mockCompletedChild('pathext-marker');
+      const r = await bashCallTool('run', { command: 'Write-Output pathext-marker', shell: 'pwsh' });
+      expect(r.isError).toBeUndefined();
+      expect(mockedSpawn.mock.calls[0]?.[0]).toBe(executable);
+      const childPathExt = mockedSpawn.mock.calls[0]?.[2]?.env?.PATHEXT;
+      expect(childPathExt?.split(';')).toEqual(expect.arrayContaining(['.COM', '.EXE', '.BAT', '.CMD', '.CPL']));
+    } finally {
+      restoreEnv('PATH', originalPath);
+      restoreEnv('PATHEXT', originalPathExt);
+      _resetBashShellCacheForTests();
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses PowerShell for the Windows default and reports the effective parser', async () => {
+    if (!isWin) return;
+    await withResolvedPwsh(async (executable) => {
+      mockCompletedChild('default-pwsh-marker');
+      const command = "Get-Process | Select-Object -First 1 ProcessName";
+      const r = await bashCallTool('run', { command });
+      expect(parse(r)).toEqual(expect.objectContaining({
+        requestedShell: 'default',
+        shell: 'pwsh',
+      }));
+      expect(mockedSpawn).toHaveBeenCalledWith(
+        executable,
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+        expect.objectContaining({ shell: false }),
+      );
+    });
+  });
+
+  it('passes cmd metacharacters verbatim instead of re-quoting the command', async () => {
+    if (!isWin) return;
+    mockCompletedChild('cmd-special-marker');
+    const command = 'rg -n -i "alpha|beta & gamma" src __tests__';
+    const r = await bashCallTool('run', { command, shell: 'cmd' });
+    expect(r.isError).toBeUndefined();
+    expect(parse(r).shell).toBe('cmd');
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      expect.stringMatching(/cmd\.exe$/i),
+      ['/d', '/s', '/c', command],
+      expect.objectContaining({
+        shell: false,
+        windowsVerbatimArguments: true,
+      }),
+    );
+  });
+
+  it('passes explicit command environment variables without shell interpolation', async () => {
+    await withResolvedPwsh(async () => {
+      mockCompletedChild('env-marker');
+      const r = await bashCallTool('run', {
+        command: 'Write-Output $env:FLUJO_TEST_MARKER',
+        shell: 'pwsh',
+        env: { FLUJO_TEST_MARKER: 'value with spaces & | ; "quotes"' },
+      });
+      expect(r.isError).toBeUndefined();
+      const options = mockedSpawn.mock.calls[0]?.[2];
+      expect(options?.env).toEqual(expect.objectContaining({
+        FLUJO_TEST_MARKER: 'value with spaces & | ; "quotes"',
+      }));
+    });
+  });
+
+  it('preserves essential inherited environment variables case-insensitively', async () => {
+    if (!isWin) return;
+    const originalLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = 'C:\\Flujo Case Sensitive Env Test';
+    try {
+      await withResolvedPwsh(async () => {
+        mockCompletedChild('inherited-env-marker');
+        const r = await bashCallTool('run', {
+          command: 'Write-Output $env:LOCALAPPDATA',
+          shell: 'pwsh',
+        });
+        expect(r.isError).toBeUndefined();
+        const env = mockedSpawn.mock.calls[0]?.[2]?.env ?? {};
+        const inherited = Object.entries(env).find(([key]) => key.toLowerCase() === 'localappdata');
+        expect(inherited?.[1]).toBe('C:\\Flujo Case Sensitive Env Test');
+      });
+    } finally {
+      restoreEnv('LOCALAPPDATA', originalLocalAppData);
+    }
+  });
+
+  it('rejects malformed command environment variables before spawning', async () => {
+    const r = await bashCallTool('run', {
+      command: 'echo must-not-run',
+      env: { VALID: 42 },
+    });
+    expect(r.isError).toBe(true);
+    expect(parse(r).error).toContain('must be a string');
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('settles at the timeout even when the child never emits close', async () => {
+    await withResolvedPwsh(async () => {
+      mockNeverClosingChild();
+      const r = await bashCallTool('run', {
+        command: 'never-closes',
+        shell: 'pwsh',
+        timeout: 0.01,
+      });
+      expect(r.isError).toBe(true);
+      expect(parse(r)).toEqual(expect.objectContaining({
+        timedOut: true,
+        exitCode: null,
+      }));
+    });
+  });
+
+  it('forwards output chunks as progress and settles promptly on cancellation', async () => {
+    await withResolvedPwsh(async () => {
+      const progress = jest.fn();
+      mockCompletedChild('streamed-marker');
+      const completed = await bashCallTool(
+        'run',
+        { command: 'stream-output', shell: 'pwsh' },
+        undefined,
+        undefined,
+        { onProgress: progress },
+      );
+      await Promise.resolve();
+      expect(completed.isError).toBeUndefined();
+      expect(progress).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'streamed-marker',
+      }));
+
+      mockNeverClosingChild();
+      const controller = new AbortController();
+      const pending = bashCallTool(
+        'run',
+        { command: 'cancel-me', shell: 'pwsh', timeout: 60 },
+        undefined,
+        undefined,
+        { signal: controller.signal },
+      );
+      for (let attempt = 0; attempt < 100 && mockedSpawn.mock.calls.length < 2; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+      expect(mockedSpawn.mock.calls).toHaveLength(2);
+      controller.abort();
+      const cancelled = await pending;
+      expect(cancelled.isError).toBe(true);
+      expect(parse(cancelled).cancelled).toBe(true);
+    });
   });
 
   it('returns an explicit error without executing when the requested shell is unavailable', async () => {
@@ -309,6 +560,20 @@ describe('bash shell selection (issues #225, #327)', () => {
 });
 
 describe('bash background sessions', () => {
+  it('starts multiple independent sessions in parallel', async () => {
+    mockCompletedChild('parallel-one');
+    mockCompletedChild('parallel-two');
+    mockCompletedChild('parallel-three');
+    const started = await Promise.all(
+      ['one', 'two', 'three'].map(async (marker) =>
+        parse(await bashCallTool('start', { command: `echo ${marker}` }))
+      ),
+    );
+    expect(new Set(started.map((entry) => entry.sessionId))).toHaveProperty('size', 3);
+    const listed = parse(await bashCallTool('list_sessions', {}));
+    expect(listed.sessions).toHaveLength(3);
+  });
+
   it('starts a session, waits for it, and reads the result', async () => {
     const start = parse(await bashCallTool('start', { command: 'echo bg-done' }));
     expect(start.sessionId).toBeTruthy();
@@ -321,6 +586,23 @@ describe('bash background sessions', () => {
     expect(ids).toContain(start.sessionId);
   }, 20000);
 
+  it('streams background output while wait observes the session', async () => {
+    mockCompletedChild('background-progress-marker');
+    const started = parse(await bashCallTool('start', { command: 'background-progress' }));
+    const progress = jest.fn();
+    const waited = await bashCallTool(
+      'wait',
+      { sessionId: started.sessionId as string, timeout: 10 },
+      undefined,
+      undefined,
+      { onProgress: progress },
+    );
+    expect(waited.isError).toBeUndefined();
+    expect(progress).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'background-progress-marker',
+    }));
+  });
+
   it('kills a long-running background session', async () => {
     const command = isWin ? 'ping -n 30 127.0.0.1 > NUL' : 'sleep 30';
     const start = parse(await bashCallTool('start', { command }));
@@ -329,6 +611,26 @@ describe('bash background sessions', () => {
     const waited = parse(await bashCallTool('wait', { sessionId: start.sessionId as string, timeout: 10 }));
     expect(waited.running).toBe(false);
   }, 25000);
+
+  it('cancels a wait call without killing or orphaning the background session', async () => {
+    mockNeverClosingChild();
+    const started = parse(await bashCallTool('start', { command: 'background-stays-running' }));
+    const controller = new AbortController();
+    const waiting = bashCallTool(
+      'wait',
+      { sessionId: started.sessionId as string, timeout: 60 },
+      undefined,
+      undefined,
+      { signal: controller.signal },
+    );
+    controller.abort();
+    const cancelled = await waiting;
+    expect(cancelled.isError).toBe(true);
+    expect(parse(cancelled)).toEqual(expect.objectContaining({
+      cancelled: true,
+      running: true,
+    }));
+  });
 
   it('isolates session visibility and controls by host-derived owner scope', async () => {
     const ownerA = 'conversation:alpha';

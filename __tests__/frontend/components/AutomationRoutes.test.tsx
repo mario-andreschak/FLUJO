@@ -19,7 +19,8 @@ jest.mock('@/utils/logger', () => ({
 }));
 
 import ExecutionsPage from '@/app/executions/page';
-import WavesPage, { WAVES_VIEWPORT_HEIGHT } from '@/app/waves/page';
+import WavesPage from '@/app/waves/page';
+import { WAVES_VIEWPORT_HEIGHT } from '@/app/waves/constants';
 import AutomationTriggersPage from '@/app/automation/triggers/page';
 import AutomationWavesPage from '@/app/automation/waves/page';
 

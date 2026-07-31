@@ -241,6 +241,107 @@ async function attemptViaAdapter(model: Model, apiKey: string): Promise<ModelTes
   }
 }
 
+/**
+ * OpenRouter image/video models do not implement Chat Completions, and running
+ * an actual media generation just to test a saved model would spend meaningful
+ * credits. Validate the key with `/key`, then verify the model is present in
+ * the matching dedicated media catalogue. This is non-billable and exercises
+ * the same base URL + credential the real adapter will use.
+ */
+async function attemptOpenRouterMediaConnection(
+  model: Model,
+  apiKey: string,
+): Promise<ModelTestAttempt> {
+  const started = Date.now();
+  const base = (model.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+  const output = (model.outputModalities ?? []).map(value => value.toLowerCase());
+  const kind = output.includes('video') ? 'videos' : 'images';
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    ...(getProviderDefaultHeaders('openrouter') ?? {}),
+  };
+  try {
+    const keyResponse = await axios.get(`${base}/key`, {
+      headers,
+      timeout: 60_000,
+      validateStatus: () => true,
+    });
+    if (keyResponse.status < 200 || keyResponse.status >= 300) {
+      const body = keyResponse.data?.error ?? keyResponse.data;
+      return {
+        ok: false,
+        status: keyResponse.status,
+        durationMs: Date.now() - started,
+        error: {
+          message: body?.message || `HTTP ${keyResponse.status}`,
+          status: keyResponse.status,
+          code: body?.code !== undefined ? String(body.code) : undefined,
+          type: body?.type,
+          headers: pickHeaders(keyResponse.headers as Record<string, unknown>),
+          body,
+        },
+      };
+    }
+
+    const modelsResponse = await axios.get(`${base}/${kind}/models`, {
+      headers,
+      timeout: 60_000,
+      validateStatus: () => true,
+    });
+    if (modelsResponse.status < 200 || modelsResponse.status >= 300) {
+      const body = modelsResponse.data?.error ?? modelsResponse.data;
+      return {
+        ok: false,
+        status: modelsResponse.status,
+        durationMs: Date.now() - started,
+        error: {
+          message: body?.message || `HTTP ${modelsResponse.status}`,
+          status: modelsResponse.status,
+          code: body?.code !== undefined ? String(body.code) : undefined,
+          type: body?.type,
+          headers: pickHeaders(modelsResponse.headers as Record<string, unknown>),
+          body,
+        },
+      };
+    }
+    const listed = Array.isArray(modelsResponse.data?.data) &&
+      modelsResponse.data.data.some((candidate: { id?: unknown }) => candidate?.id === model.name);
+    if (!listed) {
+      return {
+        ok: false,
+        status: 404,
+        durationMs: Date.now() - started,
+        error: {
+          message: `${model.name} is not listed by OpenRouter's ${kind} API.`,
+          status: 404,
+          code: 'media_model_not_found',
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      durationMs: Date.now() - started,
+      content: `API key is valid and ${model.name} is available through /${kind}.`,
+    };
+  } catch (error) {
+    const axErr = error as AxiosError;
+    return {
+      ok: false,
+      status: axErr.response?.status,
+      durationMs: Date.now() - started,
+      error: {
+        name: axErr.name,
+        message: axErr.message,
+        status: axErr.response?.status,
+        code: axErr.code,
+        body: axErr.response?.data,
+        stack: axErr.stack,
+      },
+    };
+  }
+}
+
 function buildDiagnosis(sdk: ModelTestAttempt, axiosAttempt: ModelTestAttempt): string {
   if (sdk.ok && axiosAttempt.ok) {
     return 'Both the SDK and axios reached the provider successfully. The model, key, and base URL are working.';
@@ -294,6 +395,36 @@ export async function testModelConnection(params: {
 }): Promise<ModelTestResult> {
   const { modelName, baseUrl, apiKey, provider, adapter, model } = params;
   log.info('Testing model connection', { modelName, baseUrl, provider, adapter, hasApiKey: Boolean(apiKey) });
+
+  const openRouterMedia =
+    provider === 'openrouter' &&
+    model &&
+    (model.outputModalities ?? []).some(modality =>
+      ['image', 'video'].includes(modality.toLowerCase())
+    );
+  if (openRouterMedia) {
+    const sdk = await attemptOpenRouterMediaConnection(model, apiKey);
+    const axiosAttempt: ModelTestAttempt = {
+      ok: sdk.ok,
+      durationMs: 0,
+      content: 'n/a — dedicated OpenRouter media APIs are validated without starting a billable generation.',
+    };
+    const output = (model.outputModalities ?? []).some(value => value.toLowerCase() === 'video')
+      ? 'video'
+      : 'image';
+    const diagnosis = sdk.ok
+      ? `Connected successfully. The API key is valid and the model is listed by OpenRouter's dedicated ${output} API. No billable generation was started.`
+      : `OpenRouter ${output} API validation failed: ${sdk.error?.message ?? 'unknown error'}.`;
+    return {
+      ok: sdk.ok,
+      model: modelName,
+      baseUrl,
+      provider,
+      sdk,
+      axios: axiosAttempt,
+      diagnosis,
+    };
+  }
 
   // Anything other than the plain Chat Completions path is tested with a single
   // round-trip through its own adapter rather than the SDK+axios cross-check:

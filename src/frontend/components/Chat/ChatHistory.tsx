@@ -153,10 +153,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   );
 
   // Wave grouping (issue #181): the wave graph is only needed while grouping by
-  // wave, so fetch it lazily and refresh it when the conversation list changes
-  // (the sidebar polls periodically). Failures / empty responses are tolerated
+  // wave, so fetch it lazily and refresh it when wave membership changes.
+  // Status/title updates do not need another wave request. Failures are tolerated
   // silently — grouping just falls back to the Ad-hoc / Archived buckets.
   const [waves, setWaves] = React.useState<WavesResponse | null>(null);
+  const waveMembershipKey = useMemo(
+    () => conversations
+      .map((conversation) => `${conversation.id}:${conversation.plannedExecutionId ?? ''}`)
+      .join('\u0000'),
+    [conversations],
+  );
   React.useEffect(() => {
     if (groupMode !== 'wave') return;
     let cancelled = false;
@@ -165,7 +171,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       .then((data) => { if (!cancelled && data) setWaves(data as WavesResponse); })
       .catch(() => { /* ignore — sidebar still renders fallback buckets */ });
     return () => { cancelled = true; };
-  }, [groupMode, conversations]);
+  }, [groupMode, waveMembershipKey]);
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
 
@@ -744,4 +750,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   );
 };
 
-export default ChatHistory;
+// The parent chat updates on every streamed message/debug event. Keeping this
+// subtree memoized prevents rebuilding and reconciling the entire sidebar when
+// its summaries and controls have not changed.
+export default React.memo(ChatHistory);

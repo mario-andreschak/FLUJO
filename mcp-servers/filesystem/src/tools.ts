@@ -1282,12 +1282,10 @@ export async function filesystemCallTool(toolName: string, args: Record<string, 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn('filesystemCallTool failed', { toolName, err });
-    // Return a JSON-structured error so payloadOf() in the in-chat file-browser
-    // HTML can extract the real message instead of falling back to a generic string.
-    return {
-      isError: true,
-      content: [{ type: 'text' as const, text: JSON.stringify({ error: msg }) }],
-      structuredContent: { error: msg },
-    } satisfies StructuredResult;
+    // Do not attach structuredContent to an error. Every successful tool has
+    // its own outputSchema, and `{ error }` does not conform to those schemas;
+    // strict MCP clients validate it before the file-browser View can inspect
+    // `isError`. The JSON text block remains machine-readable by payloadOf().
+    return errorResult(msg);
   }
 }

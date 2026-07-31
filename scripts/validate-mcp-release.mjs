@@ -68,6 +68,12 @@ for (const entry of packages) {
   if (binTarget !== 'dist/index.js' || !existsSync(path.join(packageDirectory, binTarget))) {
     fail(`${entry.name} is missing its built ${entry.bin} binary`);
   }
+  if (
+    entry.directory === 'browser'
+    && packageJson.scripts?.install !== 'patchright install chromium'
+  ) {
+    fail(`${entry.name} must automatically install its managed Chromium binary`);
+  }
 
   const childFiles = packedFiles(`./mcp-servers/${entry.directory}`);
   if (!childFiles.has('dist/index.js') || !childFiles.has('package.json')) {

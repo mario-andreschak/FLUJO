@@ -1,11 +1,13 @@
 import path from 'node:path';
 import type { MCPHostPathAccessConfig, MCPStdioConfig } from '@/shared/types/mcp';
 
+type Environment = Readonly<Record<string, string | undefined>>;
+
 export type ShippedMcpServerDescriptor = {
   defaultName: string;
   packageId: string;
   packageDirectory: string;
-  disabledByDefault?: (env: NodeJS.ProcessEnv) => boolean;
+  disabledByDefault?: (env: Environment) => boolean;
   enableMcpApps?: boolean;
   hostPathAccess?: MCPHostPathAccessConfig;
 };
@@ -52,14 +54,14 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   },
 ] as const;
 
-export function shippedMcpAppRoot(env: NodeJS.ProcessEnv = process.env): string {
+export function shippedMcpAppRoot(env: Environment = process.env): string {
   return path.resolve(env.FLUJO_APP_ROOT?.trim() || process.cwd());
 }
 
 /** Forward only the operator controls needed by the standalone child process. */
 export function shippedServerEnv(
   descriptor: ShippedMcpServerDescriptor,
-  env: NodeJS.ProcessEnv = process.env,
+  env: Environment = process.env,
 ): Record<string, string> {
   const result: Record<string, string> = {
     FLUJO_DATA_DIR: env.FLUJO_DATA_DIR ?? process.cwd(),
@@ -95,6 +97,7 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_MAX_SESSIONS',
       'FLUJO_BROWSER_IDLE_TIMEOUT_MS',
       'FLUJO_BROWSER_MAX_REDIRECTS',
+      'PLAYWRIGHT_BROWSERS_PATH',
     ]) forwarded.add(key);
   }
 
@@ -108,7 +111,7 @@ export function shippedServerEnv(
 /** Build the ordinary persisted stdio record installed for one shipped package. */
 export function createShippedServerConfig(
   descriptor: ShippedMcpServerDescriptor,
-  env: NodeJS.ProcessEnv = process.env,
+  env: Environment = process.env,
 ): MCPStdioConfig {
   const appRoot = shippedMcpAppRoot(env);
   return {

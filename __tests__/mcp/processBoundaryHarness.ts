@@ -32,7 +32,10 @@ export interface RunningFlujo {
   close(): Promise<void>;
 }
 
-export function cleanEnv(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
+type Environment = Readonly<Record<string, string | undefined>>;
+type CleanEnvironment = NodeJS.ProcessEnv & Record<string, string>;
+
+export function cleanEnv(extra: Environment = {}): CleanEnvironment {
   return {
     ...Object.fromEntries(
       Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
@@ -40,6 +43,7 @@ export function cleanEnv(extra: NodeJS.ProcessEnv = {}): Record<string, string> 
     ...Object.fromEntries(
       Object.entries(extra).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
     ),
+    NODE_ENV: process.env.NODE_ENV,
   };
 }
 
@@ -107,7 +111,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, descriptio
 
 export async function connectStdio(
   entrypoint: string,
-  env: NodeJS.ProcessEnv = {},
+  env: Environment = {},
 ): Promise<TrackedStdioClient> {
   const notifications: unknown[] = [];
   const client = new Client(

@@ -62,7 +62,7 @@ describe('persisted shipped server configs', () => {
         command: 'node',
         disabled: true,
         exposeAsMcpServer: true,
-        enableMcpApps: false,
+        enableMcpApps: descriptor.enableMcpApps ?? false,
       });
       expect(config).not.toHaveProperty('builtIn');
       expect(config).not.toHaveProperty('internalPackage');
@@ -71,7 +71,12 @@ describe('persisted shipped server configs', () => {
   });
 
   it('renames a shipped record through the ordinary update path', async () => {
-    const original = (await mcpService.getServerConfig('filesystem')) as MCPServerConfig;
+    const original = (await mcpService.loadServerConfigs() as MCPServerConfig[])
+      .find((config) => config.name === 'filesystem');
+    expect(original).toBeDefined();
+    if (!original || original.transport !== 'stdio') {
+      throw new Error('Expected the shipped filesystem server to use stdio.');
+    }
     const result = await mcpService.updateServerConfig('filesystem', {
       name: 'workspace-files',
       disabled: true,
@@ -120,7 +125,7 @@ describe('normal stdio delivery', () => {
       expect(path.isAbsolute(config.cwd ?? '')).toBe(true);
       expect(config.source).toEqual({ type: 'marketplace', id: descriptor.packageId });
       expect(config.roots).toEqual([]);
-      expect(config.enableMcpApps).toBe(false);
+      expect(config.enableMcpApps).toBe(descriptor.enableMcpApps ?? false);
     }
   });
 
@@ -141,5 +146,19 @@ describe('normal stdio delivery', () => {
     });
     expect(env).toMatchObject({ FLUJO_DATA_DIR: '/data', FLUJO_FS_ROOTS: '/workspace' });
     expect(env).not.toHaveProperty('SECRET_THAT_MUST_NOT_LEAK');
+  });
+
+  it('forwards the shared Patchright browser cache to the browser child only', () => {
+    const browser = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'browser')!;
+    const filesystem = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'filesystem')!;
+    const environment = {
+      FLUJO_DATA_DIR: '/data',
+      PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
+    };
+
+    expect(shippedServerEnv(browser, environment)).toMatchObject({
+      PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
+    });
+    expect(shippedServerEnv(filesystem, environment)).not.toHaveProperty('PLAYWRIGHT_BROWSERS_PATH');
   });
 });

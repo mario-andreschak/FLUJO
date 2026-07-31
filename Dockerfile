@@ -13,6 +13,7 @@
 # ---- Builder --------------------------------------------------------------
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
 # Install deps first (better layer caching) using the full dependency set so the
 # production build has its build-time tooling (typescript, webpack, etc.).
@@ -35,7 +36,8 @@ ENV NODE_ENV=production \
     FLUJO_CONTAINER=1 \
     FLUJO_APP_ROOT=/app \
     FLUJO_DATA_DIR=/app/data \
-    FLUJO_MCP_APP_SANDBOX_HOST=0.0.0.0
+    FLUJO_MCP_APP_SANDBOX_HOST=0.0.0.0 \
+    PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
     # Optional: restrict the in-chat file-browser MCP tool to specific host directories
     # (requires a matching bind-mount in docker-compose.yml):
     # ENV FLUJO_FS_ROOTS=/data/files
@@ -71,7 +73,13 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
 # `npx --no-install` can then resolve every shipped binary without a registry.
 COPY --from=builder /app/package.json /app/package-lock.json ./
 COPY --from=builder /app/mcp-servers ./mcp-servers
+# Reuse the browser payload downloaded by the workspace install lifecycle in the
+# builder. The following npm ci sees the version marker and does not download it again.
+COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright
 RUN npm ci --omit=dev
+# The browser workspace install lifecycle downloads its version-matched Chromium
+# payload above. Add the Debian libraries it requires while this stage is still root.
+RUN npx --no-install patchright install-deps chromium
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs

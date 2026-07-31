@@ -14,6 +14,10 @@ import { toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import {
+  filterUnsupportedMediaInputs,
+  hydrateRunResourceMedia,
+} from '@/backend/services/model/mediaHandoff';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
 import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
@@ -1493,7 +1497,10 @@ export class ModelHandler {
       // its result, the synthetic "Continue") from the WIRE view only — the threaded
       // history kept in SharedState is untouched. So a node handed off to sees a
       // clean conversation. See ~/.claude/plans/execution-core-v2.md.
-      let apiMessages: OpenAI.ChatCompletionMessageParam[] = toApiMessages(messages);
+      let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
+        toApiMessages(messages),
+        model.inputModalities,
+      );
       let effectiveTools: OpenAI.ChatCompletionTool[] | undefined = tools;
 
       // Strip trailing assistant message(s) for providers that require the last
@@ -1813,6 +1820,10 @@ export class ModelHandler {
             //      new one — freeing VRAM on GPU-constrained hardware.
             // When disabled (default), zero overhead: falls straight through.
             const issueCompletion = async () => {
+              const hydratedMessages = await hydrateRunResourceMedia(
+                attemptMessages,
+                opts?.nodeId,
+              );
               const input = {
               model,
               apiKey: decryptedApiKey,
@@ -1826,7 +1837,7 @@ export class ModelHandler {
                 providerAttemptObserved = true;
                 recordProviderAttempt(observation);
               },
-              messages: attemptMessages,
+              messages: hydratedMessages,
               tools: attemptTools,
               temperature,
               // Effective output-token cap: node-level override → per-model default
