@@ -94,7 +94,7 @@ const ServerList: React.FC<ServerListProps> = ({
   }
 
   return (
-    <Grid container spacing={2}>
+    <Grid container spacing={2.5}>
       {servers.map((server) => {
         // Check if this is a streamable server with OAuth tokens
         const hasOAuthTokens = server.transport === 'streamable' && 

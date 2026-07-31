@@ -120,7 +120,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
 
     // Render a grid of model cards for a given subset (whole list or one group).
     const renderModelGrid = (items: Model[]) => (
-        <Grid container spacing={2}>
+        <Grid container spacing={2.5}>
             {items.map((model) => (
                 <Grid item xs={12} sm={6} md={4} key={model.id}>
                     <ModelCard

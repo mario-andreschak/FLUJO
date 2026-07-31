@@ -240,7 +240,7 @@ const FlowDashboard = ({
 
   // Render a grid of flow cards for a given subset (whole list or one group).
   const renderFlowGrid = (items: Flow[]) => (
-    <Grid container spacing={2}>
+    <Grid container spacing={2.5}>
       {items.map(flow => (
         <Grid 
           item 
@@ -403,7 +403,7 @@ const FlowDashboard = ({
         pb: 2
       }}>
         {isLoading ? (
-          <Grid container spacing={2}>
+          <Grid container spacing={2.5}>
             {renderSkeletons()}
           </Grid>
         ) : filteredFlows.length > 0 ? (

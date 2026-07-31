@@ -33,10 +33,11 @@ async function ModelsPage() {
           title="AI Setup"
           description="Connect the AI provider FLUJO will use for every agent and conversation."
           icon={MemoryRoundedIcon}
+          maxWidth="none"
         />
         <ScrollArea
           storageKey="flujo-ui:scroll:models"
-          sx={{ p: { xs: 2, md: 3, lg: 4 }, flex: 1, width: '100%', maxWidth: 1440, mx: 'auto' }}
+          sx={{ p: { xs: 2, md: 3, lg: 4 }, flex: 1, width: '100%' }}
         >
           <Suspense fallback={<Spinner />}>
             <ModelClient initialModels={models} />
