@@ -113,6 +113,27 @@ describe('McpAppsDashboard', () => {
     expect(onOpenToolTester).toHaveBeenCalledWith('weather', 'get_forecast');
   });
 
+  it('discovers tool-linked apps even when resources/list omits the UI resource', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'terminal-server', disabled: false, enableMcpApps: true },
+    ] as any);
+    service.listServerResources.mockResolvedValue({
+      resources: [],
+      resourceTemplates: [],
+      error: 'resources/list is unavailable',
+    });
+    service.listServerTools.mockResolvedValue({
+      tools: [{ name: 'open_terminal', _meta: { ui: { resourceUri: 'ui://bash/real-terminal' } } }],
+    });
+
+    renderDashboard();
+
+    expect(await screen.findByText('Real Terminal')).toBeInTheDocument();
+    expect(screen.getByText('Tool-discovered')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Real Terminal'));
+    expect(await screen.findByTestId('mcp-app-frame')).toHaveAttribute('data-uri', 'ui://bash/real-terminal');
+  });
+
   it('invalidates an active preview when server app access is revoked', async () => {
     service.loadServerConfigs
       .mockResolvedValueOnce([

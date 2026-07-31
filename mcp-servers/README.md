@@ -6,7 +6,7 @@ This workspace contains the stdio MCP processes managed by FLUJO:
 | --- | --- | --- |
 | `@flujo-ai/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through the localhost control API. |
 | `@flujo-ai/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
-| `@flujo-ai/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground and background shell execution with process-tree cleanup. |
+| `@flujo-ai/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground/background shell execution plus a PTY-backed MCP Apps terminal with process-tree cleanup. |
 | `@flujo-ai/mcp-browser` | `flujo-mcp-browser` | Isolated server-side Patchright browser automation with an MCP Apps browser view. |
 
 Each package builds to `dist/index.js`, uses `StdioServerTransport`, and reserves stdout for MCP protocol frames. Diagnostics are written to stderr. FLUJO persists portable `npx --no-install <executable>` configurations and resolves them from the runtime-only `FLUJO_APP_ROOT`; no checkout or install path is stored in user data. Connection, restart, roots notifications, and shutdown use the same client lifecycle as external MCP servers.
@@ -57,6 +57,14 @@ Browser controls:
 - `FLUJO_BROWSER_MAX_REDIRECTS`: per-navigation document redirect cap, 0–50 (default 10).
 
 The exposed contract is deliberately narrow: open, navigate, snapshot, selector click/fill, in-memory PNG screenshot, and close. It exposes no process execution, host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
+
+The Bash server publishes `ui://bash/terminal` as a self-contained MCP App and
+links it from `open_terminal`. The launcher is visible to the model and the app;
+the raw PTY read/write/resize/close/list tools use `_meta.ui.visibility: ["app"]`
+so they do not clutter model tool context. The terminal uses ConPTY on Windows
+and a pseudoterminal on macOS/Linux, renders ANSI/VT output with xterm, accepts
+keyboard and pasted input, and negotiates terminal size through app-only tools.
+As with a normal terminal, stdout and stderr share the PTY stream.
 
 ## Roots and operator policy
 

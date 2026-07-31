@@ -24,22 +24,26 @@ describe('Bash terminal MCP App', () => {
     ]);
     const result = bashReadResource(BASH_TERMINAL_APP_URI);
     const content = result.data?.contents?.[0] as { _meta?: unknown } | undefined;
-    expect(content?._meta).toEqual({ ui: { csp: {}, permissions: {} } });
+    expect(content?._meta).toEqual({
+      ui: { csp: {}, permissions: { clipboardWrite: {} }, prefersBorder: true },
+    });
   });
 
-  it('uses textContent for shell output and only approved Bash session tools', () => {
+  it('embeds xterm and uses only the dedicated owner-scoped terminal tools', () => {
     const html = terminalHtml();
-    expect(html).toContain('outputEl.textContent = data.output');
-    expect(html).not.toContain('outputEl.innerHTML');
-    for (const tool of ['start', 'status', 'write_stdin', 'kill', 'list_sessions']) {
+    expect(html).toContain('new Terminal({');
+    expect(html).toContain('new FitAddon.FitAddon()');
+    for (const tool of ['open_terminal', 'terminal_read', 'terminal_write', 'terminal_resize', 'terminal_close', 'terminal_list']) {
       expect(html).toContain(`"${tool}"`);
     }
   });
 
-  it('documents the non-PTY contract and advertises docked display mode', () => {
+  it('supports raw input, incremental output, resize, copy, and docked display mode', () => {
     const html = terminalHtml();
-    expect(html).toContain('Line-oriented console only');
-    expect(html).toContain('Full-screen TTY apps');
+    expect(html).toContain('terminal.onData');
+    expect(html).toContain('terminal.onResize');
+    expect(html).toContain('navigator.clipboard.writeText');
+    expect(html).toContain('data.chunk');
     expect(html).toContain('availableDisplayModes:["inline","fullscreen","pip"]');
     expect(html).toContain('"ui/request-display-mode", { mode:"pip" }');
   });

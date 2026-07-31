@@ -1,10 +1,7 @@
-/**
- * First-party MCP App for the built-in Bash server (issue #330).
- *
- * This is intentionally a line-oriented console over the existing piped child
- * process implementation. It does not claim PTY, curses/full-screen program,
- * cursor-positioning, alternate-screen, or resize support.
- */
+/** First-party, PTY-backed MCP App for the built-in Bash server. */
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
 import type {
   ReadResourceResult as MCPReadResourceResult,
   Resource as MCPResource,
@@ -13,6 +10,7 @@ import { BASH_TERMINAL_APP_URI } from './tools.js';
 
 const MCP_APPS_PROTOCOL_VERSION = '2026-01-26';
 const APP_MIME_TYPE = 'text/html;profile=mcp-app';
+const require = createRequire(import.meta.url);
 
 type MCPServiceResponse<T> = {
   success: boolean;
@@ -21,15 +19,31 @@ type MCPServiceResponse<T> = {
   statusCode?: number;
 };
 
+function browserAsset(packageName: string, relativePath?: string): string {
+  const entry = require.resolve(packageName);
+  const file = relativePath ? path.join(path.dirname(path.dirname(entry)), relativePath) : entry;
+  return fs.readFileSync(file, 'utf8');
+}
+
+function safeInlineScript(source: string): string {
+  return source.replace(/<\/script/gi, '<\\/script');
+}
+
+const XTERM_JS = safeInlineScript(browserAsset('@xterm/xterm'));
+const XTERM_CSS = browserAsset('@xterm/xterm', 'css/xterm.css').replace(/<\/style/gi, '<\\/style');
+const XTERM_FIT_JS = safeInlineScript(browserAsset('@xterm/addon-fit'));
+
 export function bashListResources(): { resources: MCPResource[] } {
   return {
     resources: [
       {
         uri: BASH_TERMINAL_APP_URI,
-        name: 'bash_terminal',
+        name: 'Interactive Terminal',
+        title: 'Interactive Terminal',
         mimeType: APP_MIME_TYPE,
-        description: 'Dockable, line-oriented console for owner-scoped Bash background sessions.',
-      },
+        description: 'A real PTY/ConPTY terminal with ANSI rendering, keyboard input, copy/paste, and resize support.',
+        _meta: { ui: { csp: {}, permissions: { clipboardWrite: {} }, prefersBorder: true } },
+      } as MCPResource,
     ],
   };
 }
@@ -50,7 +64,7 @@ export function bashReadResource(uri: string): MCPServiceResponse<MCPReadResourc
           uri,
           mimeType: APP_MIME_TYPE,
           text: BASH_TERMINAL_APP_HTML,
-          _meta: { ui: { csp: {}, permissions: {} } },
+          _meta: { ui: { csp: {}, permissions: { clipboardWrite: {} }, prefersBorder: true } },
         } as MCPReadResourceResult['contents'][number],
       ],
     },
@@ -62,89 +76,70 @@ const BASH_TERMINAL_APP_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>${XTERM_CSS}</style>
 <style>
-  :root { color-scheme:light; --bg:#f8fafc; --panel:#fff; --fg:#172033; --muted:#64748b; --border:#cbd5e1; --accent:#2563eb; --danger:#b91c1c; --term:#07120d; --termfg:#bbf7d0; }
-  [data-theme="dark"] { color-scheme:dark; --bg:#0f172a; --panel:#111827; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --accent:#60a5fa; --danger:#f87171; --term:#020906; --termfg:#bbf7d0; }
+  :root { color-scheme:dark; --bar:#111827; --border:#334155; --fg:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; --danger:#f87171; }
   * { box-sizing:border-box; }
-  html,body { margin:0; min-height:100%; background:var(--bg); color:var(--fg); font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  main { display:flex; flex-direction:column; gap:8px; min-height:100vh; padding:10px; }
-  .card { border:1px solid var(--border); border-radius:8px; background:var(--panel); padding:9px; }
-  .row { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
-  .grow { flex:1 1 220px; }
-  label { color:var(--muted); font-size:12px; }
-  input,select,button { min-height:32px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--fg); font:inherit; padding:5px 8px; }
-  input:focus,select:focus,button:focus { outline:2px solid var(--accent); outline-offset:1px; }
-  button { cursor:pointer; font-weight:600; }
-  button.primary { background:var(--accent); color:white; border-color:var(--accent); }
-  button.danger { color:var(--danger); }
-  button:disabled,input:disabled,select:disabled { cursor:not-allowed; opacity:.55; }
-  #command { width:100%; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
-  #cwd { min-width:170px; }
-  #sessions { min-width:210px; }
-  #terminal { flex:1 1 auto; min-height:220px; margin:0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; border-radius:8px; background:var(--term); color:var(--termfg); font:12.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
-  #state { min-height:20px; color:var(--muted); }
-  #state.error { color:var(--danger); }
-  .badge { border:1px solid var(--border); border-radius:999px; padding:2px 7px; color:var(--muted); }
-  .notice { color:var(--muted); font-size:12px; }
-  .stdin { flex-wrap:nowrap; }
-  #line { flex:1 1 auto; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  html,body { width:100%; height:100%; margin:0; overflow:hidden; background:#050a07; color:var(--fg); font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  body { display:flex; flex-direction:column; }
+  #toolbar { display:flex; align-items:center; gap:7px; min-height:40px; padding:5px 8px; background:var(--bar); border-bottom:1px solid var(--border); }
+  #terminal { flex:1 1 auto; min-height:180px; padding:5px; }
+  #status { flex:1 1 auto; min-width:0; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .live { color:#86efac !important; }
+  .error { color:var(--danger) !important; }
+  button,select,input { min-height:28px; border:1px solid var(--border); border-radius:5px; background:#0f172a; color:var(--fg); font:inherit; padding:3px 7px; }
+  button { cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #cwd { width:min(28vw,260px); }
+  #shell { max-width:125px; }
+  .xterm { height:100%; }
+  .xterm-viewport { scrollbar-color:#475569 #07120d; }
 </style>
+<script>${XTERM_JS}</script>
+<script>${XTERM_FIT_JS}</script>
 </head>
 <body>
-<main>
-  <section class="card" aria-labelledby="launch-title">
-    <div class="row">
-      <strong id="launch-title">Bash session</strong>
-      <span id="session-badge" class="badge">No session</span>
-      <span class="grow"></span>
-      <button id="reload-sessions" type="button">Sessions</button>
-      <select id="sessions" aria-label="Owned Bash sessions"><option value="">Select a session</option></select>
-    </div>
-    <div class="row" style="margin-top:7px">
-      <input id="command" class="grow" aria-label="Command" placeholder="Command to start in the background" autocomplete="off" />
-      <input id="cwd" aria-label="Working directory" placeholder="Working directory (.)" value="." />
-      <select id="shell" aria-label="Shell"><option value="default">Automatic</option><option value="pwsh">PowerShell 7+</option><option value="bash">Bash</option><option value="cmd">Windows cmd</option></select>
-      <button id="start" class="primary" type="button">Start</button>
-    </div>
-  </section>
-
-  <div id="state" role="status" aria-live="polite">Ready. Start or select an owner-scoped session.</div>
-  <pre id="terminal" tabindex="0" aria-label="Combined standard output and standard error">No session output.</pre>
-
-  <section class="card">
-    <div class="row stdin">
-      <input id="line" aria-label="Line to send to standard input" placeholder="Send one line to stdin" autocomplete="off" disabled />
-      <button id="send" type="button" disabled>Send</button>
-      <button id="refresh" type="button" disabled>Refresh</button>
-      <button id="stop" class="danger" type="button" disabled>Stop</button>
-    </div>
-    <div class="notice" style="margin-top:7px">Line-oriented console only. Full-screen TTY apps, cursor control, alternate screens, and resize negotiation require future PTY support.</div>
-  </section>
-</main>
+  <div id="toolbar">
+    <select id="shell" aria-label="Shell"><option value="default">Automatic</option><option value="pwsh">PowerShell</option><option value="bash">Bash</option><option value="cmd">cmd</option></select>
+    <input id="cwd" aria-label="Working directory" value="." title="Working directory" />
+    <button id="new" type="button">New</button>
+    <button id="copy" type="button" title="Copy selection">Copy</button>
+    <button id="clear" type="button">Clear</button>
+    <button id="close" type="button">Close</button>
+    <span id="status">Initializing terminal…</span>
+  </div>
+  <div id="terminal" aria-label="Interactive terminal"></div>
 <script>
 (function () {
   "use strict";
   var nextId = 1;
   var pending = {};
   var sessionId = "";
+  var cursor = 0;
   var running = false;
-  var busy = false;
   var pollTimer = null;
-  var pollPending = false;
-  var lastToolInput = null;
+  var pollBusy = false;
+  var opening = false;
+  var inputQueue = "";
+  var inputBusy = false;
+  var resizeTimer = null;
+  var lastToolInput = {};
 
-  var commandEl = document.getElementById("command");
-  var cwdEl = document.getElementById("cwd");
+  var statusEl = document.getElementById("status");
   var shellEl = document.getElementById("shell");
-  var sessionsEl = document.getElementById("sessions");
-  var outputEl = document.getElementById("terminal");
-  var stateEl = document.getElementById("state");
-  var badgeEl = document.getElementById("session-badge");
-  var lineEl = document.getElementById("line");
-  var startEl = document.getElementById("start");
-  var sendEl = document.getElementById("send");
-  var refreshEl = document.getElementById("refresh");
-  var stopEl = document.getElementById("stop");
+  var cwdEl = document.getElementById("cwd");
+  var terminal = new Terminal({
+    cursorBlink:true,
+    convertEol:false,
+    scrollback:10000,
+    fontFamily:'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    fontSize:13,
+    theme:{ background:'#050a07', foreground:'#d1fae5', cursor:'#86efac', selectionBackground:'#2563eb88' }
+  });
+  var fitAddon = new FitAddon.FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.open(document.getElementById("terminal"));
+  fitAddon.fit();
 
   function post(message) { window.parent.postMessage(message, "*"); }
   function rpc(method, params) {
@@ -163,147 +158,113 @@ const BASH_TERMINAL_APP_HTML = `<!doctype html>
       return text ? JSON.parse(text) : null;
     } catch (e) { return null; }
   }
-  function applyTheme(context) {
-    var theme = context && context.theme;
-    document.documentElement.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
-  }
-  function setState(message, isError) {
-    stateEl.textContent = message;
-    stateEl.className = isError ? "error" : "";
-  }
-  function setBusy(value) {
-    busy = value;
-    startEl.disabled = value;
-    sessionsEl.disabled = value;
-    document.getElementById("reload-sessions").disabled = value;
-    updateControls();
-  }
-  function updateControls() {
-    var usable = Boolean(sessionId) && !busy;
-    lineEl.disabled = !usable || !running;
-    sendEl.disabled = !usable || !running;
-    refreshEl.disabled = !usable;
-    stopEl.disabled = !usable || !running;
-    badgeEl.textContent = sessionId ? (running ? "Running" : "Ended") + " · " + sessionId : "No session";
-  }
-  function schedulePoll() {
-    if (pollTimer) clearTimeout(pollTimer);
-    pollTimer = running ? setTimeout(refresh, 750) : null;
-  }
-  function applySnapshot(data) {
-    if (!data) return;
-    if (typeof data.sessionId === "string" && data.sessionId) sessionId = data.sessionId;
-    if (typeof data.running === "boolean") running = data.running;
-    if (typeof data.output === "string") outputEl.textContent = data.output || "(no output yet)";
-    var parts = [];
-    if (sessionId) parts.push(running ? "Session is running" : "Session ended with exit code " + String(data.exitCode));
-    if (data.truncated) parts.push("Output was truncated at the server limit");
-    if (data.timedOut) parts.push("Wait timed out; the process may still be running");
-    if (data.error) parts.push(String(data.error));
-    setState(parts.join(". ") || "Ready.", Boolean(data.error));
-    updateControls();
-    schedulePoll();
-    outputEl.scrollTop = outputEl.scrollHeight;
-  }
   async function callTool(name, args) {
     var result = await rpc("tools/call", { name:name, arguments:args || {} });
     var data = payloadOf(result) || {};
     if (result && result.isError) throw new Error(data.error || name + " failed");
     return data;
   }
-  async function refresh() {
-    if (!sessionId || pollPending) return;
-    pollPending = true;
+  function setStatus(message, kind) {
+    statusEl.textContent = message;
+    statusEl.className = kind || "";
+  }
+  function schedulePoll(delay) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = sessionId ? setTimeout(poll, delay == null ? (running ? 60 : 500) : delay) : null;
+  }
+  function acceptSession(data) {
+    if (!data || !data.sessionId) return false;
+    sessionId = String(data.sessionId);
+    cursor = Number(data.cursor || data.nextCursor || 0);
+    running = data.running !== false;
+    setStatus((running ? "● " : "○ ") + (data.shell || "terminal") + " — " + (data.cwd || sessionId), running ? "live" : "");
+    schedulePoll(0);
+    terminal.focus();
+    return true;
+  }
+  async function openTerminal() {
+    if (opening) return;
+    opening = true;
+    document.getElementById("new").disabled = true;
     try {
-      applySnapshot(await callTool("status", { sessionId:sessionId }));
+      if (sessionId && running) await callTool("terminal_close", { sessionId:sessionId }).catch(function () {});
+      terminal.reset();
+      terminal.clear();
+      var data = await callTool("open_terminal", {
+        shell:shellEl.value,
+        cwd:cwdEl.value.trim() || ".",
+        cols:terminal.cols,
+        rows:terminal.rows
+      });
+      acceptSession(data);
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), "error");
+      terminal.writeln("\\r\\n\\x1b[31m" + (error && error.message ? error.message : String(error)) + "\\x1b[0m");
+    } finally {
+      opening = false;
+      document.getElementById("new").disabled = false;
+    }
+  }
+  async function poll() {
+    if (!sessionId || pollBusy) return;
+    pollBusy = true;
+    try {
+      var data = await callTool("terminal_read", { sessionId:sessionId, cursor:cursor });
+      if (data.reset) { terminal.reset(); terminal.clear(); }
+      if (typeof data.chunk === "string" && data.chunk) terminal.write(data.chunk);
+      cursor = Number(data.nextCursor == null ? cursor : data.nextCursor);
+      running = data.running !== false;
+      setStatus((running ? "● " : "○ ") + (data.shell || "terminal") + " — " + (data.cwd || sessionId) + (running ? "" : " — exited " + String(data.exitCode)), running ? "live" : "");
     } catch (error) {
       running = false;
-      setState(error && error.message ? error.message : String(error), true);
-      updateControls();
+      setStatus(error && error.message ? error.message : String(error), "error");
     } finally {
-      pollPending = false;
+      pollBusy = false;
       schedulePoll();
     }
   }
-  async function startSession() {
-    var command = commandEl.value.trim();
-    if (!command) { setState("Enter a command to start.", true); commandEl.focus(); return; }
-    setBusy(true);
-    setState("Starting command...", false);
-    try {
-      var data = await callTool("start", { command:command, cwd:cwdEl.value.trim() || ".", shell:shellEl.value });
-      sessionId = String(data.sessionId || "");
-      running = Boolean(sessionId);
-      outputEl.textContent = "(waiting for output)";
-      applySnapshot(data);
-      await refresh();
-    } catch (error) {
-      setState(error && error.message ? error.message : String(error), true);
-    } finally { setBusy(false); }
+  async function flushInput() {
+    if (inputBusy || !inputQueue || !sessionId || !running) return;
+    inputBusy = true;
+    var data = inputQueue;
+    inputQueue = "";
+    try { await callTool("terminal_write", { sessionId:sessionId, data:data }); }
+    catch (error) { setStatus(error && error.message ? error.message : String(error), "error"); }
+    finally { inputBusy = false; if (inputQueue) setTimeout(flushInput, 0); }
   }
-  async function sendLine() {
-    var data = lineEl.value;
-    if (!sessionId || !running || !data) return;
-    setBusy(true);
-    try {
-      await callTool("write_stdin", { sessionId:sessionId, data:data, newline:true });
-      lineEl.value = "";
-      await refresh();
-      lineEl.focus();
-    } catch (error) { setState(error && error.message ? error.message : String(error), true); }
-    finally { setBusy(false); }
-  }
-  async function stopSession() {
+  function sendResize() {
     if (!sessionId || !running) return;
-    setBusy(true);
-    try {
-      await callTool("kill", { sessionId:sessionId });
-      setState("Stop requested.", false);
-      await refresh();
-    } catch (error) { setState(error && error.message ? error.message : String(error), true); }
-    finally { setBusy(false); }
-  }
-  async function loadSessions() {
-    setBusy(true);
-    try {
-      var data = await callTool("list_sessions", {});
-      var list = Array.isArray(data.sessions) ? data.sessions : [];
-      sessionsEl.textContent = "";
-      var empty = document.createElement("option"); empty.value = ""; empty.textContent = list.length ? "Select a session" : "No owned sessions"; sessionsEl.appendChild(empty);
-      list.forEach(function (item) {
-        var option = document.createElement("option");
-        option.value = String(item.sessionId || "");
-        option.textContent = (item.running ? "● " : "○ ") + String(item.command || item.sessionId || "session");
-        sessionsEl.appendChild(option);
-      });
-      if (sessionId) sessionsEl.value = sessionId;
-      setState(list.length + " owned session(s) available.", false);
-    } catch (error) { setState(error && error.message ? error.message : String(error), true); }
-    finally { setBusy(false); }
+    callTool("terminal_resize", { sessionId:sessionId, cols:terminal.cols, rows:terminal.rows }).catch(function () {});
   }
   function acceptToolResult(result) {
     var data = payloadOf(result) || {};
-    if (lastToolInput && typeof lastToolInput.command === "string") commandEl.value = lastToolInput.command;
-    if (lastToolInput && typeof lastToolInput.cwd === "string") cwdEl.value = lastToolInput.cwd;
-    if (lastToolInput && typeof lastToolInput.shell === "string") shellEl.value = lastToolInput.shell;
-    if (data.sessionId && data.running === undefined && lastToolInput && lastToolInput.command) running = true;
-    if (data.sessionId || data.output !== undefined || data.running !== undefined) applySnapshot(data);
+    acceptSession(data);
   }
 
-  startEl.onclick = startSession;
-  sendEl.onclick = sendLine;
-  refreshEl.onclick = refresh;
-  stopEl.onclick = stopSession;
-  document.getElementById("reload-sessions").onclick = loadSessions;
-  sessionsEl.onchange = function () {
-    if (!sessionsEl.value) return;
-    sessionId = sessionsEl.value;
-    running = true;
-    updateControls();
-    refresh();
+  terminal.onData(function (data) {
+    inputQueue += data;
+    setTimeout(flushInput, 0);
+  });
+  terminal.onResize(function () {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(sendResize, 100);
+  });
+  window.addEventListener("resize", function () { try { fitAddon.fit(); } catch (e) {} });
+  document.getElementById("new").onclick = openTerminal;
+  document.getElementById("clear").onclick = function () { terminal.clear(); };
+  document.getElementById("copy").onclick = function () {
+    var text = terminal.getSelection();
+    if (!text) { setStatus("Select terminal text first.", ""); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { setStatus("Selection copied.", ""); }).catch(function () { setStatus("Copy was denied by the host.", "error"); });
+    }
   };
-  commandEl.onkeydown = function (event) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); startSession(); } };
-  lineEl.onkeydown = function (event) { if (event.key === "Enter") { event.preventDefault(); sendLine(); } };
+  document.getElementById("close").onclick = async function () {
+    if (!sessionId) return;
+    await callTool("terminal_close", { sessionId:sessionId }).catch(function () {});
+    running = false;
+    setStatus("Terminal closed.", "");
+  };
 
   window.addEventListener("message", function (event) {
     var message = event.data;
@@ -316,29 +277,39 @@ const BASH_TERMINAL_APP_HTML = `<!doctype html>
       else waiting.resolve(message.result);
       return;
     }
-    if (message.method === "ui/notifications/host-context-changed") { applyTheme(message.params); return; }
-    if (message.method === "ui/notifications/tool-input") { lastToolInput = message.params && message.params.arguments; return; }
+    if (message.method === "ui/notifications/tool-input") {
+      lastToolInput = message.params && message.params.arguments || {};
+      if (typeof lastToolInput.cwd === "string") cwdEl.value = lastToolInput.cwd;
+      if (typeof lastToolInput.shell === "string") shellEl.value = lastToolInput.shell;
+      return;
+    }
     if (message.method === "ui/notifications/tool-result") { acceptToolResult(message.params && message.params.result ? message.params.result : message.params); return; }
     if (message.method === "ping" && message.id !== undefined) { post({ jsonrpc:"2.0", id:message.id, result:{} }); return; }
     if (message.method === "ui/resource-teardown" && message.id !== undefined) {
-      // A teardown can be an inline-to-dock handoff, so it must not terminate
-      // the process. Live processes remain owner-scoped and are killed on an
-      // explicit Stop or server shutdown; completed records expire after 10m.
+      // Dock/fullscreen transitions tear down Views; the owner-scoped PTY stays
+      // alive so the replacement View can reattach through terminal_list.
       post({ jsonrpc:"2.0", id:message.id, result:{} });
     }
   });
 
   rpc("ui/initialize", {
-    appInfo:{ name:"bash-terminal", version:"1.0.0" },
+    appInfo:{ name:"bash-terminal", version:"2.0.0" },
     appCapabilities:{ availableDisplayModes:["inline","fullscreen","pip"] },
     protocolVersion:"${MCP_APPS_PROTOCOL_VERSION}"
-  }).then(function (result) {
-    applyTheme(result && result.hostContext);
+  }).then(async function () {
     notify("ui/notifications/initialized", {});
-    updateControls();
-    loadSessions();
+    try { fitAddon.fit(); } catch (e) {}
+    setTimeout(async function () {
+      if (sessionId) return;
+      try {
+        var listed = await callTool("terminal_list", {});
+        var sessions = Array.isArray(listed.sessions) ? listed.sessions : [];
+        var active = sessions.filter(function (item) { return item.running; }).pop();
+        if (!acceptSession(active)) await openTerminal();
+      } catch (e) { await openTerminal(); }
+    }, 350);
     rpc("ui/request-display-mode", { mode:"pip" }).catch(function () {});
-  }).catch(function (error) { setState("MCP App initialization failed: " + (error && error.message ? error.message : error), true); });
+  }).catch(function (error) { setStatus("MCP App initialization failed: " + (error && error.message ? error.message : error), "error"); });
 })();
 </script>
 </body>

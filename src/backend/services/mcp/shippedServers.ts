@@ -37,6 +37,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     defaultName: 'bash',
     packageId: '@flujo-ai/mcp-bash',
     packageDirectory: 'bash',
+    enableMcpApps: true,
     hostPathAccess: {
       environmentRootVariables: ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'],
       protectedPaths: true,

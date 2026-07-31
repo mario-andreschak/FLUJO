@@ -46,6 +46,7 @@ interface DashboardApp {
   description?: string;
   mimeType: string;
   toolNames: string[];
+  listedResource: boolean;
 }
 
 interface ServerDiscovery {
@@ -55,6 +56,17 @@ interface ServerDiscovery {
 }
 
 const appKey = (serverName: string, uri: string) => `${serverName}\u0000${uri}`;
+const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
+
+const appNameFromUri = (uri: string): string => {
+  const tail = uri.replace(/^ui:\/\//i, '').split('/').filter(Boolean).at(-1);
+  if (!tail) return uri;
+  try {
+    return decodeURIComponent(tail).replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  } catch {
+    return tail.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+};
 
 const readableError = (error: unknown, fallback: string): string => {
   if (typeof error === 'string' && error.trim()) return error;
@@ -111,14 +123,6 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
           mcpService.listServerResources(server.name),
           mcpService.listServerTools(server.name),
         ]);
-        if (resourceResult?.error) {
-          return {
-            name: server.name,
-            apps: [],
-            error: readableError(resourceResult.error, 'Resource discovery is unavailable.'),
-          };
-        }
-
         const toolsByResource = new Map<string, string[]>();
         for (const tool of Array.isArray(toolResult?.tools) ? toolResult.tools : []) {
           const uri = extractUiResourceUri(tool?._meta);
@@ -126,7 +130,15 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
           toolsByResource.set(uri, [...(toolsByResource.get(uri) || []), tool.name]);
         }
 
-        const apps: DashboardApp[] = [];
+        if (resourceResult?.error && toolsByResource.size === 0) {
+          return {
+            name: server.name,
+            apps: [],
+            error: readableError(resourceResult.error, 'Resource discovery is unavailable.'),
+          };
+        }
+
+        const appsByUri = new Map<string, DashboardApp>();
         for (const resource of Array.isArray(resourceResult?.resources) ? resourceResult.resources : []) {
           if (!isUiResourceUri(resource?.uri) || !isMcpAppMimeType(resource?.mimeType)) continue;
           const title = typeof resource.title === 'string' && resource.title.trim()
@@ -134,7 +146,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
             : typeof resource.name === 'string' && resource.name.trim()
               ? resource.name.trim()
               : resource.uri;
-          apps.push({
+          appsByUri.set(resource.uri, {
             serverName: server.name,
             uri: resource.uri,
             name: title,
@@ -143,12 +155,30 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
               : undefined,
             mimeType: resource.mimeType,
             toolNames: toolsByResource.get(resource.uri) || [],
+            listedResource: true,
+          });
+        }
+
+        // MCP Apps are primarily discovered through tool metadata, and the
+        // extension explicitly permits servers to omit UI-only resources from
+        // resources/list. Include those linked URIs as launchable candidates;
+        // McpAppFrame still performs the authoritative resources/read MIME,
+        // URI, CSP, and HTML validation before anything is rendered.
+        for (const [uri, toolNames] of toolsByResource) {
+          if (appsByUri.has(uri)) continue;
+          appsByUri.set(uri, {
+            serverName: server.name,
+            uri,
+            name: appNameFromUri(uri),
+            mimeType: MCP_APP_MIME_TYPE,
+            toolNames,
+            listedResource: false,
           });
         }
 
         return {
           name: server.name,
-          apps,
+          apps: Array.from(appsByUri.values()),
         };
       }));
 
@@ -284,6 +314,9 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                                 </Typography>
                                 {app.toolNames.length > 0 && (
                                   <Chip icon={<BuildIcon />} label={`${app.toolNames.length} linked tool${app.toolNames.length === 1 ? '' : 's'}`} size="small" sx={{ mt: 1 }} />
+                                )}
+                                {!app.listedResource && (
+                                  <Chip label="Tool-discovered" size="small" variant="outlined" sx={{ mt: 1, ml: app.toolNames.length > 0 ? 1 : 0 }} />
                                 )}
                               </CardContent>
                             </CardActionArea>

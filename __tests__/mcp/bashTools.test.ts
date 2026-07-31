@@ -114,17 +114,24 @@ afterEach(() => {
 });
 
 describe('bash tool definitions', () => {
-  it('exposes foreground run + background session tools', () => {
+  it('exposes foreground, background, and PTY terminal tools with correct app visibility', () => {
     const tools = bashToolDefinitions();
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining(['run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions'])
+      expect.arrayContaining([
+        'run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions',
+        'open_terminal', 'terminal_read', 'terminal_write', 'terminal_resize', 'terminal_close', 'terminal_list',
+      ])
     );
-    for (const tool of tools.filter((candidate) => candidate.name !== 'run')) {
-      expect(tool._meta).toEqual(expect.objectContaining({
-        ui: { resourceUri: 'ui://bash/terminal' },
-      }));
+    expect(tools.find((tool) => tool.name === 'open_terminal')?._meta).toEqual({
+      ui: { resourceUri: 'ui://bash/terminal', visibility: ['model', 'app'] },
+    });
+    for (const name of ['terminal_read', 'terminal_write', 'terminal_resize', 'terminal_close', 'terminal_list']) {
+      expect(tools.find((tool) => tool.name === name)?._meta).toEqual({
+        ui: { resourceUri: 'ui://bash/terminal', visibility: ['app'] },
+      });
     }
+    expect(tools.find((tool) => tool.name === 'start')?._meta).toBeUndefined();
     const run = tools.find((tool) => tool.name === 'run');
     expect(run?.description).toContain('live progress');
     expect(run?.inputSchema.properties?.shell).toEqual(expect.objectContaining({

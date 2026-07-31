@@ -17,7 +17,17 @@ export * from './resources.js';
 
 const server = new Server(
   { name: '@flujo-ai/mcp-bash', version: '0.1.0' },
-  { capabilities: { tools: {}, resources: {} } },
+  {
+    capabilities: {
+      tools: {},
+      resources: {},
+      extensions: {
+        'io.modelcontextprotocol/ui': {
+          mimeTypes: ['text/html;profile=mcp-app'],
+        },
+      },
+    },
+  },
 );
 
 configureRootsProvider(async () => (await server.listRoots()).roots);

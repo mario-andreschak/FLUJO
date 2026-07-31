@@ -26,14 +26,15 @@
  * Every tool returns a machine-readable JSON envelope in a single text content
  * block; failures come back as `isError: true` rather than thrown.
  *
- * MCP App contract (issue #330): the terminal View is a streaming,
- * line-oriented console over these existing piped child processes. It is not a
- * PTY and deliberately does not emulate curses/full-screen programs, cursor
- * positioning, alternate screens, or terminal resize negotiation.
+ * MCP App contract (issue #330): ordinary run/background tools continue to use
+ * pipes, while the interactive terminal View uses a real OS pseudoterminal
+ * (ConPTY on Windows, forkpty on POSIX) with incremental reads, raw keyboard
+ * input, ANSI/VT output, and resize negotiation.
  */
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   ALLOW_PROTECTED_PATHS_ENV,
@@ -56,6 +57,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_CHARS = 100_000;
 const MAX_SESSIONS = 25;
+const MAX_TERMINAL_OUTPUT_CHARS = 2_000_000;
 /**
  * Lifecycle: live sessions end only by process exit, explicit kill, or Bash
  * server shutdown. Finished owner-scoped records remain readable for ten
@@ -263,11 +265,29 @@ interface BashSession {
   reapTimer?: NodeJS.Timeout;
 }
 
+interface TerminalSession {
+  id: string;
+  ownerScope: string;
+  shell: EffectiveShell;
+  cwd: string;
+  pty: IPty;
+  output: string;
+  outputStart: number;
+  nextCursor: number;
+  running: boolean;
+  exitCode: number | null;
+  startedAt: number;
+  endedAt?: number;
+  reapTimer?: NodeJS.Timeout;
+}
+
 // Process-global so all Next.js module-graph instances share one session table
 // (same rationale as __mcp_clients in index.ts) and the exit-cleanup runs once.
 declare global {
   // eslint-disable-next-line no-var
   var __flujo_bash_sessions: Map<string, BashSession> | undefined;
+  // eslint-disable-next-line no-var
+  var __flujo_terminal_sessions: Map<string, TerminalSession> | undefined;
   // eslint-disable-next-line no-var
   var __flujo_bash_foreground_children: Set<ChildProcess> | undefined;
   // eslint-disable-next-line no-var
@@ -277,6 +297,11 @@ declare global {
 function sessions(): Map<string, BashSession> {
   if (!global.__flujo_bash_sessions) global.__flujo_bash_sessions = new Map<string, BashSession>();
   return global.__flujo_bash_sessions;
+}
+
+function terminalSessions(): Map<string, TerminalSession> {
+  if (!global.__flujo_terminal_sessions) global.__flujo_terminal_sessions = new Map<string, TerminalSession>();
+  return global.__flujo_terminal_sessions;
 }
 
 function foregroundChildren(): Set<ChildProcess> {
@@ -298,8 +323,8 @@ function ownedSession(id: string, ownerScope: string): BashSession | undefined {
   return session?.ownerScope === ownerScope ? session : undefined;
 }
 
-function terminalMeta(): Tool['_meta'] {
-  return { ui: { resourceUri: BASH_TERMINAL_APP_URI } };
+function terminalMeta(visibility: Array<'model' | 'app'> = ['model', 'app']): Tool['_meta'] {
+  return { ui: { resourceUri: BASH_TERMINAL_APP_URI, visibility } };
 }
 
 /** Kill every live session's process tree — used on FLUJO process exit. */
@@ -320,6 +345,17 @@ export function shutdownBashSessions(): void {
       }
     }
     if (s.reapTimer) clearTimeout(s.reapTimer);
+  }
+  for (const terminal of terminalSessions().values()) {
+    try {
+      if (terminal.running) {
+        terminal.running = false;
+        terminal.pty.kill();
+      }
+    } catch {
+      /* best-effort */
+    }
+    if (terminal.reapTimer) clearTimeout(terminal.reapTimer);
   }
 }
 
@@ -749,6 +785,55 @@ function makeAppender(get: () => string, set: (v: string, truncated: boolean) =>
   };
 }
 
+interface PtySpawnPlan {
+  file: string;
+  args: string[];
+  effectiveShell: EffectiveShell;
+  unavailableShell?: Exclude<ShellKind, 'default'>;
+  startError?: string;
+}
+
+/** Resolve an interactive shell executable without wrapping a command string. */
+function buildPtySpawn(shell: ShellKind): PtySpawnPlan {
+  if (shell === 'pwsh') {
+    const file = resolvePwshExecutable();
+    return file
+      ? { file, args: ['-NoLogo'], effectiveShell: 'pwsh' }
+      : { file: '', args: [], effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
+  }
+  if (shell === 'bash') {
+    const file = resolveBashExecutable();
+    return file
+      ? { file, args: ['--noprofile', '--norc', '-i'], effectiveShell: 'bash' }
+      : { file: '', args: [], effectiveShell: 'bash', unavailableShell: 'bash' };
+  }
+  if (shell === 'cmd') {
+    const file = resolveCmdExecutable();
+    return file
+      ? { file, args: ['/d', '/q'], effectiveShell: 'cmd' }
+      : { file: '', args: [], effectiveShell: 'cmd', unavailableShell: 'cmd' };
+  }
+  if (process.platform === 'win32') {
+    const pwsh = resolvePwshExecutable();
+    if (pwsh) return { file: pwsh, args: ['-NoLogo'], effectiveShell: 'pwsh' };
+    const powershell = resolveWindowsPowerShellExecutable();
+    if (powershell) return { file: powershell, args: ['-NoLogo'], effectiveShell: 'powershell' };
+    const cmd = resolveCmdExecutable();
+    if (cmd) return { file: cmd, args: ['/d', '/q'], effectiveShell: 'cmd' };
+    return { file: '', args: [], effectiveShell: 'cmd', startError: 'No usable PowerShell or cmd executable was found.' };
+  }
+  const loginShell = getEnvCaseInsensitive('SHELL');
+  const bash = resolveBashExecutable();
+  const file = firstExistingFile([loginShell, bash, '/bin/sh', findExecutableOnPath('sh')]);
+  if (!file) return { file: '', args: [], effectiveShell: 'sh', startError: 'No interactive POSIX shell was found.' };
+  const isBash = path.basename(file).toLowerCase().startsWith('bash');
+  return {
+    file,
+    args: isBash ? ['--noprofile', '--norc', '-i'] : ['-i'],
+    effectiveShell: isBash ? 'bash' : 'sh',
+  };
+}
+
 function createCommandProgressReporter(context?: BashExecutionContext): {
   push: (chunk: string) => void;
   stop: () => Promise<void>;
@@ -848,6 +933,70 @@ export function bashToolDefinitions(): Tool[] {
   };
   return [
     {
+      name: 'open_terminal',
+      description: 'Open a real interactive pseudoterminal (PTY/ConPTY) and display its MCP App. Returns an owner-scoped terminal sessionId.',
+      _meta: terminalMeta(['model', 'app']),
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cwd: cwdProp,
+          shell: shellProp,
+          env: envProp,
+          cols: { type: 'number', description: 'Initial terminal columns (20-400, default 100).' },
+          rows: { type: 'number', description: 'Initial terminal rows (5-200, default 30).' },
+        },
+      },
+    },
+    {
+      name: 'terminal_read',
+      description: 'Read incremental ANSI/VT output from an owner-scoped interactive terminal session.',
+      _meta: terminalMeta(['app']),
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string' },
+          cursor: { type: 'number', description: 'Output cursor returned by the previous read.' },
+        },
+        required: ['sessionId'],
+      },
+    },
+    {
+      name: 'terminal_write',
+      description: 'Write raw keyboard or pasted input to an owner-scoped interactive terminal PTY.',
+      _meta: terminalMeta(['app']),
+      inputSchema: {
+        type: 'object',
+        properties: { sessionId: { type: 'string' }, data: { type: 'string' } },
+        required: ['sessionId', 'data'],
+      },
+    },
+    {
+      name: 'terminal_resize',
+      description: 'Resize an owner-scoped interactive terminal PTY.',
+      _meta: terminalMeta(['app']),
+      inputSchema: {
+        type: 'object',
+        properties: { sessionId: { type: 'string' }, cols: { type: 'number' }, rows: { type: 'number' } },
+        required: ['sessionId', 'cols', 'rows'],
+      },
+    },
+    {
+      name: 'terminal_close',
+      description: 'Close an owner-scoped interactive terminal PTY.',
+      _meta: terminalMeta(['app']),
+      inputSchema: {
+        type: 'object',
+        properties: { sessionId: { type: 'string' } },
+        required: ['sessionId'],
+      },
+    },
+    {
+      name: 'terminal_list',
+      description: 'List interactive terminal PTY sessions owned by this MCP App scope.',
+      _meta: terminalMeta(['app']),
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
       name: 'run',
       description:
         'Run one command to completion. Output is sent as live progress when supported and returned with the exit code; use start/status for a persistent background session.',
@@ -867,7 +1016,6 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'start',
       description: 'Start an independent background command and return its sessionId. Multiple sessions may run in parallel; use status/wait, write_stdin, or kill.',
-      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -882,7 +1030,6 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'status',
       description: 'Return the current state of a background session: { sessionId, running, exitCode, output, truncated }.',
-      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: { sessionId: { type: 'string', description: 'The id returned by start.' } },
@@ -892,7 +1039,6 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'wait',
       description: 'Wait for a background session, sending new output as live progress when supported. The wait timeout does not kill the session.',
-      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -905,7 +1051,6 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'write_stdin',
       description: 'Write a string to a running background session\'s stdin. Pass "newline": false to omit the trailing newline. Returns { sessionId, written }.',
-      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -919,7 +1064,6 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'kill',
       description: 'Kill a background session (and its whole process tree). Returns { sessionId, killed }.',
-      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: { sessionId: { type: 'string', description: 'The id returned by start.' } },
@@ -929,7 +1073,6 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'list_sessions',
       description: 'List background sessions owned by this caller scope. Returns { sessions: [{ sessionId, command, running, exitCode, startedAt, endedAt }] }.',
-      _meta: terminalMeta(),
       inputSchema: { type: 'object', properties: {} },
     },
   ];
@@ -1267,6 +1410,182 @@ function listSessionsTool(ownerScope: string): CallToolResult {
   return textResult({ sessions: list });
 }
 
+function terminalSnapshot(session: TerminalSession): Record<string, unknown> {
+  return {
+    sessionId: session.id,
+    shell: session.shell,
+    cwd: session.cwd,
+    running: session.running,
+    exitCode: session.exitCode,
+    cursor: session.nextCursor,
+  };
+}
+
+function scheduleTerminalReap(session: TerminalSession): void {
+  session.reapTimer = setTimeout(() => terminalSessions().delete(session.id), SESSION_TTL_MS);
+  session.reapTimer.unref?.();
+}
+
+function appendTerminalOutput(session: TerminalSession, chunk: string): void {
+  if (!chunk) return;
+  session.output += chunk;
+  session.nextCursor += chunk.length;
+  if (session.output.length > MAX_TERMINAL_OUTPUT_CHARS) {
+    const remove = session.output.length - MAX_TERMINAL_OUTPUT_CHARS;
+    session.output = session.output.slice(remove);
+    session.outputStart += remove;
+  }
+}
+
+async function openTerminalTool(
+  args: Record<string, unknown>,
+  roots: string[],
+  ownerScope: string,
+): Promise<CallToolResult> {
+  const shellValidation = validateShell(args.shell);
+  if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
+  const envValidation = validateEnv(args.env);
+  if (!envValidation.valid) return textResult({ error: envValidation.error }, true);
+
+  const ownedRunning = Array.from(terminalSessions().values())
+    .filter((session) => session.ownerScope === ownerScope && session.running);
+  if (ownedRunning.length >= MAX_SESSIONS) {
+    return textResult({ error: `Too many active terminal sessions (max ${MAX_SESSIONS}). Close one first.` }, true);
+  }
+
+  const cwd = await resolveCwd(args.cwd, roots);
+  const plan = buildPtySpawn(shellValidation.shell);
+  if (plan.unavailableShell) {
+    return textResult({ error: `Requested shell "${plan.unavailableShell}" is unavailable or could not be resolved.` }, true);
+  }
+  if (plan.startError) return textResult({ error: plan.startError }, true);
+
+  const cols = Math.max(20, Math.min(400, Math.floor(typeof args.cols === 'number' ? args.cols : 100)));
+  const rows = Math.max(5, Math.min(200, Math.floor(typeof args.rows === 'number' ? args.rows : 30)));
+  let pty: IPty;
+  try {
+    pty = spawnPty(plan.file, plan.args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: {
+        ...buildChildEnv(envValidation.env),
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+      },
+    });
+  } catch (error) {
+    return textResult({
+      error: `Failed to open pseudoterminal (${plan.effectiveShell}): ${error instanceof Error ? error.message : String(error)}`,
+      cwd,
+      shell: plan.effectiveShell,
+    }, true);
+  }
+
+  registerExitCleanup();
+  const id = `terminal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const session: TerminalSession = {
+    id,
+    ownerScope,
+    shell: plan.effectiveShell,
+    cwd,
+    pty,
+    output: '',
+    outputStart: 0,
+    nextCursor: 0,
+    running: true,
+    exitCode: null,
+    startedAt: Date.now(),
+  };
+  terminalSessions().set(id, session);
+  pty.onData((chunk) => appendTerminalOutput(session, chunk));
+  pty.onExit(({ exitCode }) => {
+    session.running = false;
+    session.exitCode = exitCode;
+    session.endedAt = Date.now();
+    scheduleTerminalReap(session);
+  });
+  return textResult({ ...terminalSnapshot(session), cols, rows });
+}
+
+function ownedTerminal(id: string, ownerScope: string): TerminalSession | undefined {
+  const session = terminalSessions().get(id);
+  return session?.ownerScope === ownerScope ? session : undefined;
+}
+
+function readTerminalTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
+  const id = String(args.sessionId ?? '');
+  const session = ownedTerminal(id, ownerScope);
+  if (!session) return textResult({ error: `No terminal session with id "${id}".` }, true);
+  const requested = Number.isFinite(args.cursor) ? Math.max(0, Math.floor(Number(args.cursor))) : session.outputStart;
+  const reset = requested < session.outputStart || requested > session.nextCursor;
+  const cursor = reset ? session.outputStart : requested;
+  return textResult({
+    ...terminalSnapshot(session),
+    chunk: session.output.slice(cursor - session.outputStart),
+    nextCursor: session.nextCursor,
+    reset,
+  });
+}
+
+function writeTerminalTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
+  const id = String(args.sessionId ?? '');
+  const session = ownedTerminal(id, ownerScope);
+  if (!session) return textResult({ error: `No terminal session with id "${id}".` }, true);
+  if (!session.running) return textResult({ error: `Terminal session "${id}" has exited.` }, true);
+  const data = typeof args.data === 'string' ? args.data : '';
+  if (data.length > 65_536) return textResult({ error: 'Terminal input is limited to 65,536 characters per write.' }, true);
+  try {
+    session.pty.write(data);
+    return textResult({ sessionId: id, written: Buffer.byteLength(data, 'utf8') });
+  } catch (error) {
+    return textResult({ error: `Failed to write terminal input: ${error instanceof Error ? error.message : String(error)}` }, true);
+  }
+}
+
+function resizeTerminalTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
+  const id = String(args.sessionId ?? '');
+  const session = ownedTerminal(id, ownerScope);
+  if (!session) return textResult({ error: `No terminal session with id "${id}".` }, true);
+  const cols = Math.max(20, Math.min(400, Math.floor(Number(args.cols))));
+  const rows = Math.max(5, Math.min(200, Math.floor(Number(args.rows))));
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return textResult({ error: 'cols and rows must be finite numbers.' }, true);
+  try {
+    if (session.running) session.pty.resize(cols, rows);
+    return textResult({ sessionId: id, cols, rows });
+  } catch (error) {
+    return textResult({ error: `Failed to resize terminal: ${error instanceof Error ? error.message : String(error)}` }, true);
+  }
+}
+
+function closeTerminalTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
+  const id = String(args.sessionId ?? '');
+  const session = ownedTerminal(id, ownerScope);
+  if (!session) return textResult({ error: `No terminal session with id "${id}".` }, true);
+  try {
+    if (session.running) {
+      session.running = false;
+      session.pty.kill();
+    }
+    return textResult({ sessionId: id, closed: true });
+  } catch (error) {
+    return textResult({ error: `Failed to close terminal: ${error instanceof Error ? error.message : String(error)}` }, true);
+  }
+}
+
+function listTerminalsTool(ownerScope: string): CallToolResult {
+  return textResult({
+    sessions: Array.from(terminalSessions().values())
+      .filter((session) => session.ownerScope === ownerScope)
+      .map((session) => ({
+        ...terminalSnapshot(session),
+        startedAt: new Date(session.startedAt).toISOString(),
+        endedAt: session.endedAt ? new Date(session.endedAt).toISOString() : undefined,
+      })),
+  });
+}
+
 export async function bashCallTool(
   toolName: string,
   args: Record<string, unknown>,
@@ -1277,6 +1596,20 @@ export async function bashCallTool(
   try {
     const scope = effectiveOwnerScope(ownerScope, callerNodeId);
     switch (toolName) {
+      case 'open_terminal': {
+        const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
+        return await openTerminalTool(args, roots, scope);
+      }
+      case 'terminal_read':
+        return readTerminalTool(args, scope);
+      case 'terminal_write':
+        return writeTerminalTool(args, scope);
+      case 'terminal_resize':
+        return resizeTerminalTool(args, scope);
+      case 'terminal_close':
+        return closeTerminalTool(args, scope);
+      case 'terminal_list':
+        return listTerminalsTool(scope);
       case 'run': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
         return await runTool(args, roots, context);
@@ -1309,4 +1642,5 @@ export function _resetBashSessionsForTests(): void {
   shutdownBashSessions();
   foregroundChildren().clear();
   sessions().clear();
+  terminalSessions().clear();
 }
