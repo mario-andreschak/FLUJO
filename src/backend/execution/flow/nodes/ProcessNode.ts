@@ -977,6 +977,34 @@ export class ProcessNode extends BaseNode {
             // ModelHandler resolves this against the bound model's maxTokens, then
             // lets the adapter apply its own default when both are unset.
             maxTokens: node_params?.properties?.maxTokens,
+            // Thread the existing Process-node summarizing-compaction settings;
+            // ModelHandler previously resolved them with `undefined` (#356).
+            compactionMode: node_params?.properties?.compactionMode,
+            compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
+            onFinalWire: prepResult.modelInput
+              ? (finalWire, visualCompaction) => {
+                  const captured = finalWire.map((message, index) => ({
+                    ...message,
+                    id: `final-wire-${prepResult.nodeId}-${index}`,
+                    timestamp: Date.now(),
+                    content: Array.isArray(message.content)
+                      ? message.content.map((part) => {
+                          if (part && typeof part === 'object' && 'image_url' in part) {
+                            const image = (part as { image_url?: { url?: string } }).image_url;
+                            return { type: 'text' as const, text: `[image omitted from debugger snapshot: ${image?.url?.slice(0, 32) ?? 'unknown'}…]` };
+                          }
+                          return part;
+                        })
+                      : message.content,
+                  })) as FlujoChatMessage[];
+                  prepResult.modelInput!.wireMessages = captured;
+                  if (visualCompaction) {
+                    visualCompaction.finalWireCaptured = true;
+                    prepResult.modelInput!.visualCompaction = visualCompaction;
+                  }
+                  prepResult.modelInputs = [prepResult.modelInput!];
+                }
+              : undefined,
             nodeName, // Pass the node name to be included in the response header
             nodeId: prepResult.nodeId, // Pass the node ID
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService

@@ -10,6 +10,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 
 // Input for model call
 export interface ModelCallInput {
@@ -39,6 +40,14 @@ export interface ModelCallInput {
    * then lets the adapter apply its own default (no numeric system default).
    */
   maxTokens?: number;
+  /** Existing Process-node summarizing-compaction overrides (#248). */
+  compactionMode?: 'auto' | 'off';
+  compactionKeepTokens?: number;
+  /** Debug-only observer for the final generic provider wire and visual route. */
+  onFinalWire?: (
+    messages: OpenAI.ChatCompletionMessageParam[],
+    diagnostic?: VisualCompactionDiagnostic,
+  ) => void;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
   /**

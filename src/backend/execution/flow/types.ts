@@ -6,6 +6,7 @@ import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import OpenAI from 'openai';
+import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
@@ -85,6 +86,8 @@ export interface ModelInputSnapshot {
   /** Summary counts for a one-line "18 in history → 11 sent · 5 folded …". */
   counts: { threaded: number; sent: number; folded: number; scopedOut: number; handoffStripped: number };
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
+  /** Final wire-time visual routing metrics, captured by ModelHandler. */
+  visualCompaction?: VisualCompactionDiagnostic;
 }
 
 /**

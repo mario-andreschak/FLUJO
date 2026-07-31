@@ -35,7 +35,12 @@ function discoverProviderMetadata(model: any): Partial<NormalizedModel> {
       supportedParameters,
       supportsTools: supportedParameters.includes('tools'),
     } : {}),
-    ...(inputModalities !== undefined ? { inputModalities } : {}),
+    ...(inputModalities !== undefined ? {
+      inputModalities,
+      visionInputCapability: inputModalities.some((value) => /^(?:image|vision)$/i.test(value))
+        ? 'supported' as const
+        : 'unsupported' as const,
+    } : { visionInputCapability: 'unknown' as const }),
     ...(outputModalities !== undefined ? { outputModalities } : {}),
   };
 }

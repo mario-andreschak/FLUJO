@@ -16,7 +16,8 @@ import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
-import { resolveEffectiveCompaction } from './resolveEffectiveCompaction';
+import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
+import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import { compactHistory, estimateTokens } from './summarizingCompaction';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
@@ -335,6 +336,9 @@ export class ModelHandler {
     compactionEnabled?: boolean;
     compactionBufferTokens?: number;
     compactionKeepTokens?: number;
+    visualCompactionEnabled?: boolean;
+    visualCompactionToolResultsOnly?: boolean;
+    visualCompactionEvaluationMode?: boolean;
   }> {
     try {
       const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
@@ -343,6 +347,9 @@ export class ModelHandler {
         compactionEnabled: exp?.compactionEnabled,
         compactionBufferTokens: exp?.compactionBufferTokens,
         compactionKeepTokens: exp?.compactionKeepTokens,
+        visualCompactionEnabled: exp?.visualCompactionEnabled,
+        visualCompactionToolResultsOnly: exp?.visualCompactionToolResultsOnly,
+        visualCompactionEvaluationMode: exp?.visualCompactionEvaluationMode,
       };
     } catch (err) {
       log.warn('Failed to read compaction settings; defaulting to disabled', { err });
@@ -371,13 +378,14 @@ export class ModelHandler {
     nodeId: string | undefined,
     model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
+    nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
   ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
     try {
       // Self-orchestrating adapters manage their own session/wire; excluded.
       if (isSelfOrchestratingAdapter(model.adapter)) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
-      const eff = resolveEffectiveCompaction(undefined, model, global);
+      const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
       const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
@@ -923,7 +931,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
+    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
@@ -1155,6 +1163,7 @@ export class ModelHandler {
         nodeId,
         { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
         effectiveMaxTokens,
+        { compactionMode, compactionKeepTokens },
       );
       if (compaction) {
         const removed = new Set(compaction.removedIds);
@@ -1190,6 +1199,7 @@ export class ModelHandler {
       localToolExecutors,
       runResourceMarkers,
       sessionResume,
+      onFinalWire,
     });
 
     if (!response.success) {
@@ -1411,6 +1421,7 @@ export class ModelHandler {
        * subscription adapter. Resolved by callModel from the experimental setting
        * and node eligibility. */
       sessionResume?: boolean;
+      onFinalWire?: ModelCallInput['onFinalWire'];
     }
   ): Promise<Result<ModelCallResult>> {
     log.debug('Preparing provider completion', {
@@ -1496,6 +1507,26 @@ export class ModelHandler {
             adapter: model.adapter,
           });
         }
+      }
+
+      // Experimental visual context compaction (#356). This is a final-wire-only
+      // transformation: persisted/displayed messages remain untouched. Exact
+      // source is stashed in run resources before a complete old range is
+      // replaced, and unsupported/unknown capability, secrets, poor density,
+      // failed estimates, or non-positive savings remain on the text route.
+      const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
+      const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
+      const visual = await compactMessagesVisually({
+        messages: apiMessages,
+        model,
+        conversationId: opts?.conversationId,
+        nodeId: opts?.nodeId,
+        config: visualConfig,
+      });
+      apiMessages = visual.messages;
+      let visualDiagnostic = visual.diagnostic;
+      if (visualDiagnostic.route === 'image') {
+        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -1611,6 +1642,15 @@ export class ModelHandler {
             };
           }
         }
+      }
+
+      // Capture the actual final generic provider wire after visual routing,
+      // lossless compaction, tool trimming, and proactive budget refit. Image
+      // data URLs are bounded by the ProcessNode observer before debugger storage.
+      try {
+        opts?.onFinalWire?.(apiMessages, visualDiagnostic);
+      } catch (error) {
+        log.warn('Final-wire observer failed; continuing request', { error });
       }
 
       // Select the completion adapter for this model's provider/SDK. The
@@ -2038,6 +2078,11 @@ export class ModelHandler {
             beforeChars,
             afterChars,
           });
+          try {
+            opts?.onFinalWire?.(refitMessages, visualDiagnostic);
+          } catch (error) {
+            log.warn('Final-wire observer failed during overflow refit; continuing retry', { error });
+          }
           result = await attempt(refitMessages, refitTools);
         } else {
           log.warn('Context-length overflow but nothing on the wire left to compact; returning the original error', { modelId });

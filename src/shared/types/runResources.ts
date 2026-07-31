@@ -37,7 +37,8 @@ export type RunResourceSource =
   | 'mcp-link'
   | 'tool-args'
   | 'snapshot'
-  | 'model-output';
+  | 'model-output'
+  | 'visual-archive';
 
 export interface RunResourceProducer {
   source: RunResourceSource;
@@ -65,6 +66,15 @@ export interface RunResourceAccess {
   nodeId?: string;
 }
 
+export interface RunResourceVerification {
+  at: number;
+  expectedSha256: string;
+  actualSha256: string;
+  ok: boolean;
+  source: RunResourceAccess['source'];
+  nodeId?: string;
+}
+
 export interface RunResourceEntry {
   /** uuid; also the payload file stem on disk. */
   id: string;
@@ -80,11 +90,17 @@ export interface RunResourceEntry {
   mimeType?: string;
   /** Bytes stored on disk (0 for kind 'link' — no payload). */
   size: number;
+  /** SHA-256 of the immutable stored payload, when one exists. */
+  sha256?: string;
   kind: RunResourceKind;
   /** How the payload file is encoded on disk. */
   encoding: 'utf8' | 'base64';
   createdAt: number;
   producedBy: RunResourceProducer;
+  /** Visual archive lineage shared by its exact-source sidecar and PNG pages. */
+  archive?: import('./visualArchive').VisualArchiveResourceMetadata;
+  /** Integrity checks performed through bounded run-resource reads. */
+  verifications?: RunResourceVerification[];
   /**
    * Native MCP identity when the artifact originated on another server
    * (resource_link / embedded resource): where it can also be read directly.

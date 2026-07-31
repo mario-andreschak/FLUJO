@@ -221,6 +221,21 @@ export interface ExperimentalSettings {
    */
   compactionKeepTokens?: number;
   /**
+   * Opt in to wire-time visual archives for old bulky context (#356). Missing
+   * values are migrated lazily to false, preserving byte-identical behaviour.
+   */
+  visualCompactionEnabled?: boolean;
+  /**
+   * Restrict visual archive candidates to complete old tool-call/result groups.
+   * Missing values default to true, the conservative migration default.
+   */
+  visualCompactionToolResultsOnly?: boolean;
+  /**
+   * Diagnostic/manual evaluation mode: calculate visual routing metrics but do
+   * not replace text with images. Missing values default to false.
+   */
+  visualCompactionEvaluationMode?: boolean;
+  /**
    * How many of the most-recent wire messages `compactForWire` keeps VERBATIM
    * (everything older is eligible for lossless wire-only shrinking of oversized
    * old tool results / old assistant prose). Missing ⇒ 12 (the historical

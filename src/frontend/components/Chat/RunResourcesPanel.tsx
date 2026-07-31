@@ -48,6 +48,7 @@ function producerLabel(entry: RunResourceEntry): string {
     case 'tool-args': return `tool args ${p.server ?? '?'}/${p.toolName ?? '?'}`;
     case 'capture': return `step ${p.nodeName ?? p.nodeId ?? '?'}`;
     case 'mcp-link': return `link from ${p.server ?? '?'}`;
+    case 'visual-archive': return 'visual context archive';
     default: return 'run';
   }
 }
@@ -107,6 +108,7 @@ const RunResourcesPanel: React.FC<RunResourcesPanelProps> = ({ conversationId, r
                   {entry.name ?? `${entry.kind}-${entry.id.slice(0, 8)}`}
                 </Typography>
                 {entry.mimeType && <Chip label={entry.mimeType} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />}
+                {entry.archive && <Chip label={entry.archive.role === 'page' ? `archive page ${(entry.archive.pageIndex ?? 0) + 1}/${entry.archive.pageCount ?? '?'}` : 'archive source'} size="small" color="info" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />}
                 <Typography variant="caption" color="text.secondary">{formatSize(entry.size)}</Typography>
               </Box>
             }
@@ -114,6 +116,8 @@ const RunResourcesPanel: React.FC<RunResourcesPanelProps> = ({ conversationId, r
               <Typography variant="caption" color="text.secondary" component="span" sx={{ wordBreak: 'break-all' }}>
                 by {producerLabel(entry)}
                 {entry.readBy.length > 0 ? ` · read ${entry.readBy.length}×` : ''}
+                {(entry.verifications?.length ?? 0) > 0 ? ` · verified ${entry.verifications!.filter((item) => item.ok).length}/${entry.verifications!.length}` : ''}
+                {entry.sha256 ? ` · sha256 ${entry.sha256.slice(0, 12)}…` : ''}
                 {' · '}{entry.uri}
               </Typography>
             }

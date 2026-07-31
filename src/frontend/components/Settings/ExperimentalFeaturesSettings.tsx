@@ -109,6 +109,39 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleVisualCompactionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Visual context compaction toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        visualCompactionEnabled: event.target.checked,
+      },
+    });
+  };
+
+  const handleVisualToolResultsOnlyChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Visual compaction tool-results-only toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        visualCompactionToolResultsOnly: event.target.checked,
+      },
+    });
+  };
+
+  const handleVisualEvaluationModeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Visual compaction evaluation mode toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        visualCompactionEvaluationMode: event.target.checked,
+      },
+    });
+  };
+
   return (
     <Box sx={{ p: 2 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -147,6 +180,64 @@ export default function ExperimentalFeaturesSettings() {
           dramatically cut token usage on long chats. It changes how conversation
           context reaches the model, so it is off by default; if you notice a model
           losing track of earlier context, turn it back off.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.visualCompactionEnabled ?? false}
+              onChange={handleVisualCompactionChange}
+              name="visualCompactionEnabled"
+            />
+          }
+          label="Visual context compaction"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Experimental and off by default. For explicitly vision-capable models,
+          FLUJO may replace a complete old, bulky context range with dense PNG
+          pages only when provider-aware estimates show a context reduction. Exact
+          source remains in run data; secrets, uncertain capability, and failures
+          always keep the safe text route.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.visualCompactionToolResultsOnly !== false}
+              onChange={handleVisualToolResultsOnlyChange}
+              name="visualCompactionToolResultsOnly"
+              disabled={!experimental.visualCompactionEnabled}
+            />
+          }
+          label="Only archive old tool results"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Safe default: only complete oversized tool-call/result groups are
+          eligible. Turn this off to let the router consider other old bulky text;
+          recent turns and incomplete tool pairs are never archived.
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.visualCompactionEvaluationMode ?? false}
+              onChange={handleVisualEvaluationModeChange}
+              name="visualCompactionEvaluationMode"
+              disabled={!experimental.visualCompactionEnabled}
+            />
+          }
+          label="Evaluate visual routing without sending images"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          Records comparable raw, text, summary, and image estimates in the
+          debugger while preserving the current text wire. Use this for live
+          evaluation before enabling automatic image selection.
         </Typography>
       </FormControl>
 

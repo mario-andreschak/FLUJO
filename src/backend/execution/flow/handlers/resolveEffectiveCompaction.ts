@@ -42,6 +42,34 @@ export interface CompactionModelSettings {
   compactionThreshold?: number;
 }
 
+export interface VisualCompactionGlobalSettings {
+  visualCompactionEnabled?: boolean;
+  visualCompactionToolResultsOnly?: boolean;
+  visualCompactionEvaluationMode?: boolean;
+}
+
+export interface EffectiveVisualCompactionSettings {
+  enabled: boolean;
+  toolResultsOnly: boolean;
+  evaluationOnly: boolean;
+}
+
+/**
+ * Visual compaction is independently and globally gated. There is no Process
+ * node visual override in the current schema/UI, so nodes cannot silently turn
+ * the experimental feature on. Missing persisted values migrate to the safe
+ * defaults: disabled and tool-results-only.
+ */
+export function resolveEffectiveVisualCompaction(
+  global?: VisualCompactionGlobalSettings,
+): EffectiveVisualCompactionSettings {
+  return {
+    enabled: Boolean(global?.visualCompactionEnabled),
+    toolResultsOnly: global?.visualCompactionToolResultsOnly !== false,
+    evaluationOnly: Boolean(global?.visualCompactionEvaluationMode),
+  };
+}
+
 function posInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
