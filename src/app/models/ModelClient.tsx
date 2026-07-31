@@ -2,13 +2,31 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Box, Button, Alert, Paper, TextField, InputAdornment } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  ButtonGroup,
+  InputAdornment,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
+  Paper,
+  TextField,
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import SearchIcon from '@mui/icons-material/Search';
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { v4 as uuidv4 } from 'uuid';
 
 import ModelList from '@/frontend/components/models/list/ModelList';
 import ModelModal from '@/frontend/components/models/modal';
+import ModelConnectionWizard, {
+  GuidedCreationResult,
+} from '@/frontend/components/models/ModelConnectionWizard';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
 import { getModelService, ModelResult } from '@/frontend/services/model';
@@ -29,16 +47,19 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
+  const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
   // In-memory draft for a brand-new model (add mode). It is NOT persisted to disk until the
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
 
-  const isAddMode = searchParams.get('add') === '1';
+  const addMode = searchParams.get('add');
+  const isWizardOpen = addMode === '1';
+  const isManualAddMode = addMode === 'manual';
 
   // Create the draft once when entering add mode; clear it when leaving.
   useEffect(() => {
-    if (isAddMode) {
+    if (isManualAddMode) {
       setNewModelDraft(prev => prev ?? ({
         id: uuidv4(),
         name: '',
@@ -53,7 +74,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     } else {
       setNewModelDraft(null);
     }
-  }, [isAddMode]);
+  }, [isManualAddMode]);
 
   // Ensure service is ready before using it
   useEffect(() => {
@@ -89,18 +110,18 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   // Get modal state from URL
   const editId = searchParams.get('edit');
   // In add mode the model comes from the in-memory draft; in edit mode from the loaded list.
-  const currentModel: Model | null = isAddMode
+  const currentModel: Model | null = isManualAddMode
     ? newModelDraft
     : (editId ? models.find(m => m.id === editId) ?? null : null);
-  const isModalOpen = isAddMode ? Boolean(newModelDraft) : Boolean(editId);
+  const isModalOpen = isManualAddMode ? Boolean(newModelDraft) : Boolean(editId);
 
   const handleSave = async (model: Model): Promise<ModelResult> => {
-    log.info('Saving model', { modelId: model.id, modelName: model.name, mode: isAddMode ? 'add' : 'update' });
+    log.info('Saving model', { modelId: model.id, modelName: model.name, mode: isManualAddMode ? 'add' : 'update' });
     setIsLoading(true);
     try {
       const service = getModelService();
       // First-time save of a new model creates it; otherwise update the existing record.
-      const result = isAddMode ? await service.addModel(model) : await service.updateModel(model);
+      const result = isManualAddMode ? await service.addModel(model) : await service.updateModel(model);
       if (result.success) {
         // Refresh models list
         const updatedModels = await service.loadModels();
@@ -131,9 +152,81 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   };
 
   const handleAdd = async () => {
-    log.info('Opening add-model modal');
-    // Just open the modal in add mode - the draft lives in memory until the user saves.
+    log.info('Opening guided model connection wizard');
+    setAddMenuAnchor(null);
     router.push('/models?add=1');
+  };
+
+  const handleManualAdd = () => {
+    log.info('Opening manual add-model modal');
+    setAddMenuAnchor(null);
+    // The draft lives in memory until the user saves.
+    router.push('/models?add=manual');
+  };
+
+  const handleGuidedCreate = async (candidates: Model[]): Promise<GuidedCreationResult> => {
+    log.info('Creating guided model bundle', { count: candidates.length });
+    setIsLoading(true);
+    setError(null);
+    const created: Model[] = [];
+    const existing: Model[] = [];
+
+    try {
+      const service = getModelService();
+      const current = await service.loadModels();
+      const known = [...current];
+
+      for (const candidate of candidates) {
+        // Re-running a completed (or partially completed) wizard path is
+        // idempotent: a provider/adapter/technical-name match is already the
+        // desired connection, regardless of its user-edited display name.
+        const match = known.find((model) =>
+          model.provider === candidate.provider &&
+          (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
+          model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase()
+        );
+        if (match) {
+          existing.push(match);
+          continue;
+        }
+
+        // Display names are globally unique in FLUJO. Preserve a user's
+        // unrelated connection and give the guided model a readable suffix.
+        const baseDisplayName = candidate.displayName || candidate.name;
+        let displayName = baseDisplayName;
+        let suffix = 2;
+        while (known.some((model) => model.displayName?.trim().toLowerCase() === displayName.trim().toLowerCase())) {
+          displayName = `${baseDisplayName} (${suffix})`;
+          suffix += 1;
+        }
+
+        const result = await service.addModel({ ...candidate, displayName });
+        if (!result.success || !result.model) {
+          const updated = await service.loadModels();
+          setModels(updated);
+          return {
+            success: false,
+            created,
+            existing,
+            error: result.error || `Could not create ${displayName}.`,
+          };
+        }
+        created.push(result.model);
+        known.push(result.model);
+      }
+
+      const updated = await service.loadModels();
+      setModels(updated);
+      router.refresh();
+      return { success: true, created, existing };
+    } catch (guidedError: any) {
+      log.error('Failed to create guided model bundle', guidedError);
+      const message = guidedError?.message || 'Failed to create the guided model bundle.';
+      setError(message);
+      return { success: false, created, existing, error: message };
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleDelete = async (modelId: string) => {
@@ -266,15 +359,39 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             }}
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={<AddIcon />}
-            onClick={handleAdd}
-            data-tour="add-model"
-          >
-            Connect AI
-          </Button>
+          <>
+            <ButtonGroup variant="contained" color="primary" aria-label="AI connection options">
+              <Button startIcon={<AddIcon />} onClick={handleAdd} data-tour="add-model">
+                Connect AI
+              </Button>
+              <Button
+                size="small"
+                aria-label="More AI connection options"
+                aria-controls={addMenuAnchor ? 'add-model-menu' : undefined}
+                aria-haspopup="menu"
+                aria-expanded={addMenuAnchor ? 'true' : undefined}
+                onClick={(event) => setAddMenuAnchor(event.currentTarget)}
+                sx={{ px: 0.8, minWidth: 40 }}
+              >
+                <ArrowDropDownIcon />
+              </Button>
+            </ButtonGroup>
+            <Menu
+              id="add-model-menu"
+              anchorEl={addMenuAnchor}
+              open={Boolean(addMenuAnchor)}
+              onClose={() => setAddMenuAnchor(null)}
+            >
+              <MenuItem onClick={handleAdd}>
+                <ListItemIcon><AutoAwesomeRoundedIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary="Guided connection" secondary="Let FLUJO choose the setup" />
+              </MenuItem>
+              <MenuItem onClick={handleManualAdd}>
+                <ListItemIcon><TuneRoundedIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary="Manual Creation" secondary="Configure every model field" />
+              </MenuItem>
+            </Menu>
+          </>
         </Box>
       </Paper>
 
@@ -295,6 +412,13 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
         folders={collectFolders(models, (m) => m.folder)}
         onSetFolder={handleSetFolder}
         onToggleFavorite={handleToggleFavorite}
+      />
+
+      <ModelConnectionWizard
+        open={isWizardOpen}
+        onClose={handleCloseModal}
+        onManualCreation={handleManualAdd}
+        onCreateModels={handleGuidedCreate}
       />
 
       {/* Only render modal when we have a valid model ID */}
