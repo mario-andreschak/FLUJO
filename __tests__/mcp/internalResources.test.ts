@@ -56,6 +56,12 @@ describe('internalListResources', () => {
     expect(found!.mimeType).toBe('text/markdown');
     expect(found!.description).toContain('srv/analyze');
   });
+
+  it('rejects malformed pagination cursors without throwing the MCP request', async () => {
+    const result = await internalListResources('not-a-real-cursor');
+    expect(result.resources).toEqual([]);
+    expect(result.error).toContain('cursor');
+  });
 });
 
 describe('internalListResourceTemplates', () => {

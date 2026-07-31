@@ -16,6 +16,7 @@ import { quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { StorageKey } from '@/shared/types/storage';
+import { persistConversationSummary } from '@/backend/execution/flow/conversationSummaryStore';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -382,6 +383,7 @@ export async function POST(req: NextRequest) {
     // intrinsically (assertSafeCollectionId) and resolves to the identical
     // on-disk path (db/conversations/<id>.json) — no data migration required.
     await saveCollectionItem('conversations', conversationId, initialState);
+    await persistConversationSummary(conversationId, initialState);
     log.info(`Successfully saved initial state for conversation`, { requestId, conversationId, filePath });
 
     // Prepare the response body (matching ConversationListItem)

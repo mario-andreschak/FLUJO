@@ -3,6 +3,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { SharedState } from './types';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
+import { persistConversationSummary } from './conversationSummaryStore';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
 
@@ -44,5 +45,6 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
     log.info(`Refusing to persist state for deleted conversation ${state.conversationId} (key ${key}).`);
     return Promise.resolve();
   }
-  return saveItemBackend(key, { ...state, executionTrace: undefined, emit: undefined });
+  await saveItemBackend(key, { ...state, executionTrace: undefined, emit: undefined });
+  await persistConversationSummary(idFromKey, state);
 }

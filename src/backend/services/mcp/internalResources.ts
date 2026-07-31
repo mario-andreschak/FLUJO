@@ -26,6 +26,7 @@ import {
   parseRunResourceUri,
 } from '@/backend/services/runResources';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { decodeListCursor, encodeListCursor } from './listQuery';
 
 const log = createLogger('backend/services/mcp/internalResources');
 
@@ -44,10 +45,16 @@ function describeProducer(entry: Awaited<ReturnType<typeof listAllRunResources>>
 }
 
 /** resources/list — newest-first run resources across conversations, capped. */
-export async function internalListResources(): Promise<{ resources: MCPResource[]; error?: string }> {
+export async function internalListResources(cursor?: string): Promise<{
+  resources: MCPResource[];
+  nextCursor?: string;
+  error?: string;
+}> {
   try {
-    const entries = await listAllRunResources(200);
-    const resources: MCPResource[] = entries.map((entry) => ({
+    const offset = cursor ? decodeListCursor(cursor) : 0;
+    const entries = await listAllRunResources(201, offset);
+    const hasMore = entries.length > 200;
+    const resources: MCPResource[] = entries.slice(0, 200).map((entry) => ({
       uri: entry.uri,
       name: entry.name ?? `${entry.kind}-${entry.id.slice(0, 8)}`,
       mimeType: entry.mimeType,
@@ -55,7 +62,10 @@ export async function internalListResources(): Promise<{ resources: MCPResource[
       // MCP size hint (bytes), per spec an optional annotation-ish field.
       size: entry.size,
     }));
-    return { resources };
+    return {
+      resources,
+      ...(hasMore ? { nextCursor: encodeListCursor(offset + resources.length) } : {}),
+    };
   } catch (error) {
     log.error('internalListResources failed', error);
     return { resources: [], error: error instanceof Error ? error.message : String(error) };

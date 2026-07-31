@@ -156,13 +156,72 @@ describe('internalToolDefinitions', () => {
       ])
     );
   });
+
+  it('keeps read_flow strict while advertising filters on list_flow_versions', () => {
+    const definitions = internalToolDefinitions();
+    const readFlow = definitions.find((tool) => tool.name === 'read_flow');
+    const listVersions = definitions.find((tool) => tool.name === 'list_flow_versions');
+
+    expect(readFlow?.inputSchema).toEqual({
+      type: 'object',
+      properties: {
+        flow: expect.any(Object),
+      },
+      required: ['flow'],
+    });
+    expect(listVersions?.inputSchema).toEqual(expect.objectContaining({
+      additionalProperties: false,
+      properties: expect.objectContaining({
+        flow: expect.any(Object),
+        query: expect.any(Object),
+        savedAfter: expect.any(Object),
+        savedBefore: expect.any(Object),
+        limit: expect.objectContaining({ maximum: 200 }),
+        cursor: expect.any(Object),
+      }),
+      required: ['flow'],
+    }));
+    expect(listVersions?.outputSchema).toEqual(expect.objectContaining({
+      required: ['items', 'total', 'hasMore'],
+    }));
+  });
+
+  it('declares strict schemas for every list tool and paged output for flat lists', () => {
+    const listTools = internalToolDefinitions().filter((tool) => tool.name.startsWith('list_'));
+    expect(listTools.length).toBeGreaterThan(0);
+    for (const tool of listTools) {
+      expect(tool.inputSchema).toEqual(expect.objectContaining({ additionalProperties: false }));
+      if (tool.name !== 'list_flow_building_blocks') {
+        expect(tool.inputSchema.properties).toEqual(expect.objectContaining({
+          query: expect.any(Object),
+          limit: expect.objectContaining({ maximum: 200 }),
+          cursor: expect.any(Object),
+        }));
+        expect(tool.outputSchema).toEqual(expect.objectContaining({
+          required: ['items', 'total', 'hasMore'],
+        }));
+      }
+    }
+  });
 });
 
 describe('list_flows', () => {
-  it('advertises an empty-object input schema', () => {
+  it('advertises bounded filters and rejects undeclared properties', () => {
     const def = internalToolDefinitions().find((t) => t.name === 'list_flows');
     expect(def).toBeDefined();
-    expect(def!.inputSchema).toEqual({ type: 'object', properties: {} });
+    expect(def!.inputSchema).toEqual(expect.objectContaining({
+      type: 'object',
+      additionalProperties: false,
+      properties: expect.objectContaining({
+        query: expect.any(Object),
+        limit: expect.objectContaining({ maximum: 200 }),
+        cursor: expect.any(Object),
+        folder: expect.any(Object),
+        favorite: expect.any(Object),
+        sort: expect.objectContaining({ enum: expect.arrayContaining(['name-asc', 'updated-desc']) }),
+      }),
+    }));
+    expect(def!.outputSchema).toEqual(expect.objectContaining({ required: ['items', 'total', 'hasMore'] }));
   });
 
   it('returns lightweight per-flow metadata only (id, name, description?, nodeCount)', async () => {
@@ -217,6 +276,38 @@ describe('list_flows', () => {
     const r = await internalCallTool(makeService(), 'list_flows', {});
     expect(r.isError).toBeUndefined();
     expect(JSON.parse(text(r))).toEqual([]);
+  });
+
+  it('filters, sorts, and paginates with an opaque next cursor', async () => {
+    flows.loadFlows.mockResolvedValue([
+      { id: 'z', name: 'Zulu', folder: 'ops', favorite: false, updatedAt: 100, nodes: [{}] },
+      { id: 'a', name: 'Alpha', folder: 'ops', favorite: true, updatedAt: 300, nodes: [{}, {}] },
+      { id: 'b', name: 'Beta', folder: 'other', favorite: true, updatedAt: 200, nodes: [] },
+    ]);
+    const first = await internalCallTool(makeService(), 'list_flows', {
+      folder: 'ops',
+      sort: 'updated-desc',
+      limit: 1,
+    });
+    expect(JSON.parse(text(first)).map((flow: { id: string }) => flow.id)).toEqual(['a']);
+    const firstPage = first.structuredContent as { total: number; hasMore: boolean; nextCursor: string };
+    expect(firstPage).toMatchObject({ total: 2, hasMore: true });
+
+    const second = await internalCallTool(makeService(), 'list_flows', {
+      folder: 'ops',
+      sort: 'updated-desc',
+      limit: 1,
+      cursor: firstPage.nextCursor,
+    });
+    expect(JSON.parse(text(second)).map((flow: { id: string }) => flow.id)).toEqual(['z']);
+    expect(second.structuredContent).toEqual(expect.objectContaining({ total: 2, hasMore: false }));
+  });
+
+  it('returns an explicit error for unsupported filters', async () => {
+    const result = await internalCallTool(makeService(), 'list_flows', { status: 'completed' });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Unsupported list argument');
+    expect(flows.loadFlows).not.toHaveBeenCalled();
   });
 
   it('returns a graceful error result (no throw) when loadFlows rejects', async () => {
@@ -497,6 +588,47 @@ describe('list_mcp_servers', () => {
     expect(out).not.toContain('secret-token');
     expect(out).not.toContain('oauth-secret');
   });
+
+  it('filters by enabled state, live status, transport, and query', async () => {
+    const service = makeService();
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'alpha-web', transport: 'streamable', disabled: false, folder: 'web' },
+      { name: 'beta-shell', transport: 'stdio', disabled: false, folder: 'local' },
+      { name: 'gamma-off', transport: 'stdio', disabled: true, folder: 'local' },
+    ]);
+    service.getServerStatus.mockImplementation(async (name: string) => ({
+      status: name === 'alpha-web' ? 'connected' : 'error',
+    }));
+
+    const result = await internalCallTool(service, 'list_mcp_servers', {
+      enabled: true,
+      statuses: ['connected'],
+      transports: ['streamable'],
+      query: 'web',
+    });
+    expect(JSON.parse(text(result))).toEqual([
+      { name: 'alpha-web', transport: 'streamable', enabled: true, status: 'connected', folder: 'web' },
+    ]);
+    expect(service.getServerStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('list_mcp_server_tools', () => {
+  it('searches, sorts, paginates, and can omit large schemas', async () => {
+    const service = makeService();
+    service.listServerTools.mockResolvedValue({
+      tools: [
+        { name: 'zeta_read', description: 'Read a record', inputSchema: { type: 'object' } },
+        { name: 'alpha_read', description: 'Read another record', inputSchema: { type: 'object' } },
+        { name: 'write', description: 'Write a record', inputSchema: { type: 'object' } },
+      ],
+    });
+    const result = await internalCallTool(service, 'list_mcp_server_tools', {
+      server: 'records', query: 'read', sort: 'name-asc', limit: 1, includeSchema: false,
+    });
+    expect(JSON.parse(text(result))).toEqual([{ name: 'alpha_read', description: 'Read another record' }]);
+    expect(result.structuredContent).toEqual(expect.objectContaining({ total: 2, hasMore: true }));
+  });
 });
 
 describe('call_mcp_tool', () => {
@@ -581,6 +713,20 @@ describe('list_models', () => {
     expect(out).not.toContain('encrypted-secret');
     expect(out).not.toContain('ApiKey');
   });
+
+  it('filters safe capability metadata without exposing credentials', async () => {
+    models.loadModels.mockResolvedValue([
+      { id: 'm1', name: 'tool-model', provider: 'openai', adapter: 'openai', supportsTools: true, contextWindow: 128000, ApiKey: 'secret' },
+      { id: 'm2', name: 'text-model', provider: 'ollama', adapter: 'openai', supportsTools: false, contextWindow: 8000, ApiKey: '' },
+    ]);
+    const result = await internalCallTool(makeService(), 'list_models', {
+      providers: ['openai'], supportsTools: true, minContextWindow: 100000,
+    });
+    expect(JSON.parse(text(result))).toEqual([
+      expect.objectContaining({ id: 'm1', provider: 'openai', supportsTools: true }),
+    ]);
+    expect(text(result)).not.toContain('secret');
+  });
 });
 
 describe('planned executions', () => {
@@ -604,6 +750,28 @@ describe('planned executions', () => {
     expect(out).toContain('"webhook"');
     expect(out).toContain('"Nightly"');
     expect(out).not.toContain('hook-secret');
+  });
+
+  it('filters by operational state, trigger, flow, and last-run status', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'Target Flow' }]);
+    scheduler.list.mockResolvedValue([
+      {
+        execution: { id: 'pe1', name: 'Good', enabled: true, flowId: 'f1', folder: 'ops', prompt: 'go', trigger: { type: 'schedule' }, createdAt: '2026-01-01' },
+        status: { armed: true, running: true },
+        lastRun: { status: 'completed', firedAt: '2026-01-02' },
+      },
+      {
+        execution: { id: 'pe2', name: 'Bad', enabled: true, flowId: 'f2', prompt: 'go', trigger: { type: 'webhook' }, createdAt: '2026-01-01' },
+        status: { armed: true, running: false },
+        lastRun: { status: 'error', firedAt: '2026-01-03' },
+      },
+    ]);
+    const result = await internalCallTool(makeService(), 'list_planned_executions', {
+      states: ['running'], triggerTypes: ['schedule'], lastRunStatuses: ['completed'], flow: 'Target Flow', folder: 'ops',
+    });
+    expect(JSON.parse(text(result))).toEqual([
+      expect.objectContaining({ id: 'pe1', running: true, triggerType: 'schedule', folder: 'ops' }),
+    ]);
   });
 
   it('run_planned_execution returns the run record', async () => {
@@ -862,6 +1030,29 @@ describe('list_conversations', () => {
     const list = JSON.parse(text(r)) as Array<Record<string, unknown>>;
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('c2');
+    const page = r.structuredContent as { total: number; hasMore: boolean; nextCursor: string };
+    expect(page).toMatchObject({ total: 2, hasMore: true });
+    const next = await internalCallTool(makeService(), 'list_conversations', { limit: 1, cursor: page.nextCursor });
+    expect(JSON.parse(text(next)).map((conversation: { id: string }) => conversation.id)).toEqual(['c1']);
+  });
+
+  it('filters on reconciled status and bound flow', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f2', name: 'Second Flow' }]);
+    const errored = await internalCallTool(makeService(), 'list_conversations', {
+      statuses: ['error'], flow: 'Second Flow',
+    });
+    expect(JSON.parse(text(errored)).map((conversation: { id: string }) => conversation.id)).toEqual(['c2']);
+
+    const completed = await internalCallTool(makeService(), 'list_conversations', { statuses: ['completed'] });
+    expect(JSON.parse(text(completed)).map((conversation: { id: string }) => conversation.id)).toEqual(['c1']);
+  });
+
+  it('builds reusable summary sidecars without copying transcript bodies', async () => {
+    await internalCallTool(makeService(), 'list_conversations', {});
+    const summaryPath = path.join(dataDir, 'db', 'conversation-summaries', 'c1.json');
+    const summary = await fsp.readFile(summaryPath, 'utf8');
+    expect(summary).toContain('"id": "c1"');
+    expect(summary).not.toContain('transcript-body-must-not-leak');
   });
 });
 

@@ -21,6 +21,10 @@ import { deleteRunResources } from '@/backend/services/runResources';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { deleteCollectionItem } from '@/utils/storage/backend';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
+import {
+  deleteConversationSummary,
+  persistConversationSummary,
+} from '@/backend/execution/flow/conversationSummaryStore';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -314,6 +318,7 @@ export async function PATCH(
 
     // 3. Save updated state back to storage
     await saveItem(storageKey, updatedState);
+    await persistConversationSummary(conversationId, updatedState);
     log.info(`Successfully updated and saved conversation state`, { requestId, conversationId, updatedFields: Object.keys(allowedUpdates) });
 
     // 4. Update in-memory state if it exists
@@ -406,6 +411,7 @@ export async function DELETE(
     // per-key write chain serializes the unlink behind any in-flight persist of
     // the same conversation. A missing file is treated as already deleted.
     await deleteCollectionItem('conversations', conversationId);
+    await deleteConversationSummary(conversationId);
     log.info(`Deleted conversation state from storage`, { requestId, conversationId });
 
     // A Quick-Chat (issue #61) carried its flow as an in-memory snapshot compiled

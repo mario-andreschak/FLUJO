@@ -142,6 +142,23 @@ describe('list_flow_building_blocks', () => {
     expect(text).not.toContain('enc');
     expect(text).not.toContain('ApiKey');
   });
+
+  it('filters categories, connection state, and names without changing the full default catalog', async () => {
+    const blocks = payload(await authoringCallTool('list_flow_building_blocks', {
+      include: ['servers'],
+      connected: true,
+      query: 'tool_a',
+    }));
+    expect(blocks).toEqual({
+      servers: [{ name: 'srv', connected: true, tools: [{ name: 'tool_a', description: 'does a' }] }],
+    });
+  });
+
+  it('rejects unsupported list arguments instead of silently ignoring them', async () => {
+    const result = await authoringCallTool('list_flow_building_blocks', { status: 'connected' });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('Unsupported list argument');
+  });
 });
 
 describe('validate_flow_spec', () => {

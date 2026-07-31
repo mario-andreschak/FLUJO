@@ -9,6 +9,7 @@ type FlujoPayload = {
   name?: string;
   args?: Record<string, unknown>;
   uri?: string;
+  cursor?: string;
 };
 
 const AUTHORING_TOOLS = new Set([
@@ -126,9 +127,14 @@ export async function flujoRequest<T>(
       resources: unknown[];
       resourceTemplates: unknown[];
       error?: string;
-    }>('/api/mcp/flujo/resources');
+      nextCursor?: string;
+    }>(`/api/mcp/flujo/resources${payload.cursor ? `?cursor=${encodeURIComponent(payload.cursor)}` : ''}`);
     if (operation === 'listResources') {
-      return { resources: result.resources, ...(result.error ? { error: result.error } : {}) } as T;
+      return {
+        resources: result.resources,
+        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        ...(result.error ? { error: result.error } : {}),
+      } as T;
     }
     return {
       resourceTemplates: result.resourceTemplates,

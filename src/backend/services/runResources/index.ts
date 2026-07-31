@@ -273,7 +273,7 @@ export async function listRunResources(conversationId: string): Promise<RunResou
  * server's resources/list. Reads directories on disk (not just cache) so a
  * fresh process still lists resources from earlier runs.
  */
-export async function listAllRunResources(limit = 200): Promise<RunResourceEntry[]> {
+export async function listAllRunResources(limit = 200, offset = 0): Promise<RunResourceEntry[]> {
   let conversationIds: string[] = [];
   try {
     const dirents = await fs.readdir(runResourcesDir, { withFileTypes: true });
@@ -287,7 +287,7 @@ export async function listAllRunResources(limit = 200): Promise<RunResourceEntry
     all.push(...await loadIndex(conversationId));
   }
   all.sort((a, b) => b.createdAt - a.createdAt);
-  return all.slice(0, limit);
+  return all.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit));
 }
 
 export async function findRunResourceByName(

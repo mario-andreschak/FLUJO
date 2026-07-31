@@ -29,8 +29,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) =>
     args: request.params.arguments ?? {},
   }),
 );
-server.setRequestHandler(ListResourcesRequestSchema, async () =>
-  flujoRequest<ListResourcesResult>('listResources'),
+server.setRequestHandler(ListResourcesRequestSchema, async (request) =>
+  flujoRequest<ListResourcesResult>('listResources', { cursor: request.params?.cursor }),
 );
 server.setRequestHandler(ListResourceTemplatesRequestSchema, async () =>
   flujoRequest<ListResourceTemplatesResult>('listResourceTemplates'),

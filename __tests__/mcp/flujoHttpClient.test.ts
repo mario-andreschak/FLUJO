@@ -55,4 +55,27 @@ describe('standalone flujo HTTP client', () => {
 
     await expect(flujoRequest('listTools')).rejects.toThrow('Storage is locked');
   });
+
+  it('forwards and returns resources/list cursors', async () => {
+    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4567';
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        resources: [{ uri: 'flujo://run/c/r' }],
+        resourceTemplates: [],
+        nextCursor: 'next-page',
+      }),
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    await expect(flujoRequest('listResources', { cursor: 'previous page' })).resolves.toEqual({
+      resources: [{ uri: 'flujo://run/c/r' }],
+      nextCursor: 'next-page',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4567/api/mcp/flujo/resources?cursor=previous%20page',
+      expect.objectContaining({ cache: 'no-store' }),
+    );
+  });
 });

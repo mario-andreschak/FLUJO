@@ -32,8 +32,6 @@
  * imports below (runFlow, flowAuthoringTools → registryInstall) transitively import
  * mcpService back, and this file must not be pulled into index.ts's module-init.
  */
-import path from 'path';
-import { promises as fs } from 'fs';
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
@@ -57,8 +55,31 @@ import {
   projectMessages,
 } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { getDataDir } from '@/utils/paths';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { kvGet, kvSet } from '@/backend/services/kvStore';
+import {
+  listConversationSummaries,
+  type ConversationSummary,
+} from '@/backend/execution/flow/conversationSummaryStore';
+import {
+  listInputSchema,
+  listOutputSchema,
+  ListArgumentError,
+  optionalBoolean,
+  optionalFiniteNumber,
+  optionalString,
+  optionalStringArray,
+  pagedCallToolResult,
+  paginateList,
+  parseListArgs,
+} from './listQuery';
+import {
+  matchesPlannedExecutionSearch,
+  matchesPlannedExecutionStatus,
+  sortPlannedExecutions,
+  type PlannedExecutionFilter,
+  type PlannedExecutionSortOption,
+} from '@/utils/shared/plannedExecutionGrouping';
 import {
   authoringToolDefinitions,
   authoringCallTool,
@@ -84,6 +105,36 @@ const MAX_EXECUTE_FLOW_DEPTH = 4;
 const READ_CONVERSATION_DEFAULT_LIMIT = 50;
 const READ_CONVERSATION_MAX_CHARS = 100_000;
 const READ_CONVERSATION_TOOL_ARGS_CHARS = 2_000;
+
+const FLOW_SORTS = ['name-asc', 'name-desc', 'updated-desc', 'updated-asc', 'nodes-desc', 'nodes-asc'] as const;
+const FLOW_VERSION_SORTS = ['saved-desc', 'saved-asc'] as const;
+const SERVER_SORTS = ['name-asc', 'name-desc', 'status', 'transport'] as const;
+const TOOL_SORTS = ['name-asc', 'name-desc'] as const;
+const MODEL_SORTS = ['name-asc', 'name-desc', 'provider', 'context-desc', 'context-asc'] as const;
+const PLANNED_EXECUTION_SORTS = ['name-asc', 'name-desc', 'newest', 'oldest', 'last-run'] as const;
+const CONVERSATION_SORTS = ['activity-desc', 'activity-asc', 'created-desc', 'created-asc', 'title-asc', 'title-desc'] as const;
+const CONVERSATION_STATUSES = [
+  'not_started',
+  'running',
+  'awaiting_tool_approval',
+  'paused_debug',
+  'completed',
+  'error',
+  'capped',
+] as const;
+const MCP_SERVER_STATUSES = [
+  'connected',
+  'disconnected',
+  'error',
+  'connecting',
+  'initialization',
+  'requires_authentication',
+  'unknown',
+] as const;
+const MCP_TRANSPORTS = ['stdio', 'websocket', 'sse', 'streamable'] as const;
+const PLANNED_EXECUTION_STATES = ['enabled', 'disabled', 'running', 'attention'] as const;
+const TRIGGER_TYPES = ['schedule', 'webhook', 'file-watch', 'mcp-poll', 'url-watch', 'flow-event'] as const;
+const RUN_STATUSES = ['completed', 'error', 'skipped', 'needs_approval', 'capped'] as const;
 
 /**
  * Runaway-cadence guardrail (issue #112). Flow-driven create/update of a planned
@@ -145,7 +196,13 @@ export function internalToolDefinitions(): Tool[] {
         '(id, name, description, node count) and no flow content. Use this to ' +
         'enumerate flows cheaply. Use list_flow_building_blocks only when you ' +
         'need the full authoring catalog (models + servers + flows).',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: listInputSchema({
+        folder: { type: 'string', description: 'Exact folder name; use an empty string for ungrouped flows.' },
+        favorite: { type: 'boolean', description: 'Filter by favorite state.' },
+        updatedAfter: { type: 'number', description: 'Keep flows updated at or after this epoch-millisecond timestamp.' },
+        updatedBefore: { type: 'number', description: 'Keep flows updated at or before this epoch-millisecond timestamp.' },
+      }, { sorts: FLOW_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'execute_flow',
@@ -189,13 +246,12 @@ export function internalToolDefinitions(): Tool[] {
       name: 'list_flow_versions',
       description:
         'List a flow\'s archived versions (by name or id), newest first. A version is created automatically whenever the flow\'s definition is overwritten (builder save, update_flow, revert_flow) and holds the definition that was replaced. Use read_flow_version to inspect one and revert_flow to restore one.',
-      inputSchema: {
-        type: 'object',
-        properties: {
+      inputSchema: listInputSchema({
           flow: { type: 'string', description: 'Flow name or flow id.' },
-        },
-        required: ['flow'],
-      },
+          savedAfter: { type: 'number', description: 'Keep versions saved at or after this epoch-millisecond timestamp.' },
+          savedBefore: { type: 'number', description: 'Keep versions saved at or before this epoch-millisecond timestamp.' },
+      }, { required: ['flow'], sorts: FLOW_VERSION_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'read_flow_version',
@@ -239,19 +295,24 @@ export function internalToolDefinitions(): Tool[] {
       name: 'list_mcp_servers',
       description:
         'List the MCP servers configured in this FLUJO instance with their transport, enabled/disabled state and live connection status. Config details (env vars, headers, credentials) are never included.',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: listInputSchema({
+        enabled: { type: 'boolean', description: 'Filter by enabled state.' },
+        statuses: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: MCP_SERVER_STATUSES } },
+        transports: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: MCP_TRANSPORTS } },
+        folder: { type: 'string', description: 'Exact folder name; use an empty string for ungrouped servers.' },
+        favorite: { type: 'boolean', description: 'Filter by favorite state.' },
+      }, { sorts: SERVER_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'list_mcp_server_tools',
       description:
         'List the tools of one configured MCP server (name, description, input schema). Use together with call_mcp_tool for servers that are not bound to this flow.',
-      inputSchema: {
-        type: 'object',
-        properties: {
+      inputSchema: listInputSchema({
           server: { type: 'string', description: 'The FLUJO server name (see list_mcp_servers).' },
-        },
-        required: ['server'],
-      },
+          includeSchema: { type: 'boolean', description: 'Include each tool input schema (default true).' },
+      }, { required: ['server'], sorts: TOOL_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'call_mcp_tool',
@@ -297,13 +358,30 @@ export function internalToolDefinitions(): Tool[] {
       name: 'list_models',
       description:
         'List the models configured in this FLUJO instance (id, name, display name, description, provider, base URL, context window). API keys are never included. Reference models by id or name in FlowSpecs.',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: listInputSchema({
+        providers: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' } },
+        adapters: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' } },
+        supportsTools: { type: 'boolean', description: 'Filter models with an explicit tool-capability value.' },
+        visionInput: { type: 'string', enum: ['supported', 'unsupported', 'unknown'] },
+        folder: { type: 'string', description: 'Exact folder name; use an empty string for ungrouped models.' },
+        favorite: { type: 'boolean', description: 'Filter by favorite state.' },
+        minContextWindow: { type: 'number', minimum: 0 },
+      }, { sorts: MODEL_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'list_planned_executions',
       description:
         'List the planned (scheduled/triggered) executions in this FLUJO instance with their trigger type, enabled state, armed status and last run outcome.',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: listInputSchema({
+        states: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: PLANNED_EXECUTION_STATES } },
+        triggerTypes: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: TRIGGER_TYPES } },
+        lastRunStatuses: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: RUN_STATUSES } },
+        flow: { type: 'string', description: 'Exact flow name or id.' },
+        folder: { type: 'string', description: 'Exact folder name; use an empty string for ungrouped executions.' },
+        armed: { type: 'boolean' },
+      }, { sorts: PLANNED_EXECUTION_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'run_planned_execution',
@@ -366,13 +444,17 @@ export function internalToolDefinitions(): Tool[] {
     {
       name: 'list_conversations',
       description:
-        'List the chat conversations stored in this FLUJO instance (id, title, bound flow, status, created/updated timestamps), newest first. Use read_conversation to get a transcript.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          limit: { type: 'number', description: 'Optional maximum number of conversations to return (newest first). Default: all.' },
-        },
-      },
+        'List lightweight chat-conversation summaries with status, flow, activity, planned-execution and hierarchy filters. Defaults to the 50 most recently active conversations. Use read_conversation to get a transcript.',
+      inputSchema: listInputSchema({
+        statuses: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: CONVERSATION_STATUSES } },
+        flow: { type: 'string', description: 'Exact flow name or id.' },
+        plannedExecutionId: { type: 'string' },
+        parentConversationId: { type: 'string' },
+        rootConversationId: { type: 'string' },
+        updatedAfter: { type: 'number', description: 'Keep conversations active at or after this epoch-millisecond timestamp.' },
+        updatedBefore: { type: 'number', description: 'Keep conversations active at or before this epoch-millisecond timestamp.' },
+      }, { sorts: CONVERSATION_SORTS }),
+      outputSchema: listOutputSchema(),
     },
     {
       name: 'read_conversation',
@@ -535,7 +617,13 @@ async function readFlow(args: Record<string, unknown>): Promise<CallToolResult> 
 }
 
 async function listFlowVersionsTool(args: Record<string, unknown>): Promise<CallToolResult> {
-  const ref = String(args?.flow ?? '').trim();
+  const parsed = parseListArgs(args, {
+    allowed: ['flow', 'savedAfter', 'savedBefore'],
+    sorts: FLOW_VERSION_SORTS,
+    defaultSort: 'saved-desc',
+    defaultLimit: 25,
+  });
+  const ref = optionalString(args, 'flow') ?? '';
   if (!ref) {
     return textResult({ error: 'Provide "flow": a flow name or id.' }, true);
   }
@@ -543,15 +631,30 @@ async function listFlowVersionsTool(args: Record<string, unknown>): Promise<Call
   if (!flow) {
     return textResult({ error: `No flow named or with id "${ref}".` }, true);
   }
-  const versions = await flowService.listFlowVersions(flow.id);
-  return textResult({
+  const savedAfter = optionalFiniteNumber(args, 'savedAfter');
+  const savedBefore = optionalFiniteNumber(args, 'savedBefore');
+  let versions = await flowService.listFlowVersions(flow.id);
+  versions = versions.filter((version) =>
+    (!parsed.query || `${version.versionId} ${version.name}`.toLocaleLowerCase().includes(parsed.query)) &&
+    (savedAfter === undefined || version.savedAt >= savedAfter) &&
+    (savedBefore === undefined || version.savedAt <= savedBefore));
+  versions.sort((a, b) =>
+    parsed.sort === 'saved-asc'
+      ? a.savedAt - b.savedAt || a.versionId.localeCompare(b.versionId)
+      : b.savedAt - a.savedAt || a.versionId.localeCompare(b.versionId));
+  const page = paginateList(versions, parsed);
+  const payload = {
     flowId: flow.id,
     flowName: flow.name,
-    versions,
-    ...(versions.length === 0
+    versions: page.items,
+    ...(page.items.length === 0
       ? { note: 'No archived versions yet — versions appear once the flow\'s definition is overwritten for the first time.' }
       : {}),
-  });
+  };
+  return {
+    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+    structuredContent: page as unknown as Record<string, unknown>,
+  };
 }
 
 async function readFlowVersion(args: Record<string, unknown>): Promise<CallToolResult> {
@@ -643,13 +746,31 @@ async function updateFlow(args: Record<string, unknown>): Promise<CallToolResult
   return textResult(summary, !result.saved);
 }
 
-async function listMcpServers(service: InternalDispatchService): Promise<CallToolResult> {
+async function listMcpServers(
+  service: InternalDispatchService,
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const parsed = parseListArgs(args, {
+    allowed: ['enabled', 'statuses', 'transports', 'folder', 'favorite'],
+    sorts: SERVER_SORTS,
+    defaultSort: 'name-asc',
+  });
+  const enabled = optionalBoolean(args, 'enabled');
+  const statuses = optionalStringArray(args, 'statuses', MCP_SERVER_STATUSES);
+  const transports = optionalStringArray(args, 'transports', MCP_TRANSPORTS);
+  const folder = optionalString(args, 'folder', { allowEmpty: true });
+  const favorite = optionalBoolean(args, 'favorite');
   const configs = await service.loadServerConfigs();
   if (!Array.isArray(configs)) {
     return textResult({ error: configs.error ?? 'Failed to load server configs.' }, true);
   }
-  const servers = await Promise.all(
-    configs.map(async (config) => {
+  const candidates = configs.filter((config) =>
+    (enabled === undefined || !config.disabled === enabled) &&
+    (!transports || transports.includes(config.transport)) &&
+    (folder === undefined || (config.folder ?? '') === folder) &&
+    (favorite === undefined || Boolean(config.favorite) === favorite));
+  let servers = await Promise.all(
+    candidates.map(async (config) => {
       let status = 'unknown';
       try {
         status = (await service.getServerStatus(config.name)).status;
@@ -661,10 +782,23 @@ async function listMcpServers(service: InternalDispatchService): Promise<CallToo
         transport: config.transport,
         enabled: !config.disabled,
         status,
+        ...(config.folder ? { folder: config.folder } : {}),
+        ...(config.favorite ? { favorite: true } : {}),
       };
     })
   );
-  return textResult(servers);
+  servers = servers.filter((server) =>
+    (!statuses || statuses.includes(server.status)) &&
+    (!parsed.query || `${server.name} ${server.transport} ${server.status} ${server.folder ?? ''}`.toLocaleLowerCase().includes(parsed.query)));
+  servers.sort((a, b) => {
+    switch (parsed.sort) {
+      case 'name-desc': return b.name.localeCompare(a.name);
+      case 'status': return a.status.localeCompare(b.status) || a.name.localeCompare(b.name);
+      case 'transport': return a.transport.localeCompare(b.transport) || a.name.localeCompare(b.name);
+      default: return a.name.localeCompare(b.name);
+    }
+  });
+  return pagedCallToolResult(paginateList(servers, parsed));
 }
 
 async function listMcpServerTools(
@@ -672,7 +806,13 @@ async function listMcpServerTools(
   args: Record<string, unknown>,
   source: ToolCallSource,
 ): Promise<CallToolResult> {
-  const server = String(args?.server ?? '').trim();
+  const parsed = parseListArgs(args, {
+    allowed: ['server', 'includeSchema'],
+    sorts: TOOL_SORTS,
+    defaultSort: 'name-asc',
+  });
+  const server = optionalString(args, 'server') ?? '';
+  const includeSchema = optionalBoolean(args, 'includeSchema') ?? true;
   if (!server) {
     return textResult({ error: 'Provide "server": a FLUJO server name.' }, true);
   }
@@ -681,7 +821,17 @@ async function listMcpServerTools(
   if (error) {
     return textResult({ error }, true);
   }
-  return textResult(tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })));
+  const summaries = tools
+    .filter((tool) => !parsed.query || `${tool.name} ${tool.description ?? ''}`.toLocaleLowerCase().includes(parsed.query))
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      ...(includeSchema ? { inputSchema: tool.inputSchema } : {}),
+    }))
+    .sort((a, b) => parsed.sort === 'name-desc'
+      ? b.name.localeCompare(a.name)
+      : a.name.localeCompare(b.name));
+  return pagedCallToolResult(paginateList(summaries, parsed));
 }
 
 async function callMcpTool(
@@ -754,55 +904,160 @@ async function setMcpServerEnabled(
   return textResult({ server, enabled });
 }
 
-async function listFlows(): Promise<CallToolResult> {
+async function listFlows(args: Record<string, unknown>): Promise<CallToolResult> {
   // Lightweight enumeration: reuses flowService.loadFlows() and returns the same
   // reduced per-flow metadata shape as list_flow_building_blocks' `flows` array
   // (id, name, truncated description, nodeCount) — never node/edge content or
   // any secrets. Cheap alternative to the full authoring catalog.
   try {
+    const parsed = parseListArgs(args, {
+      allowed: ['folder', 'favorite', 'updatedAfter', 'updatedBefore'],
+      sorts: FLOW_SORTS,
+      defaultSort: 'name-asc',
+    });
+    const folder = optionalString(args, 'folder', { allowEmpty: true });
+    const favorite = optionalBoolean(args, 'favorite');
+    const updatedAfter = optionalFiniteNumber(args, 'updatedAfter');
+    const updatedBefore = optionalFiniteNumber(args, 'updatedBefore');
     const flows = await flowService.loadFlows();
     const flowList = flows.map((f) => ({
       id: f.id,
       name: f.name,
       ...(f.description ? { description: truncate(f.description, MAX_FLOW_DESCRIPTION_CHARS) } : {}),
       nodeCount: f.nodes?.length ?? 0,
-    }));
-    return textResult(flowList);
+      ...(f.folder ? { folder: f.folder } : {}),
+      ...(f.favorite ? { favorite: true } : {}),
+      ...(f.createdAt !== undefined ? { createdAt: f.createdAt } : {}),
+      ...(f.updatedAt !== undefined ? { updatedAt: f.updatedAt } : {}),
+    })).filter((flow) => {
+      const timestamp = flow.updatedAt ?? flow.createdAt ?? 0;
+      return (!parsed.query || `${flow.id} ${flow.name} ${flow.description ?? ''} ${flow.folder ?? ''}`.toLocaleLowerCase().includes(parsed.query)) &&
+        (folder === undefined || (flow.folder ?? '') === folder) &&
+        (favorite === undefined || Boolean(flow.favorite) === favorite) &&
+        (updatedAfter === undefined || timestamp >= updatedAfter) &&
+        (updatedBefore === undefined || timestamp <= updatedBefore);
+    });
+    flowList.sort((a, b) => {
+      const aTime = a.updatedAt ?? a.createdAt ?? 0;
+      const bTime = b.updatedAt ?? b.createdAt ?? 0;
+      switch (parsed.sort) {
+        case 'name-desc': return b.name.localeCompare(a.name) || b.id.localeCompare(a.id);
+        case 'updated-desc': return bTime - aTime || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+        case 'updated-asc': return aTime - bTime || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+        case 'nodes-desc': return b.nodeCount - a.nodeCount || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+        case 'nodes-asc': return a.nodeCount - b.nodeCount || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+        default: return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+      }
+    });
+    return pagedCallToolResult(paginateList(flowList, parsed));
   } catch (error) {
+    if (error instanceof ListArgumentError) throw error;
     log.error('list_flows failed', error);
     return textResult({ error: 'Failed to load flows.' }, true);
   }
 }
 
-async function listModels(): Promise<CallToolResult> {
+async function listModels(args: Record<string, unknown>): Promise<CallToolResult> {
+  const parsed = parseListArgs(args, {
+    allowed: ['providers', 'adapters', 'supportsTools', 'visionInput', 'folder', 'favorite', 'minContextWindow'],
+    sorts: MODEL_SORTS,
+    defaultSort: 'name-asc',
+  });
+  const providers = optionalStringArray(args, 'providers');
+  const adapters = optionalStringArray(args, 'adapters');
+  const supportsTools = optionalBoolean(args, 'supportsTools');
+  const visionInput = optionalString(args, 'visionInput');
+  if (visionInput && !['supported', 'unsupported', 'unknown'].includes(visionInput)) {
+    throw new ListArgumentError('"visionInput" must be supported, unsupported, or unknown.');
+  }
+  const folder = optionalString(args, 'folder', { allowEmpty: true });
+  const favorite = optionalBoolean(args, 'favorite');
+  const minContextWindow = optionalFiniteNumber(args, 'minContextWindow');
+  if (minContextWindow !== undefined && minContextWindow < 0) {
+    throw new ListArgumentError('"minContextWindow" must be zero or greater.');
+  }
   const models = await modelService.loadModels();
   // Strict whitelist: model configs carry the (encrypted) ApiKey, which must never
   // reach a model's context. Only inert metadata goes out.
-  return textResult(
-    models.map((m) => ({
+  const safeModels = models.filter((model) =>
+    (!parsed.query || `${model.id} ${model.name} ${model.displayName ?? ''} ${model.description ?? ''} ${model.provider ?? ''} ${model.adapter ?? ''} ${model.folder ?? ''}`.toLocaleLowerCase().includes(parsed.query)) &&
+    (!providers || providers.includes(model.provider ?? 'openai')) &&
+    (!adapters || adapters.includes(model.adapter ?? 'openai')) &&
+    (supportsTools === undefined || model.supportsTools === supportsTools) &&
+    (visionInput === undefined || model.visionInputCapability === visionInput) &&
+    (folder === undefined || (model.folder ?? '') === folder) &&
+    (favorite === undefined || Boolean(model.favorite) === favorite) &&
+    (minContextWindow === undefined || (model.contextWindow ?? 0) >= minContextWindow))
+    .map((m) => ({
       id: m.id,
       name: m.name,
       ...(m.displayName ? { displayName: m.displayName } : {}),
       ...(m.description ? { description: m.description } : {}),
       ...(m.provider ? { provider: m.provider } : {}),
+      ...(m.adapter ? { adapter: m.adapter } : {}),
       ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
       ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
-    }))
-  );
+      ...(m.supportsTools !== undefined ? { supportsTools: m.supportsTools } : {}),
+      ...(m.visionInputCapability ? { visionInputCapability: m.visionInputCapability } : {}),
+      ...(m.folder ? { folder: m.folder } : {}),
+      ...(m.favorite ? { favorite: true } : {}),
+    }));
+  safeModels.sort((a, b) => {
+    const aName = a.displayName ?? a.name;
+    const bName = b.displayName ?? b.name;
+    switch (parsed.sort) {
+      case 'name-desc': return bName.localeCompare(aName) || b.id.localeCompare(a.id);
+      case 'provider': return (a.provider ?? '').localeCompare(b.provider ?? '') || aName.localeCompare(bName);
+      case 'context-desc': return (b.contextWindow ?? -1) - (a.contextWindow ?? -1) || aName.localeCompare(bName);
+      case 'context-asc': {
+        if (a.contextWindow === undefined) return b.contextWindow === undefined ? aName.localeCompare(bName) : 1;
+        if (b.contextWindow === undefined) return -1;
+        return a.contextWindow - b.contextWindow || aName.localeCompare(bName);
+      }
+      default: return aName.localeCompare(bName) || a.id.localeCompare(b.id);
+    }
+  });
+  return pagedCallToolResult(paginateList(safeModels, parsed));
 }
 
-async function listPlannedExecutions(): Promise<CallToolResult> {
-  const entries = await getSchedulerService().list();
+async function listPlannedExecutions(args: Record<string, unknown>): Promise<CallToolResult> {
+  const parsed = parseListArgs(args, {
+    allowed: ['states', 'triggerTypes', 'lastRunStatuses', 'flow', 'folder', 'armed'],
+    sorts: PLANNED_EXECUTION_SORTS,
+    defaultSort: 'name-asc',
+  });
+  const states = optionalStringArray(args, 'states', PLANNED_EXECUTION_STATES);
+  const triggerTypes = optionalStringArray(args, 'triggerTypes', TRIGGER_TYPES);
+  const lastRunStatuses = optionalStringArray(args, 'lastRunStatuses', RUN_STATUSES);
+  const flowRef = optionalString(args, 'flow');
+  const folder = optionalString(args, 'folder', { allowEmpty: true });
+  const armed = optionalBoolean(args, 'armed');
+  const resolvedFlow = flowRef ? await resolveFlow(flowRef) : undefined;
+  const flowId = resolvedFlow?.id ?? flowRef;
+  let entries = await getSchedulerService().list();
+  entries = entries.filter((entry) =>
+    (!parsed.query || matchesPlannedExecutionSearch(entry, parsed.query)) &&
+    (!states || states.some((state) => matchesPlannedExecutionStatus(entry, state as PlannedExecutionFilter))) &&
+    (!triggerTypes || triggerTypes.includes(entry.execution.trigger.type)) &&
+    (!lastRunStatuses || (entry.lastRun && lastRunStatuses.includes(entry.lastRun.status))) &&
+    (flowId === undefined || entry.execution.flowId === flowId) &&
+    (folder === undefined || (entry.execution.folder ?? '') === folder) &&
+    (armed === undefined || Boolean(entry.status?.armed) === armed));
+  entries = sortPlannedExecutions(entries, parsed.sort as PlannedExecutionSortOption);
   // Trigger configs are reduced to their TYPE: webhook triggers carry a secret
   // token, and none of the other trigger details are needed to pick a run target.
-  return textResult(
-    entries.map(({ execution, status, lastRun }) => ({
+  const safeEntries = entries.map(({ execution, status, lastRun }) => ({
       id: execution.id,
       name: execution.name,
       enabled: execution.enabled,
       flowId: execution.flowId,
       triggerType: execution.trigger?.type,
       armed: status?.armed ?? false,
+      running: status?.running ?? false,
+      ...(status?.lastTriggerError ? { lastTriggerError: status.lastTriggerError } : {}),
+      ...(execution.folder ? { folder: execution.folder } : {}),
+      ...(execution.createdAt ? { createdAt: execution.createdAt } : {}),
+      ...(execution.updatedAt ? { updatedAt: execution.updatedAt } : {}),
       ...(lastRun
         ? {
             lastRun: {
@@ -812,8 +1067,8 @@ async function listPlannedExecutions(): Promise<CallToolResult> {
             },
           }
         : {}),
-    }))
-  );
+    }));
+  return pagedCallToolResult(paginateList(safeEntries, parsed));
 }
 
 async function runPlannedExecution(args: Record<string, unknown>): Promise<CallToolResult> {
@@ -1027,57 +1282,80 @@ async function deletePlannedExecution(args: Record<string, unknown>): Promise<Ca
 }
 
 /**
- * List stored conversations as light summaries. Reads the conversation snapshot
- * files directly (same source as GET /v1/chat/conversations) instead of loading
- * full states through the executor: only metadata fields go out, never messages.
+ * List stored conversations as light summaries. Reads the derived summary index
+ * and backfills missing or stale entries from snapshots, so repeated listings do
+ * not deserialize every message while still returning current metadata.
  */
 async function listConversations(args: Record<string, unknown>): Promise<CallToolResult> {
-  const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
-  let files: string[];
-  try {
-    files = await fs.readdir(conversationsDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return textResult([]); // no conversations yet
+  const parsed = parseListArgs(args, {
+    allowed: [
+      'statuses',
+      'flow',
+      'plannedExecutionId',
+      'parentConversationId',
+      'rootConversationId',
+      'updatedAfter',
+      'updatedBefore',
+    ],
+    sorts: CONVERSATION_SORTS,
+    defaultSort: 'activity-desc',
+  });
+  const statuses = optionalStringArray(args, 'statuses', CONVERSATION_STATUSES);
+  const flowRef = optionalString(args, 'flow');
+  const plannedExecutionId = optionalString(args, 'plannedExecutionId');
+  const parentConversationId = optionalString(args, 'parentConversationId');
+  const rootConversationId = optionalString(args, 'rootConversationId');
+  const updatedAfter = optionalFiniteNumber(args, 'updatedAfter');
+  const updatedBefore = optionalFiniteNumber(args, 'updatedBefore');
+  const resolvedFlow = flowRef ? await resolveFlow(flowRef) : undefined;
+  const flowId = resolvedFlow?.id ?? flowRef;
+
+  const stored = await listConversationSummaries();
+  const summaries = stored.map((summary): ConversationSummary => {
+    // Match the main conversations API: in-memory state wins while a run is in
+    // flight, and a stored 'running' record with no event channel is interrupted.
+    const live = FlowExecutor.conversationStates.get(summary.id);
+    let status = live?.status ?? summary.status;
+    if (status === 'running' && executionEventBus.currentSeq(summary.id) === 0) status = 'error';
+    return {
+      ...summary,
+      title: live?.title ?? summary.title,
+      flowId: live?.flowId ?? summary.flowId,
+      ...(status ? { status } : {}),
+      updatedAt: live?.updatedAt ?? summary.updatedAt,
+      lastUserMessageAt: live?.lastUserMessageAt ?? summary.lastUserMessageAt ?? null,
+      plannedExecutionId: live?.plannedExecutionId ?? summary.plannedExecutionId ?? null,
+      parentConversationId: live?.parentConversationId ?? summary.parentConversationId ?? null,
+      rootConversationId: live?.rootConversationId ?? summary.rootConversationId ?? null,
+      recovery: live?.recovery ?? summary.recovery,
+    };
+  }).filter((summary) => {
+    const status = summary.status ?? 'not_started';
+    const activityAt = summary.lastUserMessageAt ?? summary.updatedAt;
+    const haystack = `${summary.id} ${summary.title} ${summary.flowId ?? ''} ${summary.plannedExecutionId ?? ''}`.toLocaleLowerCase();
+    return (!parsed.query || haystack.includes(parsed.query)) &&
+      (!statuses || statuses.includes(status)) &&
+      (flowId === undefined || summary.flowId === flowId) &&
+      (plannedExecutionId === undefined || summary.plannedExecutionId === plannedExecutionId) &&
+      (parentConversationId === undefined || summary.parentConversationId === parentConversationId) &&
+      (rootConversationId === undefined || summary.rootConversationId === rootConversationId) &&
+      (updatedAfter === undefined || activityAt >= updatedAfter) &&
+      (updatedBefore === undefined || activityAt <= updatedBefore);
+  });
+
+  summaries.sort((a, b) => {
+    const aActivity = a.lastUserMessageAt ?? a.updatedAt;
+    const bActivity = b.lastUserMessageAt ?? b.updatedAt;
+    switch (parsed.sort) {
+      case 'activity-asc': return aActivity - bActivity || a.id.localeCompare(b.id);
+      case 'created-desc': return b.createdAt - a.createdAt || a.id.localeCompare(b.id);
+      case 'created-asc': return a.createdAt - b.createdAt || a.id.localeCompare(b.id);
+      case 'title-asc': return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+      case 'title-desc': return b.title.localeCompare(a.title) || a.id.localeCompare(b.id);
+      default: return bActivity - aActivity || a.id.localeCompare(b.id);
     }
-    return textResult({ error: `Failed to list conversations: ${err instanceof Error ? err.message : String(err)}` }, true);
-  }
-
-  const summaries = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file) => {
-        try {
-          const raw = await fs.readFile(path.join(conversationsDir, file), 'utf-8');
-          const state = JSON.parse(raw) as SharedState;
-          const id = state.conversationId || file.replace(/\.json$/, '');
-          // Same stale-'running' reconcile as the conversations list route: a
-          // process restart drops the live run without flipping the stored
-          // status, and such a run can never resume.
-          let status = state.status;
-          if (status === 'running' && executionEventBus.currentSeq(id) === 0) {
-            status = 'error';
-          }
-          return {
-            id,
-            title: state.title || 'Untitled Conversation',
-            flowId: state.flowId || null,
-            ...(status ? { status } : {}),
-            createdAt: state.createdAt || 0,
-            updatedAt: state.updatedAt || 0,
-          };
-        } catch (err) {
-          log.warn(`list_conversations: skipping unreadable conversation file ${file}`, err);
-          return null;
-        }
-      })
-  );
-
-  const valid = summaries
-    .filter((s): s is NonNullable<typeof s> => s !== null)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-  const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : undefined;
-  return textResult(limit ? valid.slice(0, limit) : valid);
+  });
+  return pagedCallToolResult(paginateList(summaries, parsed));
 }
 
 /**
@@ -1235,7 +1513,7 @@ export async function internalCallTool(
     }
     switch (toolName) {
       case 'list_flows':
-        return await listFlows();
+        return await listFlows(args);
       case 'execute_flow':
         return await executeFlow(args);
       case 'read_flow':
@@ -1251,7 +1529,7 @@ export async function internalCallTool(
       case 'delete_flow':
         return await deleteFlow(args);
       case 'list_mcp_servers':
-        return await listMcpServers(service);
+        return await listMcpServers(service, args);
       case 'list_mcp_server_tools':
         return await listMcpServerTools(service, args, source);
       case 'call_mcp_tool':
@@ -1261,9 +1539,9 @@ export async function internalCallTool(
       case 'set_mcp_server_enabled':
         return await setMcpServerEnabled(service, args);
       case 'list_models':
-        return await listModels();
+        return await listModels(args);
       case 'list_planned_executions':
-        return await listPlannedExecutions();
+        return await listPlannedExecutions(args);
       case 'run_planned_execution':
         return await runPlannedExecution(args);
       case 'update_planned_execution':

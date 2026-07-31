@@ -34,6 +34,13 @@ import { searchRegistry, installRegistryServer, installBestForCapability } from 
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { isVerifiedStatus } from '@/utils/mcp/registry';
+import {
+  assertAllowedArguments,
+  listInputSchema,
+  optionalBoolean,
+  optionalString,
+  optionalStringArray,
+} from './listQuery';
 
 const log = createLogger('backend/services/mcp/flowAuthoringTools');
 
@@ -92,7 +99,17 @@ export function authoringToolDefinitions(): Tool[] {
       name: 'list_flow_building_blocks',
       description:
         'List models, MCP server/tool references, and existing flows available to a new flow.',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: listInputSchema({
+        query: { type: 'string', maxLength: 256, description: 'Case-insensitive search within the included categories.' },
+        include: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string', enum: ['models', 'servers', 'flows'] },
+          description: 'Categories to include (default all).',
+        },
+        connected: { type: 'boolean', description: 'When set, filter the server category by connection state.' },
+      }, { common: false }),
     },
     {
       name: 'get_flow_authoring_guide',
@@ -221,8 +238,32 @@ export async function authoringCallTool(
 ): Promise<CallToolResult> {
   try {
     if (toolName === 'list_flow_building_blocks') {
+      assertAllowedArguments(args, ['query', 'include', 'connected']);
+      const query = (optionalString(args, 'query', { allowEmpty: true }) ?? '').toLocaleLowerCase();
+      const include = optionalStringArray(args, 'include', ['models', 'servers', 'flows']) ?? ['models', 'servers', 'flows'];
+      const connected = optionalBoolean(args, 'connected');
       const context = await gatherGenerationContext();
-      return textResult(context.blocks);
+      return textResult({
+        ...(include.includes('models')
+          ? {
+              models: context.blocks.models.filter((model) =>
+                !query || `${model.id} ${model.name} ${model.displayName ?? ''} ${model.description ?? ''}`.toLocaleLowerCase().includes(query)),
+            }
+          : {}),
+        ...(include.includes('servers')
+          ? {
+              servers: context.blocks.servers.filter((server) =>
+                (connected === undefined || server.connected === connected) &&
+                (!query || `${server.name} ${(server.tools ?? []).map((tool) => `${tool.name} ${tool.description ?? ''}`).join(' ')}`.toLocaleLowerCase().includes(query))),
+            }
+          : {}),
+        ...(include.includes('flows')
+          ? {
+              flows: context.blocks.flows.filter((flow) =>
+                !query || `${flow.id} ${flow.name} ${flow.description ?? ''}`.toLocaleLowerCase().includes(query)),
+            }
+          : {}),
+      });
     }
 
     if (toolName === 'get_flow_authoring_guide') {
