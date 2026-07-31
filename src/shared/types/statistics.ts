@@ -299,3 +299,95 @@ export function sanitizeStatisticsEvent(value: unknown): StatisticsEvent | undef
 export function isStatisticsEvent(value: unknown): value is StatisticsEvent {
   return sanitizeStatisticsEvent(value) !== undefined;
 }
+
+
+/** Inclusive UTC date range accepted by the aggregate statistics API. */
+export interface StatisticsDateRange {
+  from: string;
+  to: string;
+}
+
+export type StatisticsStatusFilter = StatisticsRunOutcome | 'paused' | 'skipped';
+
+/** All filter values are exact metadata identifiers; no display names are accepted. */
+export interface StatisticsFilters {
+  flowIds?: readonly string[];
+  plannedExecutionIds?: readonly string[];
+  sources?: readonly StatisticsRunSource[];
+  statuses?: readonly StatisticsStatusFilter[];
+  modelIds?: readonly string[];
+  providerIds?: readonly string[];
+  credentialIds?: readonly string[];
+}
+
+export interface StatisticsAggregateRequest {
+  range: StatisticsDateRange;
+  filters?: StatisticsFilters;
+}
+
+export interface StatisticsDurationMetrics {
+  count: number;
+  totalMs: number;
+  averageMs: number;
+  p50Ms: number;
+  p95Ms: number;
+}
+
+export interface StatisticsUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface StatisticsSummary {
+  runs: number;
+  successes: number;
+  errors: number;
+  capped: number;
+  cancelled: number;
+  paused: number;
+  schedulerSkips: number;
+  providerAttempts: number;
+  providerErrors: number;
+  nodeVisits: number;
+  nodeErrors: number;
+  toolCalls: number;
+  toolFailures: number;
+  usage: StatisticsUsageTotals;
+  peakContextUtilization: number;
+  runDuration: StatisticsDurationMetrics;
+  providerDuration: StatisticsDurationMetrics;
+  stepDuration: StatisticsDurationMetrics;
+  toolDuration: StatisticsDurationMetrics;
+}
+
+export interface StatisticsDailyBucket {
+  date: string;
+  summary: StatisticsSummary;
+}
+
+/** A common aggregate-only row used by every ranking dimension. */
+export interface StatisticsRankingRow extends StatisticsSummary {
+  id: string;
+  name?: string;
+}
+
+export interface StatisticsRankings {
+  flows: StatisticsRankingRow[];
+  plannedExecutions: StatisticsRankingRow[];
+  models: StatisticsRankingRow[];
+  providers: StatisticsRankingRow[];
+  credentials: StatisticsRankingRow[];
+  nodes: StatisticsRankingRow[];
+  tools: StatisticsRankingRow[];
+}
+
+export interface StatisticsAggregateResponse {
+  range: StatisticsDateRange;
+  filters: StatisticsFilters;
+  summary: StatisticsSummary;
+  daily: StatisticsDailyBucket[];
+  rankings: StatisticsRankings;
+}

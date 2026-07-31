@@ -110,6 +110,24 @@ export async function flushStatisticsEvents(): Promise<void> {
   await Promise.allSettled([...appendChains.values()]);
 }
 
+export interface StatisticsPartitionMetadata {
+  day: string;
+  exists: boolean;
+  mtimeMs?: number;
+  size?: number;
+}
+
+/** Reads freshness for one selected partition without enumerating history. */
+export async function getStatisticsPartitionMetadata(day: string): Promise<StatisticsPartitionMetadata> {
+  try {
+    const stat = await fs.stat(eventFile(day));
+    return { day, exists: true, mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { day, exists: false };
+    throw error;
+  }
+}
+
 export async function readStatisticsEvents(day: string): Promise<StatisticsEvent[]> {
   let body: string;
   try {
@@ -119,14 +137,20 @@ export async function readStatisticsEvents(day: string): Promise<StatisticsEvent
     throw error;
   }
   const events: StatisticsEvent[] = [];
+  let invalidRecords = 0;
   for (const line of body.split('\n')) {
     if (!line.trim()) continue;
     try {
       const parsed = sanitizeStatisticsEvent(JSON.parse(line) as unknown);
       if (parsed) events.push(parsed);
+      else invalidRecords += 1;
     } catch {
+      invalidRecords += 1;
       // Corrupt middle records and truncated tails are ignored independently.
     }
+  }
+  if (invalidRecords > 0) {
+    log.warn('Ignored invalid statistics records', { day, count: invalidRecords });
   }
   return events;
 }
