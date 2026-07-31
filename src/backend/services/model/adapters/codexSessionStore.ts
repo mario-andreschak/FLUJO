@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
 
 interface ToolFingerprint {
   name: string;
@@ -8,20 +9,9 @@ interface ToolFingerprint {
   annotations?: ToolAnnotations;
 }
 
-export interface StoredCodexSession {
-  threadId: string;
-  prefixHash: string;
-  seenMessageCount: number;
-  historyHash: string;
-  updatedAt: number;
-}
+export type StoredCodexSession = CodexSessionMetadata;
 
-interface CodexSessionObservation {
-  threadId: string;
-  prefixHash: string;
-  seenMessageCount: number;
-  historyHash: string;
-}
+type CodexSessionObservation = Omit<CodexSessionMetadata, 'updatedAt'>;
 
 const MAX_TRACKED_SESSIONS = 200;
 const sessions = new Map<string, StoredCodexSession>();
@@ -45,13 +35,13 @@ function stableStringify(value: unknown): string {
  * a thread can safely receive only the newly appended FLUJO messages.
  */
 export function computeCodexPrefixHash(
-  model: string,
+  configuration: { adapter: string; provider: string; model: string; reasoningEffort?: string },
   systemPrompt: string | undefined,
   tools: readonly ToolFingerprint[],
 ): string {
   const hash = createHash('sha256');
   hash.update(stableStringify({
-    model,
+    ...configuration,
     systemPrompt: systemPrompt ?? '',
     tools: [...tools]
       .sort((left, right) => left.name.localeCompare(right.name))
@@ -69,8 +59,9 @@ export function findReusableCodexSession(
   key: string,
   prefixHash: string,
   currentMessages: readonly unknown[],
+  persisted?: StoredCodexSession,
 ): StoredCodexSession | undefined {
-  const existing = sessions.get(key);
+  const existing = persisted ?? sessions.get(key);
   if (!existing) return undefined;
   if (existing.prefixHash !== prefixHash) return undefined;
   if (currentMessages.length < existing.seenMessageCount) return undefined;
@@ -108,13 +99,15 @@ export function computeCodexHistoryHash(messages: readonly unknown[]): string {
     .digest('hex');
 }
 
-export function recordCodexSession(key: string, observation: CodexSessionObservation): void {
+export function recordCodexSession(key: string, observation: CodexSessionObservation): StoredCodexSession {
   sessions.delete(key);
   if (sessions.size >= MAX_TRACKED_SESSIONS) {
     const oldest = sessions.keys().next();
     if (!oldest.done) sessions.delete(oldest.value);
   }
-  sessions.set(key, { ...observation, updatedAt: Date.now() });
+  const stored = { ...observation, updatedAt: Date.now() };
+  sessions.set(key, stored);
+  return stored;
 }
 
 export function invalidateCodexSession(key: string): void {

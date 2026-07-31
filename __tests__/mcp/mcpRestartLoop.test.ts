@@ -35,8 +35,8 @@ jest.mock('@/backend/services/mcp/connection', () => ({
 }));
 
 // The experimental beta-protocol gate reads the Settings blob from on-disk
-// storage on every connect (betaClient.ts). Same fake-timer reasoning as the
-// registry mock below: mock it to pure, no-I/O behavior so the gate resolves
+// storage on every connect (betaClient.ts). Mock it to pure, no-I/O behavior
+// so the gate resolves
 // within advanceTimersByTimeAsync — and so this suite is hermetic against the
 // developer's local settings.
 jest.mock('@/backend/services/mcp/betaClient', () => ({
@@ -45,19 +45,6 @@ jest.mock('@/backend/services/mcp/betaClient', () => ({
   createBetaTransport: jest.fn(),
   isBetaClient: jest.fn(() => false),
   negotiatedProtocolVersion: jest.fn(() => undefined),
-}));
-
-// The built-in-server registry reads persisted overrides from on-disk storage
-// (loadItem). This suite is about MCPService's reconnect logic in isolation and
-// runs under fake timers; a real fs read inside the retry callback would not
-// settle within advanceTimersByTimeAsync and would mask the reconnect. Mock it
-// to pure, no-I/O behavior (mirrors the ./config and ./connection mocks above).
-// 'srv' is a user server, so isBuiltInServerName('srv') is false and none of the
-// built-in short-circuits ever engage.
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  isBuiltInServerName: (name: string) => ['flujo', 'filesystem', 'bash'].includes(name),
-  builtInServerConfigsWithOverrides: jest.fn(async () => []),
-  setInternalServerDisabled: jest.fn(async () => {}),
 }));
 
 import { MCPService } from '@/backend/services/mcp';

@@ -75,7 +75,7 @@ describe('flowToolsCallTool', () => {
     const result = await flowToolsCallTool('web_research', { input: 'find X' });
 
     expect(runFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ flowId: 'f1', prompt: 'find X', mode: 'ephemeral' }),
+      expect.objectContaining({ flowId: 'f1', prompt: 'find X', source: 'mcp', mode: 'ephemeral' }),
     );
     expect(result.isError).toBeUndefined();
     expect(result.content).toEqual([{ type: 'text', text: 'the answer' }]);

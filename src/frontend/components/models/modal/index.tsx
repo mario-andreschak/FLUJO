@@ -48,6 +48,7 @@ const discoveredModelMetadata = (model: NormalizedModel): Partial<Model> => ({
   ...(model.supportedParameters !== undefined ? { supportedParameters: model.supportedParameters } : {}),
   ...(model.inputModalities !== undefined ? { inputModalities: model.inputModalities } : {}),
   ...(model.outputModalities !== undefined ? { outputModalities: model.outputModalities } : {}),
+  ...(model.visionInputCapability !== undefined ? { visionInputCapability: model.visionInputCapability } : {}),
 });
 
 export interface ModelModalProps {
@@ -348,6 +349,11 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         supportedParameters: formState.supportedParameters,
         inputModalities: formState.inputModalities,
         outputModalities: formState.outputModalities,
+        visionInputCapability: formState.visionInputCapability ?? (
+          Array.isArray(formState.inputModalities)
+            ? (formState.inputModalities.some((value) => /^(?:image|vision)$/i.test(value)) ? 'supported' : 'unsupported')
+            : 'unknown'
+        ),
         maxTurns: formState.maxTurns,
         maxTokens: configurationCapabilities.maxOutputTokens ? formState.maxTokens : undefined,
       } as Model);

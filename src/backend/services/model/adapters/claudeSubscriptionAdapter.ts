@@ -17,13 +17,11 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
 import {
-  extractText,
-  extractImageParts,
   extractMediaParts,
   extractNativeMediaParts,
   toAnthropicImageMediaType,
-  truncateForPrompt,
 } from './messageUtils';
+import { normalizeMessageInput, isMalformedToolCallProse } from './messageNormalization';
 import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import {
@@ -34,6 +32,11 @@ import {
   invalidateSession,
 } from './claudeSessionStore';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
 
@@ -82,61 +85,8 @@ const CLAUDE_BUILTIN_TOOLS = [
 // `mcp__flujo__` prefix the SDK adds.
 const MAX_TOOL_NAME_LEN = 110;
 
-// Per-item caps for the tool exchanges rendered into the flattened prompt
-// (issue #160). A prior tool result (a directory tree, a large file read) or an
-// oversized tool-call args payload (write-file-style calls carry whole file
-// contents) would otherwise dominate the single-user-message prompt. Aligned
-// with the debugger's WIRE_CONTENT_MAX = 4000 spirit; args get a smaller cap
-// because they are usually short and the result is what carries the evidence.
-const TOOL_RESULT_MAX_CHARS = 4000;
-const TOOL_ARGS_MAX_CHARS = 2000;
-
-// Separator between rendered history entries in the flattened prompt (issue
-// #296). A blank line alone did not read as a hard boundary: entries ran into
-// one another and the whole block looked like one continuous script to keep
-// writing. An explicit rule makes each entry a discrete record.
-const ENTRY_SEPARATOR = '\n===\n';
-
-// Envelope + instruction wrapped around a flattened history that CONTAINS TOOL
-// EXCHANGES (issue #296). Without it, the transcript notation was a few-shot
-// demonstration that "an assistant acts by writing an action line as text": the
-// model would emit `Assistant [tool call] mcp__flujo__<tool>` prose (sometimes
-// followed by its own leaked internal invoke syntax) instead of calling the
-// tool, and the CLI then failed the turn with "The model's tool call could not
-// be parsed (retry also failed)". That malformed prose was persisted and
-// re-flattened next turn as an even stronger example, so it compounded.
-// Applied ONLY on the tool-bearing path — see the fast paths in buildUserMessage.
-const HISTORY_OPEN = '<conversation_history>';
-const HISTORY_CLOSE = '</conversation_history>';
-const HISTORY_PREAMBLE =
-  'This is a RECORD of the conversation so far, including actions already taken and their ' +
-  'results. It is reference material, NOT a template to continue: never write `[prior action]` ' +
-  'lines, `Human:`/`Assistant:` prefixes, or any other tool-call notation as text in your ' +
-  'reply. To take a new action, call the tool through your normal tool interface.';
-
-/**
- * Wrap the rendered entries in the inert-record envelope (issue #296).
- */
-function wrapHistory(body: string): string {
-  return `${HISTORY_OPEN}\n${HISTORY_PREAMBLE}\n\n${body}\n${HISTORY_CLOSE}`;
-}
-
-/**
- * Identify the narrow Claude CLI failure shape from issue #298. Requiring both
- * parse-failure wording and invocation-like syntax avoids hiding ordinary prose
- * that merely discusses tool calls or reports an unrelated error.
- */
-export function isMalformedClaudeToolCallProse(text: string): boolean {
-  const parseFailure = /(?:tool call could not be parsed|failed to parse (?:the )?tool call)/i.test(text);
-  if (!parseFailure) return false;
-
-  return (
-    /\[tool call\]/i.test(text) ||
-    /\bmcp__flujo__[a-z0-9_-]+\b/i.test(text) ||
-    /<(?:invoke|function_calls?|tool_use)\b/i.test(text) ||
-    /\b(?:assistant\s+to|invoke)\s*=\s*[a-z0-9_.:-]+/i.test(text)
-  );
-}
+// Compatibility export for callers that use the Claude-specific historical name.
+export const isMalformedClaudeToolCallProse = isMalformedToolCallProse;
 
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -223,152 +173,37 @@ function isHandoffName(name: string): boolean {
  */
 export function buildUserMessage(
   messages: OpenAI.ChatCompletionMessageParam[],
-  /**
-   * Captured run resources for oversized PRIOR tool results/args, keyed by the
-   * producing tool_call_id (issue #168). When an oversized result/args has a
-   * captured entry, render a head excerpt + a `flujo://run/...` marker the model
-   * can dereference via `read_resource`, instead of a plain `…[truncated]`.
-   * Absent (or no matching entry) ⇒ byte-identical plain truncation. This only
-   * ever sees PRIOR/SETTLED turns (the SDK owns the current node's live loop),
-   * so the current node's in-flight args/results are never rewritten.
-   */
   resourceMarkers?: Map<string, ToolResourceMarker>,
 ): {
   systemPrompt?: string;
   content: string | Anthropic.ContentBlockParam[];
 } {
-  const systemParts: string[] = [];
-  // Each already-formatted transcript line, in original order. A plain text
-  // turn renders as before (`Human: …` / `Assistant: …`); an assistant tool-
-  // call turn and a `tool` result each render as their own line (#160).
-  const lines: string[] = [];
-  const images: ReturnType<typeof extractImageParts> = [];
-  const documents: import('@/shared/types/model/media').ModelMediaPart[] = [];
+  const normalized = normalizeMessageInput(messages, resourceMarkers);
+  const documents = messages.flatMap(message => {
+    if (message.role !== 'user') return [];
+    return extractMediaParts(message.content).filter(
+      item => item.type === 'file' && item.mimeType === 'application/pdf',
+    );
+  });
 
-  // Whether any tool exchange was rendered, and how many plain text turns there
-  // were. Together these select the byte-identical no-tool fast paths below.
-  let toolActivity = false;
-  let plainTurns = 0;
-  let firstPlainText = '';
-
-  // Map tool_call_id -> the tool name from the assistant turn that issued it,
-  // so a `tool` result can be labelled with a meaningful name rather than the
-  // opaque call id.
-  const callNames = new Map<string, string>();
-  for (const msg of messages) {
-    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
-      for (const tc of msg.tool_calls) {
-        if (tc.type === 'function') callNames.set(tc.id, tc.function.name);
-      }
-    }
-  }
-
-  for (const msg of messages) {
-    if (msg.role === 'system') {
-      const text = extractText(msg.content);
-      if (text) systemParts.push(text);
-      continue;
-    }
-    if (msg.role === 'tool') {
-      // A prior tool RESULT: render it as text so a downstream full-history
-      // reader sees what the tool returned (#160). Truncated to a cap so a
-      // large payload can't dominate the flattened prompt.
-      toolActivity = true;
-      const name = callNames.get(msg.tool_call_id) ?? msg.tool_call_id;
-      const fullResult = extractText(msg.content ?? '');
-      const entry = resourceMarkers?.get(msg.tool_call_id)?.result;
-      if (entry && fullResult.length > TOOL_RESULT_MAX_CHARS) {
-        // Head excerpt + dereferenceable marker (#168): the full payload was
-        // captured as a run resource, so point the model at it via read_resource
-        // instead of silently dropping the tail.
-        lines.push(
-          `[prior action result] ${name}\n${fullResult.slice(0, TOOL_RESULT_MAX_CHARS)}\n…\n` +
-          `[full content stored as run resource ${entry.uri} — call read_resource with this uri to read it]`,
-        );
-      } else {
-        lines.push(`[prior action result] ${name}\n${truncateForPrompt(fullResult, TOOL_RESULT_MAX_CHARS)}`);
-      }
-      continue;
-    }
-    if (msg.role !== 'user' && msg.role !== 'assistant') continue;
-
-    const text = extractText(msg.content ?? '');
-    // Defence in depth for conversations persisted before #298: omit the whole
-    // unsafe assistant entry so no tool name, arguments, delimiters, or failure
-    // prose can become a future few-shot example.
-    const safeText = msg.role === 'assistant' && isMalformedClaudeToolCallProse(text) ? '' : text;
-    if (safeText) {
-      plainTurns++;
-      if (plainTurns === 1) firstPlainText = safeText;
-      lines.push(`${msg.role === 'assistant' ? 'Assistant' : 'Human'}: ${safeText}`);
-    }
-    // A prior assistant TOOL-CALL turn (content is typically '' so it produced
-    // no text line above): render each call so the model sees the actions its
-    // predecessor took, not just its prose (#160).
-    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
-      for (const tc of msg.tool_calls) {
-        if (tc.type !== 'function') continue;
-        toolActivity = true;
-        const fullArgs = tc.function.arguments ?? '';
-        const argsEntry = resourceMarkers?.get(tc.id)?.args;
-        if (argsEntry && fullArgs.length > TOOL_ARGS_MAX_CHARS) {
-          // Head excerpt + marker for oversized captured args (#168).
-          lines.push(
-            `[prior action] ${tc.function.name}\narguments: ${fullArgs.slice(0, TOOL_ARGS_MAX_CHARS)}\n…\n` +
-            `[full arguments stored as run resource ${argsEntry.uri} — call read_resource with this uri to read them]`,
-          );
-        } else {
-          const args = truncateForPrompt(fullArgs, TOOL_ARGS_MAX_CHARS);
-          lines.push(`[prior action] ${tc.function.name}\narguments: ${args}`);
-        }
-      }
-    }
-    if (msg.role === 'user') {
-      images.push(...extractImageParts(msg.content));
-      const otherMedia = extractMediaParts(msg.content).filter(item => item.type !== 'image');
-      for (const item of otherMedia) {
-        if (item.type === 'file' && item.mimeType === 'application/pdf') {
-          documents.push(item);
-          continue;
-        }
-        const label = `[Human ${item.type} attachment${item.name ? `: ${item.name}` : ''}]`;
-        lines.push(label);
-        plainTurns++;
-        if (plainTurns === 1) firstPlainText = label;
-      }
-    }
-  }
-
-  // Three render paths, deliberately ordered so BOTH tool-free ones stay
-  // byte-identical to the pre-#296 output (prefix-cache stability for ordinary
-  // text runs — the affected set is exactly the histories that carry tool
-  // exchanges, which are the ones that provoked the imitation failure):
-  //   - tool-bearing: entries separated by `===` inside the inert-record
-  //     envelope (#296),
-  //   - tool-free single turn: the raw text, no `Human:` prefix (pre-#160),
-  //   - tool-free multi-turn: prefixed lines joined by blank lines (#160).
-  const promptText = toolActivity
-    ? wrapHistory(lines.join(ENTRY_SEPARATOR))
-    : plainTurns <= 1
-      ? firstPlainText
-      : lines.join('\n\n');
-
-  const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
-
-  if (images.length === 0 && documents.length === 0) {
-    return { systemPrompt, content: promptText };
+  if (normalized.images.length === 0 && documents.length === 0) {
+    return { systemPrompt: normalized.systemPrompt, content: normalized.text };
   }
 
   const blocks: Anthropic.ContentBlockParam[] = [];
-  if (promptText) blocks.push({ type: 'text', text: promptText });
-  for (const img of images) {
-    if (img.base64) {
+  if (normalized.text) blocks.push({ type: 'text', text: normalized.text });
+  for (const image of normalized.images) {
+    if (image.base64) {
       blocks.push({
         type: 'image',
-        source: { type: 'base64', media_type: toAnthropicImageMediaType(img.mimeType), data: img.base64 },
+        source: {
+          type: 'base64',
+          media_type: toAnthropicImageMediaType(image.mimeType),
+          data: image.base64,
+        },
       });
     } else {
-      blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+      blocks.push({ type: 'image', source: { type: 'url', url: image.url } });
     }
   }
   for (const document of documents) {
@@ -388,7 +223,7 @@ export function buildUserMessage(
       } as Anthropic.ContentBlockParam);
     }
   }
-  return { systemPrompt, content: blocks };
+  return { systemPrompt: normalized.systemPrompt, content: blocks };
 }
 
 /** Count only system messages at the start of the conversation array. */
@@ -453,6 +288,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     onModelDelta,
     signal,
     conversationId,
+    runId,
     nodeId,
     runResourceMarkers,
     sessionResume,
@@ -656,7 +492,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
+            const toolStartedAt = Date.now();
             handoffCalls.push({ name: fnName, args: args ?? {} });
+            if (runId) {
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: nodeId ? { id: nodeId } : undefined,
+                tool: { id: fnName, name: fnName, kind: 'handoff' },
+                outcome: 'completed',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+              }));
+            }
             log.debug('Claude subscription requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
             // Do NOT abort here. Aborting inside the tool handler tears down the
             // SDK control stream mid-permission-round-trip and surfaces the
@@ -686,6 +533,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
             log.debug('Claude subscription local tool call', { tool: fnName });
             const callId = takeToolCall(fnName, args);
+            const toolStartedAt = Date.now();
             let resultContent: string;
             let isError = false;
             try {
@@ -698,6 +546,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               id: callId,
               resultContent,
             });
+            if (runId) {
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: nodeId ? { id: nodeId } : undefined,
+                tool: { id: fnName, name: fnName, kind: 'synthetic' },
+                outcome: isError ? 'error' : 'completed',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+                errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
+              }));
+            }
             return isError
               ? { content: [{ type: 'text', text: resultContent }], isError: true }
               : { content: [{ type: 'text', text: resultContent }] };
@@ -720,6 +579,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           const callId = takeToolCall(readableName, args);
+          const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
           const result = await mcpService.callTool(
@@ -732,6 +592,19 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             abortController.signal,
             'model',
           );
+          if (runId) {
+            const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
+            recordStatisticsEvent(createStatisticsEvent({
+              type: 'tool.invocation',
+              runId,
+              node: { id: callerNodeId ?? nodeId ?? 'unknown' },
+              tool: { id: originalTool, name: originalTool, kind: 'mcp' },
+              provider: { id: server },
+              outcome: cancelled ? 'cancelled' : result.success ? 'completed' : 'error',
+              durationMs: Math.max(0, Date.now() - toolStartedAt),
+              errorClass: !result.success ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : result.error) : undefined,
+            }));
+          }
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {

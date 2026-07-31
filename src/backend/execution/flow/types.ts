@@ -1,14 +1,40 @@
 import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
-import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import { EmitFn, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import OpenAI from 'openai';
+import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
+/**
+ * Explicit origin for every runFlow invocation (issue #339). Chat and direct
+ * API calls have an interactive caller; scheduled/triggered, subflow, MCP, and
+ * internal-tool runs are headless and therefore unattended.
+ */
+export const FLOW_INVOCATION_SOURCES = [
+  'chat',
+  'api',
+  'schedule',
+  'trigger',
+  'subflow',
+  'mcp',
+  'internal',
+] as const;
+
+export type FlowInvocationSource = typeof FLOW_INVOCATION_SOURCES[number];
+
+export function isFlowInvocationSource(value: unknown): value is FlowInvocationSource {
+  return typeof value === 'string' &&
+    (FLOW_INVOCATION_SOURCES as readonly string[]).includes(value);
+}
+
+export function isUnattendedFlowInvocation(source: FlowInvocationSource): boolean {
+  return source !== 'chat' && source !== 'api';
+}
 
 // --- Debugger Types ---
 
@@ -60,6 +86,8 @@ export interface ModelInputSnapshot {
   /** Summary counts for a one-line "18 in history → 11 sent · 5 folded …". */
   counts: { threaded: number; sent: number; folded: number; scopedOut: number; handoffStripped: number };
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
+  /** Final wire-time visual routing metrics, captured by ModelHandler. */
+  visualCompaction?: VisualCompactionDiagnostic;
 }
 
 /**
@@ -565,8 +593,38 @@ export interface FlowParams {
     nodeParams?: Record<string, NodeParams>;
 }
 
+/** Durable Codex SDK thread metadata, scoped to one Process node. */
+export interface CodexSessionMetadata {
+    adapter: string;
+    provider: string;
+    threadId: string;
+    configurationHash: string;
+    prefixHash: string;
+    historyHash: string;
+    seenMessageCount: number;
+    updatedAt: number;
+}
+
 // Shared state (minimized)
 export interface SharedState {
+    /** Stable logical execution id used only for metadata-only statistics. It is
+     * preserved while approval/debug is paused, then replaced for a new turn. */
+    logicalRunId?: string;
+    /**
+     * Additive durable recovery metadata (issue #355). Legacy status values stay
+     * authoritative for compatibility; this versioned record supplies the more
+     * precise cancellation/interruption/failure classification and safe boundary.
+     */
+    recovery?: RecoveryRecord;
+    /** UTC epoch used to measure the logical run across pause/resume boundaries. */
+    statisticsRunStartedAt?: number;
+    /** Prevents a resumed approval/debug request from emitting a second start. */
+    statisticsRunStarted?: boolean;
+    /** Guards terminal lifecycle emission in reconciliation/error paths. */
+    statisticsRunFinished?: boolean;
+    /** Display-name snapshots captured once for this logical run. */
+    statisticsFlowName?: string;
+    statisticsPlannedExecutionName?: string;
     // Only tracking info in shared state
     trackingInfo: {
         executionId: string;
@@ -575,6 +633,17 @@ export interface SharedState {
     };
     // Messages as the single source of truth, now using our timestamped type
     messages: FlujoChatMessage[];
+    /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
+    codexSessions?: Record<string, CodexSessionMetadata>;
+    /** Server-owned anchors for undoing a confirmed per-message revert. */
+    revertOperations?: Record<string, {
+        messageId: string;
+        root: string;
+        snapshotId: string;
+        paths: string[];
+        createdAt: number;
+        undoneAt?: number;
+    }>;
     /**
      * Latest `ui/update-model-context` payload per MCP App. This is persisted
      * separately from chat messages and injected only into future model wire
@@ -671,6 +740,11 @@ export interface SharedState {
     handoffInput?: {
         targetNodeId: string;
         prompt: string;
+        /** Process → Signal (#307): caller-supplied event payload. The
+         *  `fromHandoffTool` marker lets SignalNode defensively reject malformed
+         *  legacy/parameterless calls without affecting direct traversal. */
+        signalBody?: string;
+        fromHandoffTool?: boolean;
         /** Spawn-with-brief (issue #156): one entry per handoff tool call the
          *  routing model made to this target in the SAME assistant turn, each the
          *  call's `task` brief. N entries => the target subflow runs N PARALLEL
@@ -744,12 +818,11 @@ export interface SharedState {
      * but cannot override a flow-level deny.
      */
     savedPermissionRules?: SavedPermissionRule[];
-    /** Unattended execution (issue #218), resolved once per run from the flow's
-     *  `unattended` flag (falling back to a source default: headless/scheduled
-     *  ON, interactive chat OFF). When true, a Process node that ends its turn
-     *  on plain text is driven forward along its single non-returning successor
-     *  instead of silently completing the run — see runFlow's FINAL_RESPONSE
-     *  handling. Memoized here so resolution (a flow load) happens at most once. */
+    /** Unattended execution (issue #218/#339), derived for this run solely from
+     *  its invocation source. When true, a Process node that ends its turn on
+     *  plain text is driven forward along its single non-returning successor
+     *  instead of silently completing the run. Runtime-only: persisted flow
+     *  definitions cannot override this value. */
     unattended?: boolean;
     /** Node IDs with an active breakpoint (used by the visual debugger). */
     breakpoints?: string[];
@@ -785,6 +858,9 @@ export interface SharedState {
      * stripping the prefix.
      */
     handoffNameMap?: Record<string, string>;
+    /** Target node types keyed by node id, populated alongside handoffNameMap so
+     *  transition handling can enforce target-specific runtime contracts. */
+    handoffTargetTypes?: Record<string, string>;
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
@@ -828,14 +904,12 @@ export interface SharedState {
     rootConversationId?: string;
 
     /**
-     * Where this run originated (issue #113): 'schedule' for a planned-execution
-     * fire, 'api' for an ad-hoc /v1/chat/completions call, 'chat' for the in-app
-     * chat UI. Set by runFlow from FlowRunInput.source at run start and surfaced
-     * read-only by GET /api/runs/active so a suspend-when-idle orchestrator can
-     * tell in-flight scheduled runs apart from ad-hoc ones. Undefined for legacy
-     * callers that don't tag a source.
+     * Where this run originated (issue #113/#339). Set by runFlow from the
+     * required FlowRunInput.source at every run boundary and surfaced read-only
+     * by GET /api/runs/active. Optional only for persisted legacy states created
+     * before the invocation-context contract existed.
      */
-    source?: 'schedule' | 'chat' | 'api';
+    source?: FlowInvocationSource;
 
     /**
      * For scheduler-originated runs (source === 'schedule'): the planned
@@ -969,6 +1043,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Conversation id, forwarded so self-orchestrating adapters can surface
      *  mid-run tool-approval prompts on the conversation's event stream. */
     conversationId?: string;
+    /** Metadata-only logical run id for model/tool attribution. */
+    runId?: string;
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
@@ -988,6 +1064,9 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  node produced during the visit, in call order (see DebugStep.modelInputs).
      *  `modelInput` above is the first/representative entry. Same debug gate. */
     modelInputs?: ModelInputSnapshot[];
+    /** Durable Codex session for this node and a state-owned replacement hook. */
+    codexSession?: CodexSessionMetadata;
+    onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
 }
 
 // FinishNode prep result

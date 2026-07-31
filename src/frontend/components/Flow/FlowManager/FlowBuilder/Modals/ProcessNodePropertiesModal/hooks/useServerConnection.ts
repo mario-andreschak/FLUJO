@@ -14,6 +14,7 @@ interface ConnectedMcpNode {
   serverName: string;
   status: string;
   enabledTools: string[];
+  enabledResources?: string[] | 'all';
   // Add other relevant properties if needed
 }
 
@@ -74,12 +75,14 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
         const serverInfo = allServers.find(s => s.name === serverName);
         const status = serverInfo?.status || 'unknown';
         const enabledTools = mcpNode.data.properties.enabledTools || [];
+        const enabledResources = mcpNode.data.properties.enabledResources as string[] | 'all' | undefined;
 
         nodes.push({
           nodeId: nodeId,
           serverName: serverName,
           status: status,
           enabledTools: Array.isArray(enabledTools) ? enabledTools : [],
+          enabledResources,
         });
         processedNodeIds.add(nodeId); // Mark as processed
       });

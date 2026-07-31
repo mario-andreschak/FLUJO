@@ -2,6 +2,7 @@ import React, { forwardRef, useImperativeHandle, useRef, useState, useEffect } f
 import { Box, Typography, CircularProgress, Alert, Paper, Button } from '@mui/material';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { createLogger } from '@/utils/logger';
+import { PromptReferenceSuggestion } from '@/utils/shared/promptRefs';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/PromptTemplateEditor');
 
@@ -15,6 +16,7 @@ interface PromptTemplateEditorProps {
   excludeSystemPrompt: boolean;
   nodeData: any;
   flowId?: string;
+  suggestions?: PromptReferenceSuggestion[];
 }
 
 /**
@@ -34,7 +36,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     excludeStartNodePrompt,
     excludeSystemPrompt,
     nodeData,
-    flowId
+    flowId,
+    suggestions,
   } = props;
 
   // State for rendered prompt
@@ -196,6 +199,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
         height="100%"
         onModeChange={handleModeChange}
         customPreviewRenderer={customPreviewRenderer}
+        suggestions={suggestions}
       />
     </Box>
   );

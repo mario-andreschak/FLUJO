@@ -3,6 +3,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
+import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 
 /**
@@ -47,6 +48,15 @@ export interface CompletionInput {
   model: Model;
   /** The decrypted API key / OAuth token. Never log this. */
   apiKey: string;
+  /** Observes each real provider request, including transport retries. The
+   * callback is metadata-only and must never receive request payloads. */
+  onProviderAttempt?: (observation: {
+    attempt: number;
+    durationMs: number;
+    outcome: 'completed' | 'error' | 'cancelled';
+    result?: unknown;
+    error?: unknown;
+  }) => void;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -59,6 +69,8 @@ export interface CompletionInput {
    * `localToolExecutors`). Omitted means session reuse is disabled for the call.
    */
   conversationId?: string;
+  /** Metadata-only logical run id for in-adapter tool attribution. */
+  runId?: string;
   nodeId?: string;
   /**
    * Opt-in to native session reuse for self-orchestrating adapters (Claude
@@ -73,6 +85,10 @@ export interface CompletionInput {
    * Request/response adapters ignore it.
    */
   sessionResume?: boolean;
+  /** Persisted Codex thread metadata supplied by the conversation owner. */
+  codexSession?: CodexSessionMetadata;
+  /** Replace or invalidate the durable Codex metadata after an adapter turn. */
+  onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionTool[];
   /** Sampling temperature. */

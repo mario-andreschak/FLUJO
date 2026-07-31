@@ -141,7 +141,7 @@ Step through a run node-by-node with the visual debugger, inspecting prep/exec s
 
 ![Visual Debugger](docs/images/readme/chat-debugger.png)
 
-### ⏱️ Planned Executions (Automation)
+### ⏱️ Automation — Triggers
 
 Run your flows automatically — on a schedule or when something happens — without opening the chat. FLUJO just needs to be running for triggers to fire.
 
@@ -151,12 +151,12 @@ Run your flows automatically — on a schedule or when something happens — wit
 - **MCP tool polling**: periodically call a tool and fire on change, on new items, or let a model/checker-flow decide
 - **URL watch**: fire when a fetched page's content changes
 
-![Planned Executions](docs/images/readme/planned-executions.png)
-![New Planned Execution](docs/images/readme/planned-execution-new.png)
+![Automation Triggers](docs/images/readme/planned-executions.png)
+![New Automation Trigger](docs/images/readme/planned-execution-new.png)
 
 Run history is kept per trigger, with the full output of every run one click away:
 
-![Planned Execution Run Detail](docs/images/readme/planned-execution-detail.png)
+![Automation Trigger Run Detail](docs/images/readme/planned-execution-detail.png)
 
 As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn FLUJO into an autonomous auto-responder:
 
@@ -308,6 +308,10 @@ the sandbox beneath FLUJO's own origin, and do not point the browser directly at
 port `4201` from an HTTPS page—the listener expects TLS termination at the
 separate proxy origin.
 
+See [MCP Apps host support](docs/features/mcp/apps.md) for protocol behavior,
+security guarantees, display modes, compatibility limits, and the versioned
+compliance matrix.
+
 ### Run via npx (npm package)
 
 ```bash
@@ -345,6 +349,15 @@ Prefer a graphical installer? Download `flujo-setup.exe` from the
 wizard around the same `install.ps1` script above (see
 [`installer/flujo-setup.iss`](installer/flujo-setup.iss)).
 
+The Windows installer is a networked bootstrapper, not an offline file-copy
+package. It requires Windows App Installer (`winget`) and access to GitHub, the
+winget catalog, npm, and Python package sources. Missing Git, Node.js, Python,
+and uv are installed through winget; Ollama is optional. The installer also
+installs the Claude Code CLI used by the optional Claude Subscription provider.
+Running the installer again against an existing FLUJO Git checkout updates and
+rebuilds that checkout. For safety, an existing target that is not a Git checkout
+is rejected before registration or cloning.
+
 ### One-line install (Linux / macOS)
 
 The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
@@ -378,9 +391,14 @@ or, from inside your install folder:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-It asks, per prerequisite (Git, Node.js, Python, uv), whether to remove it — defaulting
-to **yes** for ones FLUJO installed and **no** for ones that were already on your system
-— then removes the `flujo` command and the FLUJO folder.
+It asks, per prerequisite (Git, Node.js, Python, uv, and optional Ollama), whether
+to remove it — defaulting to **yes** for ones FLUJO installed and **no** for ones
+that were already on your system — then removes the `flujo` command and the FLUJO
+folder. These ownership decisions come from
+`%LOCALAPPDATA%\FLUJO-cli\install-manifest.json`; without a readable manifest,
+all detected prerequisites default to **keep**. The graphical bootstrapper is
+intentionally not registered in Windows Apps, so this direct PowerShell command
+is the supported uninstall entry point.
 
 > ⚠️ **This permanently deletes your data.** All flows, encrypted API keys, MCP server
 > configs and chat history live in `<install>\db\` and are removed with the folder. Use
@@ -427,12 +445,12 @@ once writes the manifest for future uninstalls. See
 
 For branching, loops, and subflows, see [Orchestration & Subflows](#orchestration--subflows) above.
 
-### Automating Flows (Planned Executions)
+### Automating Flows (Automation)
 
-1. Go to the Executions page
-2. Click "Add" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
+1. Go to **Automation > Triggers**
+2. Click "Add trigger" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
 3. Pick the flow to run and configure the trigger-specific options
-4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the same page
+4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the Triggers page
 
 ### Using the Chat Interface
 
@@ -446,7 +464,7 @@ FLUJO is licensed under the [MIT License](LICENSE).
 
 ## 🚀 Roadmap
 
-Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Planned Executions (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
+Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Automation triggers (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
 
 Beyond that, ideas we're keeping an eye on:
 - Real-time voice input/output

@@ -28,7 +28,7 @@ jest.mock('@/backend/execution/flow/buildHandoffDescription', () => ({
   buildHandoffDescription: jest.fn(async () => 'stub description'),
 }));
 
-import { ProcessNode, SubflowNode } from '@/backend/execution/flow/nodes';
+import { ProcessNode, SignalNode, SubflowNode } from '@/backend/execution/flow/nodes';
 import type { SharedState } from '@/backend/execution/flow/types';
 
 const getFlowMock = flowService.getFlow as jest.Mock;
@@ -56,7 +56,7 @@ function processTarget(id: string): ProcessNode {
 }
 
 /** Build the source ProcessNode wiring in arbitrary-typed target nodes. */
-function makeProcessNodeWith(targets: { edgeId: string; node: ProcessNode | SubflowNode }[]): ProcessNode {
+function makeProcessNodeWith(targets: { edgeId: string; node: ProcessNode | SignalNode | SubflowNode }[]): ProcessNode {
   const proc = new ProcessNode();
   proc.setParams({}, { id: 'proc', label: 'P', type: 'process', properties: {} });
   for (const t of targets) proc.addSuccessor(t.node, t.edgeId);
@@ -69,6 +69,24 @@ function hasPromptParam(tool: any): boolean {
 
 beforeEach(() => {
   getFlowMock.mockReset();
+});
+
+describe('ProcessNode.generateHandoffTools — Signal body (#307)', () => {
+  it('requires a non-empty body for a Signal target', async () => {
+    const signal = new SignalNode();
+    signal.setParams({}, { id: 'sig', label: 'Signal', type: 'signal', properties: {} });
+    const proc = makeProcessNodeWith([{ edgeId: 'e-sig', node: signal }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [{ id: 'sig', type: 'signal', data: { properties: { topic: 'done' } } }],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].inputSchema.properties.body).toMatchObject({ type: 'string', minLength: 1 });
+    expect(tools[0].inputSchema.required).toEqual(['body']);
+    expect(tools[0].description).toContain('MUST');
+  });
 });
 
 describe('ProcessNode.generateHandoffTools — caller-prompt schema (#96)', () => {

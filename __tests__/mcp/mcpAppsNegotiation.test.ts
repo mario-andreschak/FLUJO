@@ -59,11 +59,6 @@ describe('MCP Apps client capability negotiation', () => {
     expect(declaredCapabilities(factory(config(false))).extensions).toBeUndefined();
   });
 
-  it('does not infer negotiation from built-in status (built-ins run in-process)', () => {
-    const builtIn = config(undefined, { name: 'filesystem', builtIn: true });
-    expect(declaredCapabilities(createNewClient(builtIn)).extensions).toBeUndefined();
-  });
-
   it('includes the MCP Apps opt-in in the reconnect capability key', () => {
     expect(capabilityKey(config(false))).not.toBe(capabilityKey(config(true)));
 

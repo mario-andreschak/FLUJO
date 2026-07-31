@@ -23,6 +23,8 @@ export interface ProcessNodePropertiesModalProps {
     onConnectMcpServer?: (serverName: string) => void;
     /** Guided hides runtime plumbing while preserving every stored property. */
     authoringMode?: FlowAuthoringMode;
+    /** Whether the caller is configuring a freshly-created draft or editing an existing node. */
+    mode?: 'create' | 'edit';
 }
 
 export interface ProcessNodeData {

@@ -77,6 +77,8 @@ export interface Model {
     supportedParameters?: string[];
     inputModalities?: string[];
     outputModalities?: string[];
+    /** Explicit tri-state image-input capability used by visual compaction. */
+    visionInputCapability?: 'supported' | 'unsupported' | 'unknown';
     /**
      * Upper bound on agentic turns for self-orchestrating adapters (e.g. the
      * Claude subscription / Agent SDK path). A Process node can override this

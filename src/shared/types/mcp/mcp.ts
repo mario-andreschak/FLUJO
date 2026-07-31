@@ -52,6 +52,17 @@ export type MCPServerSource =
   | { type: 'remote' }
   | { type: 'local' };
 
+/**
+ * Optional host-path security contract for a persisted stdio server. It is
+ * attached to the installed record and therefore survives rename operations;
+ * runtime code never infers these privileges from the server display name.
+ */
+export type MCPHostPathAccessConfig = {
+  environmentRootVariables: string[];
+  protectedPaths: boolean;
+  snapshots: boolean;
+};
+
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
@@ -68,6 +79,10 @@ export type MCPManagerConfig = {
    * packageable-vs-abort purely from `source.type`.
    */
   source?: MCPServerSource;
+  /** Name-independent host-path security metadata supplied by an installer. */
+  hostPathAccess?: MCPHostPathAccessConfig;
+  /** Package-level protected-path policy; legacy Settings remains a read fallback. */
+  protectedPathsEnabled?: boolean;
   /**
    * When true, FLUJO re-exposes this server's tools to external MCP clients at
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
@@ -96,13 +111,6 @@ export type MCPManagerConfig = {
    * has no effect on the server connection.
    */
   favorite?: boolean;
-  /**
-   * Marks FLUJO's own built-in in-process server (the synthetic "flujo" entry
-   * that exposes FLUJO's backend API as MCP tools to its own flows). Built-in
-   * configs are synthesized at load time, never persisted (saveConfig drops
-   * them), and cannot be edited, renamed, disabled, or deleted.
-   */
-  builtIn?: boolean;
   /**
    * MCP roots (#15/#46): workspace folders this server is scoped to. Each entry is a
    * filesystem path or a `file://` URI (and may contain `${global:VAR}` references,

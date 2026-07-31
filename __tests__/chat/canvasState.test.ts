@@ -99,31 +99,19 @@ describe('updateCanvasApp (live re-feed)', () => {
 });
 
 describe('syncCanvasAppResult (issue #331)', () => {
-  it.each(['flujo', 'filesystem', 'bash'])(
-    'auto-opens an app shipped by the built-in %s server in the PiP canvas',
+  it.each(['flujo', 'filesystem', 'bash', 'browser', 'github'])(
+    'keeps an app from %s behind the explicit click-to-mount consent gate',
     (serverName) => {
-      const { state, evicted } = syncCanvasAppResult(
+      const result = syncCanvasAppResult(
         emptyCanvasState,
-        { serverName, uri: 'ui://internal/app', resultContent: 'ready' },
+        { serverName, uri: 'ui://app', resultContent: 'untrusted' },
         10,
       );
 
-      expect(evicted).toEqual([]);
-      expect(state.activeKey).toBe(`${serverName}::ui://internal/app`);
-      expect(state.entries[state.activeKey!].latestResultContent).toBe('ready');
+      expect(result.state).toBe(emptyCanvasState);
+      expect(result.evicted).toEqual([]);
     },
   );
-
-  it('keeps an external app behind the explicit click-to-mount consent gate', () => {
-    const result = syncCanvasAppResult(
-      emptyCanvasState,
-      { serverName: 'github', uri: 'ui://github/app', resultContent: 'untrusted' },
-      10,
-    );
-
-    expect(result.state).toBe(emptyCanvasState);
-    expect(result.evicted).toEqual([]);
-  });
 
   it('re-feeds an external app after the user has explicitly opened it', () => {
     let state = open(

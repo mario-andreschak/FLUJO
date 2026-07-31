@@ -1,6 +1,101 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 
+/** Additive, durable recovery semantics. Existing SharedState.status values stay
+ * unchanged so older snapshots and clients remain readable. */
+export type RecoveryClassification =
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'retryable_failure'
+  | 'permanent_failure'
+  | 'capped';
+
+export type RecoveryFailureCategory =
+  | 'user_cancelled'
+  | 'ancestor_cancelled'
+  | 'transport_failure'
+  | 'provider_failure'
+  | 'rate_limit'
+  | 'context_limit'
+  | 'input_limit'
+  | 'session_loss'
+  | 'model_empty_response'
+  | 'model_truncated_response'
+  | 'tool_failure'
+  | 'unclean_process_interruption'
+  | 'unknown';
+
+export interface RecoveryLaneIdentity {
+  laneIndex: number;
+  laneCount?: number;
+  laneTitle?: string;
+  conversationId?: string;
+}
+
+export type RecoveryCheckpointPhase =
+  | 'node:before'
+  | 'node:after'
+  | 'tool:before'
+  | 'tool:after'
+  | 'tool:unknown';
+
+export interface RecoveryToolEffect {
+  toolCallId: string;
+  name: string;
+  readOnly: boolean;
+  idempotent: boolean;
+  destructive?: boolean;
+}
+
+export interface RecoveryCheckpointRef {
+  id: string;
+  phase: RecoveryCheckpointPhase;
+  nodeId?: string;
+  turnEntryNodeId?: string;
+  attempt: number;
+  inputFingerprint: string;
+  safe: boolean;
+  effectStatus: 'none' | 'pending' | 'completed' | 'unknown';
+  parentRunId?: string;
+  lane?: RecoveryLaneIdentity;
+  tools?: RecoveryToolEffect[];
+  createdAt: number;
+}
+
+export interface RecoveryFailureDetails {
+  category: RecoveryFailureCategory;
+  message: string;
+  code?: string;
+  status?: number;
+  retryable: boolean;
+}
+
+/** Version 1 recovery record persisted additively on SharedState. */
+export interface RecoveryRecord {
+  version: 1;
+  runId: string;
+  attemptId: string;
+  attempt: number;
+  classification: RecoveryClassification;
+  failure?: RecoveryFailureDetails;
+  retryAfterAt?: number;
+  parentRunId?: string;
+  lane?: RecoveryLaneIdentity;
+  currentCheckpoint?: RecoveryCheckpointRef;
+  lastSafeCheckpoint?: RecoveryCheckpointRef;
+  ownerId?: string;
+  ownerHeartbeatAt?: number;
+  startedAt: number;
+  updatedAt: number;
+  terminalAt?: number;
+  cancellationRequestedAt?: number;
+  manualActionRequired?: boolean;
+  sideEffectWarning?: string;
+}
+
 /**
  * Execution events emitted by the flow engine during a run.
  *
@@ -17,6 +112,9 @@ export type ExecutionEventType =
   | 'run:awaiting_elicitation'
   | 'run:awaiting_question'
   | 'run:done'
+  | 'recovery:checkpoint'
+  | 'recovery:transition'
+  | 'recovery:retry'
   | 'node:enter'
   | 'node:exit'
   | 'node:snapshot'
@@ -124,6 +222,20 @@ export interface RunDoneEvent extends ExecutionEventBase {
   // terminal state, distinct from 'error', so the UI can show it differently.
   status: 'completed' | 'error' | 'capped';
 }
+export interface RecoveryCheckpointEvent extends ExecutionEventBase {
+  type: 'recovery:checkpoint';
+  checkpoint: RecoveryCheckpointRef;
+}
+export interface RecoveryTransitionEvent extends ExecutionEventBase {
+  type: 'recovery:transition';
+  recovery: RecoveryRecord;
+}
+export interface RecoveryRetryEvent extends ExecutionEventBase {
+  type: 'recovery:retry';
+  attempt: number;
+  retryAt: number;
+  failure: RecoveryFailureDetails;
+}
 export interface NodeEnterEvent extends ExecutionEventBase {
   type: 'node:enter';
   node: NodeRef;
@@ -142,7 +254,7 @@ export interface SnapshotChangedFile {
 }
 /**
  * A filesystem snapshot of a confinement root was taken before/after a Process
- * node that had the built-in `filesystem`/`bash` servers armed (issue #250).
+ * node that had a snapshot-capable host-path server armed (issue #250).
  * `snapshotId` is the shadow-repo commit SHA; `root` is the captured root.
  */
 export interface NodeSnapshotEvent extends ExecutionEventBase {
@@ -164,6 +276,8 @@ export interface NodeChangedFilesEvent extends ExecutionEventBase {
   startSnapshot: string;
   endSnapshot: string;
   changedFiles: SnapshotChangedFile[];
+  /** Persisted unified patch for this root, when storage caps allowed it. */
+  patchResourceUri?: string;
 }
 export interface ModelStartEvent extends ExecutionEventBase {
   type: 'model:start';
@@ -316,8 +430,15 @@ export interface ResourceWriteEvent extends ExecutionEventBase {
   name?: string;
   mimeType?: string;
   size?: number;
-  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args';
+  source: 'tool-result' | 'capture' | 'mcp-app' | 'tool-args' | 'snapshot';
   toolCallId?: string;
+  /** Snapshot metadata used by the first-party DevCanvas diff view. */
+  snapshot?: {
+    root: string;
+    startSnapshot: string;
+    endSnapshot: string;
+    changedFiles: SnapshotChangedFile[];
+  };
 }
 export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';
@@ -355,6 +476,9 @@ export type ExecutionEvent =
   | RunAwaitingElicitationEvent
   | RunAwaitingQuestionEvent
   | RunDoneEvent
+  | RecoveryCheckpointEvent
+  | RecoveryTransitionEvent
+  | RecoveryRetryEvent
   | NodeEnterEvent
   | NodeExitEvent
   | NodeSnapshotEvent

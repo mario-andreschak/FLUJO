@@ -157,6 +157,7 @@ describe('SchedulerService', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     const input = runFlowMock.mock.calls[0][0];
     expect(input.flowId).toBe('flow-1');
+    expect(input.source).toBe('schedule');
     expect(input.mode).toBe('ephemeral');
     expect(input.requireApproval).toBe(false);
     expect(input.userTurn).toBe(true);

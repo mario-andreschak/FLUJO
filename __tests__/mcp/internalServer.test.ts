@@ -1,239 +1,145 @@
-/**
- * Tests for the built-in internal server's integration into MCPService:
- * synthetic config injection (stored config wins), connect/status short-circuits,
- * CRUD guards, tool dispatch, and the never-persist rule in saveConfig.
- */
+/** Ordinary persisted-config and CRUD coverage for shipped MCP packages. */
 
-// Self-contained factories (no closing over outer consts — see jest-test-harness notes).
 jest.mock('@/utils/storage/backend', () => ({
-  loadItem: jest.fn(async () => ({})),
-  saveItem: jest.fn(async () => undefined),
-}));
-// The dispatcher module reaches into runFlow/authoring/scheduler; MCPService loads
-// it via dynamic import, which jest.mock intercepts all the same.
-jest.mock('@/backend/services/mcp/internalTools', () => ({
-  internalToolDefinitions: () => [
-    { name: 'ping', description: 'test tool', inputSchema: { type: 'object', properties: {} } },
-  ],
-  internalCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'pong' }] })),
+  loadItem: jest.fn(),
+  saveItem: jest.fn(),
 }));
 
-import { promises as fsp } from 'fs';
-import os from 'os';
-import path from 'path';
+import path from 'node:path';
 import { mcpService } from '@/backend/services/mcp';
-import { saveConfig } from '@/backend/services/mcp/config';
-import { INTERNAL_SERVER_NAME, internalServerConfig } from '@/backend/services/mcp/internalServerConfig';
-import { _setRunResourcesDirForTests } from '@/backend/services/runResources';
+import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
+import {
+  createShippedServerConfig,
+  shippedServerEnv,
+  SHIPPED_MCP_SERVERS,
+} from '@/backend/services/mcp/shippedServers';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { MCPServerConfig } from '@/shared/types/mcp';
+import type { MCPServerConfig } from '@/shared/types/mcp';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
-const internalCallToolMock = (jest.requireMock('@/backend/services/mcp/internalTools') as { internalCallTool: jest.Mock }).internalCallTool;
+let storage: Map<StorageKey, unknown>;
+
+function copy<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? value : JSON.parse(serialized) as T;
+}
+
+function persisted(config: MCPServerConfig): Record<string, unknown> {
+  const { name: _name, ...stored } = config;
+  return stored;
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
-  loadItemMock.mockResolvedValue({});
-  saveItemMock.mockResolvedValue(undefined);
+  storage = new Map([
+    [StorageKey.MCP_SERVERS, Object.fromEntries(
+      SHIPPED_MCP_SERVERS.map((descriptor) => [
+        descriptor.defaultName,
+        persisted({ ...createShippedServerConfig(descriptor), disabled: true }),
+      ]),
+    )],
+  ]);
+  loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) =>
+    storage.has(key) ? copy(storage.get(key)) : fallback
+  );
+  saveItemMock.mockImplementation(async (key: StorageKey, value: unknown) => {
+    storage.set(key, copy(value));
+  });
 });
 
-describe('loadServerConfigs injection', () => {
-  it('appends the synthetic built-in config when no stored server claims the name', async () => {
-    loadItemMock.mockResolvedValue({ other: { transport: 'stdio', command: 'x' } });
+describe('persisted shipped server configs', () => {
+  it('loads shipped packages only from ordinary MCP_SERVERS records', async () => {
     const configs = await mcpService.loadServerConfigs();
     expect(Array.isArray(configs)).toBe(true);
     const list = configs as MCPServerConfig[];
-    const internal = list.find((c) => c.name === INTERNAL_SERVER_NAME);
-    expect(internal).toBeDefined();
-    expect(internal!.builtIn).toBe(true);
-    expect(internal!.disabled).toBe(false);
-    expect(internal!.exposeAsMcpServer).toBe(true);
-    expect(list.some((c) => c.name === 'other')).toBe(true);
-  });
 
-  it('lets a stored server of the same name shadow the built-in one', async () => {
-    loadItemMock.mockResolvedValue({ [INTERNAL_SERVER_NAME]: { transport: 'stdio', command: 'x' } });
-    const configs = (await mcpService.loadServerConfigs()) as MCPServerConfig[];
-    const matches = configs.filter((c) => c.name === INTERNAL_SERVER_NAME);
-    expect(matches).toHaveLength(1);
-    expect(matches[0].builtIn).toBeUndefined();
-  });
-});
-
-describe('connection short-circuits', () => {
-  it('connectServer succeeds instantly without creating a client', async () => {
-    const result = await mcpService.connectServer(INTERNAL_SERVER_NAME);
-    expect(result.success).toBe(true);
-    expect((global as { __mcp_clients?: Map<string, unknown> }).__mcp_clients?.has(INTERNAL_SERVER_NAME)).toBe(false);
-  });
-
-  it('getServerStatus reports connected', async () => {
-    const status = await mcpService.getServerStatus(INTERNAL_SERVER_NAME);
-    expect(status.status).toBe('connected');
-  });
-
-  it('disconnectServer and forceReconnect are successful no-ops', async () => {
-    expect((await mcpService.disconnectServer(INTERNAL_SERVER_NAME)).success).toBe(true);
-    expect((await mcpService.forceReconnect(INTERNAL_SERVER_NAME)).success).toBe(true);
-  });
-
-  it('does not short-circuit when a stored server shadows the name', async () => {
-    loadItemMock.mockResolvedValue({ [INTERNAL_SERVER_NAME]: { transport: 'stdio', command: 'x' } });
-    // A shadowed name takes the normal path: no client exists and no live connect
-    // is attempted here, so the status is the regular "configured but not
-    // connected" error rather than the built-in's synthetic "connected".
-    const status = await mcpService.getServerStatus(INTERNAL_SERVER_NAME);
-    expect(status.status).not.toBe('connected');
-  });
-});
-
-describe('tool listing and dispatch', () => {
-  it('listServerTools returns the internal tool definitions', async () => {
-    const { tools, error } = await mcpService.listServerTools(INTERNAL_SERVER_NAME);
-    expect(error).toBeUndefined();
-    expect(tools.map((t) => t.name)).toEqual(['ping']);
-  });
-
-  it('callTool dispatches in-process and wraps the CallToolResult in data', async () => {
-    const result = await mcpService.callTool(INTERNAL_SERVER_NAME, 'ping', { a: 1 });
-    expect(internalCallToolMock).toHaveBeenCalledWith(mcpService, 'ping', { a: 1 }, 'host');
-    expect(result.success).toBe(true);
-    expect(result.data).toEqual({ content: [{ type: 'text', text: 'pong' }] });
-  });
-
-  it('listServerResources/Prompts return empty without errors', async () => {
-    // The internal server's listServerResources reads the REAL on-disk Tier-3
-    // run-resource store (db/run-resources), so isolate it to an empty temp dir
-    // via the store's test seam to make the emptiness assertion deterministic on
-    // any machine that has ever produced run artifacts.
-    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-internal-'));
-    const prevDir = _setRunResourcesDirForTests(tmp);
-    try {
-      const resources = await mcpService.listServerResources(INTERNAL_SERVER_NAME);
-      expect(resources.error).toBeUndefined();
-      expect(Array.isArray(resources.resources)).toBe(true);
-      expect(resources.resources).toEqual([]);
-      const prompts = await mcpService.listServerPrompts(INTERNAL_SERVER_NAME);
-      expect(prompts.prompts).toEqual([]);
-      expect(prompts.error).toBeUndefined();
-    } finally {
-      _setRunResourcesDirForTests(prevDir);
-      await fsp.rm(tmp, { recursive: true, force: true });
+    for (const descriptor of SHIPPED_MCP_SERVERS) {
+      const config = list.find((candidate) => candidate.name === descriptor.defaultName);
+      expect(config).toMatchObject({
+        transport: 'stdio',
+        command: 'node',
+        disabled: true,
+        exposeAsMcpServer: true,
+        enableMcpApps: false,
+      });
+      expect(config).not.toHaveProperty('builtIn');
+      expect(config).not.toHaveProperty('internalPackage');
+      expect(config).not.toHaveProperty('packageCapabilities');
     }
   });
-});
 
-describe('CRUD guards', () => {
-  it('allows toggling the built-in server on/off via a persisted override (issue #170)', async () => {
-    const result = await mcpService.updateServerConfig(INTERNAL_SERVER_NAME, { disabled: true });
-    // Toggling is NOT an error: it returns the synthetic config, and it is persisted
-    // to the internal-overrides key — never to MCP_SERVERS.
-    expect('error' in result ? result.error : undefined).toBeUndefined();
-    expect(saveItemMock).toHaveBeenCalled();
-    const [key, value] = saveItemMock.mock.calls[0];
-    expect(key).toBe(StorageKey.MCP_INTERNAL_OVERRIDES);
-    expect((value as Record<string, { disabled?: boolean }>)[INTERNAL_SERVER_NAME].disabled).toBe(true);
+  it('renames a shipped record through the ordinary update path', async () => {
+    const original = (await mcpService.getServerConfig('filesystem')) as MCPServerConfig;
+    const result = await mcpService.updateServerConfig('filesystem', {
+      name: 'workspace-files',
+      disabled: true,
+    });
+    expect(result).toMatchObject({
+      name: 'workspace-files',
+      command: original.command,
+      args: original.args,
+      source: original.source,
+      hostPathAccess: original.hostPathAccess,
+    });
+
+    const saved = storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>;
+    expect(saved.filesystem).toBeUndefined();
+    expect(saved['workspace-files']).toBeDefined();
   });
 
-  it('still refuses to edit non-toggle fields of the built-in server', async () => {
-    const result = await mcpService.updateServerConfig(INTERNAL_SERVER_NAME, { command: 'evil' } as Partial<MCPServerConfig>);
-    expect('error' in result && result.error).toMatch(/built-in/i);
-  });
-
-  it('refuses to delete the built-in server', async () => {
-    const result = await mcpService.deleteServerConfig(INTERNAL_SERVER_NAME);
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/built-in/i);
-    expect(saveItemMock).not.toHaveBeenCalled();
-  });
-
-  it('refuses to rename another server onto the reserved name', async () => {
-    loadItemMock.mockResolvedValue({ other: { transport: 'stdio', command: 'x' } });
-    const result = await mcpService.updateServerConfig('other', { name: INTERNAL_SERVER_NAME });
-    expect('error' in result && result.error).toMatch(/already exists/i);
-  });
-
-  it('still allows editing a stored server that shadows the name', async () => {
-    loadItemMock.mockResolvedValue({ [INTERNAL_SERVER_NAME]: { transport: 'stdio', command: 'x' } });
-    const result = await mcpService.updateServerConfig(INTERNAL_SERVER_NAME, { disabled: true });
-    expect('error' in result ? result.error : undefined).toBeUndefined();
-    expect(saveItemMock).toHaveBeenCalled();
-  });
-});
-
-describe('persistence', () => {
-  it('saveConfig never writes builtIn entries to storage', async () => {
-    const configs = new Map<string, MCPServerConfig>();
-    configs.set(INTERNAL_SERVER_NAME, internalServerConfig());
-    configs.set('real', {
-      name: 'real',
-      transport: 'stdio',
-      command: 'x',
-      args: [],
-      env: {},
-      disabled: false,
-      autoApprove: [],
-      rootPath: '',
-      _buildCommand: '',
-      _installCommand: '',
-    } as MCPServerConfig);
-
-    const result = await saveConfig(configs);
+  it('deletes a shipped record without synthesizing it again', async () => {
+    const result = await mcpService.deleteServerConfig('filesystem');
     expect(result.success).toBe(true);
 
-    const saved = saveItemMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(Object.keys(saved)).toEqual(['real']);
+    const saved = storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>;
+    expect(saved.filesystem).toBeUndefined();
+    const reloaded = await mcpService.loadServerConfigs() as MCPServerConfig[];
+    expect(reloaded.some((config) => config.name === 'filesystem')).toBe(false);
   });
 
-  it('updating another server does not leak the synthetic entry into storage', async () => {
-    loadItemMock.mockResolvedValue({ other: { transport: 'stdio', command: 'x' } });
-    // disabled: true keeps handleConnectionStateChange from attempting a real connect.
-    const result = await mcpService.updateServerConfig('other', { disabled: true });
-    expect('error' in result ? result.error : undefined).toBeUndefined();
+  it('leaves a pre-existing same-name user configuration unchanged', async () => {
+    const custom = { transport: 'stdio', command: 'custom-flujo', disabled: true };
+    storage.set(StorageKey.MCP_SERVERS, { flujo: custom });
 
-    const saved = saveItemMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(saved.other).toBeDefined();
-    expect(saved[INTERNAL_SERVER_NAME]).toBeUndefined();
-  });
-});
-
-describe('multiple built-in servers (issue #170)', () => {
-  it('injects filesystem and bash as enabled built-in servers', async () => {
-    const configs = (await mcpService.loadServerConfigs()) as MCPServerConfig[];
-    const fsCfg = configs.find((c) => c.name === 'filesystem');
-    const bashCfg = configs.find((c) => c.name === 'bash');
-    expect(fsCfg?.builtIn).toBe(true);
-    expect(fsCfg?.disabled).toBe(false);
-    expect(bashCfg?.builtIn).toBe(true);
-    expect(bashCfg?.disabled).toBe(false);
-  });
-
-  it('applies a persisted disabled override and gates a disabled built-in', async () => {
-    loadItemMock.mockImplementation(async (key: string) =>
-      key === StorageKey.MCP_INTERNAL_OVERRIDES ? { filesystem: { disabled: true } } : {}
-    );
-    const configs = (await mcpService.loadServerConfigs()) as MCPServerConfig[];
-    expect(configs.find((c) => c.name === 'filesystem')?.disabled).toBe(true);
-    const { tools, error } = await mcpService.listServerTools('filesystem');
-    expect(tools).toEqual([]);
-    expect(error).toMatch(/disabled/i);
-  });
-
-  it('lists real filesystem tools when enabled', async () => {
-    const { tools, error } = await mcpService.listServerTools('filesystem');
-    expect(error).toBeUndefined();
-    expect(tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(['read_file', 'write_file', 'edit_file', 'list_dir', 'search'])
-    );
-  });
-
-  it('lists real bash tools when enabled', async () => {
-    const { tools } = await mcpService.listServerTools('bash');
-    expect(tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(['run', 'start', 'status', 'wait', 'kill'])
-    );
+    const configs = await mcpService.loadServerConfigs() as MCPServerConfig[];
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toMatchObject({ name: 'flujo', ...custom });
   });
 });
 
+describe('normal stdio delivery', () => {
+  it('persists direct package entrypoints and ordinary working directories', () => {
+    for (const descriptor of SHIPPED_MCP_SERVERS) {
+      const config = createShippedServerConfig(descriptor);
+      expect(config.command).toBe('node');
+      expect(config.args).toEqual([
+        path.join('mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
+      ]);
+      expect(path.isAbsolute(config.cwd ?? '')).toBe(true);
+      expect(config.source).toEqual({ type: 'marketplace', id: descriptor.packageId });
+      expect(config.roots).toEqual([]);
+      expect(config.enableMcpApps).toBe(false);
+    }
+  });
+
+  it('uses the same launch resolver as an arbitrary stdio server', () => {
+    const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'flujo')!;
+    const config = createShippedServerConfig(descriptor);
+    const launch = resolveStdioLaunch(config);
+    expect(launch.cwd).toBe(config.cwd);
+    expect(launch.args).toEqual(config.args);
+  });
+
+  it('forwards only documented environment controls by default', () => {
+    const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'filesystem')!;
+    const env = shippedServerEnv(descriptor, {
+      FLUJO_DATA_DIR: '/data',
+      FLUJO_FS_ROOTS: '/workspace',
+      SECRET_THAT_MUST_NOT_LEAK: 'secret',
+    });
+    expect(env).toMatchObject({ FLUJO_DATA_DIR: '/data', FLUJO_FS_ROOTS: '/workspace' });
+    expect(env).not.toHaveProperty('SECRET_THAT_MUST_NOT_LEAK');
+  });
+});

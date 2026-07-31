@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Button, Collapse, CircularProgress, Alert, Tooltip, useTheme } from '@mui/material';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
@@ -57,6 +57,8 @@ export const MAX_MCP_APP_CONTEXT_BYTES = 256 * 1024;
 const MAX_APP_DIMENSION_PX = 6_000;
 
 export interface McpAppFrameProps {
+  /** Conversation that owns app-created server state, when hosted from chat. */
+  conversationId?: string;
   /** Server that owns the `ui://` resource. */
   serverName: string;
   /** The `ui://…` resource URI to read and render. */
@@ -500,6 +502,7 @@ export function getSafeOpenLinkUrl(rawUrl: string): string | null {
  */
 function makeClientShim(
   serverName: string,
+  ownerScope: string,
   onAccessRevoked: (message: string) => void,
 ): Client {
   const shim = {
@@ -523,6 +526,7 @@ function makeClientShim(
           params.arguments ?? {},
           undefined,
           options?.signal,
+          ownerScope,
         );
         if (r?.httpStatus === 403) {
           const message = r?.error || 'MCP Apps access was disabled for this server';
@@ -719,6 +723,7 @@ export async function resolveHostToolInfo(
  * `resources/read` back through FLUJO's MCP layer (same server only).
  */
 const McpAppFrame: React.FC<McpAppFrameProps> = ({
+  conversationId,
   serverName,
   uri,
   toolName,
@@ -741,6 +746,13 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   visible = true,
 }) => {
   const theme = useTheme();
+  const frameInstanceId = useId();
+  const ownerScope = useMemo(
+    () => conversationId
+      ? `conversation:${conversationId}`
+      : `app:${serverName}:${uri}:${frameInstanceId}`,
+    [conversationId, frameInstanceId, serverName, uri],
+  );
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -987,7 +999,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         void teardown();
       };
       bridge = new AppBridge(
-        makeClientShim(serverName, revokeAccess),
+        makeClientShim(serverName, ownerScope, revokeAccess),
         HOST_INFO,
         {
           openLinks: {},
@@ -1266,6 +1278,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     }
   }, [
     handoffToDock,
+    ownerScope,
     queueToolDelivery,
     serverName,
     teardown,

@@ -208,6 +208,14 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
   }
 }
 
+/** Load the persisted roots for one ordinary server record. */
+export async function loadServerRoots(serverName: string): Promise<string[]> {
+  const configs = await loadServerConfigs();
+  if (!Array.isArray(configs)) return [];
+  const roots = configs.find((config) => config.name === serverName)?.roots;
+  return Array.isArray(roots) ? roots.filter((root): root is string => typeof root === 'string') : [];
+}
+
 /**
  * Save MCP server configurations to storage
  */
@@ -215,16 +223,11 @@ export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise
   log.debug('Entering saveConfig method');
   try {
     const mcpServers = Object.fromEntries(
-      Array.from(configs.entries())
-        // The built-in internal server is synthesized at load time
-        // (MCPService.loadServerConfigs), so callers that load-modify-save the whole
-        // set naturally carry it here. Dropping it keeps it out of storage — it must
-        // never be persisted or it would stop being synthetic.
-        .filter(([, config]) => config.builtIn !== true)
-        .map(([name, config]) => {
-        // Remove the name property since it's used as the key
+      Array.from(configs.entries()).map(([name, config]) => {
+        // Remove the name property since it is represented by the storage key.
+        // Every server, including shipped package installs, uses this same path.
         const { name: _, ...configWithoutName } = config;
-        
+
         // Return the entry with the server name as the key
         return [name, configWithoutName];
       })

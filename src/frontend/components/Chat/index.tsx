@@ -58,6 +58,7 @@ import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import type { RecoveryRecord } from '@/shared/types/execution/events';
 import { getStartNode } from '@/utils/shared/getStartNode';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
@@ -189,7 +190,9 @@ export interface Conversation {
   requireApproval?: boolean;
   createdAt: number;
   updatedAt: number;
-  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error';
+  status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped';
+  /** Additive durable cancellation/interruption/failure metadata (issue #355). */
+  recovery?: RecoveryRecord;
   /** Node where execution currently sits (server truth). May reference a node
    *  of a previously selected flow after a flow switch — validate before use. */
   currentNodeId?: string;
@@ -228,6 +231,7 @@ export interface ConversationListItem {
    *  Optional/null for legacy conversations (falls back to updatedAt). */
   lastUserMessageAt?: number | null;
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped'; // 'capped' = graceful landing at turn cap (#253)
+  recovery?: RecoveryRecord;
   /** Id of the scheduler planned-execution that originated this conversation
    *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
    *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
@@ -253,6 +257,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.title === y.title &&
       x.flowId === y.flowId &&
       x.status === y.status &&
+      x.recovery?.classification === y.recovery?.classification &&
+      x.recovery?.updatedAt === y.recovery?.updatedAt &&
       x.plannedExecutionId === y.plannedExecutionId &&
       x.parentConversationId === y.parentConversationId &&
       x.rootConversationId === y.rootConversationId &&
@@ -550,6 +556,9 @@ const Chat: React.FC = () => {
   // touching RIGHT NOW, for canvas highlighting in the debugger. Entries decay
   // by age (LIVE_HIGHLIGHT_TTL_MS); pruned on each event application.
   const [liveActivity, setLiveActivity] = useState<LiveActivity>(EMPTY_LIVE_ACTIVITY);
+  // Ordered, bounded source events for the visual debugger's subflow frame
+  // model. The existing SSE consumer remains the only network subscription.
+  const [debuggerEvents, setDebuggerEvents] = useState<ExecutionEvent[]>([]);
   // Per-lane progress rows for parallel subflow fan-outs (issue #157). Pure
   // reducer state rebuilt from the SSE replay (from seq 0) on re-attach.
   const [liveLanes, setLiveLanes] = useState<LiveLanes>(EMPTY_LIVE_LANES);
@@ -993,6 +1002,7 @@ const Chat: React.FC = () => {
   // (issue #243). Same-conversation refetches keep the same id and don't clear.
   useEffect(() => {
     setSseVisitedNodeIds(new Set());
+    setDebuggerEvents([]);
   }, [detailedConversation?.id]);
 
   // The node the NEXT message will be processed on, for the chat input's node
@@ -1205,6 +1215,29 @@ const Chat: React.FC = () => {
       lastSeqRef.current = event.seq;
     }
 
+    // Keep only graph-routing/activity events: token deltas and messages would
+    // rebuild the canvas frame model on every streamed chunk without adding any
+    // graph information. A fresh top-level run starts a new debugger session.
+    if (
+      event.type === 'run:start'
+      || event.type === 'run:done'
+      || event.type === 'run:paused'
+      || event.type === 'breakpoint:hit'
+      || event.type === 'subflow:start'
+      || event.type === 'subflow:done'
+      || event.type === 'node:enter'
+      || event.type === 'node:exit'
+      || event.type === 'resource:read'
+      || event.type === 'resource:write'
+      || event.type === 'error'
+    ) {
+      setDebuggerEvents(prev => {
+        if (event.type === 'run:start') return [event];
+        const next = [...prev, event];
+        return next.length > 2_000 ? next.slice(next.length - 2_000) : next;
+      });
+    }
+
     const touch = (patch: Partial<{ totalTokens: number; activeNode: string | null }>) =>
       setLiveStats(prev => ({
         totalTokens: patch.totalTokens ?? prev?.totalTokens ?? 0,
@@ -1358,6 +1391,23 @@ const Chat: React.FC = () => {
         });
         break;
       }
+      case 'node:changed-files': {
+        touch({});
+        const nodeId = event.node?.nodeId;
+        if (!nodeId || event.changedFiles.length === 0) break;
+        setDetailedConversation(prev => {
+          if (!prev || prev.id !== event.conversationId) return prev;
+          const index = prev.messages.findLastIndex(message => message.processNodeId === nodeId);
+          if (index < 0) return prev;
+          const messages = [...prev.messages];
+          messages[index] = {
+            ...messages[index],
+            changedFiles: event.changedFiles.map(({ path, status }) => ({ path, status })),
+          };
+          return { ...prev, messages };
+        });
+        break;
+      }
       case 'usage':
         setLiveStats(prev => ({
           totalTokens: (prev?.totalTokens ?? 0) + (event.totalTokens || 0),
@@ -1381,6 +1431,35 @@ const Chat: React.FC = () => {
         // canvas). resource:write also bumps resourceVersion so the run-data
         // panel refetches.
         const kind = event.type === 'resource:read' ? 'read' as const : 'write' as const;
+        if (
+          event.type === 'resource:write'
+          && event.source === 'snapshot'
+          && event.snapshot
+          && event.node?.nodeId
+          && event.conversationId === currentConversationIdRef.current
+        ) {
+          const nodeId = event.node.nodeId;
+          const root = event.snapshot.root;
+          setCanvasStateOwnerId(event.conversationId);
+          setCanvasState((prev) => openCanvasApp(prev, {
+            serverName: 'filesystem',
+            uri: 'ui://devcanvas/diff',
+            instanceKey: `snapshot::${nodeId}::${root}`,
+            toolName: 'snapshot_diff',
+            resultContent: JSON.stringify({
+              snapshotDiff: {
+                nodeId,
+                nodeName: event.node?.nodeName,
+                root,
+                startSnapshot: event.snapshot?.startSnapshot,
+                endSnapshot: event.snapshot?.endSnapshot,
+                changedFiles: event.snapshot?.changedFiles,
+                resourceUri: event.uri,
+              },
+            }),
+            updateId: event.seq,
+          }, Date.now(), Number.MAX_SAFE_INTEGER).state);
+        }
         touchActivity(draft => {
           const now = Date.now();
           if (event.node?.nodeId) {
@@ -3512,6 +3591,7 @@ const Chat: React.FC = () => {
                 editingMessageId={editingMessage?.messageId ?? null} // Bubble being edited (in the input)
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
+                onRevertToHere={() => fetchDetailedConversation(detailedConversation.id)}
                 onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
@@ -3580,11 +3660,51 @@ const Chat: React.FC = () => {
                 </Box>
               )}
 
+              {/* Durable recovery status (issue #355). Unknown tool effects are
+                  never presented as a safe node retry; the conservative action
+                  remains the existing restart-from-turn-entry path. */}
+              {!isLoading && !isDebugPaused && !viewedConversationStopped && detailedConversation?.recovery &&
+                (detailedConversation.recovery.classification === 'interrupted' || detailedConversation.recovery.manualActionRequired) && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                  <Alert
+                    icon={<ErrorOutlineIcon fontSize="inherit" />}
+                    severity="warning"
+                    variant="filled"
+                    sx={{ borderRadius: 2, py: 0.5, alignItems: 'center', maxWidth: 760 }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => sendToChatCompletions(detailedConversation)}
+                      >
+                        Restart turn
+                      </Button>
+                    }
+                  >
+                    <Typography variant="body2" fontWeight={600}>
+                      Recovery required
+                      {detailedConversation.recovery.currentCheckpoint?.nodeId
+                        ? ` at node ${detailedConversation.recovery.currentCheckpoint.nodeId}`
+                        : ''}
+                    </Typography>
+                    {detailedConversation.recovery.sideEffectWarning && (
+                      <Typography variant="caption" component="div">
+                        {detailedConversation.recovery.sideEffectWarning}
+                      </Typography>
+                    )}
+                  </Alert>
+                </Box>
+              )}
+
               {/* Error banner: the run ended in an error state. Guarded by !error
                   so it doesn't duplicate the transient error Alert shown right
                   after a live failure; this one persists across reloads. Not shown
                   for a user Stop (viewedConversationStopped owns that case). */}
-              {!isLoading && !isDebugPaused && !error && !viewedConversationStopped && currentConversationSummary?.status === 'error' && (
+              {!isLoading && !isDebugPaused && !error && !viewedConversationStopped &&
+                detailedConversation?.recovery?.classification !== 'interrupted' &&
+                !detailedConversation?.recovery?.manualActionRequired &&
+                currentConversationSummary?.status === 'error' && (
                 <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
                   <Alert
                     icon={<ErrorOutlineIcon fontSize="inherit" />}
@@ -3850,6 +3970,7 @@ const Chat: React.FC = () => {
                 debugState={debugState}
                 conversationId={currentConversationId}
                 liveActivity={liveActivity}
+                executionEvents={debuggerEvents}
                 onStep={handleDebugStep}
                 onStepOver={handleStepOver}
                 onContinue={handleDebugContinue}
@@ -3877,6 +3998,7 @@ const Chat: React.FC = () => {
               debugState={debugState}
               conversationId={currentConversationId}
               liveActivity={liveActivity}
+              executionEvents={debuggerEvents}
               onStep={handleDebugStep}
               onStepOver={handleStepOver}
               onContinue={handleDebugContinue}

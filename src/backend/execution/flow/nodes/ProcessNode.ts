@@ -143,6 +143,7 @@ export class ProcessNode extends BaseNode {
     // name -> node-id mapping so routing still works.
     const nameMap = buildHandoffToolNameMap(targets);
     sharedState.handoffNameMap = sharedState.handoffNameMap || {};
+    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
 
     // Load the containing flow once so descriptions can read each target's
     // user-authored description and full properties (and recurse into subflows).
@@ -160,6 +161,7 @@ export class ProcessNode extends BaseNode {
     for (const target of targets) {
       const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
       sharedState.handoffNameMap[toolName] = target.id;
+      sharedState.handoffTargetTypes[target.id] = target.type;
 
       const flowNode = flowNodesById?.get(target.id);
       const description = flowNode
@@ -212,7 +214,15 @@ export class ProcessNode extends BaseNode {
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
       const descExtras: string[] = [];
-      if (acceptsCallerSpawn) {
+      if (target.type === 'signal') {
+        paramProps.body = {
+          type: "string",
+          minLength: 1,
+          description: "REQUIRED non-empty payload body to emit with the signal. You MUST supply the signal data for this handoff."
+        };
+        requiredParams.push('body');
+        descExtras.push('You MUST pass a non-empty "body" argument; it becomes the emitted signal payload.');
+      } else if (acceptsCallerSpawn) {
         // `task` subsumes `prompt` for spawnable targets (a single spawn with a
         // brief behaves like a caller prompt), so only one param is exposed.
         paramProps.task = {
@@ -517,6 +527,16 @@ export class ProcessNode extends BaseNode {
     // Forwarded so self-orchestrating adapters can surface mid-run tool-approval
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
+    runId: sharedState.logicalRunId,
+    codexSession: sharedState.codexSessions?.[nodeId],
+    onCodexSessionChange: (session) => {
+      if (session) {
+        sharedState.codexSessions = { ...(sharedState.codexSessions ?? {}), [nodeId]: session };
+      } else if (sharedState.codexSessions?.[nodeId]) {
+        const { [nodeId]: _removed, ...remaining } = sharedState.codexSessions;
+        sharedState.codexSessions = Object.keys(remaining).length > 0 ? remaining : undefined;
+      }
+    },
     requireToolApproval: sharedState.requireApproval ?? false,
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
@@ -632,12 +652,45 @@ export class ProcessNode extends BaseNode {
             .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
             .map((n) => n.id)
         );
-        wireBase = collapseNodeOutputs(prepResult.messages, collapsedNodeIds);
+        wireBase = collapseNodeOutputs(wireBase, collapsedNodeIds);
       } catch (err) {
         // Collapsing is a context-token optimization — never block the run on it.
         log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
       }
     }
+
+    // Chat references are a wire-only projection: preserve canonical serialized
+    // pills in SharedState.messages, but expand only resources authorized for
+    // this ProcessNode and non-secret globals before the model sees them.
+    if (wireBase.some((message) =>
+      message.role === 'user'
+      && typeof message.content === 'string'
+      && message.content.includes('${')
+    )) {
+      wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
+        if (message.role !== 'user' || typeof message.content !== 'string') return message;
+        let content = await promptRenderer.resolveChatMessageReferences(
+          message.content,
+          mcpNodes,
+          (info) => sharedState.emit?.({
+            type: 'resource:read',
+            node: { nodeId },
+            source: 'pill',
+            ...info,
+          }),
+        );
+        content = await resolveRunResourceRefs(
+          content,
+          sharedState.ephemeral ? undefined : sharedState.conversationId,
+          sharedState.emit,
+          { nodeId },
+        );
+        return content === message.content
+          ? message
+          : { ...message, content } as FlujoChatMessage;
+      }));
+    }
+
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
       // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
       // like the system prompt) so an isolated step can pull captured state.
@@ -924,10 +977,41 @@ export class ProcessNode extends BaseNode {
             // ModelHandler resolves this against the bound model's maxTokens, then
             // lets the adapter apply its own default when both are unset.
             maxTokens: node_params?.properties?.maxTokens,
+            // Thread the existing Process-node summarizing-compaction settings;
+            // ModelHandler previously resolved them with `undefined` (#356).
+            compactionMode: node_params?.properties?.compactionMode,
+            compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
+            onFinalWire: prepResult.modelInput
+              ? (finalWire, visualCompaction) => {
+                  const captured = finalWire.map((message, index) => ({
+                    ...message,
+                    id: `final-wire-${prepResult.nodeId}-${index}`,
+                    timestamp: Date.now(),
+                    content: Array.isArray(message.content)
+                      ? message.content.map((part) => {
+                          if (part && typeof part === 'object' && 'image_url' in part) {
+                            const image = (part as { image_url?: { url?: string } }).image_url;
+                            return { type: 'text' as const, text: `[image omitted from debugger snapshot: ${image?.url?.slice(0, 32) ?? 'unknown'}…]` };
+                          }
+                          return part;
+                        })
+                      : message.content,
+                  })) as FlujoChatMessage[];
+                  prepResult.modelInput!.wireMessages = captured;
+                  if (visualCompaction) {
+                    visualCompaction.finalWireCaptured = true;
+                    prepResult.modelInput!.visualCompaction = visualCompaction;
+                  }
+                  prepResult.modelInputs = [prepResult.modelInput!];
+                }
+              : undefined,
             nodeName, // Pass the node name to be included in the response header
             nodeId: prepResult.nodeId, // Pass the node ID
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
             conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
+            runId: prepResult.runId,
+            codexSession: prepResult.codexSession,
+            onCodexSessionChange: prepResult.onCodexSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
@@ -971,6 +1055,7 @@ export class ProcessNode extends BaseNode {
           modelResult = await callModelWithTools(undefined);
           usedToolFreeFallback = modelResult.success;
         }
+
 
         // --- Log successful model call result (check success first) ---
         if (modelResult.success) {

@@ -269,9 +269,9 @@ export const API_GROUPS: ApiGroup[] = [
   },
   {
     id: 'planned-executions',
-    name: 'Planned Executions',
+    name: 'Automation — Triggers',
     description:
-      'Run flows headlessly on triggers: schedules (cron), inbound webhooks, and more. Managed from the Executions page; each run is recorded in a per-execution run history.',
+      'Run flows headlessly on triggers: schedules (cron), inbound webhooks, and more. Managed from Automation > Triggers; each run is recorded in a per-trigger run history. The compatibility API remains /api/planned-executions.',
     endpoints: [
       {
         method: 'GET',

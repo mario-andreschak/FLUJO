@@ -382,6 +382,8 @@ npm ci --include=dev
 
 step "Building FLUJO (npm run build)"
 npm run build
+step "Validating bundled offline MCP packages"
+npm run validate:mcp-release
 ok "Build complete."
 
 # ---------------------------------------------------------------------------

@@ -31,4 +31,7 @@ export const FEATURES = {
    * When false, the nodeExecutionTracker array will not be created or updated
    */
   ENABLE_EXECUTION_TRACKER: false, // Enabled by default
+
+  /** Enables the preview/confirm per-message worktree revert UI and API. */
+  ENABLE_REVERT_TO_HERE: false,
 };

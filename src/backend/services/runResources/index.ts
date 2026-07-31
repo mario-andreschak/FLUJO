@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { loadItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
@@ -15,6 +15,7 @@ import {
   DEFAULT_RUN_RESOURCE_SETTINGS,
 } from '@/shared/types/runResources';
 import type { MCPReadResourceResult } from '@/shared/types/mcp';
+import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive';
 
 /**
  * Run-scoped resource store (Tier 3 data flow).
@@ -173,6 +174,7 @@ export type WriteRunResourceInput = {
   data?: { text: string } | { base64: string };
   producedBy: RunResourceProducer;
   origin?: { server: string; uri: string };
+  archive?: VisualArchiveResourceMetadata;
 };
 
 export type WriteRunResourceResult = RunResourceEntry | { skipped: 'size-cap' | 'conversation-cap' };
@@ -230,12 +232,15 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       name: input.name,
       mimeType: input.mimeType,
       size,
+      sha256: payload ? createHash('sha256').update(payload).digest('hex') : undefined,
       kind: input.kind,
       encoding,
       createdAt: Date.now(),
       producedBy: input.producedBy,
       origin: input.origin,
+      archive: input.archive,
       readBy: [],
+      verifications: [],
     };
 
     if (payload) {
@@ -352,6 +357,68 @@ export async function readRunResource(
     }
   }
   return { entry, contents };
+}
+
+/**
+ * Bounded exact-source fetch used by visual archives. It returns at most
+ * `maxChars` of text, verifies the immutable payload hash when requested, and
+ * records both the read and verification in the resource lineage.
+ */
+export async function readRunResourceBounded(
+  uri: string,
+  options: { maxChars?: number; expectedSha256?: string; access: RunResourceAccess },
+): Promise<{
+  entry: RunResourceEntry;
+  content: string;
+  truncated: boolean;
+  verification?: { expectedSha256: string; actualSha256: string; ok: boolean };
+} | null> {
+  const parsed = parseRunResourceUri(uri);
+  if (!parsed) return null;
+  const entries = await loadIndex(parsed.conversationId);
+  const entry = entries.find((candidate) => candidate.id === parsed.id);
+  if (!entry || entry.kind === 'link') return null;
+  let payload: Buffer;
+  try {
+    payload = await fs.readFile(payloadPath(parsed.conversationId, parsed.id));
+  } catch (error) {
+    log.error(`Run-resource payload missing for ${uri}`, error);
+    return null;
+  }
+  const actualSha256 = createHash('sha256').update(payload).digest('hex');
+  const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
+  const verification = expectedSha256
+    ? { expectedSha256, actualSha256, ok: expectedSha256 === actualSha256 }
+    : undefined;
+  const maxChars = Math.max(1, Math.min(200_000, Math.floor(options.maxChars ?? 50_000)));
+  const raw = entry.encoding === 'utf8'
+    ? payload.toString('utf8')
+    : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`;
+  const content = raw.slice(0, maxChars);
+  try {
+    await mutateIndex<void>(parsed.conversationId, async (current) => {
+      const target = current.find((candidate) => candidate.id === parsed.id);
+      if (!target) return { next: current, result: undefined };
+      const updated: RunResourceEntry = {
+        ...target,
+        readBy: [...target.readBy, options.access],
+        verifications: verification
+          ? [...(target.verifications ?? []), {
+              at: options.access.at,
+              expectedSha256: verification.expectedSha256,
+              actualSha256: verification.actualSha256,
+              ok: verification.ok,
+              source: options.access.source,
+              nodeId: options.access.nodeId,
+            }]
+          : target.verifications,
+      };
+      return { next: current.map((candidate) => candidate === target ? updated : candidate), result: undefined };
+    });
+  } catch (error) {
+    log.warn(`Failed to persist bounded read lineage for ${uri}`, error);
+  }
+  return { entry, content, truncated: raw.length > content.length, verification };
 }
 
 /** Remove a conversation's resources (called from conversation DELETE). */

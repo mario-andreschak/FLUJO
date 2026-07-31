@@ -44,6 +44,9 @@ const log = createLogger('backend/execution/flow/conversationLog');
 const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<ExecutionEventType>([
   'run:start',
   'run:done',
+  'recovery:checkpoint',
+  'recovery:transition',
+  'recovery:retry',
   'node:enter',
   'node:exit',
   'node:snapshot',
@@ -364,6 +367,17 @@ export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
       } else {
         indexById.set(projectedId, messages.length);
         messages.push(projected);
+      }
+    } else if (event.type === 'node:changed-files') {
+      const nodeId = event.node?.nodeId;
+      if (!nodeId || event.changedFiles.length === 0) continue;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].processNodeId !== nodeId) continue;
+        messages[i] = {
+          ...messages[i],
+          changedFiles: event.changedFiles.map(({ path, status }) => ({ path, status })),
+        };
+        break;
       }
     } else if (event.type === 'message:removed') {
       const existingIndex = indexById.get(event.messageId);

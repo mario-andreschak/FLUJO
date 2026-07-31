@@ -141,7 +141,9 @@ export async function callTool(
   timeout?: number,
   onProgress?: (progress: ToolCallProgress) => void,
   signal?: AbortSignal,
-  source: ToolCallSource = 'host'
+  source: ToolCallSource = 'host',
+  callerNodeId?: string,
+  ownerScope?: string,
 ): Promise<MCPServiceResponse> {
   log.debug('Entering callTool method');
   if (!client) {
@@ -213,12 +215,26 @@ export async function callTool(
     // callTool(params, resultSchema?, options?), the v2-beta SDK dropped the
     // schema parameter — passing options in the v1 slot would silently discard
     // the timeout and progress forwarding.
+    const requestParams = {
+      name: toolName,
+      arguments: normalizedArgs,
+      ...(callerNodeId || ownerScope
+        ? {
+            _meta: {
+              flujo: {
+                ...(callerNodeId ? { callerNodeId } : {}),
+                ...(ownerScope ? { ownerScope } : {}),
+              },
+            },
+          }
+        : {}),
+    };
     const response = isBetaClient(client)
       ? await (client.callTool as unknown as (
-          params: { name: string; arguments: Record<string, unknown> },
+          params: typeof requestParams,
           options?: typeof callOptions
-        ) => ReturnType<Client['callTool']>).call(client, { name: toolName, arguments: normalizedArgs }, callOptions)
-      : await client.callTool({ name: toolName, arguments: normalizedArgs }, undefined, callOptions);
+        ) => ReturnType<Client['callTool']>).call(client, requestParams, callOptions)
+      : await client.callTool(requestParams, undefined, callOptions);
 
     // -----------------------------------------------------------------------
     // MCP Tasks extension (SEP-2663 / spec 2026-07-28)

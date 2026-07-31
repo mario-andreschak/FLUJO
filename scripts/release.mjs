@@ -6,10 +6,11 @@
 //   npm run release 4.0.0           exact version
 //   npm run release -- --dry-run    preflight only; changes nothing
 //
-// Publishing comes before pushing. A failed npm publish therefore cannot
-// create a GitHub release or advance the official container image. Once npm
-// succeeds, pushing main rebuilds ghcr.io/mario-andreschak/flujo:latest and
-// pushing the version tag builds flujo-setup.exe and creates the GitHub release.
+// Publishing comes before pushing. The standalone MCP packages are
+// published first at the exact flujo-ai version, then the application package.
+// A failed npm publish cannot create a GitHub release or advance the official
+// container image. Once npm succeeds, pushing main rebuilds the image and the
+// version tag builds flujo-setup.exe and creates the GitHub release.
 
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -33,6 +34,12 @@ const fail = (message) => {
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const bump = args.find((arg) => !arg.startsWith('--')) ?? 'minor';
+const publicMcpPackages = [
+  '@flujo-ai/mcp-flujo',
+  '@flujo-ai/mcp-filesystem',
+  '@flujo-ai/mcp-bash',
+  '@flujo-ai/mcp-browser',
+];
 
 if (!/^(patch|minor|major|\d+\.\d+\.\d+)$/.test(bump)) {
   fail(`unknown version '${bump}'; use patch, minor, major, or an exact x.y.z version.`);
@@ -82,10 +89,12 @@ if (run('git rev-parse main') !== run('git rev-parse origin/main')) {
 
 const current = JSON.parse(readFileSync('package.json', 'utf8')).version;
 console.log(`Current FLUJO version: ${current}`);
+show('npm run build:mcp');
+show('npm run validate:mcp-release');
 
 if (dryRun) {
   console.log(
-    `\nDry run passed. Would version '${bump}', publish to npm, then push main and the new version tag.`,
+    `\nDry run passed. Would version '${bump}', publish the three MCP packages and flujo-ai, then push main and the new version tag.`,
   );
   process.exit(0);
 }
@@ -94,12 +103,16 @@ show(`npm version ${bump} -m "Bump version to %s"`);
 
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
 const tag = `v${version}`;
+show('npm run validate:mcp-release');
 
 try {
+  for (const packageName of publicMcpPackages) {
+    show(`npm publish --workspace ${packageName} --access public`);
+  }
   show('npm publish');
 } catch {
   fail(
-    `npm publish failed. Nothing was pushed. Fix the publish problem, then run "npm publish" and "git push origin main ${tag}" to finish this release.`,
+    `npm publish failed. No Git refs were pushed, but earlier packages in the sequence may already be on npm. Inspect which packages reached npm, finish publishing all four at ${version}, then run "git push origin main ${tag}".`,
   );
 }
 
@@ -113,4 +126,7 @@ try {
 
 console.log(`\nReleased FLUJO ${version}:`);
 console.log(`  npm:    https://www.npmjs.com/package/flujo-ai/v/${version}`);
+for (const packageName of publicMcpPackages) {
+  console.log(`  npm:    https://www.npmjs.com/package/${packageName}/v/${version}`);
+}
 console.log(`  GitHub: https://github.com/mario-andreschak/FLUJO/releases/tag/${tag}`);

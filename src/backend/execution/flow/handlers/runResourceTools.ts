@@ -1,5 +1,5 @@
 import { createLogger } from '@/utils/logger';
-import { writeRunResource, readRunResource, parseRunResourceUri } from '@/backend/services/runResources';
+import { writeRunResource, readRunResource, readRunResourceBounded, parseRunResourceUri } from '@/backend/services/runResources';
 import { ToolDefinition, ResourceNodeReference, MCPNodeReference } from '../types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { executeNativeReadResource } from './mcpResourceTools';
@@ -68,6 +68,17 @@ export function buildReadResourceTool(): ToolDefinition {
           description:
             'The URI to read. Either a flujo://run/... run-resource marker, or a native MCP resource URI ' +
             'from a bound server (use list_mcp_resources to discover available URIs).',
+        },
+        max_chars: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 200000,
+          description: 'Optional bounded text limit. Visual archives default to 50,000 characters.',
+        },
+        expected_sha256: {
+          type: 'string',
+          pattern: '^[a-fA-F0-9]{64}$',
+          description: 'Optional SHA-256 to verify against the immutable stored payload.',
         },
       },
       required: ['uri'],
@@ -232,15 +243,22 @@ async function executeReadResource(
   }
 
   try {
-    const read = await readRunResource(uri, {
-      at: Date.now(),
-      source: 'tool-read',
-      nodeId: ctx.node?.nodeId,
-    });
-    if (!read) {
+    const maxChars = typeof args?.max_chars === 'number' && Number.isFinite(args.max_chars)
+      ? Math.floor(args.max_chars)
+      : undefined;
+    const expectedSha256 = typeof args?.expected_sha256 === 'string'
+      ? args.expected_sha256.trim()
+      : undefined;
+    const access = { at: Date.now(), source: 'tool-read' as const, nodeId: ctx.node?.nodeId };
+    const bounded = maxChars !== undefined || expectedSha256
+      ? await readRunResourceBounded(uri, { maxChars, expectedSha256, access })
+      : null;
+    const read = bounded ? null : await readRunResource(uri, access);
+    if (!bounded && !read) {
       return { success: false, error: `Run resource not found: ${uri}` };
     }
-    const { entry, contents } = read;
+    const entry = bounded?.entry ?? read!.entry;
+    const contents = read?.contents;
     ctx.emit?.({
       type: 'resource:read',
       node: ctx.node,
@@ -253,16 +271,24 @@ async function executeReadResource(
     });
     // Prefer text content; for binary/link kinds return a compact note rather
     // than re-inlining base64 (which would defeat the point of the marker).
-    const textParts = (contents.contents ?? [])
+    const textParts = (contents?.contents ?? [])
       .map((c) => (typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : ''))
       .filter((t) => t.length > 0);
-    const content = textParts.length > 0
+    const content = bounded?.content ?? (textParts.length > 0
       ? textParts.join('\n')
-      : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`;
+      : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`);
     log.info('read_resource served run resource', { uri: entry.uri, size: entry.size });
     return {
       success: true,
-      data: { uri: entry.uri, name: entry.name, mimeType: entry.mimeType, content },
+      data: {
+        uri: entry.uri,
+        name: entry.name,
+        mimeType: entry.mimeType,
+        content,
+        truncated: bounded?.truncated ?? false,
+        sha256: entry.sha256,
+        verification: bounded?.verification,
+      },
     };
   } catch (error) {
     log.error('read_resource failed', error);

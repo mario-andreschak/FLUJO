@@ -73,9 +73,9 @@ async function processChatCompletionInternal(
     debug: flujodebug,
     continueDebug,
     userTurn,
-    // Tag origin so GET /api/runs/active can distinguish ad-hoc completions
-    // runs from scheduled fires (issue #113).
-    source: 'api',
+    // This adapter is the interactive chat/completions entry point. Classify it
+    // as chat so runtime behavior stays attended even though transport is HTTP.
+    source: 'chat',
   });
 
   // --- Flow not found → 400 (OpenAI invalid_request) ---

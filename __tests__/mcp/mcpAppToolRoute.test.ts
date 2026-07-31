@@ -29,6 +29,7 @@ describe('MCP App tool-call REST routing', () => {
         body: {
           args: { value: 1 },
           source: 'app',
+          ownerScope: 'conversation:chat-1',
           // Must be ignored: the route path is the app's authoritative server.
           serverName: 'other-server',
         },
@@ -43,8 +44,19 @@ describe('MCP App tool-call REST routing', () => {
       { value: 1 },
       undefined,
       expect.any(AbortSignal),
+      'conversation:chat-1',
     );
     expect(callToolMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed app owner scopes before dispatch', async () => {
+    const response = await POST(
+      makeLocalRequest({ body: { args: {}, source: 'app', ownerScope: '' } }),
+      context('frame-server', 'refresh')
+    );
+
+    expect(response.status).toBe(400);
+    expect(callToolFromAppMock).not.toHaveBeenCalled();
   });
 
   it('keeps ordinary calls on the model/manual path', async () => {

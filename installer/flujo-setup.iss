@@ -49,6 +49,7 @@ SetupLogging=yes
 ; there. Deliberately NOT placed into {app}: install.ps1 git-clones into {app},
 ; and git clone requires the target directory to be empty.
 Source: "..\scripts\install.ps1"; Flags: dontcopy
+Source: "..\scripts\installer-functions.ps1"; Flags: dontcopy
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"
@@ -70,6 +71,12 @@ function SetEnvironmentVariable(lpName: string; lpValue: string): Boolean;
 function FlujoLauncherExists: Boolean;
 begin
   Result := FileExists(ExpandConstant('{localappdata}\FLUJO-cli\flujo.cmd'));
+end;
+
+procedure SetRequiredEnvironmentVariable(Name: string; Value: string);
+begin
+  if not SetEnvironmentVariable(Name, Value) then
+    RaiseException('Could not prepare the installer environment variable ' + Name + '. Setup has stopped before running PowerShell.');
 end;
 
 // install.ps1 bootstraps every prerequisite through winget, so winget itself
@@ -99,19 +106,19 @@ begin
 
   // Hand the wizard's answers to install.ps1 via its unattended-install
   // environment variables (inherited by the Exec'd process below).
-  SetEnvironmentVariable('FLUJO_DIR', ExpandConstant('{app}'));
-  SetEnvironmentVariable('FLUJO_BRANCH', '{#MyBranch}');
+  SetRequiredEnvironmentVariable('FLUJO_DIR', ExpandConstant('{app}'));
+  SetRequiredEnvironmentVariable('FLUJO_BRANCH', '{#MyBranch}');
   if WizardIsTaskSelected('desktopicon') then
-    SetEnvironmentVariable('FLUJO_SHORTCUT', '1')
+    SetRequiredEnvironmentVariable('FLUJO_SHORTCUT', '1')
   else
-    SetEnvironmentVariable('FLUJO_SHORTCUT', '0');
+    SetRequiredEnvironmentVariable('FLUJO_SHORTCUT', '0');
   if WizardIsTaskSelected('ollama') then
-    SetEnvironmentVariable('FLUJO_OLLAMA', '1')
+    SetRequiredEnvironmentVariable('FLUJO_OLLAMA', '1')
   else
-    SetEnvironmentVariable('FLUJO_OLLAMA', '0');
+    SetRequiredEnvironmentVariable('FLUJO_OLLAMA', '0');
   // Never start from inside install.ps1 (it would block this wizard forever);
   // the finish page's "Start FLUJO now" checkbox launches it detached instead.
-  SetEnvironmentVariable('FLUJO_START', '0');
+  SetRequiredEnvironmentVariable('FLUJO_START', '0');
 
   // FLUJO runs npm/npx (PowerShell shims) on every start and when building MCP
   // servers on demand, so persisting the execution policy is worthwhile here.
@@ -119,10 +126,11 @@ begin
   if MsgBox('Windows blocks running PowerShell scripts by default, and FLUJO needs to run npm/npx (PowerShell shims) for this install and later when building MCP servers.' + #13#10#13#10 +
             'Set the execution policy to RemoteSigned for your user account? (recommended)',
             mbConfirmation, MB_YESNO) = IDYES then
-    SetEnvironmentVariable('FLUJO_SET_POLICY', '1')
+    SetRequiredEnvironmentVariable('FLUJO_SET_POLICY', '1')
   else
-    SetEnvironmentVariable('FLUJO_SET_POLICY', '0');
+    SetRequiredEnvironmentVariable('FLUJO_SET_POLICY', '0');
 
+  ExtractTemporaryFile('installer-functions.ps1');
   ExtractTemporaryFile('install.ps1');
   WizardForm.StatusLabel.Caption :=
     'Running the FLUJO installer - a console window shows its progress ...';

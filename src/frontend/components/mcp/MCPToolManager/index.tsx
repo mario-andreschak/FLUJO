@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import ToolTester from './ToolTester';
+import ToolTester, { type ToolTesterPrefill } from './ToolTester';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { mcpService } from '@/frontend/services/mcp';
@@ -13,9 +13,10 @@ const log = createLogger('frontend/components/mcp/MCPToolManager');
 interface ToolManagerProps {
   serverName: string | null;
   onClose?: () => void; // Optional handler to dismiss the tool tester panel
+  prefill?: ToolTesterPrefill;
 }
 
-const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
+const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill }) => {
   const {
     tools,
     isLoading,
@@ -120,6 +121,7 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose }) => {
         tools={tools}
         onTestTool={handleTestTool}
         onClose={onClose}
+        prefill={prefill}
       />
       {isLoading && (
         <div className="mt-4 flex items-center space-x-2 text-blue-500">

@@ -61,9 +61,21 @@ export function buildLaunchEnv(baseEnv = process.env) {
   return env;
 }
 
+function portFromNextArgs(args) {
+  const index = args.findIndex((arg) => arg === '--port' || arg === '-p');
+  if (index !== -1 && args[index + 1]) return args[index + 1];
+  const inline = args.find((arg) => arg.startsWith('--port='));
+  return inline?.slice('--port='.length) || process.env.FLUJO_PORT || '4200';
+}
+
 /** Spawn `next <passthroughArgs>` with the TLS-configured env and forward its exit. */
 function launchNext(passthroughArgs) {
-  const env = buildLaunchEnv();
+  const baseEnv = {
+    ...process.env,
+    FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),
+    FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
+  };
+  const env = buildLaunchEnv(baseEnv);
 
   const tlsSummary = [
     env.NODE_OPTIONS ? `NODE_OPTIONS="${env.NODE_OPTIONS}"` : null,

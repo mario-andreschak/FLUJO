@@ -17,6 +17,7 @@ WORKDIR /app
 # Install deps first (better layer caching) using the full dependency set so the
 # production build has its build-time tooling (typescript, webpack, etc.).
 COPY package.json package-lock.json ./
+COPY mcp-servers ./mcp-servers
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
@@ -32,6 +33,8 @@ WORKDIR /app
 # containers listen beyond loopback while publication remains runner-controlled.
 ENV NODE_ENV=production \
     FLUJO_CONTAINER=1 \
+    FLUJO_APP_ROOT=/app \
+    FLUJO_DATA_DIR=/app/data \
     FLUJO_MCP_APP_SANDBOX_HOST=0.0.0.0
     # Optional: restrict the in-chat file-browser MCP tool to specific host directories
     # (requires a matching bind-mount in docker-compose.yml):
@@ -63,20 +66,23 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh \
     && uv --version && uvx --version
 
-# Bring in the built app + production dependencies.
+# Bring in the built app + production dependencies. Copy the built workspace
+# packages before npm ci so their exact root dependency pins become local links;
+# `npx --no-install` can then resolve every shipped binary without a registry.
 COPY --from=builder /app/package.json /app/package-lock.json ./
+COPY --from=builder /app/mcp-servers ./mcp-servers
 RUN npm ci --omit=dev
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts ./scripts
 
-# User data lives under the working dir (db/, mcp-servers/) and is mounted as
-# named volumes by docker-compose. Create + own them so the non-root user can
-# write. HOME must be writable for npm's cache when installing npx-based servers.
+# Keep writable data separate from the immutable bundled package workspace so a
+# persistent mcp-servers volume cannot mask the offline built-ins. HOME remains
+# writable for npm's cache when installing optional external npx servers.
 ENV HOME=/home/node
-RUN mkdir -p /app/db /app/mcp-servers /home/node/.npm \
-    && chown -R node:node /app/db /app/mcp-servers /home/node
+RUN mkdir -p /app/data/db /app/data/mcp-servers /home/node/.npm \
+    && chown -R node:node /app/data /home/node
 
 USER node
 

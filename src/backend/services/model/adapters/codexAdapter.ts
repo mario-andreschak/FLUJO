@@ -15,7 +15,7 @@ import {
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
-import { buildUserMessage } from './claudeSubscriptionAdapter';
+import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
@@ -27,7 +27,12 @@ import {
   recordCodexSession,
   invalidateCodexSession,
 } from './codexSessionStore';
-import { extractNativeMediaParts } from './messageUtils';
+import { extractMediaParts, extractNativeMediaParts } from './messageUtils';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -69,6 +74,21 @@ function buildReadableName(server: string, tool: string, used: Set<string>): str
 
 function isHandoffName(name: string): boolean {
   return name.startsWith('handoff_to_') || name === 'handoff';
+}
+
+function codexImageExtension(mimeType: string | undefined): string {
+  switch ((mimeType || '').toLowerCase()) {
+    case 'image/jpeg':
+    case 'image/jpg':
+      return 'jpeg';
+    case 'image/gif':
+      return 'gif';
+    case 'image/webp':
+      return 'webp';
+    case 'image/png':
+    default:
+      return 'png';
+  }
 }
 
 const CODEX_CONNECTION_CLOSED_MID_RESPONSE =
@@ -139,28 +159,33 @@ interface CodexUsage {
  * scoped views and prefix/history divergence fall back to a fresh full flatten.
  */
 export class CodexAdapter implements CompletionAdapter {
-  async createCompletion({
-    model,
-    apiKey,
-    messages,
-    tools,
-    toolNameMap,
-    localToolExecutors,
-    requestToolApproval,
-    onTranscriptMessage,
-    onModelDelta,
-    signal,
-    conversationId,
-    nodeId,
-    runResourceMarkers,
-    sessionResume,
-  }: CompletionInput): Promise<CompletionResult> {
+  async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    const {
+      model,
+      apiKey,
+      messages,
+      tools,
+      toolNameMap,
+      localToolExecutors,
+      requestToolApproval,
+      onTranscriptMessage,
+      onModelDelta,
+      signal,
+      conversationId,
+      runId,
+      nodeId,
+      runResourceMarkers,
+      sessionResume,
+      codexSession,
+      onCodexSessionChange,
+    } = input;
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
     // the CommonJS Jest transform for every module referencing the adapter
     // factory (same reason the Agent SDK is imported lazily).
     const { Codex } = await import('@openai/codex-sdk');
 
-    const { systemPrompt, content: fullContent } = buildUserMessage(messages, runResourceMarkers);
+    const fullInput = normalizeMessageInput(messages, runResourceMarkers);
+    const { systemPrompt } = fullInput;
 
     const abortController = new AbortController();
     const onExternalAbort = () => abortController.abort();
@@ -260,7 +285,18 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              const toolStartedAt = Date.now();
               handoffCalls.push({ name: fnName, args: args ?? {} });
+              if (runId) {
+                recordStatisticsEvent(createStatisticsEvent({
+                  type: 'tool.invocation',
+                  runId,
+                  node: nodeId ? { id: nodeId } : undefined,
+                  tool: { id: fnName, name: fnName, kind: 'handoff' },
+                  outcome: 'completed',
+                  durationMs: Math.max(0, Date.now() - toolStartedAt),
+                }));
+              }
               log.debug('Codex requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
               // Do NOT abort here — return cleanly so the CLI's tool round-trip
               // completes; the event loop ends the run at the next streamed
@@ -294,6 +330,7 @@ export class CodexAdapter implements CompletionAdapter {
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
               log.debug('Codex local tool call', { tool: fnName });
+              const toolStartedAt = Date.now();
               let resultContent: string;
               let isError = false;
               try {
@@ -303,6 +340,17 @@ export class CodexAdapter implements CompletionAdapter {
                 isError = true;
               }
               recordToolResult({ id: callId, resultContent });
+              if (runId) {
+                recordStatisticsEvent(createStatisticsEvent({
+                  type: 'tool.invocation',
+                  runId,
+                  node: nodeId ? { id: nodeId } : undefined,
+                  tool: { id: fnName, name: fnName, kind: 'synthetic' },
+                  outcome: isError ? 'error' : 'completed',
+                  durationMs: Math.max(0, Date.now() - toolStartedAt),
+                  errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
+                }));
+              }
               return isError
                 ? { content: [{ type: 'text', text: resultContent }], isError: true }
                 : { content: [{ type: 'text', text: resultContent }] };
@@ -348,6 +396,7 @@ export class CodexAdapter implements CompletionAdapter {
             );
             if (denied) return denied;
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
+            const toolStartedAt = Date.now();
             const result = await mcpService.callTool(
               server,
               originalTool,
@@ -358,6 +407,19 @@ export class CodexAdapter implements CompletionAdapter {
               abortController.signal,
               'model',
             );
+            if (runId) {
+              const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: { id: callerNodeId ?? nodeId ?? 'unknown' },
+                tool: { id: originalTool, name: originalTool, kind: 'mcp' },
+                provider: { id: server },
+                outcome: cancelled ? 'cancelled' : result.success ? 'completed' : 'error',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+                errorClass: !result.success ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : result.error) : undefined,
+              }));
+            }
             let callResult: CallToolResult;
             let resultContent: string;
             if (result.success) {
@@ -425,31 +487,40 @@ export class CodexAdapter implements CompletionAdapter {
       // full-history thread. Drop it now so a later full-history turn never
       // resumes across this divergence.
       invalidateCodexSession(sessionRegistryKey);
+      onCodexSessionChange?.(undefined);
     }
+    const configuration = {
+      adapter: model.adapter ?? 'codex-cli',
+      provider: model.provider ?? 'openai',
+      model: model.name,
+      reasoningEffort: model.reasoningEffort,
+    };
     const sessionTracking =
       sessionResume && conversationId && nodeId
         ? {
             key: sessionRegistryKey!,
-            prefixHash: computeCodexPrefixHash(model.name, systemPrompt, bridgeTools),
+            configuration,
+            prefixHash: computeCodexPrefixHash(configuration, systemPrompt, bridgeTools),
           }
         : undefined;
     let resumeThreadId: string | undefined;
-    let content = fullContent;
+    let normalizedInput = fullInput;
     let inputSystemPrompt = systemPrompt;
     if (sessionTracking) {
       const reusable = findReusableCodexSession(
         sessionTracking.key,
         sessionTracking.prefixHash,
         messages,
+        codexSession,
       );
       if (reusable && messages.length > reusable.seenMessageCount) {
-        const delta = buildUserMessage(
+        const delta = normalizeMessageInput(
           messages.slice(reusable.seenMessageCount),
           runResourceMarkers,
         );
-        if (delta.content.length > 0) {
+        if (delta.text.length > 0 || delta.images.length > 0) {
           resumeThreadId = reusable.threadId;
-          content = delta.content;
+          normalizedInput = delta;
           // The original system prompt is already in the persisted Codex thread.
           inputSystemPrompt = undefined;
           log.debug('Codex resuming SDK thread', {
@@ -483,35 +554,32 @@ export class CodexAdapter implements CompletionAdapter {
         text: `<system_instructions>\n${inputSystemPrompt}\n</system_instructions>`,
       });
     }
-    if (typeof content === 'string') {
-      inputItems.push({ type: 'text', text: content });
-    } else {
-      for (const block of content) {
-        if (block.type === 'text') {
-          inputItems.push({ type: 'text', text: block.text });
-        } else if (block.type === 'image') {
-          if (block.source.type === 'base64') {
-            const dir = await ensureScratchDir();
-            const ext = block.source.media_type.split('/')[1] ?? 'png';
-            const file = path.join(dir, `img_${tempFiles.length}.${ext}`);
-            await fs.writeFile(file, Buffer.from(block.source.data, 'base64'));
-            tempFiles.push(file);
-            inputItems.push({ type: 'local_image', path: file });
-          } else {
-            // Remote URLs can't be attached (the CLI reads local paths only);
-            // reference them in text so the model at least knows they exist.
-            inputItems.push({ type: 'text', text: `[image: ${block.source.url}]` });
-          }
-        } else if (block.type === 'document') {
-          // The Codex SDK input union currently accepts text and local images,
-          // not arbitrary local files. Keep the attachment visible in context
-          // instead of silently dropping it; native Claude receives the actual
-          // document block through the shared buildUserMessage path.
-          inputItems.push({
-            type: 'text',
-            text: '[PDF document attachment supplied; this Codex SDK version cannot attach non-image files.]',
-          });
-        }
+    if (normalizedInput.text) {
+      inputItems.push({ type: 'text', text: normalizedInput.text });
+    }
+    for (const image of normalizedInput.images) {
+      if (image.base64) {
+        const dir = await ensureScratchDir();
+        const ext = codexImageExtension(image.mimeType);
+        const file = path.join(dir, `img_${tempFiles.length}.${ext}`);
+        await fs.writeFile(file, Buffer.from(image.base64, 'base64'));
+        tempFiles.push(file);
+        inputItems.push({ type: 'local_image', path: file });
+      } else {
+        // Remote URLs can't be attached (the CLI reads local paths only);
+        // reference them in text so the model at least knows they exist.
+        inputItems.push({ type: 'text', text: `[image: ${image.url}]` });
+      }
+    }
+
+    for (const message of messages) {
+      if (message.role !== 'user') continue;
+      for (const media of extractMediaParts(message.content)) {
+        if (media.type !== 'file' || media.mimeType !== 'application/pdf') continue;
+        inputItems.push({
+          type: 'text',
+          text: '[PDF document attachment supplied; this Codex SDK version cannot attach non-image files.]',
+        });
       }
     }
 
@@ -715,7 +783,21 @@ export class CodexAdapter implements CompletionAdapter {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
-      if (sessionTracking) invalidateCodexSession(sessionTracking.key);
+      if (sessionTracking) {
+        invalidateCodexSession(sessionTracking.key);
+        onCodexSessionChange?.(undefined);
+      }
+      // A stale/missing persisted thread must not lose the current user request.
+      // Retry exactly once from the full flattened history on a new SDK thread.
+      if (resumeThreadId && handoffCalls.length === 0) {
+        log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
+          conversationId,
+          nodeId,
+          model: model.name,
+          errorClass: err instanceof Error ? err.name : typeof err,
+        });
+        return this.createCompletion({ ...input, codexSession: undefined });
+      }
       // A handoff aborts the stream on purpose; only genuine errors propagate.
       if (handoffCalls.length === 0) throw err;
     } finally {
@@ -749,14 +831,19 @@ export class CodexAdapter implements CompletionAdapter {
         handoffCalls.length === 0 &&
         capturedThreadId;
       if (reusable) {
-        recordCodexSession(sessionTracking.key, {
+        const stored = recordCodexSession(sessionTracking.key, {
+          adapter: sessionTracking.configuration.adapter,
+          provider: sessionTracking.configuration.provider,
           threadId: capturedThreadId!,
+          configurationHash: sessionTracking.prefixHash,
           prefixHash: sessionTracking.prefixHash,
           seenMessageCount: messages.length + transcript.length,
           historyHash: computeCodexHistoryHash([...messages, ...transcript]),
         });
+        onCodexSessionChange?.(stored);
       } else {
         invalidateCodexSession(sessionTracking.key);
+        onCodexSessionChange?.(undefined);
       }
       log.debug('Codex SDK thread usage', {
         conversationId,

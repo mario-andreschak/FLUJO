@@ -71,6 +71,19 @@ describe('flowService cache invalidation', () => {
     expect(clearFlowCache).toHaveBeenCalledWith('flow-abc');
   });
 
+  it('strips a legacy unattended override before persisting', async () => {
+    const svc = new FlowService();
+    const legacyFlow = {
+      ...flowFixture('flow-legacy', 'Legacy'),
+      unattended: true,
+    } as Flow & { unattended?: boolean };
+
+    await svc.saveFlow(legacyFlow);
+
+    expect(legacyFlow.unattended).toBeUndefined();
+    expect((collections.flows['flow-legacy'] as { unattended?: boolean }).unattended).toBeUndefined();
+  });
+
   it('invalidates the engine flow cache when a flow is updated (rename)', async () => {
     const svc = new FlowService();
     await svc.saveFlow(flowFixture('flow-abc', 'Original'));

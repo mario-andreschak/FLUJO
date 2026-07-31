@@ -21,7 +21,6 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
-import { isBuiltInServerName } from './mcpConstants';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -44,6 +43,23 @@ export interface FlowValidationResult {
   isRunnable: boolean;
 }
 
+export const PROCESS_FILEPATH_MCP_UNAVAILABLE = 'process-filepath-mcp-unavailable';
+export const PROCESS_FILEPATH_MCP_ROOTS_MISSING = 'process-filepath-mcp-roots-missing';
+
+export type FileAccessMcpUsability = 'usable' | 'unavailable' | 'unknown';
+
+export interface FileAccessMcpServerSnapshot {
+  /** Whether this capability-bearing server was present in a successfully loaded config list. */
+  configured: boolean;
+  disabled: boolean;
+  /** A live tool-list result proves usability; a load failure remains unknown. */
+  usability: FileAccessMcpUsability;
+  roots?: unknown[];
+  rootPath?: unknown;
+}
+
+export type FileAccessMcpSnapshot = Record<string, FileAccessMcpServerSnapshot>;
+
 export interface FlowValidationContext {
   /** Known models, for detecting a deleted/renamed bound model. Omit to skip those checks. */
   models?: Array<{ id: string; name?: string; displayName?: string }>;
@@ -54,6 +70,11 @@ export interface FlowValidationContext {
    * checked against actual availability. Omit to skip the per-tool availability check.
    */
   serverTools?: Record<string, string[]>;
+  /**
+   * Design-time snapshot for capability-bearing file-access servers. Omit when MCP
+   * configuration could not be loaded so uncertainty never becomes a false warning.
+   */
+  fileAccessMcp?: FileAccessMcpSnapshot;
 }
 
 // --- Minimal structural shapes (avoid a hard dependency on @xyflow/react types) ---
@@ -204,6 +225,73 @@ function reachableFrom(startIds: string[], adj: Map<string, string[]>): Set<stri
   return seen;
 }
 
+/** Prompt fields that can actually reach a Process model for its current input mode. */
+function processPromptTexts(node: VNode): string[] {
+  const props = node.data?.properties ?? {};
+  const texts: string[] = [];
+  if (typeof props.promptTemplate === 'string' && props.promptTemplate) {
+    texts.push(props.promptTemplate);
+  }
+  if (props.inputMode === 'isolated' && typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) {
+    texts.push(props.isolatedPrompt);
+  }
+  return texts;
+}
+
+/** Remove an entire whitespace-delimited token when any part is runtime interpolation. */
+function stripDynamicPathTokens(text: string): string {
+  return text.replace(/\S*\$\{[^}]*\}\S*/g, ' ');
+}
+
+/** Conservative literal detector: file:// URIs plus absolute POSIX, drive, and UNC paths. */
+function containsLiteralFilepath(text: string): boolean {
+  const literal = stripDynamicPathTokens(text);
+  const fileUri = /(?:^|[\s("'`])file:\/\/(?:\/|[^/\s]+\/)[^\s<>"'`]+/i;
+  const windows = /(?:^|[\s("'`])(?:[A-Za-z]:[\\/][^\s<>"'`]*|\\\\[^\\\s<>"'`]+\\[^\\\s<>"'`]+(?:\\[^\s<>"'`]*)?)/;
+  const posix = /(?:^|[\s("'`])\/(?!\/)[^\s<>"'`]+/;
+  return fileUri.test(literal) || windows.test(literal) || posix.test(literal);
+}
+
+/**
+ * Browser-side roots stay intentionally syntactic. `${global:...}` roots and environment
+ * ceilings (FLUJO_FS_ROOTS / FLUJO_BASH_ROOTS) resolve only at runtime, so a configured
+ * global token counts as meaningful and environment ceilings are not guessed here.
+ */
+function isMeaningfulFileAccessRoot(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const root = value.trim();
+  if (!root) return false;
+  if (/^\$\{global:[^{}]+\}$/.test(root)) return true;
+  if (root.includes('${')) return false;
+  if (/^file:/i.test(root)) {
+    try {
+      const uri = new URL(root);
+      return uri.protocol === 'file:' && (!!uri.hostname || !!uri.pathname);
+    } catch {
+      return false;
+    }
+  }
+  // Literal absolute and relative roots are both supported by the runtime.
+  return !root.includes('\0');
+}
+
+function fileAccessServerHasEffectiveRoot(
+  name: string,
+  server: FileAccessMcpServerSnapshot,
+  mcpNodes: VNode[]
+): boolean {
+  const serverRoots = Array.isArray(server.roots) ? server.roots : [];
+  const nodeRoots = mcpNodes
+    .filter((node) => node.data?.properties?.boundServer === name)
+    .flatMap((node) => {
+      const roots = node.data?.properties?.roots;
+      return Array.isArray(roots) ? roots : [];
+    });
+  if ([...serverRoots, ...nodeRoots].some(isMeaningfulFileAccessRoot)) return true;
+  // Runtime roots/list falls back to rootPath only when the additive roots union is empty.
+  return isMeaningfulFileAccessRoot(server.rootPath);
+}
+
 /**
  * Validate a flow against the (optional) current models/servers, returning a structured
  * list of issues. Errors block a run; warnings are advisory.
@@ -302,6 +390,49 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     );
     if (!wiredToProcess) {
       add('warning', 'mcp-node-unconnected', `MCP node "${getNodeLabel(node)}" is not connected to any Process node.`, node);
+    }
+  }
+
+  // --- Process prompts: literal filepath support (issue #321) ---
+  // One warning per node, never per candidate path/server. Missing context means MCP config
+  // loading failed, so the check is skipped instead of presenting uncertainty as absence.
+  if (context.fileAccessMcp) {
+    const snapshot = context.fileAccessMcp;
+    const available = Object.entries(snapshot)
+      .filter(([, server]) => server.configured && !server.disabled && server.usability === 'usable')
+      .map(([name]) => name);
+    const availabilityUnknown = Object.values(snapshot).some((server) => (
+      server.configured && !server.disabled && server.usability === 'unknown'
+    ));
+
+    for (const node of processNodes) {
+      if (!processPromptTexts(node).some(containsLiteralFilepath)) continue;
+
+      if (available.length === 0) {
+        if (!availabilityUnknown) {
+          add(
+            'warning',
+            PROCESS_FILEPATH_MCP_UNAVAILABLE,
+            `Process node "${getNodeLabel(node)}" contains a literal filepath, but no configured file-access MCP server is currently available. Enable or reconnect one so this flow can access the path.`,
+            node
+          );
+        }
+        continue;
+      }
+
+      // A failed status/tool load could hide another usable server with roots. Suppress the
+      // roots warning until every enabled file-access server has a known availability result.
+      if (
+        !availabilityUnknown &&
+        available.every((name) => !fileAccessServerHasEffectiveRoot(name, snapshot[name], mcpNodes))
+      ) {
+        add(
+          'warning',
+          PROCESS_FILEPATH_MCP_ROOTS_MISSING,
+          `Process node "${getNodeLabel(node)}" contains a literal filepath, but the available file-access MCP servers have no effective roots configured. Add roots globally or on the corresponding MCP node in this flow.`,
+          node
+        );
+      }
     }
   }
 
@@ -813,13 +944,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         context.serverTools[binding.server] &&
         !context.serverTools[binding.server].includes(binding.name)
       ) {
-        const shadowNote = isBuiltInServerName(binding.server)
-          ? ` (a stored server named "${binding.server}" shadows the built-in — their toolsets may differ)`
-          : '';
         add(
           'warning',
           'tool-unavailable',
-          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" does not currently expose.${shadowNote}`,
+          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" does not currently expose.`,
           node
         );
       }
@@ -882,13 +1010,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
             if (warnedTools.has(dedupeKey)) continue;
             if (!tools.includes(toolName)) {
               warnedTools.add(dedupeKey);
-              const shadowNote = isBuiltInServerName(server)
-                ? ` (stored server "${server}" shadows the built-in — their toolsets may differ)`
-                : '';
               add(
                 'warning',
                 'tool-unavailable',
-                `Process node "${getNodeLabel(node)}" has enabledTool "${toolName}" which server "${server}" does not currently expose.${shadowNote}`,
+                `Process node "${getNodeLabel(node)}" has enabledTool "${toolName}" which server "${server}" does not currently expose.`,
                 node
               );
             }

@@ -7,13 +7,14 @@
  *   - `mcpBinding` (findBindings / PILL_SCAN) is the COMPILER-facing codec. It
  *     matches ONLY `${tool:...}` / `${resource:...}` / legacy pills. The flow
  *     compiler (`stripPills`) and validation depend on that exact set, and
- *     `${res:NAME}` / `${var:NAME}` are intentionally INVISIBLE to it so they
+ *     `${res:NAME}` / `${var:NAME}` / `${global:NAME}` are intentionally
+ *     INVISIBLE to it so they
  *     survive compilation and reach the backend resolvers verbatim.
  *
  *   - THIS module is the RENDERING-facing scanner. It additionally recognizes
- *     `${res:NAME}` (a run-scoped resource reference — "Temporary Data") so the
- *     PromptBuilder can show it as a pill, WITHOUT changing what the compiler
- *     sees. `${res:...}` is still resolved at run time by
+ *     `${res:NAME}` (a run-scoped resource reference — "Temporary Data") and
+ *     `${global:NAME}` so prompt-authoring surfaces can show both as pills,
+ *     WITHOUT changing what the compiler sees. `${res:...}` is still resolved at run time by
  *     `resolveRunResourceRefs` — this only affects how it looks while editing.
  *
  * Keep this dependency-light (it runs in the browser). `${res:NAME}` uses the
@@ -31,14 +32,14 @@ import {
   bindingLabel,
 } from './mcpBinding';
 
-/** A run-scoped resource reference is a new, server-less kind on top of the MCP binding kinds. */
-export type PromptRefKind = BindingKind | 'runres';
+/** Rendering-only, server-less kinds on top of the MCP binding kinds. */
+export type PromptRefKind = BindingKind | 'runres' | 'global';
 
 export interface PromptRef {
   kind: PromptRefKind;
-  /** MCP server for tool/resource kinds; empty string for `runres`. */
+  /** MCP server for tool/resource kinds; empty string for rendering-only kinds. */
   server: string;
-  /** Tool name / resource URI (mcp kinds) or the run-resource NAME (`runres`). */
+  /** Tool name / resource URI (MCP kinds), run-resource NAME, or global key. */
   name: string;
 }
 
@@ -49,12 +50,24 @@ export interface PromptRefMatch extends PromptRef {
   index: number;
 }
 
+/** A context-scoped option shown by prompt-authoring `@` pickers. */
+export interface PromptReferenceSuggestion extends PromptRef {
+  /** Short human-facing name used for filtering and selection. */
+  label: string;
+  /** Canonical serialized reference inserted into the persisted string. */
+  value: string;
+  /** Optional context shown under the label (description, URI, or server). */
+  description?: string;
+}
+
 /** Matches `${res:NAME}`. Mirrors the backend `RES_REF_SCAN` (no `}` inside NAME). */
 const RES_REF_SCAN = /\$\{res:([^}]+)\}/g;
+/** Matches `${global:NAME}` without accepting an empty name or nested closing brace. */
+const GLOBAL_REF_SCAN = /\$\{global:([^}]+)\}/g;
 
 /**
  * Find every renderable reference in a block of text, in document order: the
- * MCP binding pills (`findBindings`) PLUS run-resource references (`${res:NAME}`).
+ * MCP binding pills (`findBindings`) PLUS rendering-only run-resource and global references.
  */
 export function findPromptRefs(text: string): PromptRefMatch[] {
   const out: PromptRefMatch[] = findBindings(text).map((b) => ({
@@ -78,14 +91,30 @@ export function findPromptRefs(text: string): PromptRefMatch[] {
     });
   }
 
+  GLOBAL_REF_SCAN.lastIndex = 0;
+  while ((m = GLOBAL_REF_SCAN.exec(text)) !== null) {
+    out.push({
+      kind: 'global',
+      server: '',
+      // Preserve the raw key so an untouched expression round-trips exactly.
+      name: m[1],
+      fullMatch: m[0],
+      index: m.index,
+    });
+  }
+
   return out.sort((a, b) => a.index - b.index);
 }
 
-/** Parse a complete reference string (`${…}`), including `${res:NAME}`. Null if not one. */
+/** Parse a complete rendering reference string (`${…}`). Null if not one. */
 export function parsePromptRefPill(full: string): PromptRef | null {
   if (full.startsWith('${res:') && full.endsWith('}')) {
     const name = full.slice('${res:'.length, -1);
     return name ? { kind: 'runres', server: '', name } : null;
+  }
+  if (full.startsWith('${global:') && full.endsWith('}')) {
+    const name = full.slice('${global:'.length, -1);
+    return name ? { kind: 'global', server: '', name } : null;
   }
   const b: ParsedBinding | null = parsePill(full);
   return b ? { kind: b.kind, server: b.server, name: b.name } : null;
@@ -94,12 +123,28 @@ export function parsePromptRefPill(full: string): PromptRef | null {
 /** Build the reference text (including `${` … `}`) to embed in a prompt template. */
 export function encodePromptRefPill(kind: PromptRefKind, server: string, name: string): string {
   if (kind === 'runres') return `\${res:${name}}`;
+  if (kind === 'global') return `\${global:${name}}`;
   return encodeBindingPill(kind, server, name);
+}
+
+/** Build a typed picker option while keeping serialization in one codec. */
+export function createPromptReferenceSuggestion(
+  ref: PromptRef,
+  label = ref.name,
+  description?: string,
+): PromptReferenceSuggestion {
+  return {
+    ...ref,
+    label,
+    value: encodePromptRefPill(ref.kind, ref.server, ref.name),
+    description,
+  };
 }
 
 /** Readable chip label for a parsed reference (no `${` … `}`), e.g. `res:NAME`. */
 export function promptRefLabel(ref: PromptRef): string {
   if (ref.kind === 'runres') return `res:${ref.name}`;
+  if (ref.kind === 'global') return `global:${ref.name}`;
   return bindingLabel({ kind: ref.kind, server: ref.server, name: ref.name });
 }
 

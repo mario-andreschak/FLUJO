@@ -20,9 +20,20 @@ export enum StorageKey {
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
   PENDING_APPROVALS = 'pending_approvals',
-  // Per-built-in-server overrides (issue #170). Only a tiny { disabled } flag is
-  // persisted here; the synthetic built-in configs themselves are NEVER stored.
+  // Legacy per-internal-server overrides retained only as migration input.
   MCP_INTERNAL_OVERRIDES = 'mcp_internal_overrides',
+  // Durable marker for the one-time migration of shipped internal MCP servers
+  // into ordinary MCP_SERVERS records (issue #346).
+  MCP_INTERNAL_SERVERS_MIGRATION_V1 = 'mcp_internal_servers_migration_v1',
+  // Adds immutable package ids/capabilities to shipped records without claiming
+  // a user-defined configuration that happens to reuse a former built-in name.
+  MCP_INTERNAL_CAPABILITIES_MIGRATION_V2 = 'mcp_internal_capabilities_migration_v2',
+  // Seeds the browser package for installations whose original built-in migration
+  // completed before the browser server shipped (issue #334).
+  MCP_INTERNAL_BROWSER_MIGRATION_V3 = 'mcp_internal_browser_migration_v3',
+  // Converts previously provisioned package records to normal stdio launch fields
+  // and removes the legacy internal-package metadata (issue #347).
+  MCP_SHIPPED_SERVERS_MIGRATION_V4 = 'mcp_shipped_servers_migration_v4',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -63,6 +74,10 @@ export const StorageKeys = {
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
+  MCP_INTERNAL_SERVERS_MIGRATION_V1: StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1,
+  MCP_INTERNAL_CAPABILITIES_MIGRATION_V2: StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,
+  MCP_INTERNAL_BROWSER_MIGRATION_V3: StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
+  MCP_SHIPPED_SERVERS_MIGRATION_V4: StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,
@@ -156,12 +171,17 @@ export interface ExperimentalSettings {
    */
   autoUnloadOllamaModels?: boolean;
   /**
-   * When true, the built-in filesystem and bash MCP servers block sensitive
+   * When true, installed filesystem and bash MCP packages block sensitive
    * home-directory locations even when a configured root would otherwise allow
    * them. Off by default: configured roots are an explicit user grant and take
    * precedence unless this additional defense-in-depth layer is opted into.
    */
   protectedPathsEnabled?: boolean;
+  /**
+   * When false, filesystem snapshots and snapshot-based revert are disabled.
+   * Missing values default to true to preserve existing installations.
+   */
+  snapshotsEnabled?: boolean;
   /**
    * Cap, in characters, on each tool DESCRIPTION sent to the model. 0 / undefined
    * disables capping.
@@ -200,6 +220,21 @@ export interface ExperimentalSettings {
    * `compactionEnabled`. Missing ⇒ 8000.
    */
   compactionKeepTokens?: number;
+  /**
+   * Opt in to wire-time visual archives for old bulky context (#356). Missing
+   * values are migrated lazily to false, preserving byte-identical behaviour.
+   */
+  visualCompactionEnabled?: boolean;
+  /**
+   * Restrict visual archive candidates to complete old tool-call/result groups.
+   * Missing values default to true, the conservative migration default.
+   */
+  visualCompactionToolResultsOnly?: boolean;
+  /**
+   * Diagnostic/manual evaluation mode: calculate visual routing metrics but do
+   * not replace text with images. Missing values default to false.
+   */
+  visualCompactionEvaluationMode?: boolean;
   /**
    * How many of the most-recent wire messages `compactForWire` keeps VERBATIM
    * (everything older is eligible for lossless wire-only shrinking of oversized

@@ -50,6 +50,26 @@ describe('FlowBuilder permission rules', () => {
     window.localStorage.clear();
   });
 
+  it('omits the unattended control and strips historical values from saves', () => {
+    const onSave = jest.fn();
+    const legacyFlow = {
+      ...initialFlow,
+      permissionRules: undefined,
+      unattended: true,
+    };
+    render(<FlowBuilder initialFlow={legacyFlow} onSave={onSave} onDelete={() => {}} allFlows={[legacyFlow]} />);
+
+    expect(screen.queryByText(/This flow contains advanced settings/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Unattended/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
+    expect(screen.queryByRole('checkbox', { name: /Unattended/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty('unattended');
+  });
+
   it('edits, reorders, and saves rules in their displayed order without editor IDs', async () => {
     const onSave = jest.fn();
     render(<FlowBuilder initialFlow={initialFlow} onSave={onSave} onDelete={() => {}} allFlows={[initialFlow]} />);

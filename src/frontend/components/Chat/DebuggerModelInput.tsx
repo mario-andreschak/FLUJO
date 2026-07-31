@@ -149,7 +149,7 @@ export const AnnotatedHistory: React.FC<{ provenance: ModelInputProvenanceEntry[
 const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ modelInput }) => {
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
 
-  const { systemMessage, wireMessages, provenance, counts, inputMode } = modelInput;
+  const { systemMessage, wireMessages, provenance, counts, inputMode, visualCompaction } = modelInput;
 
   // The wire view shows non-system messages (the system message gets its own
   // prominent block above).
@@ -169,6 +169,27 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
           <Chip size="small" variant="outlined" label={`inputMode: ${inputMode}`} />
         )}
       </Box>
+
+      {visualCompaction && (
+        <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Chip size="small" color={visualCompaction.route === 'image' ? 'success' : 'default'} label={`visual route: ${visualCompaction.route}`} />
+            <Chip size="small" variant="outlined" label={`vision: ${visualCompaction.capability}`} />
+            {visualCompaction.evaluationOnly && <Chip size="small" variant="outlined" label="evaluation only" />}
+            {visualCompaction.fallbackReason && <Chip size="small" variant="outlined" label={visualCompaction.fallbackReason} />}
+          </Box>
+          {visualCompaction.estimates && (
+            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 0.5 }}>
+              raw {visualCompaction.estimates.rawTextTokens.toLocaleString()} tokens · image {visualCompaction.estimates.imageTokens.toLocaleString()} + sidecar {visualCompaction.estimates.sidecarTokens.toLocaleString()} · savings {visualCompaction.estimates.netSavings.toLocaleString()} ({visualCompaction.estimates.savingsPercent.toFixed(1)}%) · {visualCompaction.pages.length} page(s), {visualCompaction.renderedBytes.toLocaleString()} bytes, {visualCompaction.latencyMs} ms
+            </Typography>
+          )}
+          {visualCompaction.sourceResourceUri && (
+            <Typography variant="caption" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>
+              Exact source: {visualCompaction.sourceResourceUri} · SHA-256 {visualCompaction.sourceSha256}
+            </Typography>
+          )}
+        </Paper>
+      )}
 
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion defaultExpanded sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>

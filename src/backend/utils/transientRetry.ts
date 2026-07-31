@@ -31,6 +31,14 @@ export interface TransientRetryOptions {
   baseDelayMs?: number;
   /** When provided, an already-aborted signal skips all retries. */
   signal?: AbortSignal;
+  /** Best-effort metadata callback for each actual invocation of `fn`. */
+  onAttempt?: (observation: {
+    attempt: number;
+    durationMs: number;
+    outcome: 'completed' | 'error' | 'cancelled';
+    result?: unknown;
+    error?: unknown;
+  }) => void;
 }
 
 /**
@@ -48,15 +56,31 @@ export async function withTransientRetry<T>(
   fn: () => Promise<T>,
   opts: TransientRetryOptions = {}
 ): Promise<T> {
-  const { maxAttempts = 3, baseDelayMs = 500, signal } = opts;
+  const { maxAttempts = 3, baseDelayMs = 500, signal, onAttempt } = opts;
+  const observe = (observation: Parameters<NonNullable<TransientRetryOptions['onAttempt']>>[0]) => {
+    try {
+      onAttempt?.(observation);
+    } catch {
+      // Instrumentation must never alter provider behavior.
+    }
+  };
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (signal?.aborted) {
       throw lastError ?? new DOMException('Aborted', 'AbortError');
     }
+    const startedAt = Date.now();
     try {
-      return await fn();
+      const result = await fn();
+      observe({ attempt, durationMs: Math.max(0, Date.now() - startedAt), outcome: 'completed', result });
+      return result;
     } catch (err) {
+      observe({
+        attempt,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        outcome: signal?.aborted || (err instanceof Error && err.name === 'AbortError') ? 'cancelled' : 'error',
+        error: err,
+      });
       if (!isTransientTransportError(err) || attempt >= maxAttempts) {
         throw err;
       }

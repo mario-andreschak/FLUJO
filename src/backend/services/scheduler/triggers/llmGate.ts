@@ -154,6 +154,7 @@ async function askFlow(flowId: string, task: string): Promise<string> {
   const result = await runFlow({
     flowId,
     prompt: `${task}\n\n${VERDICT_CONTRACT}`,
+    source: 'trigger',
     mode: 'ephemeral',
     requireApproval: false,
     debug: false,

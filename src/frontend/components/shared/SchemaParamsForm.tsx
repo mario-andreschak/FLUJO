@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   FormControl,
@@ -12,6 +12,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { useStorage } from '@/frontend/contexts/StorageContext';
+import GlobalReferenceEditor from './GlobalReferenceEditor';
 
 /**
  * Render input fields for an MCP tool's parameters from its JSON schema
@@ -32,6 +34,11 @@ export interface SchemaParamsFormProps {
 }
 
 const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaParamsFormProps) => {
+  const { globalEnvVars } = useStorage();
+  const globalNames = useMemo(
+    () => Object.keys(globalEnvVars).sort((a, b) => a.localeCompare(b)),
+    [globalEnvVars],
+  );
   // Local text drafts for JSON-edited fields, so half-typed JSON doesn't get
   // destroyed by round-tripping through the parsed value.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -181,15 +188,25 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
         }
 
         return (
-          <TextField
-            key={key}
-            fullWidth
-            size={size}
-            label={label}
-            value={values[key] !== undefined ? String(values[key]) : ''}
-            onChange={(e) => setValue(key, e.target.value === '' ? undefined : e.target.value)}
-            helperText={description}
-          />
+          <Box key={key}>
+            <Typography variant="body2" component="label" sx={{ display: 'block', mb: 0.5 }}>
+              {label}
+            </Typography>
+            <GlobalReferenceEditor
+              value={values[key] !== undefined ? String(values[key]) : ''}
+              onChange={(nextValue) => setValue(key, nextValue === '' ? undefined : nextValue)}
+              globalNames={globalNames}
+              placeholder={description || key}
+              multiline={false}
+              minRows={1}
+              ariaLabel={label}
+            />
+            {description && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, mx: 1.75 }}>
+                {description}
+              </Typography>
+            )}
+          </Box>
         );
       })}
     </Box>

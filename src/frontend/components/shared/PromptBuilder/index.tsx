@@ -1,34 +1,30 @@
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { createLogger } from '@/utils/logger';
-
-// Create a logger instance for this component
-const log = createLogger('frontend/components/shared/PromptBuilder');
-
-// Log levels:
-// log.verbose - Extremely detailed information for in-depth debugging
-// log.debug - Detailed information for debugging purposes
-// log.info - General information about application operation
-// log.warn - Warning messages that don't prevent the application from working
-// log.error - Error messages that may prevent the application from working correctly
-import { createEditor, Descendant, Text, Transforms, Editor, BaseEditor } from 'slate';
-import { Slate, Editable, withReact, ReactEditor, useSlate } from 'slate-react';
-import { withHistory } from 'slate-history';
-import { Box, Typography, Paper, ToggleButtonGroup, ToggleButton } from '@mui/material';
+import React, {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { Box, Paper, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import CodeIcon from '@mui/icons-material/Code';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { mcpService } from '@/frontend/services/mcp';
-import './promptBuilder.css';
+import { useStorage } from '@/frontend/contexts/StorageContext';
+import { createLogger } from '@/utils/logger';
 import {
-  PromptRefKind,
+  createPromptReferenceSuggestion,
+  findPromptRefs,
   PromptRef,
   PromptRefMatch,
-  encodePromptRefPill,
-  parsePromptRefPill,
-  findPromptRefs,
-  promptRefLabel,
+  PromptReferenceSuggestion,
 } from '@/utils/shared/promptRefs';
+import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '../GlobalReferenceEditor';
+import './promptBuilder.css';
+
+const log = createLogger('frontend/components/shared/PromptBuilder');
 
 export interface PromptBuilderRef {
   insertText: (text: string) => void;
@@ -42,184 +38,9 @@ interface PromptBuilderProps {
   height?: number | string;
   onModeChange?: (mode: 'raw' | 'preview') => void;
   customPreviewRenderer?: () => React.ReactNode;
+  suggestions?: PromptReferenceSuggestion[];
 }
 
-// A binding reference (tool / resource / run-resource pill) rendered as an inline void element.
-interface BindingReferenceElement {
-  type: 'binding-reference';
-  kind: PromptRefKind;
-  server: string;
-  name: string; // tool name, resource URI, or run-resource NAME
-  children: CustomText[];
-}
-
-interface CustomElement {
-  type: 'paragraph';
-  children: (CustomText | BindingReferenceElement)[];
-}
-
-interface CustomText {
-  text: string;
-  bold?: boolean;
-  italic?: boolean;
-  code?: boolean;
-}
-
-declare module 'slate' {
-  interface CustomTypes {
-    Editor: BaseEditor & ReactEditor;
-    Element: CustomElement | BindingReferenceElement;
-    Text: CustomText;
-  }
-}
-
-const isHandoffBinding = (b: PromptRef): boolean => b.kind === 'tool' && b.server === 'handoff';
-
-// Build the inline children for a single line: plain text interleaved with binding pills.
-const lineToChildren = (line: string): CustomElement['children'] => {
-  const matches = findPromptRefs(line);
-  if (matches.length === 0) {
-    return [{ text: line }];
-  }
-
-  const children: CustomElement['children'] = [];
-  let cursor = 0;
-  for (const m of matches) {
-    if (m.index > cursor) {
-      children.push({ text: line.slice(cursor, m.index) });
-    }
-    children.push({
-      type: 'binding-reference',
-      kind: m.kind,
-      server: m.server,
-      name: m.name,
-      children: [{ text: '' }],
-    });
-    cursor = m.index + m.fullMatch.length;
-  }
-  if (cursor < line.length) {
-    children.push({ text: line.slice(cursor) });
-  }
-  return children;
-};
-
-// Convert a markdown string to Slate value
-const deserialize = (markdown: string): Descendant[] => {
-  log.debug('Deserializing markdown to Slate value');
-  const lines = markdown.split('\n');
-  const nodes: Descendant[] = lines.map((line) => ({
-    type: 'paragraph',
-    children: lineToChildren(line),
-  }));
-  return nodes.length > 0 ? nodes : [{ type: 'paragraph', children: [{ text: '' }] }];
-};
-
-// Convert Slate value back to a markdown string
-const serialize = (nodes: Descendant[]): string => {
-  log.debug('Serializing Slate value to markdown');
-  let bindingCount = 0;
-
-  const result = nodes
-    .map((node) => {
-      const element = node as CustomElement;
-      if (!element.children) return '';
-
-      return element.children
-        .map((child: any) => {
-          if (Text.isText(child)) {
-            return child.text;
-          } else if (child.type === 'binding-reference') {
-            const ref = child as BindingReferenceElement;
-            bindingCount++;
-            return encodePromptRefPill(ref.kind, ref.server, ref.name);
-          }
-          return '';
-        })
-        .join('');
-    })
-    .join('\n');
-
-  if (bindingCount > 0) {
-    log.debug(`Serialized ${bindingCount} binding references`);
-  }
-  return result;
-};
-
-// Custom element renderer
-const Element = (props: {
-  attributes: any;
-  children: React.ReactNode;
-  element: CustomElement | BindingReferenceElement;
-}) => {
-  const { attributes, children, element } = props;
-
-  const BindingReferenceComponent = () => {
-    const editor = useSlate();
-    const ref = element as BindingReferenceElement;
-    const handoff = isHandoffBinding(ref);
-    const cls =
-      ref.kind === 'runres' ? 'runres' : ref.kind === 'resource' ? 'resource' : handoff ? 'handoff' : '';
-
-    const remove = () => {
-      const path = ReactEditor.findPath(editor, element);
-      log.debug(`Removing binding reference: ${ref.kind}:${ref.server}:${ref.name}`);
-      Transforms.removeNodes(editor, { at: path });
-    };
-
-    return (
-      <span contentEditable={false} className={`tool-reference-container ${cls}`}>
-        <span className={`tool-reference ${cls}`}>
-          {promptRefLabel(ref)}
-        </span>
-        <span
-          className={`tool-reference-delete ${cls}`}
-          role="button"
-          tabIndex={0}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            remove();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              e.stopPropagation();
-              remove();
-            }
-          }}
-        >
-          ×
-        </span>
-      </span>
-    );
-  };
-
-  switch (element.type) {
-    case 'binding-reference':
-      return (
-        <span {...attributes} className="tool-reference-wrapper">
-          <BindingReferenceComponent />
-          {children} {/* Required by Slate */}
-        </span>
-      );
-    default:
-      return <p {...attributes}>{children}</p>;
-  }
-};
-
-// Custom leaf renderer
-const Leaf = (props: { attributes: any; children: React.ReactNode; leaf: CustomText }) => {
-  const { attributes, children, leaf } = props;
-  let formattedChildren = children;
-
-  if (leaf.bold) formattedChildren = <strong>{formattedChildren}</strong>;
-  if (leaf.italic) formattedChildren = <em>{formattedChildren}</em>;
-  if (leaf.code) formattedChildren = <code>{formattedChildren}</code>;
-
-  return <span {...attributes}>{formattedChildren}</span>;
-};
-
-// Preview component for a tool pill — fetches the tool's description.
 const ToolPreview = ({ server, name }: { server: string; name: string }) => {
   const isHandoff = server === 'handoff';
   const [toolInfo, setToolInfo] = useState<any>(null);
@@ -231,7 +52,7 @@ const ToolPreview = ({ server, name }: { server: string; name: string }) => {
       try {
         setIsLoading(true);
         const result = await mcpService.listServerTools(server);
-        const tool = result.tools?.find((t: any) => t.name === name);
+        const tool = result.tools?.find((candidate: any) => candidate.name === name);
         if (!cancelled) setToolInfo(tool || null);
       } catch (error) {
         log.error(`Failed to fetch tool info for ${server}:${name}`, error);
@@ -246,10 +67,18 @@ const ToolPreview = ({ server, name }: { server: string; name: string }) => {
   }, [server, name]);
 
   if (isLoading) {
-    return <span className={`tool-reference-preview loading ${isHandoff ? 'handoff' : ''}`}>{`tool:${server}__${name}`}</span>;
+    return (
+      <span className={`tool-reference-preview loading ${isHandoff ? 'handoff' : ''}`}>
+        {`tool:${server}__${name}`}
+      </span>
+    );
   }
   if (!toolInfo) {
-    return <span className={`tool-reference-preview not-found ${isHandoff ? 'handoff' : ''}`}>{`tool:${server}__${name} (Tool not found)`}</span>;
+    return (
+      <span className={`tool-reference-preview not-found ${isHandoff ? 'handoff' : ''}`}>
+        {`tool:${server}__${name} (Tool not found)`}
+      </span>
+    );
   }
 
   return (
@@ -259,9 +88,8 @@ const ToolPreview = ({ server, name }: { server: string; name: string }) => {
   );
 };
 
-// Preview component for a resource pill — looks up the resource's description.
 const ResourcePreview = ({ server, name }: { server: string; name: string }) => {
-  const [desc, setDesc] = useState<string | null>(null);
+  const [description, setDescription] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -271,8 +99,8 @@ const ResourcePreview = ({ server, name }: { server: string; name: string }) => 
         setIsLoading(true);
         const result = await mcpService.listServerResources(server);
         const all = [...(result.resources || []), ...(result.resourceTemplates || [])];
-        const match = all.find((r: any) => r.uri === name || r.uriTemplate === name);
-        if (!cancelled) setDesc(match?.description || match?.name || null);
+        const match = all.find((resource: any) => resource.uri === name || resource.uriTemplate === name);
+        if (!cancelled) setDescription(match?.description || match?.name || null);
       } catch (error) {
         log.error(`Failed to fetch resource info for ${server}:${name}`, error);
       } finally {
@@ -290,46 +118,47 @@ const ResourcePreview = ({ server, name }: { server: string; name: string }) => 
   }
   return (
     <span className="tool-reference-preview resource">
-      [The contents of resource `{name}` from `{server}`{desc ? ` (${desc})` : ''} will be inserted here]
+      [The contents of resource `{name}` from `{server}`{description ? ` (${description})` : ''} will be inserted here]
     </span>
   );
 };
 
-// Preview component for a run-resource reference (`${res:NAME}`, "Temporary Data").
-// Unlike a resource pill this is NOT an MCP-server resource, so there is nothing
-// to fetch — it is resolved from the run's data store at run time.
 const RunResourcePreview = ({ name }: { name: string }) => (
   <span className="tool-reference-preview runres">
     [The contents of the Temporary Data `{name}` will be inserted here at run time]
   </span>
 );
 
+const GlobalPreview = ({ name }: { name: string }) => (
+  <span className="tool-reference-preview global">
+    [Global variable <code>{`\${global:${name}}`}</code> will be inserted at run time]
+  </span>
+);
+
 const BindingPreview = ({ binding }: { binding: PromptRef }) => {
+  if (binding.kind === 'global') return <GlobalPreview name={binding.name} />;
   if (binding.kind === 'runres') return <RunResourcePreview name={binding.name} />;
   if (binding.kind === 'resource') return <ResourcePreview server={binding.server} name={binding.name} />;
   return <ToolPreview server={binding.server} name={binding.name} />;
 };
 
-// Preview renderer for the entire document
 const PreviewRenderer = ({ value }: { value: string }) => {
-  log.debug('Rendering preview');
-
-  // Build a tagged segment list: text runs and binding pills, in order.
-  type Segment = { type: 'text'; value: string } | { type: 'binding'; binding: PromptRefMatch; key: number };
+  type Segment =
+    | { type: 'text'; value: string }
+    | { type: 'binding'; binding: PromptRefMatch; key: number };
   const segments: Segment[] = [];
   let currentIndex = 0;
-  for (const m of findPromptRefs(value)) {
-    if (m.index > currentIndex) {
-      segments.push({ type: 'text', value: value.slice(currentIndex, m.index) });
+  for (const match of findPromptRefs(value)) {
+    if (match.index > currentIndex) {
+      segments.push({ type: 'text', value: value.slice(currentIndex, match.index) });
     }
-    segments.push({ type: 'binding', binding: m, key: m.index });
-    currentIndex = m.index + m.fullMatch.length;
+    segments.push({ type: 'binding', binding: match, key: match.index });
+    currentIndex = match.index + match.fullMatch.length;
   }
   if (currentIndex < value.length) {
     segments.push({ type: 'text', value: value.slice(currentIndex) });
   }
 
-  // Assemble paragraphs, splitting text segments on newlines.
   const paragraphs: React.ReactNode[] = [];
   let currentParagraph: React.ReactNode[] = [];
   const flush = () => {
@@ -340,15 +169,15 @@ const PreviewRenderer = ({ value }: { value: string }) => {
   for (const segment of segments) {
     if (segment.type === 'text') {
       const lines = segment.value.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        currentParagraph.push(lines[i]);
-        if (i < lines.length - 1) flush();
+      for (let index = 0; index < lines.length; index++) {
+        currentParagraph.push(lines[index]);
+        if (index < lines.length - 1) flush();
       }
     } else {
       currentParagraph.push(<BindingPreview key={`binding-${segment.key}`} binding={segment.binding} />);
     }
   }
-  if (currentParagraph.length > 0) flush();
+  if (currentParagraph.length > 0 || paragraphs.length === 0) flush();
 
   return <div className="preview-content">{paragraphs}</div>;
 };
@@ -356,103 +185,39 @@ const PreviewRenderer = ({ value }: { value: string }) => {
 const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   value,
   onChange,
-  label = "Prompt Builder",
+  label = 'Prompt Builder',
   height = 300,
   onModeChange,
-  customPreviewRenderer
+  customPreviewRenderer,
+  suggestions = [],
 }, ref) => {
-  log.info('PromptBuilder initialized');
-
-  // Create a Slate editor object with custom plugins
-  const editor = useMemo(() => {
-    const e = withHistory(withReact(createEditor()));
-    const { isInline, isVoid } = e;
-
-    // Binding references are inline, void (non-editable) elements.
-    e.isInline = (element) => (element.type === 'binding-reference' ? true : isInline(element));
-    e.isVoid = (element) => (element.type === 'binding-reference' ? true : isVoid(element));
-
-    return e;
-  }, []);
-
+  const { globalEnvVars } = useStorage();
+  const globalNames = useMemo(
+    () => Object.entries(globalEnvVars)
+      .filter(([, entry]) => !entry.metadata?.isSecret)
+      .map(([name]) => name)
+      .sort((a, b) => a.localeCompare(b)),
+    [globalEnvVars],
+  );
+  const pickerSuggestions = useMemo(() => [
+    ...suggestions,
+    ...globalNames.map((name) => createPromptReferenceSuggestion(
+      { kind: 'global', server: '', name },
+      name,
+    )),
+  ], [globalNames, suggestions]);
+  const editorRef = useRef<GlobalReferenceEditorRef>(null);
   const [mode, setMode] = useState<'raw' | 'preview'>('raw');
-  const [slateValue, setSlateValue] = useState<Descendant[]>(() => deserialize(value || ''));
-  const isExternalUpdate = useRef(false);
-  const [, setForceUpdate] = useState(0);
 
   useImperativeHandle(ref, () => ({
-    insertText: (text: string) => {
-      log.info(`insertText called with text length: ${text.length}`);
+    insertText: (text: string) => editorRef.current?.insertText(text),
+    getMode: () => mode,
+  }), [mode]);
 
-      // Is this a complete reference pill (tool / resource / run-resource)?
-      const parsed = parsePromptRefPill(text);
-
-      if (parsed) {
-        log.info(`Inserting ${parsed.kind} reference: ${parsed.server}:${parsed.name}`);
-        const bindingReference: BindingReferenceElement = {
-          type: 'binding-reference',
-          kind: parsed.kind,
-          server: parsed.server,
-          name: parsed.name,
-          children: [{ text: '' }],
-        };
-
-        if (!editor.selection) {
-          Transforms.select(editor, Editor.end(editor, []));
-        }
-        Transforms.insertNodes(editor, bindingReference);
-        Transforms.move(editor);
-
-        setForceUpdate((prev) => prev + 1);
-        setSlateValue([...editor.children] as Descendant[]);
-      } else {
-        // Regular text
-        if (!editor.selection) {
-          Transforms.select(editor, Editor.end(editor, []));
-        }
-        Transforms.insertText(editor, text);
-      }
-
-      const newValue = serialize(editor.children as Descendant[]);
-      onChange(newValue);
-      log.info(`insertText completed successfully`);
-    },
-    getMode: () => mode
-  }));
-
-  // Update Slate value when the external value changes.
-  // Compare against the value normalized through the same codec: a saved flow may hold a
-  // legacy `${_-_-_..}` pill which serialize() re-emits as `${tool:..}`. Without
-  // normalizing, the new text would never equal the legacy value and this effect would
-  // re-fire forever. Normalizing makes format-only differences a no-op while still
-  // catching genuine external changes (e.g. switching to a different node's template).
-  useEffect(() => {
-    const currentText = serialize(slateValue);
-    const normalizedValue = serialize(deserialize(value || ''));
-    if (currentText !== normalizedValue) {
-      log.debug('External value change detected');
-      isExternalUpdate.current = true;
-      setSlateValue(deserialize(value || ''));
-    }
-  }, [value, slateValue]);
-
-  // Handle changes to the editor content
-  const handleChange = useCallback((newValue: Descendant[]) => {
-    if (isExternalUpdate.current) {
-      isExternalUpdate.current = false;
-      return;
-    }
-    setSlateValue(newValue);
-    const markdown = serialize(newValue);
-    onChange(markdown);
-  }, [onChange]);
-
-  const handleModeChange = (_event: React.MouseEvent<HTMLElement>, newMode: 'raw' | 'preview' | null) => {
-    if (newMode !== null) {
-      log.info(`Mode changed from ${mode} to ${newMode}`);
-      setMode(newMode);
-      if (onModeChange) onModeChange(newMode);
-    }
+  const handleModeChange = (_event: React.MouseEvent<HTMLElement>, nextMode: 'raw' | 'preview' | null) => {
+    if (!nextMode) return;
+    setMode(nextMode);
+    onModeChange?.(nextMode);
   };
 
   return (
@@ -481,22 +246,28 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
         sx={{
           border: '1px solid rgba(0, 0, 0, 0.12)',
           borderRadius: 1,
-          overflow: 'hidden',
+          overflow: 'visible',
           flexGrow: 1,
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
         }}
       >
         {mode === 'raw' ? (
-          <Box className="slate-editor-container" sx={{ height: typeof height === 'number' ? height : '100%', overflow: 'auto', p: 2 }}>
-            <Slate editor={editor} initialValue={slateValue} onChange={handleChange}>
-              <Editable
-                className="slate-editor"
-                renderElement={Element}
-                renderLeaf={Leaf}
-                placeholder="Write your prompt here..."
-              />
-            </Slate>
+          <Box
+            className="slate-editor-container"
+            sx={{ height: typeof height === 'number' ? height : '100%', overflow: 'visible', p: 2 }}
+          >
+            <GlobalReferenceEditor
+              ref={editorRef}
+              value={value}
+              onChange={onChange}
+              suggestions={pickerSuggestions}
+              placeholder="Write your prompt here..."
+              bare
+              minRows={4}
+              containerSx={{ height: '100%' }}
+              ariaLabel={label || 'Prompt editor'}
+            />
           </Box>
         ) : customPreviewRenderer ? (
           <Box className="custom-preview-container" sx={{ height: typeof height === 'number' ? height : '100%', overflow: 'auto' }}>

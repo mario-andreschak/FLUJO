@@ -1,5 +1,5 @@
 "use client"
-import { AppBar, Box, Drawer, IconButton, List, ListItemButton, ListItemText, Toolbar, Typography, useTheme as useMuiTheme, useMediaQuery } from '@mui/material';
+import { AppBar, Box, Drawer, IconButton, List, ListItemButton, ListItemText, ListSubheader, Toolbar, Typography, useTheme as useMuiTheme, useMediaQuery } from '@mui/material';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { createLogger } from '@/utils/logger';
 
@@ -12,27 +12,142 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { interceptNavigation } from '@/frontend/utils/navigationGuard';
 import { useStorage } from '@/frontend/contexts/StorageContext';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 
-interface NavItem {
+interface NavLink {
+  type: 'link';
   name: string;
   path: string;
   tour: string;
+  aliases?: string[];
   /** When true, the item is only shown if experimental features are enabled (#184). */
   experimental?: boolean;
 }
 
+interface NavGroup {
+  type: 'group';
+  name: string;
+  children: NavLink[];
+}
+
+type NavItem = NavLink | NavGroup;
+
 const navItems: NavItem[] = [
-  { name: 'Models', path: '/models', tour: 'nav-models' },
-  { name: 'MCP', path: '/mcp', tour: 'nav-mcp' },
-  { name: 'Flows', path: '/flows', tour: 'nav-flows' },
-  { name: 'Executions', path: '/executions', tour: 'nav-executions' },
-  { name: 'Waves', path: '/waves', tour: 'nav-waves', experimental: true },
-  { name: 'Packages', path: '/packages', tour: 'nav-packages', experimental: true },
-  { name: 'Chat', path: '/chat', tour: 'nav-chat' },
-  { name: 'Docs', path: '/docs', tour: 'nav-docs' },
-  { name: 'Settings', path: '/settings', tour: 'nav-settings' },
+  { type: 'link', name: 'Models', path: '/models', tour: 'nav-models' },
+  { type: 'link', name: 'MCP', path: '/mcp', tour: 'nav-mcp' },
+  { type: 'link', name: 'Flows', path: '/flows', tour: 'nav-flows' },
+  {
+    type: 'group',
+    name: 'Automation',
+    children: [
+      {
+        type: 'link',
+        name: 'Triggers',
+        path: '/automation/triggers',
+        aliases: ['/executions'],
+        tour: 'nav-executions',
+      },
+      {
+        type: 'link',
+        name: 'Waves',
+        path: '/automation/waves',
+        aliases: ['/waves'],
+        tour: 'nav-waves',
+        experimental: true,
+      },
+    ],
+  },
+  { type: 'link', name: 'Packages', path: '/packages', tour: 'nav-packages', experimental: true },
+  { type: 'link', name: 'Statistics', path: '/statistics', tour: 'nav-statistics', experimental: true },
+  { type: 'link', name: 'Chat', path: '/chat', tour: 'nav-chat' },
+  { type: 'link', name: 'Docs', path: '/docs', tour: 'nav-docs' },
+  { type: 'link', name: 'Settings', path: '/settings', tour: 'nav-settings' },
 ];
+
+const isActive = (item: NavLink, pathname: string) =>
+  pathname === item.path || item.aliases?.includes(pathname) === true;
+
+interface NavigationEntriesProps {
+  items: NavItem[];
+  pathname: string;
+  mobile?: boolean;
+  onNavigate: (href: string) => (event: React.MouseEvent) => void;
+}
+
+/** Shared hierarchy renderer for the desktop toolbar and mobile drawer. */
+function NavigationEntries({ items, pathname, mobile = false, onNavigate }: NavigationEntriesProps) {
+  const renderLink = (item: NavLink, nested = false) => {
+    const active = isActive(item, pathname);
+
+    if (mobile) {
+      return (
+        <ListItemButton
+          key={item.path}
+          component={Link}
+          href={item.path}
+          data-tour={item.tour}
+          onClick={onNavigate(item.path)}
+          selected={active}
+          sx={{ pl: nested ? 4 : 2 }}
+        >
+          <ListItemText
+            primary={item.name}
+            primaryTypographyProps={{ fontWeight: active ? 600 : 400 }}
+          />
+        </ListItemButton>
+      );
+    }
+
+    return (
+      <Typography
+        key={item.path}
+        component={Link}
+        href={item.path}
+        data-tour={item.tour}
+        onClick={onNavigate(item.path)}
+        sx={{
+          color: active ? 'primary.main' : 'text.primary',
+          textDecoration: 'none',
+          fontWeight: active ? 600 : 400,
+          fontSize: nested ? '0.875rem' : undefined,
+          '&:hover': { color: 'primary.main' },
+        }}
+      >
+        {item.name}
+      </Typography>
+    );
+  };
+
+  return (
+    <>
+      {items.map((item) => {
+        if (item.type === 'link') return renderLink(item);
+
+        if (mobile) {
+          return (
+            <Fragment key={item.name}>
+              <ListSubheader component="div" disableSticky sx={{ lineHeight: 2.5, fontWeight: 600 }}>
+                {item.name}
+              </ListSubheader>
+              {item.children.map((child) => renderLink(child, true))}
+            </Fragment>
+          );
+        }
+
+        return (
+          <Box key={item.name} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <Typography variant="caption" sx={{ lineHeight: 1.1, fontWeight: 600, color: 'text.secondary' }}>
+              {item.name}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1.5 }}>
+              {item.children.map((child) => renderLink(child, true))}
+            </Box>
+          </Box>
+        );
+      })}
+    </>
+  );
+}
 
 export default function Navigation() {
   const { toggleTheme, isDarkMode } = useTheme();
@@ -49,9 +164,16 @@ export default function Navigation() {
   // hydrated from storage we render the default (hidden) state to avoid a
   // flash of the experimental Waves entry.
   const experimentalEnabled = settingsHydrated && (settings?.experimental?.enabled ?? false);
-  const visibleNavItems = navItems.filter(
-    (item) => !item.experimental || experimentalEnabled
-  );
+  const visibleNavItems = navItems.reduce<NavItem[]>((visible, item) => {
+    if (item.type === 'link') {
+      if (!item.experimental || experimentalEnabled) visible.push(item);
+      return visible;
+    }
+
+    const children = item.children.filter((child) => !child.experimental || experimentalEnabled);
+    if (children.length > 0) visible.push({ ...item, children });
+    return visible;
+  }, []);
 
   // Route nav clicks through the navigation guard so a page with unsaved
   // work (e.g. the flow editor) can show its Save/Discard dialog instead of
@@ -105,25 +227,7 @@ export default function Navigation() {
 
         {/* Desktop nav links — hidden on mobile */}
         <Box sx={{ flexGrow: 1, display: { xs: 'none', md: 'flex' }, gap: 2 }}>
-          {visibleNavItems.map((item) => (
-            <Typography
-              key={item.path}
-              component={Link}
-              href={item.path}
-              data-tour={item.tour}
-              onClick={handleNavClick(item.path)}
-              sx={{
-                color: pathname === item.path ? 'primary.main' : 'text.primary',
-                textDecoration: 'none',
-                fontWeight: pathname === item.path ? 600 : 400,
-                '&:hover': {
-                  color: 'primary.main',
-                },
-              }}
-            >
-              {item.name}
-            </Typography>
-          ))}
+          <NavigationEntries items={visibleNavItems} pathname={pathname} onNavigate={handleNavClick} />
         </Box>
 
         {/* Spacer on mobile to push icons to the right */}
@@ -168,23 +272,12 @@ export default function Navigation() {
             FLUJO
           </Typography>
           <List disablePadding>
-            {visibleNavItems.map((item) => (
-              <ListItemButton
-                key={item.path}
-                component={Link}
-                href={item.path}
-                data-tour={item.tour}
-                onClick={handleDrawerNavClick(item.path)}
-                selected={pathname === item.path}
-              >
-                <ListItemText
-                  primary={item.name}
-                  primaryTypographyProps={{
-                    fontWeight: pathname === item.path ? 600 : 400,
-                  }}
-                />
-              </ListItemButton>
-            ))}
+            <NavigationEntries
+              items={visibleNavItems}
+              pathname={pathname}
+              mobile
+              onNavigate={handleDrawerNavClick}
+            />
           </List>
         </Box>
       </Drawer>

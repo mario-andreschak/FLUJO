@@ -35,6 +35,11 @@ interface ToolTestResult {
   progressToken?: string; // Add progress token for tracking
 }
 
+export interface ToolTesterPrefill {
+  toolName: string;
+  arguments: Record<string, unknown>;
+}
+
 interface ToolTesterProps {
   serverName: string;
   tools: Array<{
@@ -45,6 +50,7 @@ interface ToolTesterProps {
   }>;
   onTestTool: (toolName: string, params: Record<string, any>, timeout?: number) => Promise<ToolTestResult>;
   onClose?: () => void; // Optional handler to dismiss the tester panel
+  prefill?: ToolTesterPrefill;
 }
 
 const ToolTester: React.FC<ToolTesterProps> = ({
@@ -52,6 +58,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   tools = [], // Provide default empty array
   onTestTool,
   onClose,
+  prefill,
 }) => {
   log.debug('Props:', { serverName, toolsCount: tools?.length });
   // Ensure tools is always an array
@@ -67,6 +74,16 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const [activeProgressToken, setActiveProgressToken] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
   const [showRawResult, setShowRawResult] = useState(false); // State for toggling raw/rendered view
+
+  useEffect(() => {
+    if (!prefill || !toolsArray.some((tool) => tool.name === prefill.toolName)) return;
+    setSelectedTool(prefill.toolName);
+    setParams({ ...prefill.arguments });
+    setResult(null);
+    setProgress(null);
+    setActiveProgressToken(null);
+    setErrorNotification(null);
+  }, [prefill, tools]);
 
   const handleToolSelect = (toolName: string) => {
     setSelectedTool(toolName);

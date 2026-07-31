@@ -2,6 +2,7 @@ import {
   resolveEffectiveCompaction,
   DEFAULT_COMPACTION_BUFFER_TOKENS,
   DEFAULT_COMPACTION_KEEP_TOKENS,
+  resolveEffectiveVisualCompaction,
 } from '@/backend/execution/flow/handlers/resolveEffectiveCompaction';
 
 describe('resolveEffectiveCompaction (issue #248)', () => {
@@ -60,5 +61,27 @@ describe('resolveEffectiveCompaction (issue #248)', () => {
   it('resolves bufferTokens from global then default', () => {
     expect(resolveEffectiveCompaction(undefined, undefined, { compactionBufferTokens: 30000 }).bufferTokens).toBe(30000);
     expect(resolveEffectiveCompaction().bufferTokens).toBe(DEFAULT_COMPACTION_BUFFER_TOKENS);
+  });
+});
+
+describe('resolveEffectiveVisualCompaction (issue #356)', () => {
+  it('migrates missing persisted values to safe defaults', () => {
+    expect(resolveEffectiveVisualCompaction()).toEqual({
+      enabled: false,
+      toolResultsOnly: true,
+      evaluationOnly: false,
+    });
+  });
+
+  it('keeps the controls independent', () => {
+    expect(resolveEffectiveVisualCompaction({
+      visualCompactionEnabled: true,
+      visualCompactionToolResultsOnly: false,
+      visualCompactionEvaluationMode: true,
+    })).toEqual({
+      enabled: true,
+      toolResultsOnly: false,
+      evaluationOnly: true,
+    });
   });
 });

@@ -197,7 +197,7 @@ const ExecutionCard = ({
             // A non-exclusive execution held off because an exclusive one holds
             // (or is waiting for) the scheduler-global lock (issue #171).
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              Blocked — an exclusive execution holds the scheduler
+              Blocked — an exclusive trigger holds the scheduler
               {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
             </Typography>
           ) : (

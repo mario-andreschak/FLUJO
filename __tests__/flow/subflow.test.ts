@@ -95,7 +95,7 @@ describe('SubflowNode', () => {
 
     // Default (no promptTemplate): the parent history is passed, not a prompt.
     const call = runFlowMock.mock.calls[0][0];
-    expect(call).toMatchObject({ flowId: 'inner-flow', mode: 'ephemeral', depth: 1, requireApproval: false });
+    expect(call).toMatchObject({ flowId: 'inner-flow', source: 'subflow', mode: 'ephemeral', depth: 1, requireApproval: false });
     expect(call.prompt).toBeUndefined();
     expect(call.messages).toEqual([
       expect.objectContaining({ role: 'user', content: 'hello world' }),

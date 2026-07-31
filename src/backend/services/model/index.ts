@@ -179,7 +179,12 @@ class ModelService {
   async updateModel(model: Model): Promise<ModelOperationResponse> {
     log.debug('updateModel: Entering method');
     try {
-      log.verbose("updateModel: full model before validation", JSON.stringify(model))
+      log.debug('updateModel: validating model metadata', {
+        modelId: model.id,
+        provider: model.provider,
+        adapter: model.adapter,
+        credentialConfigured: Boolean(model.ApiKey?.trim()),
+      });
       // Validate required fields
       if (!model.id) {
         log.warn('updateModel: Missing model ID');

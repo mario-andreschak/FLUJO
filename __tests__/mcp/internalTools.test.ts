@@ -77,7 +77,6 @@ import {
   internalCallTool,
   InternalDispatchService,
 } from '@/backend/services/mcp/internalTools';
-import { INTERNAL_SERVER_NAME } from '@/backend/services/mcp/internalServerConfig';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
@@ -244,7 +243,7 @@ describe('execute_flow', () => {
     const r = await internalCallTool(makeService(), 'execute_flow', { flow: 'My Flow', input: 'hi' });
 
     expect(runFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ flowId: 'f1', prompt: 'hi', mode: 'ephemeral' })
+      expect.objectContaining({ flowId: 'f1', prompt: 'hi', source: 'internal', mode: 'ephemeral' })
     );
     expect(r.isError).toBeUndefined();
     expect(text(r)).toBe('done');
@@ -501,16 +500,6 @@ describe('list_mcp_servers', () => {
 });
 
 describe('call_mcp_tool', () => {
-  it('refuses to call the internal server through itself', async () => {
-    const service = makeService();
-    const r = await internalCallTool(service, 'call_mcp_tool', {
-      server: INTERNAL_SERVER_NAME,
-      tool: 'anything',
-    });
-    expect(r.isError).toBe(true);
-    expect(service.callTool).not.toHaveBeenCalled();
-  });
-
   it('passes the downstream CallToolResult through on success', async () => {
     const service = makeService();
     service.callTool.mockResolvedValue({
@@ -578,15 +567,6 @@ describe('set_mcp_server_enabled', () => {
     expect(r.isError).toBeUndefined();
   });
 
-  it('refuses to disable the internal server', async () => {
-    const service = makeService();
-    const r = await internalCallTool(service, 'set_mcp_server_enabled', {
-      server: INTERNAL_SERVER_NAME,
-      enabled: false,
-    });
-    expect(r.isError).toBe(true);
-    expect(service.updateServerConfig).not.toHaveBeenCalled();
-  });
 });
 
 describe('list_models', () => {

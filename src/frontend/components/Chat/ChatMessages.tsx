@@ -46,7 +46,11 @@ import EditIcon from '@mui/icons-material/Edit';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
+import RestoreIcon from '@mui/icons-material/Restore';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { ChatMessage } from './index';
+import RevertPreviewDialog from './RevertPreviewDialog';
+import { FEATURES } from '@/config/features';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -98,6 +102,8 @@ interface ChatMessagesProps {
   editingMessageId?: string | null;
   onToggleDisabled: (messageId: string) => void;
   onSplitConversation: (messageId: string) => void;
+  /** Called after a confirmed message-scoped worktree revert. */
+  onRevertToHere?: (messageId: string) => void;
   /** Start editing a message — opens the editor in the ChatInput, not inline. */
   onBeginEditMessage?: (messageId: string) => void;
   onApproveToolCall?: (toolCallId: string, always?: boolean) => void; // Add approve handler prop
@@ -129,10 +135,9 @@ interface ChatMessagesProps {
   ) => void;
   /**
    * #216: route a tool result's `ui://` app into the docked canvas surface
-   * instead of rendering it inline. For external apps, clicking the bubble
-   * launcher is the click-to-mount consent gate. FLUJO's built-in apps may
-   * already be open under the first-party trust policy (#331). When omitted,
-   * apps render inline as before.
+   * instead of rendering it inline. Clicking the bubble launcher is the same
+   * click-to-mount consent gate for every server. When omitted, apps render
+   * inline as before.
    */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   /**
@@ -481,6 +486,7 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
 const ToolCallTimeline: React.FC<{
   pairs: ToolCallPair<ChatMessage>[];
   messageId: string;
+  conversationId?: string;
   onAppMessage?: (text: string) => boolean | Promise<boolean>;
   onUpdateModelContext?: (
     appKey: string,
@@ -491,6 +497,7 @@ const ToolCallTimeline: React.FC<{
 }> = ({
   pairs,
   messageId,
+  conversationId,
   onAppMessage,
   onUpdateModelContext,
   onRegisterAppTeardown,
@@ -546,6 +553,21 @@ const ToolCallTimeline: React.FC<{
           formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
         } catch (e) { /* keep the original string */ }
         const showRaw = !!rawByKey[key];
+        const openInToolTester = pair.mcpDestination
+          ? () => {
+              let args: Record<string, unknown> = {};
+              try {
+                const parsed = JSON.parse(pair.toolCall.function.arguments);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed;
+              } catch { /* malformed arguments safely prefill as an empty object */ }
+              const query = new URLSearchParams({
+                server: pair.mcpDestination!.serverName,
+                tool: pair.mcpDestination!.toolName,
+                args: JSON.stringify(args),
+              });
+              window.location.assign(`/mcp?${query.toString()}`);
+            }
+          : undefined;
 
         return (
           <Collapse key={key} in={expandedKey === key}>
@@ -566,6 +588,17 @@ const ToolCallTimeline: React.FC<{
               }}>
                 {formattedArgs}
               </Box>
+              {openInToolTester && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<PlayArrowIcon />}
+                  onClick={openInToolTester}
+                  sx={{ mt: 0.5 }}
+                >
+                  Execute in Tool Tester
+                </Button>
+              )}
 
               {/* Matching result (or a pending placeholder) */}
               <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
@@ -603,6 +636,7 @@ const ToolCallTimeline: React.FC<{
                   request promotion into the persistent canvas. */}
               {pair.result?.ui?.uri && pair.result.ui.serverName && (
                 <McpAppFrame
+                  conversationId={conversationId}
                   serverName={pair.result.ui.serverName}
                   uri={pair.result.ui.uri}
                   toolName={pair.result.ui.toolName ?? pair.toolCall.function.name}
@@ -639,6 +673,7 @@ const ToolCallTimeline: React.FC<{
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  conversationId?: string;
   /** Resolved node label for the attribution pill (id shown in the tooltip). */
   nodeLabel?: string;
   /** Stable reference (memoized by the parent) — resolves the attribution pill. */
@@ -682,6 +717,7 @@ interface MessageBubbleProps {
  */
 const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   message,
+  conversationId,
   nodeLabel,
   availableNodes,
   showRaw,
@@ -912,6 +948,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           <ToolCallTimeline
             pairs={toolCallPairs}
             messageId={message.id}
+            conversationId={conversationId}
             onAppMessage={onAppMessage}
             onUpdateModelContext={onUpdateModelContext}
             onRegisterAppTeardown={onRegisterAppTeardown}
@@ -1283,6 +1320,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   editingMessageId,
   onToggleDisabled,
   onSplitConversation,
+  onRevertToHere,
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
@@ -1369,6 +1407,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   // Message menu state
   const [menuAnchorEl, setMenuAnchorEl] = React.useState<null | HTMLElement>(null);
   const [activeMessageId, setActiveMessageId] = React.useState<string | null>(null);
+  const [revertMessageId, setRevertMessageId] = React.useState<string | null>(null);
   // State to manage raw view toggle for each tool message
   const [showRawToolResult, setShowRawToolResult] = React.useState<Record<string, boolean>>({});
 
@@ -1398,6 +1437,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const handleSplitConversation = () => {
     if (activeMessageId) {
       onSplitConversation(activeMessageId);
+      handleMenuClose();
+    }
+  };
+
+  const handleRevertToHere = () => {
+    if (activeMessageId) {
+      setRevertMessageId(activeMessageId);
       handleMenuClose();
     }
   };
@@ -1473,6 +1519,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <MessageBubble
             key={message.id || `msg-${hiddenCount + index}`} // Use message.id as key, fallback to global index
             message={message}
+            conversationId={conversationId}
             nodeLabel={message.processNodeId ? nodeLabelById.get(message.processNodeId) : undefined}
             availableNodes={availableNodes}
             showRaw={!!showRawToolResult[message.id]}
@@ -1574,8 +1621,23 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <ListItemIcon><CallSplitIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Split Conversation Here</ListItemText>
         </MenuItem>
+        {FEATURES.ENABLE_REVERT_TO_HERE && activeMsgForMenu?.changedFiles?.length ? (
+          <MenuItem onClick={handleRevertToHere}>
+            <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Revert to here</ListItemText>
+          </MenuItem>
+        ) : null}
       </Menu>
 
+      {FEATURES.ENABLE_REVERT_TO_HERE && conversationId && (
+        <RevertPreviewDialog
+          open={!!revertMessageId}
+          conversationId={conversationId}
+          messageId={revertMessageId}
+          onClose={() => setRevertMessageId(null)}
+          onReverted={onRevertToHere}
+        />
+      )}
 
       {/* Display Pending Elicitation Form */}
       {pendingElicitation && (

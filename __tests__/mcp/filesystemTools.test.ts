@@ -1,5 +1,5 @@
 /**
- * Tests for the built-in `filesystem` MCP server (issue #170): round-trip
+ * Tests for the shipped `filesystem` MCP package (issue #170): round-trip
  * read/write, line-range read, diff editing, dir listing + depth-limited tree,
  * search by name/content, create/move/delete, and FLUJO_FS_ROOTS confinement.
  */
@@ -8,9 +8,8 @@ import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  FILESYSTEM_SERVER_NAME: 'filesystem',
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
 // `filesystemResources.ts` imports the ESM-only `@modelcontextprotocol/ext-apps`
@@ -20,7 +19,7 @@ jest.mock('@modelcontextprotocol/ext-apps', () => ({
   LATEST_PROTOCOL_VERSION: '2026-01-26',
 }));
 
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 import { filesystemToolDefinitions, filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
 import {
   filesystemListResources,
@@ -29,7 +28,7 @@ import {
   _clearTouchedFilesForTests,
 } from '@/backend/services/mcp/internal/filesystemResources';
 
-const mockedRoots = getInternalServerRoots as jest.Mock;
+const mockedRoots = loadServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };
@@ -64,6 +63,13 @@ describe('filesystem tool definitions', () => {
   it('exposes get_allowed_directories', () => {
     const names = filesystemToolDefinitions().map((t) => t.name);
     expect(names).toContain('get_allowed_directories');
+  });
+
+  it('advertises the read_file batch request form', () => {
+    const definition = filesystemToolDefinitions().find((tool) => tool.name === 'read_file');
+    const paths = definition?.inputSchema.properties?.paths as Record<string, unknown>;
+    expect(paths).toMatchObject({ type: 'array', minItems: 1, maxItems: 25 });
+    expect(definition?.inputSchema.required).toBeUndefined();
   });
 
   it('advertises accurate read and destructive-write annotations', () => {
@@ -118,6 +124,66 @@ describe('filesystem operations', () => {
     expect(out.content).toBe('b\nc');
     expect(out.from).toBe(2);
     expect(out.to).toBe(3);
+  });
+
+  it('reads multiple files in order, preserves duplicates, and returns matching structured content', async () => {
+    const first = path.join(dir, 'first.txt');
+    const second = path.join(dir, 'second.txt');
+    await fsp.writeFile(first, 'alpha\nneedle\nomega');
+    await fsp.writeFile(second, 'one\nneedle\nthree');
+
+    const result = await filesystemCallTool('read_file', {
+      paths: [first, second, first],
+      pattern: 'needle',
+    });
+    const payload = parse(result);
+    const files = payload.files as Array<Record<string, unknown>>;
+
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual(payload);
+    expect(files.map((file) => file.path)).toEqual([first, second, first]);
+    expect(files.every((file) => typeof file.contentHash === 'string')).toBe(true);
+    expect(files.every((file) => (file.content as string).includes('needle'))).toBe(true);
+  });
+
+  it('keeps batch successes when individual files fail', async () => {
+    const good = path.join(dir, 'good.txt');
+    const missing = path.join(dir, 'missing.txt');
+    await fsp.writeFile(good, 'ok');
+
+    const payload = parse(await filesystemCallTool('read_file', { paths: [good, missing, dir] }));
+    const files = payload.files as Array<Record<string, unknown>>;
+
+    expect(files).toHaveLength(3);
+    expect(files[0]).toMatchObject({ path: good, content: 'ok' });
+    expect(files[1]).toMatchObject({ requestedPath: missing, path: missing });
+    expect(files[1].error).toEqual(expect.any(String));
+    expect(files[2]).toMatchObject({ requestedPath: dir, path: dir, error: 'Expected a regular file to read.' });
+  });
+
+  it.each([
+    [{}, 'Provide "path".'],
+    [{ path: 'one', paths: ['two'] }, 'Provide either "path" or "paths", not both.'],
+    [{ paths: [] }, 'Provide a non-empty "paths" array.'],
+    [{ paths: ['valid', 1] }, 'Every entry in "paths" must be a non-empty string.'],
+    [{ paths: Array.from({ length: 26 }, (_, i) => String(i)) }, 'Provide at most 25 paths.'],
+  ])('rejects invalid read target forms', async (args, message) => {
+    const result = await filesystemCallTool('read_file', args);
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toEqual({ error: message });
+    expect(structured(result)).toEqual({ error: message });
+  });
+
+  it.each([
+    ['whole-file', {}],
+    ['pattern', { pattern: 'needle' }],
+    ['range', { from: 1, to: 2 }],
+  ])('rejects a directory target for a %s read', async (_mode, options) => {
+    const result = await filesystemCallTool('read_file', { path: dir, ...options });
+
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toEqual({ error: 'Expected a regular file to read.' });
+    expect(structured(result)).toEqual({ error: 'Expected a regular file to read.' });
   });
 
   it('applies a diff edit and rejects a missing oldText', async () => {

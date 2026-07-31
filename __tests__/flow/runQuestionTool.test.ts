@@ -27,6 +27,7 @@ import {
   clearPendingQuestions,
 } from '@/backend/services/questionRegistry';
 import type { RawExecutionEvent } from '@/shared/types/execution/events';
+import { isUnattendedFlowInvocation } from '@/backend/execution/flow/types';
 
 /** Grab the questionId from the emitted run:awaiting_question event. */
 function emittedQuestionId(emit: jest.Mock): string {
@@ -67,17 +68,24 @@ describe('executeQuestionTool — guards', () => {
     expect(outcome.error).toMatch(/not available/i);
   });
 
-  it('degrades to a clear tool-error in an unattended run (no silent stall)', async () => {
-    const emit = jest.fn();
-    const outcome = await executeQuestionTool(
-      { questions: [{ prompt: 'x', options: ['a'] }] },
-      { conversationId: 'c1', emit, unattended: true },
-    );
-    expect(outcome.success).toBe(false);
-    expect(outcome.error).toMatch(/unattended/i);
-    // Must not have blocked / emitted an awaiting event.
-    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'run:awaiting_question' }));
-  });
+  it.each(['schedule', 'trigger', 'subflow', 'mcp', 'internal'] as const)(
+    'degrades to a clear tool-error for derived unattended %s runs',
+    async (source) => {
+      const emit = jest.fn();
+      const outcome = await executeQuestionTool(
+        { questions: [{ prompt: 'x', options: ['a'] }] },
+        {
+          conversationId: 'c1',
+          emit,
+          unattended: isUnattendedFlowInvocation(source),
+        },
+      );
+      expect(outcome.success).toBe(false);
+      expect(outcome.error).toMatch(/unattended/i);
+      // Must not have blocked / emitted an awaiting event.
+      expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'run:awaiting_question' }));
+    },
+  );
 
   it('rejects an empty questions array', async () => {
     const outcome = await executeQuestionTool({ questions: [] }, { conversationId: 'c1' });

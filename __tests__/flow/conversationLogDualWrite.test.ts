@@ -85,7 +85,7 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
-import { runFlow } from '@/backend/execution/flow/runFlow';
+import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
   readConversationLog,
@@ -94,6 +94,9 @@ import {
   hasConversationLog,
   _setConversationLogDirForTests,
 } from '@/backend/execution/flow/conversationLog';
+
+const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
+  runFlowWithContext({ ...input, source: 'chat' });
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 

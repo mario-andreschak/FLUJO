@@ -98,6 +98,7 @@ describe('lane identity on subflow boundary events (issue #157)', () => {
     for (const start of starts) {
       const input = inputs.find((i) => i.conversationId === start.laneConversationId)!;
       expect(input).toBeDefined();
+      expect(input.source).toBe('subflow');
       expect(input.mode).toBe('conversation');
       expect(input.title).toBe(start.laneTitle);
     }

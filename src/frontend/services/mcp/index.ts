@@ -295,6 +295,7 @@ class MCPService {
     args: Record<string, unknown>,
     timeout?: number,
     signal?: AbortSignal,
+    ownerScope?: string,
   ) {
     try {
       const response = await fetch(
@@ -304,7 +305,7 @@ class MCPService {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ args, timeout, source: 'app' }),
+          body: JSON.stringify({ args, timeout, source: 'app', ownerScope }),
           ...(signal ? { signal } : {}),
         }
       );

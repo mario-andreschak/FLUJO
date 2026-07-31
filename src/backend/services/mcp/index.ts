@@ -127,18 +127,7 @@ import {
   negotiatedProtocolVersion,
 } from './betaClient';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
-import { INTERNAL_SERVER_NAME } from './internalServerConfig';
 import {
-  isBuiltInServerName,
-  builtInServerConfigsWithOverrides,
-  setInternalServerDisabled,
-  setInternalServerRoots,
-  FILESYSTEM_SERVER_NAME,
-  BASH_SERVER_NAME,
-} from './internal/registry';
-import {
-  checkToolCallVisibility,
-  filterToolsForAudience,
   ToolCallSource,
   ToolListAudience,
 } from './appsProtocol';
@@ -541,21 +530,6 @@ export class MCPService {
         return serverConfigs;
       }
 
-      // The built-in internal servers (FLUJO's backend API, filesystem, bash) are
-      // synthesized here rather than stored, so they are always present and always
-      // up to date. A stored config that claims one of the reserved names wins
-      // (legacy user server) and simply shadows the built-in one. Never persisted:
-      // saveConfig() drops builtIn entries. The per-server enable/disable override
-      // (issue #170) is applied here (only the tiny { disabled } flag is stored).
-      const builtIns = await builtInServerConfigsWithOverrides();
-      for (const builtIn of builtIns) {
-        if (serverConfigs.some(c => c.name === builtIn.name)) {
-          log.warn(`loadServerConfigs: A stored server is named "${builtIn.name}" — it shadows FLUJO's built-in server`);
-          continue;
-        }
-        serverConfigs.push(builtIn);
-      }
-
       log.debug(`loadServerConfigs: Loaded ${serverConfigs.length} server configs`);
       return serverConfigs;
     } catch (error) {
@@ -602,20 +576,6 @@ export class MCPService {
   }
 
   /**
-   * Is this name the built-in internal server (and not shadowed by a stored
-   * config)? The storage check keeps a pre-existing user server that happens to
-   * be named like the built-in one fully functional: for such a name every
-   * short-circuit below steps aside and the normal client/transport path runs.
-   * Names other than the reserved one return false at a string compare — the
-   * storage read only ever happens for the reserved name itself.
-   */
-  private async isInternalServer(serverName: string): Promise<boolean> {
-    if (!isBuiltInServerName(serverName)) return false;
-    const stored = await loadServerConfigs();
-    return !Array.isArray(stored) || !stored.some(c => c.name === serverName);
-  }
-
-  /**
    * Connect to an MCP server by name
    */
   async connectServer(serverName: string): Promise<MCPServiceResponse>;
@@ -638,21 +598,6 @@ export class MCPService {
    */
   async connectServer(configOrName: MCPServerConfig | string): Promise<MCPServiceResponse> {
     const serverName = typeof configOrName === 'string' ? configOrName : configOrName.name;
-
-    // The built-in internal server has no client or transport to establish — it is
-    // "connected" by definition. Short-circuit BEFORE the in-flight machinery so the
-    // startup sweep (which includes the synthetic config) and flow handlers get an
-    // instant success, and clear any "connecting" marker the sweep set for it.
-    if (isBuiltInServerName(serverName)) {
-      const isBuiltIn =
-        typeof configOrName !== 'string'
-          ? configOrName.builtIn === true
-          : await this.isInternalServer(serverName);
-      if (isBuiltIn) {
-        this.connectingServers.delete(serverName);
-        return { success: true };
-      }
-    }
 
     const inFlight = this.inFlightConnects.get(serverName);
     if (inFlight) {
@@ -726,6 +671,19 @@ export class MCPService {
     try {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
+
+      if (config.transport === 'stdio' && config.hostPathAccess?.protectedPaths === true) {
+        const childEnv: Record<string, string> = {
+          ...(config.env as Record<string, string> | undefined),
+        };
+        // The persisted security contract follows the record across renames; no
+        // server display name grants this behavior.
+        const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
+        childEnv.FLUJO_PROTECTED_PATHS_ENABLED = await isProtectedPathsEnabled(
+          config.protectedPathsEnabled,
+        ) ? '1' : '0';
+        config = { ...config, env: childEnv };
+      }
 
       // Resolve + decrypt any custom headers (#84) BEFORE anything reads them. The SAME
       // resolved config must drive both shouldRecreateClient() and createTransport(), so the
@@ -1273,11 +1231,6 @@ export class MCPService {
   async disconnectServer(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`disconnectServer: Entering method for server ${serverName}`);
 
-    // The built-in internal server has no connection to tear down.
-    if (await this.isInternalServer(serverName)) {
-      return { success: true };
-    }
-
     // Clear any retry timers for this server
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
@@ -1327,11 +1280,6 @@ export class MCPService {
   async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
     log.info(`forceReconnect: Forcing fresh connection for server ${serverName}`);
 
-    // Nothing to rebuild for the built-in internal server.
-    if (await this.isInternalServer(serverName)) {
-      return { success: true };
-    }
-
     const existing = this.clients.get(serverName);
     if (existing) {
       // Deregister BEFORE closing so the close event is recognized as FLUJO-initiated
@@ -1363,21 +1311,6 @@ export class MCPService {
     audience: ToolListAudience = 'model'
   ): Promise<{ tools: ToolResponse[], error?: string }> {
     log.debug(`listServerTools: Entering method for server ${serverName}, audience ${audience}`);
-
-    // The built-in internal server answers in-process — no client, no reconnect
-    // machinery. Dynamic import on purpose: internalTools transitively imports
-    // modules that import mcpService back (see internalServerConfig.ts).
-    if (await this.isInternalServer(serverName)) {
-      // A disabled built-in server behaves like any disabled server (issue #170).
-      if (await this.isServerDisabled(serverName)) {
-        const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
-        log.warn(`listServerTools: ${error}`);
-        return { tools: [], error };
-      }
-      const { internalToolDefinitionsFor } = await import('./internal/dispatch');
-      const tools = await internalToolDefinitionsFor(serverName);
-      return { tools: filterToolsForAudience(tools, audience) };
-    }
 
     // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
     // loudly instead of attempting a pointless reconnect against a disabled server.
@@ -1431,44 +1364,10 @@ export class MCPService {
     onProgress?: (progress: ToolCallProgress) => void,
     callerNodeId?: string,
     signal?: AbortSignal,
-    source: ToolCallSource = 'host'
+    source: ToolCallSource = 'host',
+    ownerScope?: string,
   ): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`);
-
-    // The built-in internal server dispatches in-process. The dispatcher always
-    // resolves to a CallToolResult (tool-level failures come back as isError
-    // results), matching how a real server's tool errors flow through `data`.
-    if (await this.isInternalServer(serverName)) {
-      // A disabled built-in server must not be invoked (issue #170).
-      if (await this.isServerDisabled(serverName)) {
-        const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
-        log.warn(`callTool: ${error}`);
-        return { success: false, error };
-      }
-      const { internalCallToolFor, internalToolDefinitionsFor } = await import('./internal/dispatch');
-      if (source === 'app' || source === 'model') {
-        const definitions = await internalToolDefinitionsFor(serverName);
-        const access = checkToolCallVisibility(definitions, serverName, toolName, source);
-        if (!access.allowed) {
-          log.warn(`callTool: Rejected ${source} call to built-in tool: ${access.error}`);
-          return {
-            success: false,
-            error: access.error,
-            statusCode: access.statusCode,
-          };
-        }
-      }
-      const result = await internalCallToolFor(
-        this,
-        serverName,
-        toolName,
-        args,
-        callerNodeId,
-        source,
-      );
-      log.info(`callTool: Dispatched internal tool ${toolName} on ${serverName}`);
-      return { success: true, data: result };
-    }
 
     // Disabled servers must never be invoked — even if a live client somehow
     // lingers after disabling (issue #54). This point-of-use guard sits on top of
@@ -1510,7 +1409,9 @@ export class MCPService {
       timeout,
       onProgress,
       signal,
-      source
+      source,
+      callerNodeId,
+      ownerScope,
     );
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
@@ -1530,7 +1431,8 @@ export class MCPService {
     toolName: string,
     args: ToolArgs,
     timeout?: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    ownerScope?: string,
   ): Promise<MCPServiceResponse> {
     const appAccess = await this.checkMcpAppAccess(serverName);
     if (appAccess) return appAccess;
@@ -1543,7 +1445,8 @@ export class MCPService {
       undefined,
       undefined,
       signal,
-      'app'
+      'app',
+      ownerScope,
     );
 
     if (result.errorType !== 'tool-authorization-list') {
@@ -1570,7 +1473,8 @@ export class MCPService {
       undefined,
       undefined,
       signal,
-      'app'
+      'app',
+      ownerScope,
     );
     return result;
   }
@@ -1579,13 +1483,12 @@ export class MCPService {
    * Treat the per-server MCP Apps opt-in as a live authorization predicate.
    * Historical chat messages can outlive a config change, so a persisted
    * `ui://` marker must not keep app-originated access after the user opts out.
-   * Built-in servers are host-owned and explicitly exempt from this toggle.
+   * Every persisted config follows the same opt-in rule; shipped package records
+   * are provisioned with access off until the user explicitly enables it.
    */
   async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
-    const internal = await this.isInternalServer(serverName);
     const config = await this.getServerConfig(serverName);
     if (config?.disabled === true) return false;
-    if (internal) return true;
     return config?.enableMcpApps === true;
   }
 
@@ -1627,13 +1530,6 @@ export class MCPService {
     lister: (client: Client | undefined, serverName: string) => Promise<T>,
     emptyResult: T
   ): Promise<T> {
-    // The built-in internal server never goes through client machinery. Its
-    // resources are short-circuited in listServerResources/-Templates BEFORE
-    // this method; anything else that reaches here (prompts) is empty.
-    if (await this.isInternalServer(serverName)) {
-      return emptyResult;
-    }
-
     // Point-of-use guard on top of the connect-time hard gate (issue #54).
     if (await this.isServerDisabled(serverName)) {
       const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
@@ -1673,19 +1569,6 @@ export class MCPService {
    */
   async listServerResources(serverName: string): Promise<{ resources: MCPResource[]; error?: string }> {
     log.debug(`listServerResources: Entering method for server ${serverName}`);
-    // The built-in `flujo` server publishes RUN-SCOPED resources in-process
-    // (Tier 3 data flow). Dynamic import mirrors the internalTools pattern. The
-    // built-in `filesystem` server publishes its MCP App UI plus the files it has
-    // read/written (#287); `bash` still publishes none.
-    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
-      const { internalListResources } = await import('./internalResources');
-      return internalListResources();
-    }
-    // The built-in `filesystem` server publishes its MCP App UI (#97).
-    if (serverName === FILESYSTEM_SERVER_NAME) {
-      const { filesystemListResources } = await import('./internal/filesystemResources');
-      return filesystemListResources();
-    }
     return this.listWithReconnect(serverName, listResources, { resources: [] });
   }
 
@@ -1694,10 +1577,6 @@ export class MCPService {
    */
   async listServerResourceTemplates(serverName: string): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
     log.debug(`listServerResourceTemplates: Entering method for server ${serverName}`);
-    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
-      const { internalListResourceTemplates } = await import('./internalResources');
-      return internalListResourceTemplates();
-    }
     return this.listWithReconnect(serverName, listResourceTemplates, { resourceTemplates: [] });
   }
 
@@ -1706,20 +1585,6 @@ export class MCPService {
    */
   async readResource(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
     log.debug(`readResource: Entering method for server ${serverName}, uri ${uri}`);
-    // Run-scoped resources are served in-process by the `flujo` server —
-    // this also makes `${resource:flujo__flujo://run/...}` pills work.
-    if (serverName === INTERNAL_SERVER_NAME && await this.isInternalServer(serverName)) {
-      const { internalReadResource } = await import('./internalResources');
-      return internalReadResource(uri);
-    }
-    // The built-in `filesystem` server serves its MCP App UI HTML in-process (#97)
-    // and its tracked read/written files as resources (#287), both in-process.
-    if (serverName === FILESYSTEM_SERVER_NAME) {
-      const { filesystemReadResource, isFilesystemAppUri, isTouchedFileUri, readTouchedFileResource } =
-        await import('./internal/filesystemResources');
-      if (isFilesystemAppUri(uri)) return filesystemReadResource(uri);
-      if (isTouchedFileUri(uri)) return readTouchedFileResource(uri);
-    }
     const client = this.getClient(serverName);
     if (!client) {
       log.warn(`readResource: Client not found for ${serverName}`);
@@ -1841,47 +1706,6 @@ export class MCPService {
 
   async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>): Promise<MCPServerConfig | MCPServiceResponse> {
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
-
-    // The built-in internal servers are synthesized, not stored — their command/
-    // env/name cannot be edited, and this also blocks CREATING a server under a
-    // reserved name (the POST route funnels through here). Renaming another server
-    // onto a reserved name is caught by the duplicate check below, since
-    // loadServerConfigs() always contains the synthetic entries. The ONE mutation
-    // that IS allowed is toggling `disabled` on/off (issue #170): it is persisted
-    // as a tiny override, never as the synthetic config itself.
-    if (await this.isInternalServer(serverName)) {
-      const keys = Object.keys(updates).filter(k => k !== 'name');
-      const nameOk = updates.name === undefined || updates.name === serverName;
-      const onlyDisabledChange =
-        keys.length > 0 && keys.every(k => k === 'disabled') && typeof updates.disabled === 'boolean' && nameOk;
-      // The `filesystem` and `bash` built-ins additionally allow configuring their
-      // confinement roots (issues #170 + #175): persisted as a tiny override, never
-      // as the synthetic config.
-      const onlyRootsChange =
-        (serverName === FILESYSTEM_SERVER_NAME || serverName === BASH_SERVER_NAME) &&
-        keys.length > 0 &&
-        keys.every(k => k === 'roots') &&
-        Array.isArray(updates.roots) &&
-        nameOk;
-      if (onlyDisabledChange) {
-        await setInternalServerDisabled(serverName, updates.disabled as boolean);
-        log.info(`updateServerConfig: Toggled built-in server ${serverName} disabled=${updates.disabled}`);
-        const refreshed = await this.loadServerConfigs();
-        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
-        return cfg ?? { success: true };
-      }
-      if (onlyRootsChange) {
-        await setInternalServerRoots(serverName, updates.roots as string[]);
-        log.info(`updateServerConfig: Set built-in ${serverName} roots (${(updates.roots as string[]).length})`);
-        const refreshed = await this.loadServerConfigs();
-        const cfg = Array.isArray(refreshed) ? refreshed.find(c => c.name === serverName) : undefined;
-        return cfg ?? { success: true };
-      }
-      return {
-        success: false,
-        error: `"${serverName}" is a FLUJO built-in server: only enabling/disabling it is allowed, not editing.`,
-      };
-    }
 
     // Load all configs from storage
     const configsResult = await this.loadServerConfigs();
@@ -2112,14 +1936,6 @@ export class MCPService {
   async deleteServerConfig(serverName: string): Promise<MCPServiceResponse> {
     log.debug(`deleteServerConfig: Entering method for server ${serverName}`);
 
-    // The built-in internal server is synthesized, not stored — it cannot be deleted.
-    if (await this.isInternalServer(serverName)) {
-      return {
-        success: false,
-        error: `"${INTERNAL_SERVER_NAME}" is FLUJO's built-in server and cannot be deleted.`,
-      };
-    }
-
     // First disconnect if connected
     if (this.clients.has(serverName)) {
       log.info(`deleteServerConfig: Disconnecting server ${serverName} before deletion`);
@@ -2162,15 +1978,6 @@ export class MCPService {
    * Get the connection status of an MCP server
    */
   async getServerStatus(serverName: string): Promise<{ status: string; message?: string; stderrOutput?: string }> {
-    // The built-in internal server runs in-process: it is connected by definition,
-    // unless it has been toggled off (issue #170).
-    if (await this.isInternalServer(serverName)) {
-      if (await this.isServerDisabled(serverName)) {
-        return { status: 'disconnected' };
-      }
-      return { status: 'connected' };
-    }
-
     // Get the config directly from storage
     const config = await this.getServerConfig(serverName);
     if (!config) {

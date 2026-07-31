@@ -121,4 +121,6 @@ export interface NormalizedModel {
   /** Provider-advertised input/output modalities. */
   inputModalities?: string[];
   outputModalities?: string[];
+  /** Explicit provider-derived image-input capability. */
+  visionInputCapability?: 'supported' | 'unsupported' | 'unknown';
 }

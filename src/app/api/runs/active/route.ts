@@ -1,6 +1,7 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import type { FlowInvocationSource } from '@/backend/execution/flow/types';
 import { flowService } from '@/backend/services/flow';
 
 const log = createLogger('app/api/runs/active/route');
@@ -12,7 +13,7 @@ interface ActiveRun {
   flowName?: string;
   status?: string;
   startedAt?: string;
-  source?: 'schedule' | 'chat' | 'api';
+  source?: FlowInvocationSource;
   plannedExecutionId?: string;
 }
 

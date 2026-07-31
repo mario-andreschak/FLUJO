@@ -80,7 +80,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
   }),
 }));
 
-import { runFlow } from '@/backend/execution/flow/runFlow';
+import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
   enqueueSteeringMessage,
@@ -89,6 +89,9 @@ import {
 } from '@/backend/execution/flow/steeringInbox';
 
 (global as any).__steeringScript = script;
+
+const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
+  runFlowWithContext({ ...input, source: 'chat' });
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 

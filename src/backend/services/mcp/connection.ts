@@ -242,8 +242,8 @@ export function createNewClient(config: MCPServerConfig): Client {
   // it is declared only when the server has an enabled sampling trust policy, so a
   // server can't ask FLUJO to run LLM calls unless the user opted in. MCP Apps is
   // likewise advertised only for a server whose explicit security opt-in is on.
-  // Built-in servers do not use this factory or an MCP handshake; their first-party
-  // apps are dispatched in-process.
+  // Every configured server, including packages shipped with FLUJO, uses this
+  // same client factory and handshake.
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
@@ -490,9 +490,9 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  // Use the original (pre-.bat-rewrite) command/args for runner detection so e.g.
-  // `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
   const resolvedCwd = resolveServerCwd({
+    // Use the original (pre-.bat-rewrite) command/args for runner detection so
+    // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
     command: config.command,
     args: config.args,
     rootPath: config.rootPath,
@@ -500,11 +500,6 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
     serverName: config.name,
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
   });
-  // resolveServerCwd may hand back a relative path (e.g. the default
-  // `mcp-servers/<name>`). A child process resolves a relative cwd against the
-  // FLUJO process's cwd (the app dir), but mcp-servers/ lives under the DATA dir
-  // for a packaged install — so anchor a relative cwd to the data dir. For a git
-  // checkout the data dir IS the app dir, so this is a no-op there.
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
     : path.join(getDataDir(), resolvedCwd);

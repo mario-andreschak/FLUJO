@@ -2,8 +2,8 @@
  * Executor-side glue for filesystem snapshots (issue #250).
  *
  * FlowExecutor.executeStep calls `captureBefore()` just before a Process node
- * runs and `captureAfterAndEmit()` just after, when that node has the built-in
- * `filesystem` / `bash` servers armed. Both are BEST-EFFORT and never throw —
+ * runs and `captureAfterAndEmit()` just after, when that node has a binding whose
+ * persisted config declares snapshot-eligible host-path access. Both are BEST-EFFORT and never throw —
  * a snapshot failure must never abort a run.
  *
  * "Armed" is detected from the COMPILED flow: FlowConverter folds every bound
@@ -16,6 +16,7 @@ import { createLogger } from '@/utils/logger';
 import { ResolvedNode } from '@/backend/execution/flow/engine/FlowEngine';
 import { SharedState } from '@/backend/execution/flow/types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { writeRunResource } from '@/backend/services/runResources';
 import { shadowRepoService } from './ShadowRepoService';
 
 const log = createLogger('backend/services/snapshot/snapshotHook');
@@ -25,42 +26,69 @@ export interface SnapshotContext {
   roots: string[];
   /** root → start-snapshot SHA (or null when capture was disabled/failed). */
   start: Map<string, string | null>;
+  /** Host-access package(s) whose confined binding contributed each root. */
+  rootServers: Map<string, string[]>;
 }
 
-/** Read the servers armed on the compiled Process node (opaque handle probe). */
-function armedServers(node: ResolvedNode): Set<string> {
-  const servers = new Set<string>();
+type ArmedBinding = { serverName: string; nodeId?: string };
+
+/** Read MCP bindings from the compiled Process node (opaque handle probe). */
+function armedBindings(node: ResolvedNode): ArmedBinding[] {
+  const bindings: ArmedBinding[] = [];
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mcpNodes = (node as any)?.handle?.node_params?.properties?.mcpNodes;
-    if (!Array.isArray(mcpNodes)) return servers;
+    if (!Array.isArray(mcpNodes)) return bindings;
     for (const m of mcpNodes) {
-      const s = m?.properties?.boundServer;
-      if (s === 'filesystem' || s === 'bash') servers.add(s);
+      const serverName = m?.properties?.boundServer;
+      if (typeof serverName !== 'string' || serverName.length === 0) continue;
+      const candidateNodeId = m?.id ?? m?.properties?.id;
+      bindings.push({
+        serverName,
+        ...(typeof candidateNodeId === 'string' ? { nodeId: candidateNodeId } : {}),
+      });
     }
   } catch (err) {
-    log.debug('armedServers probe failed', { err });
+    log.debug('armedBindings probe failed', { err });
   }
-  return servers;
+  return bindings;
 }
 
-/** Resolve the confinement roots to watch for the armed servers. */
-async function resolveArmedRoots(node: ResolvedNode): Promise<string[]> {
-  const servers = armedServers(node);
-  if (servers.size === 0) return [];
-  const { loadEffectiveRoots } = await import('@/backend/services/mcp/internal/confinement');
-  const roots = new Set<string>();
+/** Resolve snapshot-capable bindings and their roots from persisted contracts. */
+async function resolveArmedRoots(
+  node: ResolvedNode,
+): Promise<{ roots: string[]; rootServers: Map<string, string[]> }> {
+  const bindings = armedBindings(node);
+  const rootServers = new Map<string, string[]>();
+  if (bindings.length === 0) return { roots: [], rootServers };
   try {
-    if (servers.has('filesystem')) {
-      for (const r of await loadEffectiveRoots('filesystem', 'FLUJO_FS_ROOTS')) roots.add(r);
-    }
-    if (servers.has('bash')) {
-      for (const r of await loadEffectiveRoots('bash', ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'])) roots.add(r);
+    const [{ loadEffectiveRoots }, { loadServerConfigs }] = await Promise.all([
+      import('@/backend/services/mcp/internal/confinement'),
+      import('@/backend/services/mcp/config'),
+    ]);
+    const loaded = await loadServerConfigs();
+    if (!Array.isArray(loaded)) return { roots: [], rootServers };
+    const configs = new Map(loaded.map((config) => [config.name, config]));
+
+    for (const binding of bindings) {
+      const config = configs.get(binding.serverName);
+      const capability = config?.hostPathAccess;
+      if (!config || capability?.snapshots !== true) continue;
+      const roots = await loadEffectiveRoots(
+        binding.serverName,
+        capability.environmentRootVariables,
+        binding.nodeId,
+      );
+      for (const root of roots) {
+        const contributors = rootServers.get(root) ?? [];
+        if (!contributors.includes(binding.serverName)) contributors.push(binding.serverName);
+        rootServers.set(root, contributors);
+      }
     }
   } catch (err) {
     log.warn('resolveArmedRoots failed', { err });
   }
-  return [...roots];
+  return { roots: [...rootServers.keys()], rootServers };
 }
 
 function nodeRef(node: ResolvedNode): NodeRef {
@@ -69,8 +97,8 @@ function nodeRef(node: ResolvedNode): NodeRef {
 
 /**
  * Take the START snapshot for an armed Process node. Returns null when there is
- * nothing to snapshot (not a process node, ephemeral run, no armed fs/bash
- * server, or no git-repo root). Never throws.
+ * nothing to snapshot (not a process node, ephemeral run, no snapshot-capable
+ * host-path binding, or no git-repo root). Never throws.
  */
 export async function captureBefore(
   node: ResolvedNode,
@@ -80,7 +108,7 @@ export async function captureBefore(
   try {
     if (node.type !== 'process') return null;
     if (sharedState.ephemeral) return null;
-    const roots = await resolveArmedRoots(node);
+    const { roots, rootServers } = await resolveArmedRoots(node);
     if (roots.length === 0) return null;
 
     const start = new Map<string, string | null>();
@@ -93,7 +121,7 @@ export async function captureBefore(
     }
     // Only keep a context if at least one root actually produced a snapshot.
     const anyCaptured = [...start.values()].some((v) => !!v);
-    return anyCaptured ? { roots, start } : null;
+    return anyCaptured ? { roots, start, rootServers } : null;
   } catch (err) {
     log.warn('captureBefore failed — no snapshot for this node', { err });
     return null;
@@ -107,6 +135,7 @@ export async function captureBefore(
 export async function captureAfterAndEmit(
   node: ResolvedNode,
   ctx: SnapshotContext | null,
+  sharedState: SharedState,
   emit?: EmitFn
 ): Promise<void> {
   if (!ctx) return;
@@ -120,6 +149,48 @@ export async function captureAfterAndEmit(
       if (startSha && endSha) {
         const changedFiles = await shadowRepoService.files(root, startSha, endSha);
         if (changedFiles.length > 0) {
+          let patchResourceUri: string | undefined;
+          const conversationId = sharedState.conversationId;
+          if (conversationId) {
+            try {
+              const patch = await shadowRepoService.diff(root, startSha, endSha);
+              if (patch.trim().length > 0) {
+                const written = await writeRunResource({
+                  conversationId,
+                  kind: 'text',
+                  mimeType: 'text/x-patch',
+                  data: { text: patch },
+                  producedBy: {
+                    source: 'snapshot',
+                    nodeId: node.id,
+                    nodeName: node.name,
+                    server: ctx.rootServers.get(root)?.[0],
+                  },
+                });
+                if (!('skipped' in written)) {
+                  patchResourceUri = written.uri;
+                  emit?.({
+                    type: 'resource:write',
+                    node: nodeRef(node),
+                    server: 'flujo',
+                    uri: written.uri,
+                    name: written.name,
+                    mimeType: written.mimeType,
+                    size: written.size,
+                    source: 'snapshot',
+                    snapshot: {
+                      root,
+                      startSnapshot: startSha,
+                      endSnapshot: endSha,
+                      changedFiles,
+                    },
+                  });
+                }
+              }
+            } catch (err) {
+              log.warn('Snapshot patch persistence failed', { root, err });
+            }
+          }
           emit?.({
             type: 'node:changed-files',
             node: nodeRef(node),
@@ -127,6 +198,7 @@ export async function captureAfterAndEmit(
             startSnapshot: startSha,
             endSnapshot: endSha,
             changedFiles,
+            patchResourceUri,
           });
         }
       }

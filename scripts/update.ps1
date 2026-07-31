@@ -90,6 +90,8 @@ Log "npm ci"
 & cmd /c "npm ci --include=dev" 2>&1 | ForEach-Object { Log "  $_" }
 Log "npm run build"
 & cmd /c "npm run build" 2>&1 | ForEach-Object { Log "  $_" }
+Log "npm run validate:mcp-release"
+& cmd /c "npm run validate:mcp-release" 2>&1 | ForEach-Object { Log "  $_" }
 
 # 4. Start the rebuilt server in its own window (survives this script).
 Log "Starting npm start"

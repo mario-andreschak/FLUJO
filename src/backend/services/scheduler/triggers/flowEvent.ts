@@ -6,7 +6,7 @@ import { getFlowRunEventBus, FlowRunEvent, isFlowSignalEvent } from '../flowRunE
 const log = createLogger('backend/services/scheduler/triggers/flowEvent');
 
 /** Default event-chain depth cap when the config doesn't set one. */
-export const DEFAULT_MAX_CHAIN_DEPTH = 5;
+export const DEFAULT_MAX_CHAIN_DEPTH = 100;
 /** Cap the upstream output scanned by `outputMatch` to bound regex work (ReDoS). */
 const MAX_MATCH_CHARS = 16_384;
 /** Cap the upstream output/payload carried into the fired run's context/prompt. */

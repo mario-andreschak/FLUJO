@@ -16,7 +16,8 @@ import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
-import { resolveEffectiveCompaction } from './resolveEffectiveCompaction';
+import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
+import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import { compactHistory, estimateTokens } from './summarizingCompaction';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
@@ -55,6 +56,12 @@ import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } f
 import { unloadModel } from '@/backend/services/ollama';
 import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  credentialFingerprint,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
@@ -331,6 +338,9 @@ export class ModelHandler {
     compactionEnabled?: boolean;
     compactionBufferTokens?: number;
     compactionKeepTokens?: number;
+    visualCompactionEnabled?: boolean;
+    visualCompactionToolResultsOnly?: boolean;
+    visualCompactionEvaluationMode?: boolean;
   }> {
     try {
       const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
@@ -339,6 +349,9 @@ export class ModelHandler {
         compactionEnabled: exp?.compactionEnabled,
         compactionBufferTokens: exp?.compactionBufferTokens,
         compactionKeepTokens: exp?.compactionKeepTokens,
+        visualCompactionEnabled: exp?.visualCompactionEnabled,
+        visualCompactionToolResultsOnly: exp?.visualCompactionToolResultsOnly,
+        visualCompactionEvaluationMode: exp?.visualCompactionEvaluationMode,
       };
     } catch (err) {
       log.warn('Failed to read compaction settings; defaulting to disabled', { err });
@@ -367,13 +380,14 @@ export class ModelHandler {
     nodeId: string | undefined,
     model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
+    nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
   ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
     try {
       // Self-orchestrating adapters manage their own session/wire; excluded.
       if (isSelfOrchestratingAdapter(model.adapter)) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
-      const eff = resolveEffectiveCompaction(undefined, model, global);
+      const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
       const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
@@ -831,27 +845,16 @@ export class ModelHandler {
       };
     }
 
-    // --- Log the raw error object caught ---
-    log.error('[ModelHandler.generateCompletion] Caught error during OpenAI API call', { rawError: error });
-
-    // --- Enhanced Error Logging ---
-    log.error('--- Error during openai.chat.completions.create ---');
-    if (error instanceof Error) {
-      log.error(`Error Name: ${error.name}`);
-      log.error(`Error Message: ${error.message}`);
-      log.error(`Error Stack: ${error.stack}`);
-    } else {
-      log.error('Caught non-Error object:', error); // Log the raw object if it's not an Error instance
-    }
-    if (error instanceof OpenAI.APIError) {
-      log.error(`API Error Status: ${error.status}`);
-      log.error(`API Error Type: ${error.type}`);
-      log.error(`API Error Code: ${error.code}`);
-      log.error(`API Error Param: ${error.param}`);
-      log.error(`API Error Headers: ${JSON.stringify(error.headers)}`);
-    }
-    log.error('--- End Error Details ---');
-    // --- End Enhanced Error Logging ---
+    // Error diagnostics are deliberately metadata-only. Provider bodies,
+    // messages, request URLs, headers, and stacks may contain credentials or
+    // execution content and must never be passed to the logger.
+    log.error('Provider completion failed', {
+      modelId,
+      errorClass: classifyStatisticsError(error),
+      status: error instanceof OpenAI.APIError ? error.status : undefined,
+      type: error instanceof OpenAI.APIError ? error.type : undefined,
+      code: error instanceof OpenAI.APIError ? error.code : undefined,
+    });
 
     // Handle API errors
     if (error instanceof OpenAI.APIError) {
@@ -894,7 +897,12 @@ export class ModelHandler {
         )
       };
 
-      log.verbose('generateCompletion API error', errorResult);
+      log.warn('Provider request failed', {
+        modelId,
+        status: error.status,
+        code: extracted.code ?? error.code,
+        type: extracted.type ?? error.type,
+      });
       return errorResult;
     }
 
@@ -913,7 +921,10 @@ export class ModelHandler {
       )
     };
 
-    log.verbose('generateCompletion unknown error', errorResult);
+    log.warn('Provider request failed with an unclassified error', {
+      modelId,
+      errorClass: error instanceof Error ? error.name : typeof error,
+    });
     return errorResult;
   }
 
@@ -923,7 +934,7 @@ export class ModelHandler {
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
-    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, conversationId, requireToolApproval, mcpNodes } = input; // Added nodeId
+    const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
@@ -976,9 +987,6 @@ export class ModelHandler {
       nodeName,
       nodeId // Log nodeId
     });
-
-    // Add verbose logging of the entire input
-    log.verbose('callModel input', input);
 
     // When approval is required and we have a conversation to surface it on, build
     // a human-in-the-loop gate for self-orchestrating adapters (Claude
@@ -1158,6 +1166,7 @@ export class ModelHandler {
         nodeId,
         { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
         effectiveMaxTokens,
+        { compactionMode, compactionKeepTokens },
       );
       if (compaction) {
         const removed = new Set(compaction.removedIds);
@@ -1186,18 +1195,24 @@ export class ModelHandler {
       onModelDelta,
       shouldAbort,
       conversationId,
+      runId,
       nodeId,
+      codexSession,
+      onCodexSessionChange,
       localToolExecutors,
       runResourceMarkers,
       sessionResume,
+      onFinalWire,
     });
 
     if (!response.success) {
       for (const messageId of liveMessageIds) {
         emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined });
       }
-      // Add verbose logging of the error response
-      log.verbose('callModel error response', response);
+      log.warn('Model call returned an error', {
+        modelId,
+        errorClass: classifyStatisticsError(response.error),
+      });
 
       // Ensure we're returning the complete error response with all details
       return {
@@ -1241,6 +1256,19 @@ export class ModelHandler {
     // unit-tested (see __tests__/model/openaiUsageMapping.test.ts).
     const usage = mapOpenAiUsage(modelResponse.fullResponse?.usage);
 
+    const projectMcpToolCalls = (toolCalls: unknown): FlujoChatMessage['mcpToolCalls'] => {
+      if (!Array.isArray(toolCalls)) return undefined;
+      const projected: NonNullable<FlujoChatMessage['mcpToolCalls']> = {};
+      for (const toolCall of toolCalls) {
+        if (!toolCall || typeof toolCall !== 'object') continue;
+        const call = toolCall as OpenAI.ChatCompletionMessageToolCall;
+        if (call.type !== 'function' || typeof call.id !== 'string') continue;
+        const decoded = decodeToolName(call.function?.name, toolNameMap);
+        if (decoded) projected[call.id] = { serverName: decoded.server, toolName: decoded.tool };
+      }
+      return Object.keys(projected).length > 0 ? projected : undefined;
+    };
+
     if (modelResponse.transcript && modelResponse.transcript.length > 0) {
       // Self-orchestrating adapter (Claude subscription): the adapter already ran
       // the agentic tool loop in-process and handed back the full assistant/tool
@@ -1262,6 +1290,9 @@ export class ModelHandler {
           id: msg.id ?? uuidv4(),
           timestamp: msg.timestamp ?? baseTs + idx, // keep ordering stable
           processNodeId: nodeId,
+          ...(projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls)
+            ? { mcpToolCalls: projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls) }
+            : {}),
           ...(transcriptMedia?.length ? { media: transcriptMedia } : {}),
           ...(isLast && usage ? { usage } : {}),
         } as FlujoChatMessage);
@@ -1293,6 +1324,9 @@ export class ModelHandler {
         ...(responseMedia.length ? { media: responseMedia } : {}),
         // IMPORTANT: Include tool_calls if they exist in the raw response
         tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
+        ...(projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls)
+          ? { mcpToolCalls: projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls) }
+          : {}),
         timestamp: Date.now(), // Add timestamp
         processNodeId: nodeId, // Attach the process node ID
         ...(usage ? { usage } : {}),
@@ -1311,7 +1345,10 @@ export class ModelHandler {
            result: '' // Result is empty as it's not processed here
          };
        } catch (e) {
-         log.warn(`Failed to parse tool arguments for call ${tc.id}`, { args: tc.function.arguments, error: e });
+         log.warn('Failed to parse tool arguments', {
+           toolCallId: tc.id,
+           errorClass: classifyStatisticsError(e),
+         });
          return {
            name: tc.function.name,
            args: {}, // Use empty object on parse failure
@@ -1335,7 +1372,12 @@ export class ModelHandler {
       }
     };
 
-    log.verbose('callModel single step result', result);
+    log.debug('Model call completed', {
+      modelId,
+      nodeId,
+      hasToolCalls: Boolean(toolCalls?.length),
+      usagePresent: Boolean(usage),
+    });
     return result;
   }
 
@@ -1367,7 +1409,10 @@ export class ModelHandler {
       /** Conversation + node identity, so self-orchestrating adapters can key a
        * reusable Agent SDK session per (conversationId, nodeId) — issue #154. */
       conversationId?: string;
+      runId?: string;
       nodeId?: string;
+      codexSession?: import('../types').CodexSessionMetadata;
+      onCodexSessionChange?: (session: import('../types').CodexSessionMetadata | undefined) => void;
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
@@ -1379,15 +1424,14 @@ export class ModelHandler {
        * subscription adapter. Resolved by callModel from the experimental setting
        * and node eligibility. */
       sessionResume?: boolean;
+      onFinalWire?: ModelCallInput['onFinalWire'];
     }
   ): Promise<Result<ModelCallResult>> {
-    // Add verbose logging of the input parameters
-    log.verbose('generateCompletion input', ({
+    log.debug('Preparing provider completion', {
       modelId,
-      prompt,
-      messages,
-      tools
-    }));
+      messageCount: messages.length,
+      toolCount: tools?.length ?? 0,
+    });
 
     // Cancellation plumbing: the watch (below) polls opts.shouldAbort while the
     // provider call is in flight and fires this controller, which every adapter
@@ -1435,8 +1479,12 @@ export class ModelHandler {
           )
         };
       }
-      log.verbose(`decrypted api key ${decryptedApiKey}`)
-      log.verbose(` baseurl ${model.baseUrl}`)
+      log.debug('Model credential resolved', {
+        modelId,
+        provider: model.provider,
+        adapter: model.adapter,
+        credentialPresent: decryptedApiKey.length > 0,
+      });
 
       // Create the request parameters - the adapters expect ChatCompletionMessageParam,
       // not FlujoChatMessage, so strip ALL FLUJO-internal fields (id, timestamp,
@@ -1462,6 +1510,26 @@ export class ModelHandler {
             adapter: model.adapter,
           });
         }
+      }
+
+      // Experimental visual context compaction (#356). This is a final-wire-only
+      // transformation: persisted/displayed messages remain untouched. Exact
+      // source is stashed in run resources before a complete old range is
+      // replaced, and unsupported/unknown capability, secrets, poor density,
+      // failed estimates, or non-positive savings remain on the text route.
+      const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
+      const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
+      const visual = await compactMessagesVisually({
+        messages: apiMessages,
+        model,
+        conversationId: opts?.conversationId,
+        nodeId: opts?.nodeId,
+        config: visualConfig,
+      });
+      apiMessages = visual.messages;
+      let visualDiagnostic = visual.diagnostic;
+      if (visualDiagnostic.route === 'image') {
+        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -1579,6 +1647,15 @@ export class ModelHandler {
         }
       }
 
+      // Capture the actual final generic provider wire after visual routing,
+      // lossless compaction, tool trimming, and proactive budget refit. Image
+      // data URLs are bounded by the ProcessNode observer before debugger storage.
+      try {
+        opts?.onFinalWire?.(apiMessages, visualDiagnostic);
+      } catch (error) {
+        log.warn('Final-wire observer failed; continuing request', { error });
+      }
+
       // Select the completion adapter for this model's provider/SDK. The
       // OpenAI-compatible adapter wraps the original hardened-client path; the
       // native adapters (Anthropic, Gemini, Claude CLI) translate to/from their
@@ -1590,10 +1667,8 @@ export class ModelHandler {
       log.verbose('calling chatcompletion now with ADAPTER', model.adapter || 'openai')
       log.verbose('calling chatcompletion now with MODEL', model.name)
       log.verbose('calling chatcompletion now with TEMP', temperature)
-      log.verbose('calling chatcompletion now with MESSAGES', apiMessages)
-      log.verbose('calling chatcompletion now with TOOLS', sanitizedTools)
 
-      // --- Log the exact request being sent ---
+      // --- Prepare the exact request being sent ---
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
       // --- Auto-unload Ollama: resolve setting and root URL once, before the
@@ -1605,6 +1680,62 @@ export class ModelHandler {
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
         ? normaliseOllamaRoot(model.baseUrl)
         : null;
+      const opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let providerAttemptOrdinal = 0;
+      const usageFromProviderResult = (value: unknown) => {
+        if (!value || typeof value !== 'object') return undefined;
+        const raw = (value as { usage?: Record<string, unknown> }).usage;
+        if (!raw || typeof raw !== 'object') return undefined;
+        const inputTokens = raw.prompt_tokens ?? raw.input_tokens;
+        const outputTokens = raw.completion_tokens ?? raw.output_tokens;
+        const totalTokens = raw.total_tokens;
+        const promptDetails = raw.prompt_tokens_details as Record<string, unknown> | undefined;
+        const inputDetails = raw.input_tokens_details as Record<string, unknown> | undefined;
+        const cachedInputTokens = promptDetails?.cached_tokens ?? inputDetails?.cached_tokens;
+        const numeric = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate)
+          ? candidate
+          : undefined;
+        const usage = {
+          inputTokens: numeric(inputTokens),
+          outputTokens: numeric(outputTokens),
+          totalTokens: numeric(totalTokens),
+          cachedInputTokens: numeric(cachedInputTokens),
+          contextWindow: model.contextWindow,
+        };
+        return Object.values(usage).some(item => item !== undefined) ? usage : undefined;
+      };
+      const recordProviderAttempt = (observation: {
+        durationMs: number;
+        outcome: 'completed' | 'error' | 'cancelled';
+        result?: unknown;
+        error?: unknown;
+        usage?: ReturnType<typeof usageFromProviderResult>;
+      }) => {
+        if (!opts?.runId) return;
+        try {
+          recordStatisticsEvent(createStatisticsEvent({
+            type: 'model.attempt',
+            runId: opts.runId,
+            node: opts.nodeId ? { id: opts.nodeId } : undefined,
+            model: { id: modelId, name: model.displayName || model.name },
+            provider: {
+              id: model.provider || model.adapter || 'unknown',
+              name: model.adapter || model.provider,
+            },
+            credentialId: opaqueCredentialId,
+            attempt: ++providerAttemptOrdinal,
+            outcome: observation.outcome,
+            durationMs: observation.durationMs,
+            errorClass: observation.outcome === 'error'
+              ? classifyStatisticsError(observation.error)
+              : undefined,
+            usage: observation.usage ?? usageFromProviderResult(observation.result)
+              ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined),
+          }));
+        } catch {
+          // Metadata instrumentation is never allowed to affect a provider call.
+        }
+      };
 
       // One retryable attempt at the provider call. Extracted into a closure so
       // a context-length overflow (below) can be retried once with oversized
@@ -1643,6 +1774,12 @@ export class ModelHandler {
           };
         }
 
+        const attemptStartedAt = Date.now();
+        let providerAttemptObserved = false;
+        let attemptOutcome: 'completed' | 'error' | 'cancelled' = 'error';
+        let attemptError: unknown;
+        let attemptUsage: OpenAiUsageLike | undefined;
+
         // The Claude subscription adapter streams transcript messages before its
         // terminal SDK result is known. Scope prose IDs to this model attempt so
         // a later SDK failure can compensate only its incomplete narration.
@@ -1679,6 +1816,16 @@ export class ModelHandler {
               const input = {
               model,
               apiKey: decryptedApiKey,
+              onProviderAttempt: (observation: {
+                attempt: number;
+                durationMs: number;
+                outcome: 'completed' | 'error' | 'cancelled';
+                result?: unknown;
+                error?: unknown;
+              }) => {
+                providerAttemptObserved = true;
+                recordProviderAttempt(observation);
+              },
               messages: attemptMessages,
               tools: attemptTools,
               temperature,
@@ -1694,7 +1841,10 @@ export class ModelHandler {
               onModelDelta: opts?.onModelDelta,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
+              runId: opts?.runId,
               nodeId: opts?.nodeId,
+              codexSession: opts?.codexSession,
+              onCodexSessionChange: opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: opts?.sessionResume,
               // Derived from the tool-block hash, so every request sharing this
@@ -1736,6 +1886,7 @@ export class ModelHandler {
           // block at all (nothing to measure).
           if (chatCompletion?.usage) {
             const rawUsage = chatCompletion.usage as OpenAiUsageLike;
+            attemptUsage = rawUsage;
             logCacheOutcome({
               conversationId: opts?.conversationId,
               nodeId: opts?.nodeId,
@@ -1750,18 +1901,18 @@ export class ModelHandler {
             });
           }
 
-          // --- Log the raw response received ---
-          log.debug('[ModelHandler.generateCompletion] Received raw response from OpenAI API', { response: chatCompletion }); // Use debug level
-
-          log.verbose(`chatcompletion returned`) // Keep verbose for backward compatibility if needed
-          log.verbose('chatcompletion returned', chatCompletion) // Keep verbose
+          log.debug('Provider completion returned', {
+            modelId,
+            usagePresent: Boolean(chatCompletion?.usage),
+            choiceCount: chatCompletion?.choices?.length ?? 0,
+          });
 
           // --- Check for top-level error in the response ---
           // Some providers (like OpenRouter for certain errors) might return a 200 OK
           // with an error object in the body instead of throwing an HTTP error.
           if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion && chatCompletion.error) {
-            log.warn('API call returned successfully but contained an error object:', JSON.stringify(chatCompletion.error));
             const errorObj = chatCompletion.error as any; // Type assertion for easier access
+            attemptError = errorObj;
 
             // Shape the message + details consistently with the thrown-error path.
             const extracted = ModelHandler.extractProviderErrorDetails(errorObj);
@@ -1783,7 +1934,11 @@ export class ModelHandler {
                     }
                 )
             };
-            log.verbose('generateCompletion returning error from response body', errorResult);
+            log.warn('Provider response contained an error object', {
+              modelId,
+              code: extracted.code,
+              type: extracted.type,
+            });
             return errorResult;
           }
           // --- End error check ---
@@ -1793,7 +1948,8 @@ export class ModelHandler {
           // Ensure choices exist before accessing them
           const choice = chatCompletion?.choices?.[0];
           if (!choice) {
-            log.error('API response missing choices array or first choice.', { response: chatCompletion });
+            attemptError = { type: 'provider_response' };
+            log.error('API response missing choices array or first choice.', { modelId });
             return {
               success: false,
               error: createModelError(
@@ -1821,7 +1977,8 @@ export class ModelHandler {
               choice.message.content.trim().length > 0) ||
             (Array.isArray(choice.message?.content) && choice.message.content.length > 0);
           if (choice.finish_reason === 'stop' && !hasToolCalls && !hasGeneratedMedia && !hasTextContent) {
-            log.error('API reported finish_reason "stop" with an empty message, no media, and no tool calls.', { response: chatCompletion });
+            attemptError = { type: 'provider_response' };
+            log.error('API reported finish_reason "stop" with an empty message, no media, and no tool calls.', { modelId });
             return {
               success: false,
               error: createModelError(
@@ -1847,11 +2004,12 @@ export class ModelHandler {
             }
           };
 
-          // Add verbose logging of the successful result
-          log.verbose('generateCompletion success result', result);
+          attemptOutcome = 'completed';
 
           return result;
         } catch (error) {
+          attemptError = error;
+          attemptOutcome = abortController.signal.aborted ? 'cancelled' : 'error';
           // A genuine Claude subscription failure can follow streamed prose. Do
           // not replay that failed-turn narration on recovery; tool activity from
           // the same attempt is not in this set and remains durable. User-driven
@@ -1860,6 +2018,23 @@ export class ModelHandler {
             await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
+        } finally {
+          // Request/response adapters report each transport retry themselves.
+          // Other adapters have one authoritative outer invocation here.
+          if (!providerAttemptObserved) {
+            recordProviderAttempt({
+              outcome: attemptOutcome,
+              durationMs: Math.max(0, Date.now() - attemptStartedAt),
+              error: attemptError,
+              usage: attemptUsage ? {
+                inputTokens: attemptUsage.prompt_tokens,
+                outputTokens: attemptUsage.completion_tokens,
+                totalTokens: attemptUsage.total_tokens,
+                cachedInputTokens: attemptUsage.prompt_tokens_details?.cached_tokens,
+                contextWindow: model.contextWindow,
+              } : undefined,
+            });
+          }
         }
       };
 
@@ -1906,6 +2081,11 @@ export class ModelHandler {
             beforeChars,
             afterChars,
           });
+          try {
+            opts?.onFinalWire?.(refitMessages, visualDiagnostic);
+          } catch (error) {
+            log.warn('Final-wire observer failed during overflow refit; continuing retry', { error });
+          }
           result = await attempt(refitMessages, refitTools);
         } else {
           log.warn('Context-length overflow but nothing on the wire left to compact; returning the original error', { modelId });
@@ -1927,10 +2107,9 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    const { toolCalls, toolNameMap, emit, conversationId, node, signal, mcpNodes } = input;
+    const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
 
-    // Add verbose logging of the input
-    log.verbose('processToolCalls input', input);
+    log.debug('Processing tool-call batch', { count: toolCalls?.length ?? 0 });
 
     if (!toolCalls || toolCalls.length === 0) {
       const emptyResult: Result<ToolCallProcessingResult> = {
@@ -1940,9 +2119,6 @@ export class ModelHandler {
           processedToolCalls: []
         }
       };
-
-      // Add verbose logging of the empty result
-      log.verbose('processToolCalls empty result', emptyResult);
 
       return emptyResult;
     }
@@ -2007,6 +2183,7 @@ export class ModelHandler {
 
         const toolCallMessages: FlujoChatMessage[] = [];
         const processedToolCalls: ProcessedToolCall[] = [];
+        const toolStartedAt = Date.now();
 
         try {
           // Cancellation check BEFORE starting this call (issue #109/#252): once
@@ -2249,7 +2426,7 @@ export class ModelHandler {
             const resource = extractResource(callArgs);
             const permEffect = evaluatePermission(permRules, savedRules, serverName, toolName, resource);
             if (permEffect === 'deny') {
-              log.info(`Permission denied by rule for tool ${toolName} on ${serverName} (resource: ${resource})`);
+              log.info('Permission denied by rule for tool invocation', { toolName, serverName });
               const deniedContent = `Permission denied: the active ruleset does not allow calling ${toolName} on ${serverName} (resource: ${resource}).`;
               emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
               emit?.({
@@ -2336,7 +2513,9 @@ export class ModelHandler {
                 });
               }
             } catch (error) {
-              log.error('Tool-args capture failed; continuing with the call', error);
+              log.error('Tool-args capture failed; continuing with the call', {
+                errorClass: classifyStatisticsError(error),
+              });
             }
           }
 
@@ -2362,6 +2541,7 @@ export class ModelHandler {
             decoded.nodeId,
             signal,
             'model',
+            conversationId ? `conversation:${conversationId}` : undefined,
           );
 
           // Tier 3 data flow: auto-capture binary/large tool results as
@@ -2401,7 +2581,9 @@ export class ModelHandler {
                 }
               }
             } catch (error) {
-              log.error('Run-resource auto-capture failed; keeping original tool result', error);
+              log.error('Run-resource auto-capture failed; keeping original tool result', {
+                errorClass: classifyStatisticsError(error),
+              });
               effectiveData = result.data;
             }
           }
@@ -2444,7 +2626,9 @@ export class ModelHandler {
                 }
               }
             } catch (error) {
-              log.error('boundToolResult failed; keeping full tool result', error);
+              log.error('boundToolResult failed; keeping full tool result', {
+                errorClass: classifyStatisticsError(error),
+              });
             }
           }
 
@@ -2550,6 +2734,31 @@ export class ModelHandler {
           // completion time.
           results[callIndex] = toolCallMessages[0] ?? null;
           processed[callIndex] = processedToolCalls[0] ?? null;
+          if (runId) {
+            const message = toolCallMessages[0];
+            const content = typeof message?.content === 'string' ? message.content : '';
+            const cancelled = Boolean(signal?.aborted || input.shouldAbort?.() || /\bcancel(?:led|ed|ation)\b/i.test(content));
+            const failed = Boolean(message?.ui?.isError || /^Error:/i.test(content));
+            const kind = name.startsWith('handoff_to_') || name === 'handoff'
+              ? 'handoff' as const
+              : isRunResourceToolName(name) || isMCPResourceToolName(name)
+                ? 'resource' as const
+                : isQuestionToolName(name) || isTodoToolName(name)
+                  ? 'synthetic' as const
+                  : decodedForUi
+                    ? 'mcp' as const
+                    : 'unknown' as const;
+            recordStatisticsEvent(createStatisticsEvent({
+              type: 'tool.invocation',
+              runId,
+              node: node ? { id: node.nodeId, name: node.nodeName } : undefined,
+              tool: { id: decodedForUi?.tool ?? name, name, kind },
+              provider: decodedForUi ? { id: decodedForUi.server } : undefined,
+              outcome: cancelled ? 'cancelled' : failed ? 'error' : 'completed',
+              durationMs: Math.max(0, Date.now() - toolStartedAt),
+              errorClass: failed ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : { type: 'tool' }) : undefined,
+            }));
+          }
         }
       };
 
@@ -2590,8 +2799,10 @@ export class ModelHandler {
         }
       };
 
-      // Add verbose logging of the successful result
-      log.verbose('processToolCalls success result', result);
+      log.debug('Tool-call batch completed', {
+        requested: toolCalls.length,
+        completed: result.value.toolCallMessages.length,
+      });
 
       return result;
     } catch (error) {
@@ -2604,8 +2815,9 @@ export class ModelHandler {
         )
       };
 
-      // Add verbose logging of the error result
-      log.verbose('processToolCalls error result', errorResult);
+      log.warn('Tool-call batch failed', {
+        errorClass: classifyStatisticsError(error),
+      });
 
       return errorResult;
     }

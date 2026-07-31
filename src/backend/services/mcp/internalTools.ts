@@ -1,12 +1,10 @@
 /**
- * Tool definitions + dispatcher for FLUJO's built-in internal MCP server
- * (see internalServerConfig.ts for the identity/loading story).
+ * Tool definitions + dispatcher for FLUJO's control-plane MCP package.
  *
  * This is the third "FLUJO-as-server" brain next to flowTools.ts (flows-as-tools
  * for external clients) and flowAuthoringTools.ts (FlowSpec authoring): hand-written
- * MCP Tool definitions dispatched straight to the backend services, no process, no
- * transport. Unlike the other two it is consumed by FLUJO's OWN flow engine — a flow
- * binds the server named "flujo" like any other MCP server and its model can then
+ * MCP Tool definitions served through the standalone package's ordinary stdio
+ * connection. A flow can bind any persisted record for that package and its model can
  * author/inspect/update flows, run flows, manage/install MCP servers, and inspect
  * models, planned executions and chat conversations.
  *
@@ -22,8 +20,8 @@
  *  - Conversation transcripts (read_conversation) exclude system-role messages
  *    (node system prompts are model plumbing, same rule as the chat UI) and are
  *    size-bounded so a long conversation can't flood the calling model's context.
- *  - call_mcp_tool refuses the internal server itself, and execute_flow carries a
- *    process-wide depth guard, so a flow cannot recurse through FLUJO unboundedly.
+ *  - execute_flow carries a process-wide depth guard, so a flow cannot recurse
+ *    through FLUJO unboundedly.
  *  - kv_get/kv_set expose the persistent key-value store (${kv:NAME}). Values are
  *    PLAINTEXT and never secrets (secrets stay in ${global:} / encrypted env);
  *    kv_set clamps to the value cap and both default to the 'global' board (they
@@ -66,7 +64,6 @@ import {
   authoringCallTool,
   isAuthoringTool,
 } from './flowAuthoringTools';
-import { INTERNAL_SERVER_NAME } from './internalServerConfig';
 
 const log = createLogger('backend/services/mcp/internalTools');
 
@@ -452,6 +449,7 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     const result = await runFlow({
       flowId: flow.id,
       prompt: String(args?.input ?? ''),
+      source: 'internal',
       mode: 'ephemeral',
       flujo: true,
       requireApproval: false,
@@ -663,7 +661,6 @@ async function listMcpServers(service: InternalDispatchService): Promise<CallToo
         transport: config.transport,
         enabled: !config.disabled,
         status,
-        ...(config.builtIn ? { builtIn: true } : {}),
       };
     })
   );
@@ -678,11 +675,6 @@ async function listMcpServerTools(
   const server = String(args?.server ?? '').trim();
   if (!server) {
     return textResult({ error: 'Provide "server": a FLUJO server name.' }, true);
-  }
-  if (server === INTERNAL_SERVER_NAME) {
-    return textResult(
-      internalToolDefinitions().map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))
-    );
   }
   const audience: ToolListAudience = source === 'host' ? 'all' : source;
   const { tools, error } = await service.listServerTools(server, audience);
@@ -701,12 +693,6 @@ async function callMcpTool(
   const tool = String(args?.tool ?? '').trim();
   if (!server || !tool) {
     return textResult({ error: 'Provide "server" and "tool".' }, true);
-  }
-  if (server === INTERNAL_SERVER_NAME) {
-    return textResult(
-      { error: `"${INTERNAL_SERVER_NAME}" is this server — call its tools directly instead of through call_mcp_tool.` },
-      true
-    );
   }
   const toolArgs =
     args?.args && typeof args.args === 'object' && !Array.isArray(args.args)
@@ -744,9 +730,6 @@ async function restartMcpServer(
   if (!server) {
     return textResult({ error: 'Provide "server": a FLUJO server name.' }, true);
   }
-  if (server === INTERNAL_SERVER_NAME) {
-    return textResult({ ok: true, note: `"${INTERNAL_SERVER_NAME}" is the built-in server — it is always running.` });
-  }
   const result = await service.forceReconnect(server);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to restart ${server}.` }, true);
@@ -763,9 +746,6 @@ async function setMcpServerEnabled(
   const enabled = args?.enabled;
   if (!server || typeof enabled !== 'boolean') {
     return textResult({ error: 'Provide "server" (string) and "enabled" (boolean).' }, true);
-  }
-  if (server === INTERNAL_SERVER_NAME) {
-    return textResult({ error: `The built-in "${INTERNAL_SERVER_NAME}" server cannot be disabled.` }, true);
   }
   const result = await service.updateServerConfig(server, { disabled: !enabled });
   if ('error' in result) {
@@ -1301,7 +1281,7 @@ export async function internalCallTool(
       case 'kv_set':
         return await kvSetTool(args);
       default:
-        return textResult({ error: `Unknown tool on the built-in FLUJO server: ${toolName}` }, true);
+        return textResult({ error: `Unknown FLUJO control-plane tool: ${toolName}` }, true);
     }
   } catch (err) {
     log.error('internalCallTool failed', { toolName, err });

@@ -4,11 +4,13 @@ import {
   ToolDefinition,
   ToolCallInfo,
   MCPNodeReference,
+  CodexSessionMetadata,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 
 // Input for model call
 export interface ModelCallInput {
@@ -38,6 +40,14 @@ export interface ModelCallInput {
    * then lets the adapter apply its own default (no numeric system default).
    */
   maxTokens?: number;
+  /** Existing Process-node summarizing-compaction overrides (#248). */
+  compactionMode?: 'auto' | 'off';
+  compactionKeepTokens?: number;
+  /** Debug-only observer for the final generic provider wire and visual route. */
+  onFinalWire?: (
+    messages: OpenAI.ChatCompletionMessageParam[],
+    diagnostic?: VisualCompactionDiagnostic,
+  ) => void;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
   /**
@@ -50,6 +60,10 @@ export interface ModelCallInput {
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
+  /** Metadata-only logical run id for provider/tool attribution. */
+  runId?: string;
+  codexSession?: CodexSessionMetadata;
+  onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
   requireToolApproval?: boolean;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
@@ -113,6 +127,8 @@ export interface ToolCallProcessingInput {
    * (e.g. ephemeral subflow-child runs, or legacy call sites).
    */
   conversationId?: string;
+  /** Metadata-only logical run id for tool attribution. */
+  runId?: string;
   /** Process node driving these calls — recorded as resource lineage producer. */
   node?: NodeRef;
   /**

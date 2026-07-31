@@ -4,3 +4,4 @@ export * from './flow/flow';
 export * from './model/model';
 export * from './chat'; // Add export for chat types
 export * from './package'; // FlujoPackage manifest format (#192)
+export * from './statistics';

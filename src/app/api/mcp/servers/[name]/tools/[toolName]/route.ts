@@ -13,8 +13,8 @@ type RouteContext = { params: Promise<{ name: string; toolName: string }> };
  * POST /api/mcp/servers/{name}/tools/{toolName}
  * Invoke a tool on an MCP server.
  *
- * Body: `{ args: Record<string, unknown>, timeout?: number, source?: "app" }`.
- * `source: "app"` is set by FLUJO's MCP App host bridge and routes through
+ * Body: `{ args: Record<string, unknown>, timeout?: number, source?: "app", ownerScope?: string }`.
+ * `source: "app"` and `ownerScope` are set by FLUJO's MCP App host bridge and route through
  * server-side visibility enforcement. The route path remains the authoritative
  * server identity; an app cannot select a different server in its request body.
  * The response carries the tool result and is given the tool's own status code when it
@@ -30,13 +30,22 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     const args = body?.args;
     const timeout = body?.timeout;
     const source = body?.source;
+    const rawOwnerScope = body?.ownerScope;
 
     if (!args || typeof args !== 'object') {
       return json({ success: false, error: 'Missing tool arguments ("args")' }, 400);
     }
+    if (
+      source === 'app'
+      && rawOwnerScope !== undefined
+      && (typeof rawOwnerScope !== 'string' || rawOwnerScope.trim().length === 0 || rawOwnerScope.length > 512)
+    ) {
+      return json({ success: false, error: 'Invalid MCP App owner scope' }, 400);
+    }
+    const ownerScope = typeof rawOwnerScope === 'string' ? rawOwnerScope.trim() : undefined;
 
     const result = source === 'app'
-      ? await mcpService.callToolFromApp(name, toolName, args, timeout, request.signal)
+      ? await mcpService.callToolFromApp(name, toolName, args, timeout, request.signal, ownerScope)
       : await mcpService.callTool(name, toolName, args, timeout);
     return json(result, result.statusCode || (result.success ? 200 : 500));
   } catch (error) {

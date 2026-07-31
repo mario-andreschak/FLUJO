@@ -73,7 +73,7 @@ const log = createLogger('frontend/components/PlannedExecutions');
 type GroupMode = 'none' | 'folder' | 'trigger' | 'status';
 
 /**
- * Planned Executions page: manage flows that run headlessly on triggers.
+ * Automation Triggers page: manage flows that run headlessly on triggers.
  */
 const PlannedExecutionsManager = () => {
   const theme = useTheme();
@@ -152,7 +152,7 @@ const PlannedExecutionsManager = () => {
     if (!result.success) {
       // Don't let the switch silently snap back on the next poll with no
       // explanation — tell the user why it didn't take.
-      const message = result.error || 'Failed to update the planned execution.';
+      const message = result.error || 'Failed to update the trigger.';
       log.warn('Failed to toggle enabled', message);
       setToggleError(message);
     }
@@ -166,7 +166,7 @@ const PlannedExecutionsManager = () => {
       folder: folder ?? '',
     });
     if (!result.success) {
-      const message = result.error || 'Failed to move the planned execution.';
+      const message = result.error || 'Failed to move the trigger.';
       log.warn('Failed to update folder', message);
       setToggleError(message);
     }
@@ -257,7 +257,7 @@ const PlannedExecutionsManager = () => {
           mb: 1,
         }}
       >
-        <Typography variant="h5">Planned Executions</Typography>
+        <Typography variant="h5">Triggers</Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <Tooltip title="Refresh">
             <IconButton onClick={() => void refresh()}>
@@ -282,7 +282,7 @@ const PlannedExecutionsManager = () => {
             }}
             data-tour="add-execution"
           >
-            Add execution
+            Add trigger
           </Button>
         </Box>
       </Box>
@@ -295,7 +295,7 @@ const PlannedExecutionsManager = () => {
 
       {paused && entries.length > 0 && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          The scheduler is paused — no triggers will fire, so every execution
+          The scheduler is paused — no triggers will fire, so every trigger
           below shows “Paused (global)”. Switch it to Active (top right) to arm
           them.
         </Alert>
@@ -314,7 +314,7 @@ const PlannedExecutionsManager = () => {
               }}
             >
               <TextField
-                placeholder="Search planned executions..."
+                placeholder="Search triggers..."
                 variant="outlined"
                 size="small"
                 fullWidth
@@ -394,7 +394,7 @@ const PlannedExecutionsManager = () => {
                   </IconButton>
                 </Tooltip>
 
-                <Tooltip title="Sort planned executions">
+                <Tooltip title="Sort triggers">
                   <IconButton
                     size="small"
                     onClick={(event) => setSortAnchorEl(event.currentTarget)}
@@ -421,7 +421,7 @@ const PlannedExecutionsManager = () => {
             }}
           >
             <Typography variant="body2" color="text.secondary">
-              {filteredEntries.length} of {entries.length} planned execution
+              {filteredEntries.length} of {entries.length} trigger
               {entries.length === 1 ? '' : 's'}
               {searchTerm && ` matching "${searchTerm}"`}
             </Typography>
@@ -450,10 +450,10 @@ const PlannedExecutionsManager = () => {
           }}
         >
           <Typography variant="h6" sx={{ mb: 1 }}>
-            Nothing planned yet
+            No triggers yet
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Create your first planned execution to run a flow on a schedule.
+            Create your first trigger to run a flow automatically.
           </Typography>
           <Button
             variant="contained"
@@ -463,7 +463,7 @@ const PlannedExecutionsManager = () => {
               setModalOpen(true);
             }}
           >
-            New planned execution
+            New trigger
           </Button>
         </Box>
       )}
@@ -611,8 +611,8 @@ const PlannedExecutionsManager = () => {
         <DialogTitle>Delete “{deleting?.name}”?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            This removes the planned execution and its run history. The flow
-            itself is not affected.
+            This removes the trigger and its run history. The flow itself is
+            not affected.
           </Typography>
         </DialogContent>
         <DialogActions>

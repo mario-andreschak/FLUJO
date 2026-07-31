@@ -22,10 +22,8 @@ jest.mock('@/utils/paths', () => {
   return { ...actual, getHomeDir: jest.fn() };
 });
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  FILESYSTEM_SERVER_NAME: 'filesystem',
-  BASH_SERVER_NAME: 'bash',
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
 // `filesystemResources.ts` (pulled in via filesystemTools) imports the ESM-only
@@ -36,7 +34,7 @@ jest.mock('@modelcontextprotocol/ext-apps', () => ({
 }));
 
 import { getHomeDir } from '@/utils/paths';
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 import { filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
 import {
   bashCallTool,
@@ -46,7 +44,7 @@ import {
 import { __resetProtectedPathsCache } from '@/backend/services/mcp/internal/protectedPaths';
 
 const mockedHome = getHomeDir as jest.Mock;
-const mockedRoots = getInternalServerRoots as jest.Mock;
+const mockedRoots = loadServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   return (r.content[0] as { text: string }).text;

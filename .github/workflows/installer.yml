@@ -1,35 +1,132 @@
-# Builds flujo-setup.exe (installer/flujo-setup.iss) on every version tag and
-# attaches it to the GitHub release. Inno Setup 6 is preinstalled on the
-# windows-latest runner image. Run manually via workflow_dispatch to get the
-# exe as a build artifact without cutting a release.
-name: Build setup.exe
+# Validates the side-effect-free Windows installer decisions and builds the
+# graphical bootstrapper on pull requests, main, version tags, and manual runs.
+name: Validate Windows installer
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/installer.yml'
+      - 'installer/**'
+      - 'scripts/install.ps1'
+      - 'scripts/installer-functions.ps1'
+      - 'scripts/uninstall.ps1'
+      - 'tests/installer.Tests.ps1'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'bin/flujo.mjs'
+      - 'scripts/launch-next.mjs'
+      - 'scripts/smoke-mcp-artifacts.mjs'
+      - 'scripts/validate-mcp-release.mjs'
+      - '__tests__/mcp/**'
+      - 'mcp-servers/**'
+      - 'src/app/mcp-proxy/**'
+      - 'src/backend/services/mcp/**'
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  installer:
+  artifact-smoke:
+    name: Packed MCP process boundary (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build production artifacts
+        run: |
+          npm ci --include=dev
+          npm run build
+
+      - name: Exercise MCP process boundaries
+        run: |
+          npm run test:mcp-process-boundary
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+
+  powershell-tests:
+    name: Installer decisions (Pester)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Pester
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run installer tests
+        shell: powershell
+        run: |
+          Import-Module Pester -RequiredVersion 5.7.1
+          Invoke-Pester -Path tests\installer.Tests.ps1 -CI
+
+  installer-build:
+    name: Compile flujo-setup.exe
+    needs: powershell-tests
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compile the installer
-        shell: pwsh
+      - name: Install pinned Inno Setup
+        shell: powershell
         run: |
-          $version = if ($env:GITHUB_REF_NAME -match '^v(.+)$') { $Matches[1] } else { '0.0.0' }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer\flujo-setup.iss
+          choco install innosetup --version=6.7.1 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey could not install Inno Setup 6.7.1 (exit $LASTEXITCODE)."
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw "Pinned Inno Setup compiler was not found: $iscc"
+          }
 
-      - uses: actions/upload-artifact@v4
+      - name: Compile and validate the installer
+        shell: powershell
+        run: |
+          $packageVersion = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $expectedTag = "v$packageVersion"
+            if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+              throw "Release tag '$env:GITHUB_REF_NAME' does not match package version '$expectedTag'."
+            }
+            $version = $packageVersion
+          } else {
+            $version = '0.0.0'
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$version" installer\flujo-setup.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed (exit $LASTEXITCODE)."
+          }
+
+          $artifact = Join-Path $PWD 'installer\Output\flujo-setup.exe'
+          if (-not (Test-Path -LiteralPath $artifact)) {
+            throw "Expected installer was not produced: $artifact"
+          }
+          if ((Get-Item -LiteralPath $artifact).Length -le 0) {
+            throw "Installer artifact is empty: $artifact"
+          }
+
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
         with:
           name: flujo-setup
           path: installer/Output/flujo-setup.exe
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Attach installer to version release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: installer/Output/flujo-setup.exe

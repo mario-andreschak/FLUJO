@@ -3,6 +3,8 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { findBindings } from '@/utils/shared';
+import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import type { MCPNodeReference } from '@/backend/execution/flow/types';
 
 const log = createLogger('backend/utils/PromptRenderer');
 
@@ -23,6 +25,55 @@ export interface PromptRenderOptions {
 }
 
 export class PromptRenderer {
+  /**
+   * Resolve references in a chat message for the model-facing wire projection.
+   * The caller keeps the original serialized message in SharedState; this method
+   * only expands resources authorized for the current ProcessNode and non-secret
+   * globals. Tool references always remain literal and never invoke a tool.
+   * Unauthorized or unreadable references also remain literal.
+   */
+  async resolveChatMessageReferences(
+    message: string,
+    mcpNodes: MCPNodeReference[],
+    onResourceRead?: PromptRenderOptions['onResourceRead'],
+  ): Promise<string> {
+    const matches = findBindings(message);
+    let resolved = message;
+
+    if (matches.length > 0) {
+      let result = '';
+      let cursor = 0;
+      for (const match of matches) {
+        result += message.slice(cursor, match.index);
+        cursor = match.index + match.fullMatch.length;
+
+        if (match.kind === 'tool') {
+          // A tool pill is descriptive context only. It must never trigger a call.
+          result += match.fullMatch;
+          continue;
+        }
+
+        const authorized = mcpNodes.some((mcpNode) => {
+          if (mcpNode.properties.boundServer !== match.server) return false;
+          const enabled = mcpNode.properties.enabledResources;
+          return enabled === undefined || enabled === 'all' || enabled.includes(match.name);
+        });
+        result += authorized
+          ? await this.renderResourceBinding(
+              match.server,
+              match.name,
+              onResourceRead,
+              match.fullMatch,
+            )
+          : match.fullMatch;
+      }
+      result += message.slice(cursor);
+      resolved = result;
+    }
+
+    return await resolveNonSecretGlobalVars(resolved) as string;
+  }
+
   /**
    * Main method to render a complete prompt
    * 
@@ -408,7 +459,8 @@ export class PromptRenderer {
   private async renderResourceBinding(
     serverName: string,
     uri: string,
-    onResourceRead?: PromptRenderOptions['onResourceRead']
+    onResourceRead?: PromptRenderOptions['onResourceRead'],
+    failureFallback?: string,
   ): Promise<string> {
     for (let retryCount = 0; retryCount < 3; retryCount++) {
       try {
@@ -431,7 +483,8 @@ export class PromptRenderer {
           }
           log.warn(`Failed to read resource ${uri} from ${serverName}: ${result.error}`);
           // A genuine read error (bad uri, etc.) won't fix itself on retry — stop early.
-          return `[Resource ${uri} from ${serverName} could not be read: ${result.error || 'unknown error'}]`;
+          return failureFallback
+            ?? `[Resource ${uri} from ${serverName} could not be read: ${result.error || 'unknown error'}]`;
         }
         log.warn(`Server not connected for resource read: ${serverName}`);
       } catch (error) {
@@ -439,7 +492,7 @@ export class PromptRenderer {
       }
       await this.delay(Math.pow(2, retryCount + 1) * 100);
     }
-    return `[Resource ${uri} from ${serverName} is currently unavailable]`;
+    return failureFallback ?? `[Resource ${uri} from ${serverName} is currently unavailable]`;
   }
 
   /** Flatten an MCP ReadResourceResult into plain text for prompt inlining. */

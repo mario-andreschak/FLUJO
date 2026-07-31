@@ -27,10 +27,8 @@ import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { buildSingleServerJson } from '@/utils/mcp/mcpFormats';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import TransportBadge from './TransportBadge';
 import ServerUpdateDialog from './ServerUpdateDialog';
-import FilesystemRootsModal from './FilesystemRootsModal';
 import { ServerUpdateInfo, shortSha } from './utils/serverUpdates';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -91,7 +89,6 @@ interface ServerCardProps {
   onSetFolder?: (folder: string | undefined) => void; // Assign/clear folder
   favorite?: boolean; // Favorite flag (#146): floats the card to the top
   onToggleFavorite?: () => void; // Toggle favorite. When omitted the star is hidden.
-  builtIn?: boolean; // FLUJO's built-in internal server: not editable/deletable, always on
   /**
    * Full server config, used to build a single-server, copy-to-clipboard MCP
    * JSON via the shared exporter (#110). Optional: when absent the copy-JSON
@@ -131,7 +128,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onSetFolder,
   favorite = false,
   onToggleFavorite,
-  builtIn = false,
   serverConfig,
 }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
@@ -142,12 +138,6 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [toastSeverity, setToastSeverity] = useState<'success' | 'error'>('success');
   const [isPolling, setIsPolling] = useState(false);
   const [isResettingTokens, setIsResettingTokens] = useState(false);
-  // Roots-configuration modal for the built-in `filesystem` server (issue #170).
-  const [showRootsModal, setShowRootsModal] = useState(false);
-  const [rootsOverride, setRootsOverride] = useState<string[] | undefined>(serverConfig?.roots);
-  useEffect(() => {
-    setRootsOverride(serverConfig?.roots);
-  }, [serverConfig?.roots]);
   // Local optimistic state for the "expose as MCP server" toggle (#17A).
   const [exposed, setExposed] = useState(exposeAsMcpServer);
   // Local optimistic state for the "MCP Apps" opt-in toggle (#97).
@@ -209,7 +199,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   };
 
   // Copy a ready-to-paste, single-server MCP config JSON to the clipboard (#110).
-  // Scoped to the exposed/built-in blocks, whose exported shape is proxy-only
+  // Scoped to exposed servers, whose exported shape is proxy-only
   // (`{ type:'http', url }`) — so no env vars, headers or secrets ever leak.
   const handleCopyServerJson = () => {
     const base = typeof window !== 'undefined' ? window.location.origin : '';
@@ -366,9 +356,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
         onClick();
       }}
     >
-      {/* Favorite star (#146): mirrors FlowCard — top-left, warning color when
-          active. Hidden for the built-in server (its config is never persisted). */}
-      {onToggleFavorite && !builtIn && (
+      {/* Favorite star (#146): mirrors FlowCard — top-left, warning color when active. */}
+      {onToggleFavorite && (
         <Tooltip title={favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
           <IconButton
             size="small"
@@ -426,13 +415,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   />
                 </Tooltip>
               )}
-              {builtIn ? (
-                <Tooltip title="FLUJO's built-in server — can be enabled or disabled below, but not edited or removed.">
-                  <Chip label="Built-in" color="primary" size="small" />
-                </Tooltip>
-              ) : (
-                <TransportBadge transport={transport} size="small" />
-              )}
+              <TransportBadge transport={transport} size="small" />
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
               {status === 'connected' && <CheckCircleIcon color="success" sx={{ mr: 0.5 }} fontSize="small" />}
@@ -452,46 +435,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
           color="text.secondary"
           sx={{ mb: 1, fontSize: '0.875rem' }}
           noWrap
-          title={builtIn ? undefined : path}
+          title={path}
         >
-          {builtIn ? "FLUJO's own backend API — flow authoring, execution and server management as MCP tools." : path}
+          {path}
         </Typography>
 
-        {/* Built-in server: always exposed at its proxy endpoint — read-only URL, no toggle */}
-        {builtIn && !pickerMode && (
-          <Box sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }} onClick={(e) => e.stopPropagation()}>
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-              <PublicIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
-              <Tooltip title="External MCP clients (Claude Code, Claude Desktop, Cursor, …) can drive FLUJO through this local endpoint.">
-                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                  Exposed to external apps
-                </Typography>
-              </Tooltip>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
-              <Typography
-                variant="caption"
-                sx={{ flex: 1, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                title={proxyUrl}
-              >
-                {proxyUrl}
-              </Typography>
-              <Tooltip title="Copy endpoint URL">
-                <IconButton size="small" onClick={handleCopyProxyUrl}>
-                  <ContentCopyIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Copy MCP server JSON">
-                <IconButton size="small" onClick={handleCopyServerJson}>
-                  <DataObjectIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            </Box>
-          </Box>
-        )}
-
         {/* Expose to external apps (#17A) */}
-        {!builtIn && !pickerMode && (
+        {!pickerMode && (
         <Box
           sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
           onClick={(e) => e.stopPropagation()}
@@ -535,7 +485,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
 
         {/* MCP Apps opt-in (#97): let this server render and interact through
             isolated ui:// apps. Off by default. */}
-        {!builtIn && !pickerMode && (
+        {!pickerMode && (
         <Box
           sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
           onClick={(e) => e.stopPropagation()}
@@ -671,58 +621,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         )}
       </CardContent>
 
-      {/* Built-in server: only an enable/disable toggle (issue #170) — no edit/delete. */}
-      {builtIn && !pickerMode && onToggle && (
-        <CardActions sx={{ justifyContent: 'flex-start', px: 2, py: 1 }} onClick={(e) => e.stopPropagation()}>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Switch
-              checked={enabled}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => {
-                log.debug(`Built-in server ${name} toggle changed to: ${e.target.checked}`);
-                onToggle(e.target.checked);
-              }}
-              color="primary"
-              size="small"
-            />
-            <Typography
-              variant="body2"
-              sx={{ ml: 0.5, fontWeight: 500, color: enabled ? 'primary.main' : 'text.secondary' }}
-            >
-              {enabled ? 'Enabled' : 'Disabled'}
-            </Typography>
-            {/* The built-in filesystem and bash servers can be scoped to specific roots (issues #170 + #175). */}
-            {(name === 'filesystem' || name === 'bash') && (
-              <Tooltip title={`Configure ${name} roots`}>
-                <Button
-                  size="small"
-                  variant="text"
-                  startIcon={<FolderOpenIcon fontSize="small" />}
-                  sx={{ ml: 1.5, textTransform: 'none' }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowRootsModal(true);
-                  }}
-                >
-                  Configure roots{rootsOverride && rootsOverride.length ? ` (${rootsOverride.length})` : ''}
-                </Button>
-              </Tooltip>
-            )}
-          </Box>
-        </CardActions>
-      )}
-
-      {(name === 'filesystem' || name === 'bash') && (
-        <FilesystemRootsModal
-          open={showRootsModal}
-          serverName={name}
-          initialRoots={rootsOverride}
-          onClose={() => setShowRootsModal(false)}
-          onSaved={(next) => setRootsOverride(next)}
-        />
-      )}
-
-      {!builtIn && !pickerMode && (
+      {!pickerMode && (
       <CardActions sx={{ justifyContent: 'space-between', px: 2, py: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <Switch

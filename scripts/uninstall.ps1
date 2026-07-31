@@ -40,6 +40,14 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+$installerFunctionsPath = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'installer-functions.ps1' } else { $null }
+if ($installerFunctionsPath -and (Test-Path -LiteralPath $installerFunctionsPath)) {
+    . $installerFunctionsPath
+} else {
+    $installerFunctionsUrl = 'https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/installer-functions.ps1'
+    Invoke-Expression ([string](Invoke-RestMethod -Uri $installerFunctionsUrl))
+}
+
 # Match install.ps1: relax the policy for THIS process so .ps1 shims work this session.
 try {
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction Stop
@@ -50,7 +58,7 @@ function Write-Ok([string]$Message)   { Write-Host "    $Message" -ForegroundCol
 function Write-Warn2([string]$Message) { Write-Host "    $Message" -ForegroundColor Yellow }
 
 function Test-Command([string]$Name) {
-    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+    return Test-CommandAvailable -CommandName $Name
 }
 
 # Yes/No prompt with a configurable default (returned on empty/unrecognized input).
@@ -63,13 +71,7 @@ function Read-YesNo([string]$Prompt, [bool]$DefaultYes) {
 }
 
 # The winget IDs install.ps1 uses, for the fallback path when there is no manifest.
-$KnownPrereqs = @(
-    [PSCustomObject]@{ command = 'git';    wingetId = 'Git.Git';            displayName = 'Git' }
-    [PSCustomObject]@{ command = 'node';   wingetId = 'OpenJS.NodeJS';      displayName = 'Node.js (includes npm)' }
-    [PSCustomObject]@{ command = 'python'; wingetId = 'Python.Python.3.12'; displayName = 'Python 3.12' }
-    [PSCustomObject]@{ command = 'uv';     wingetId = 'astral-sh.uv';       displayName = 'uv' }
-    [PSCustomObject]@{ command = 'ollama'; wingetId = 'Ollama.Ollama';      displayName = 'Ollama' }
-)
+$KnownPrereqs = Get-KnownInstallerPrerequisites
 
 Write-Host "FLUJO Uninstaller" -ForegroundColor Magenta
 Write-Host "=================" -ForegroundColor Magenta
@@ -100,7 +102,7 @@ if ($manifest -and $manifest.installDir) {
     # Prefer the binDir recorded in the manifest if present.
     if ($manifest.binDir) { $binDir = [string]$manifest.binDir }
 } else {
-    $defaultDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'FLUJO' } else { Join-Path $HOME 'FLUJO' }
+    $defaultDir = Get-DefaultInstallDirectory -LocalAppData $env:LOCALAPPDATA -HomeDirectory $HOME
     $guess = if ($env:FLUJO_DIR) {
         $env:FLUJO_DIR
     } elseif ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'package.json'))) {
@@ -125,36 +127,32 @@ if (-not (Test-Path -LiteralPath (Join-Path $installDir 'package.json'))) {
 # ---------------------------------------------------------------------------
 # 3. Gather all choices up front (prereqs, execution policy), then confirm.
 # ---------------------------------------------------------------------------
-# Build the list of prerequisites to ask about.
-$toRemove = @()
-if ($manifest -and $manifest.prerequisites) {
+# Build the list of prerequisites to ask about. The helper calculates defaults;
+# this script owns the prompts and later package-manager side effects.
+if ($manifest -and (@($manifest.PSObject.Properties.Name) -contains 'prerequisites')) {
     Write-Step "Prerequisites (winget). FLUJO-installed default to remove; pre-existing default to keep."
-    foreach ($p in $manifest.prerequisites) {
-        if (-not (Test-Command $p.command)) {
-            Write-Ok "$($p.displayName) is not installed (nothing to remove)."
-            continue
-        }
-        $defaultYes = -not [bool]$p.preexisting
-        $note = if ($p.preexisting) { "was already on your system before FLUJO" } else { "installed by FLUJO" }
-        if ($p.command -eq 'node') {
-            Write-Warn2 "Note: Node.js/npm is shared by many tools; removing it affects them too."
-        }
-        if (Read-YesNo "Remove $($p.displayName)? ($note; winget: $($p.wingetId))" $defaultYes) {
-            $toRemove += [PSCustomObject]@{ wingetId = $p.wingetId; displayName = $p.displayName }
-        }
-    }
 } else {
     Write-Step "Prerequisites (winget). No manifest - cannot confirm which FLUJO installed, so each defaults to KEEP."
-    foreach ($p in $KnownPrereqs) {
-        if (-not (Test-Command $p.command)) { continue }
-        if ($p.command -eq 'node') {
+}
+$prerequisiteDecisions = Get-UninstallPrerequisiteDecisions -Manifest $manifest `
+    -KnownPrerequisites $KnownPrereqs -CommandResolver { param($Name) Test-Command $Name } `
+    -AnswerResolver {
+        param($Candidate)
+        if ($Candidate.Command -eq 'node') {
             Write-Warn2 "Note: Node.js/npm is shared by many tools; removing it affects them too."
         }
-        if (Read-YesNo "Remove $($p.displayName)? (can't confirm FLUJO installed it; winget: $($p.wingetId))" $false) {
-            $toRemove += [PSCustomObject]@{ wingetId = $p.wingetId; displayName = $p.displayName }
+        if ($Candidate.HasManifest) {
+            $note = if ($Candidate.Preexisting) { "was already on your system before FLUJO" } else { "installed by FLUJO" }
+            return Read-YesNo "Remove $($Candidate.DisplayName)? ($note; winget: $($Candidate.WingetId))" $Candidate.DefaultRemove
         }
+        return Read-YesNo "Remove $($Candidate.DisplayName)? (can't confirm FLUJO installed it; winget: $($Candidate.WingetId))" $false
     }
+foreach ($decision in $prerequisiteDecisions | Where-Object { -not $_.Present }) {
+    Write-Ok "$($decision.DisplayName) is not installed (nothing to remove)."
 }
+$toRemove = @($prerequisiteDecisions | Where-Object { $_.Remove } | ForEach-Object {
+    [PSCustomObject]@{ wingetId = $_.WingetId; displayName = $_.DisplayName }
+})
 
 # Claude Code CLI (npm global) - offer removal only if FLUJO installed it (and it
 # wasn't already present), mirroring the prereq default-to-remove behavior.

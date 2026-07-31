@@ -3,7 +3,7 @@
  * authoring contract).
  *
  * FlowSpec is the semantic flow-authoring format: what the flow-generation LLM emits,
- * what POST /api/flow/compile accepts, and what the built-in MCP server's authoring
+ * what POST /api/flow/compile accepts, and what the control-plane MCP package's authoring
  * tools (create_flow / validate_flow_spec) take. Raw ReactFlow JSON (POST /api/flow)
  * stays the internal/advanced surface; FlowSpec is the stable contract external
  * agents author against, and `compileFlowSpec` absorbs the canvas format underneath.

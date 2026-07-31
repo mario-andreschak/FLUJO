@@ -48,6 +48,14 @@ export interface EventStreamHandlers {
   onError?: (err: Event) => void;
 }
 
+export interface RevertPreview {
+  messageId: string;
+  previewId: string;
+  files: Array<{ path: string; status: string }>;
+  diff: string;
+  truncated: boolean;
+}
+
 const BASE = '/v1/chat/conversations';
 
 // Parse a fetch Response, throwing ChatApiError on non-2xx. For 204/empty
@@ -327,6 +335,31 @@ class ChatService {
       log.warn('injectMessage: request failed; falling back to a normal send', { conversationId: id, err });
       return { delivered: false };
     }
+  }
+
+  async previewRevert(id: string, messageId: string): Promise<RevertPreview> {
+    const response = await fetch(
+      `${BASE}/${encodeURIComponent(id)}/revert?messageId=${encodeURIComponent(messageId)}`
+    );
+    return parse<RevertPreview>(response);
+  }
+
+  async revertToMessage(id: string, messageId: string, previewId: string): Promise<{ operationId: string }> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/revert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId, previewId }),
+    });
+    return parse<{ operationId: string }>(response);
+  }
+
+  async undoRevert(id: string, operationId: string): Promise<void> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/revert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operationId, action: 'undo' }),
+    });
+    await parse<void>(response);
   }
 
   /**

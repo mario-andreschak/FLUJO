@@ -19,6 +19,12 @@ import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { encodeBindingPill } from '@/utils/shared/mcpBinding';
+import {
+  createPromptReferenceSuggestion,
+  PromptReferenceSuggestion,
+} from '@/utils/shared/promptRefs';
+import { mcpService } from '@/frontend/services/mcp';
+import type { MCPResource, MCPResourceTemplate } from '@/shared/types/mcp';
 import { ProcessNodePropertiesModalProps } from './ProcessNodePropertiesModal/types'; // Adjusted path
 import useModelManagement from './ProcessNodePropertiesModal/hooks/useModelManagement'; // Adjusted path
 import useServerConnection from './ProcessNodePropertiesModal/hooks/useServerConnection'; // Adjusted path
@@ -74,6 +80,7 @@ export const ProcessNodePropertiesModal = ({
   flowId,
   onConnectMcpServer,
   authoringMode = 'advanced',
+  mode = 'edit',
 }: ProcessNodePropertiesModalProps) => {
   log.debug('ProcessNodePropertiesModal rendered with:', { node: node, flowId: flowId });
   const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
@@ -96,7 +103,7 @@ export const ProcessNodePropertiesModal = ({
   const [captureResource, setCaptureResource] = useState('');
   const [captureKvScope, setCaptureKvScope] = useState<KvRefScope>('folder');
   const [captureKvKey, setCaptureKvKey] = useState('');
-  // Inner Server Tools | Resources | Agent Tools sub-tabs (inside the Task tab).
+  // Inner MCP | Connected Nodes | Resources sub-tabs (inside the Task section).
   const [activeTab, setActiveTab] = useState<string>('server');
   // Issue #300: the currently active top-level section tab.
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
@@ -151,6 +158,67 @@ export const ProcessNodePropertiesModal = ({
     handleRetryServer,
     handleRestartServer
   } = useServerConnection(open, node, flowEdges, flowNodes);
+
+  const [resourceSuggestions, setResourceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const serverNames = [...new Set(
+      connectedMcpNodes
+        .filter((connected) => connected.status === 'connected')
+        .map((connected) => connected.serverName),
+    )];
+    if (!open || serverNames.length === 0) {
+      setResourceSuggestions([]);
+      return () => { cancelled = true; };
+    }
+    void Promise.all(serverNames.map(async (serverName) => {
+      try {
+        const result = await mcpService.listServerResources(serverName);
+        const contexts = connectedMcpNodes.filter((connected) => connected.serverName === serverName);
+        const isEnabled = (uri: string) => contexts.some((connected) => {
+          const enabled = connected.enabledResources;
+          return enabled === undefined || enabled === 'all' || enabled.includes(uri);
+        });
+        return [
+          ...(result.resources ?? [])
+            .filter((resource: MCPResource) => isEnabled(resource.uri))
+            .map((resource: MCPResource) => createPromptReferenceSuggestion(
+              { kind: 'resource', server: serverName, name: resource.uri },
+              resource.name || resource.uri,
+              resource.description || `${serverName} · ${resource.uri}`,
+            )),
+          ...(result.resourceTemplates ?? [])
+            .filter((resource: MCPResourceTemplate) => isEnabled(resource.uriTemplate))
+            .map((resource: MCPResourceTemplate) => createPromptReferenceSuggestion(
+              { kind: 'resource', server: serverName, name: resource.uriTemplate },
+              resource.name || resource.uriTemplate,
+              resource.description || `${serverName} · ${resource.uriTemplate}`,
+            )),
+        ];
+      } catch (error) {
+        log.warn(`Failed to load @ resource suggestions for ${serverName}`, error);
+        return [];
+      }
+    })).then((groups) => {
+      if (!cancelled) setResourceSuggestions(groups.flat());
+    });
+    return () => { cancelled = true; };
+  }, [open, connectedMcpNodes]);
+
+  const referenceSuggestions = React.useMemo<PromptReferenceSuggestion[]>(() => {
+    const toolSuggestions = connectedMcpNodes.flatMap((connected) => {
+      const enabled = new Set(connected.enabledTools ?? []);
+      return (serverToolsMap[connected.serverName] ?? [])
+        .filter((tool) => tool?.name && enabled.has(tool.name))
+        .map((tool) => createPromptReferenceSuggestion(
+          { kind: 'tool', server: connected.serverName, name: tool.name },
+          tool.name,
+          tool.description || connected.serverName,
+        ));
+    });
+    return [...toolSuggestions, ...resourceSuggestions];
+  }, [connectedMcpNodes, resourceSuggestions, serverToolsMap]);
   
   // Tier 3 (issue #161 item 3): resource NODES wired to this process node on
   // the canvas. Direction encodes role (resource→process = consume;
@@ -202,6 +270,8 @@ export const ProcessNodePropertiesModal = ({
 
     // Load prompt template and model binding status when node changes
   useEffect(() => {
+    if (!open) return;
+
     if (node) {
       // Always load the prompt template from the node's properties
       const savedPromptTemplate = node.data.properties?.promptTemplate || '';
@@ -231,12 +301,33 @@ export const ProcessNodePropertiesModal = ({
       setCaptureKvScope(kvParsed.scope);
       setCaptureKvKey(kvParsed.key || '');
 
-      // In Guided mode, take returning users directly to their authored task.
-      // Empty/new nodes still open on Basic, as does Advanced mode.
-      const initialSection = getInitialProcessSection(authoringMode, savedPromptTemplate);
-      setActiveSection(initialSection);
     }
-  }, [node, open, authoringMode]);
+
+    // Reset both navigation levels whenever the modal target or open state changes.
+    // Guided edit sessions with an authored task open directly on Task; new and
+    // advanced sessions start on Basic.
+    const initialSection: SectionKey = mode === 'create'
+      ? 'basic'
+      : getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate);
+    setActiveSection(initialSection);
+    setActiveTab('server');
+    isProgrammaticScroll.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      const target = sectionRefs[initialSection].current;
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ behavior: 'auto', block: 'start' });
+      } else if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
+      }
+      isProgrammaticScroll.current = false;
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      isProgrammaticScroll.current = false;
+    };
+    // sectionRefs is stable for the lifetime of this modal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node, open, mode, authoringMode]);
 
   // Issue #300: keep the active tab in sync with the section scrolled into view.
   useEffect(() => {
@@ -262,7 +353,12 @@ export const ProcessNodePropertiesModal = ({
   const handleSectionClick = (key: SectionKey) => {
     setActiveSection(key);
     isProgrammaticScroll.current = true;
-    sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const target = sectionRefs[key].current;
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
+    }
     // Re-enable observer once the smooth scroll has settled.
     window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
   };
@@ -414,25 +510,32 @@ export const ProcessNodePropertiesModal = ({
     pb: 4,
   };
 
-  // The inner Server Tools | Resources | Agent Tools panels, rendered inside the
-  // Task tab beside the editor. Kept as a local element so the editor and its
-  // tool bindings share the one mounted promptBuilderRef.
+  // The inner MCP | Connected Nodes | Resources panels, rendered beside the
+  // editor. The editor stays mounted while these panels switch so binding
+  // insertion always retains the same promptBuilderRef.
   const toolPanels = (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {authoringMode === 'advanced' && <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {authoringMode === 'advanced' && <Box sx={{ borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <Tabs
           value={activeTab}
           onChange={(_, newValue: string) => setActiveTab(newValue)}
           variant="scrollable"
           scrollButtons="auto"
+          aria-label="Task tools"
         >
-          <Tab label="Server Tools" value="server" />
-          <Tab label="Resources" value="resources" />
-          <Tab label="Agent Tools" value="agent" />
+          <Tab id="process-task-tab-server" aria-controls="process-task-panel-server" label="MCP" value="server" />
+          <Tab id="process-task-tab-agent" aria-controls="process-task-panel-agent" label="Connected Nodes" value="agent" />
+          <Tab id="process-task-tab-resources" aria-controls="process-task-panel-resources" label="Resources" value="resources" />
         </Tabs>
       </Box>}
 
-      <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+      <Box
+        id={`process-task-panel-${activeTab}`}
+        role="tabpanel"
+        aria-labelledby={`process-task-tab-${activeTab}`}
+        data-testid="process-task-tools-scroll"
+        sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', pr: 0.5 }}
+      >
         {/* Show Server Tools tab content */}
         {activeTab === 'server' && (
           <ServerTools
@@ -604,6 +707,7 @@ export const ProcessNodePropertiesModal = ({
                   excludeSystemPrompt={excludeSystemPrompt}
                   nodeData={nodeData}
                   flowId={flowId}
+                  suggestions={referenceSuggestions}
                 />
               </Box>
             </Box>

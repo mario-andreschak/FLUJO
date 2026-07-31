@@ -1,9 +1,9 @@
 /**
- * Tests for the built-in `filesystem` server's PERSISTED roots confinement
+ * Tests for the shipped `filesystem` package's persisted roots confinement
  * (issue #170): user-configured roots (stored via the MCP manager override) must
  * confine every path, and the FLUJO_FS_ROOTS env stays a hard ceiling on top.
  *
- * The registry (storage-backed) is mocked so the effective-roots merge can be
+ * The ordinary config loader is mocked so the effective-roots merge can be
  * exercised without a real storage layer.
  */
 import { promises as fsp } from 'fs';
@@ -11,15 +11,14 @@ import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  FILESYSTEM_SERVER_NAME: 'filesystem',
-  getInternalServerRoots: jest.fn(),
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerRoots: jest.fn(),
 }));
 
-import { getInternalServerRoots } from '@/backend/services/mcp/internal/registry';
+import { loadServerRoots } from '@/backend/services/mcp/config';
 import { filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
 
-const mockedRoots = getInternalServerRoots as jest.Mock;
+const mockedRoots = loadServerRoots as jest.Mock;
 
 function text(r: CallToolResult): string {
   return (r.content[0] as { text: string }).text;

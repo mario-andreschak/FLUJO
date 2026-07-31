@@ -23,6 +23,11 @@ import { getFlowRunEventBus, FlowRunFiredBy } from './flowRunEventBus';
 import { appendRunRecord, deleteRunHistory, loadLastRunRecord, loadRunRecords } from './runHistory';
 import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
 import type { FlowRunResult } from '@/backend/execution/flow/runFlow';
+import {
+  classifySchedulerSkip,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/services/scheduler/index');
 
@@ -327,8 +332,10 @@ export class SchedulerService {
             // Loop safety: record the depth-limit skip as a run so it's auditable.
             onSkip: reason => {
               const at = new Date().toISOString();
+              const runId = uuidv4();
+              this.recordSchedulerSkip(execution, runId, reason);
               void appendRunRecord(execution.id, {
-                runId: uuidv4(),
+                runId,
                 conversationId: '',
                 firedAt: at,
                 finishedAt: at,
@@ -744,6 +751,7 @@ export class SchedulerService {
    */
   private skippedRecord(fire: QueuedFire, reason: string): RunRecord {
     const at = new Date().toISOString();
+    this.recordSchedulerSkip(fire.execution, fire.runId, reason);
     return {
       runId: fire.runId,
       conversationId: '',
@@ -753,6 +761,32 @@ export class SchedulerService {
       triggerSummary: fire.payload.summary,
       error: reason,
     };
+  }
+
+  private recordSchedulerFire(
+    execution: PlannedExecution,
+    runId: string,
+    outcome: 'fired' | 'queued',
+    conversationId?: string
+  ): void {
+    recordStatisticsEvent(createStatisticsEvent({
+      type: 'scheduler.fire',
+      runId,
+      source: 'schedule',
+      plannedExecution: { id: execution.id, name: execution.name },
+      outcome,
+      ...(conversationId ? { conversationId } : {}),
+    }));
+  }
+
+  private recordSchedulerSkip(execution: PlannedExecution, runId: string, reason: string): void {
+    recordStatisticsEvent(createStatisticsEvent({
+      type: 'scheduler.skip',
+      runId,
+      source: 'schedule',
+      plannedExecution: { id: execution.id, name: execution.name },
+      reason: classifySchedulerSkip(reason),
+    }));
   }
 
   /**
@@ -1148,6 +1182,7 @@ export class SchedulerService {
         triggerSummary: payload.summary,
         error: 'encryption locked',
       };
+      this.recordSchedulerSkip(execution, runId, record.error!);
       await appendRunRecord(execution.id, record);
       log.info(`Skipped fire for "${execution.name}" — encryption locked`);
       return record;
@@ -1177,6 +1212,7 @@ export class SchedulerService {
                 triggerSummary: payload.summary,
                 error: `Exclusive wait queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
               };
+              this.recordSchedulerSkip(execution, runId, record.error!);
               await appendRunRecord(execution.id, record);
               log.warn(`Exclusive wait queue full for "${execution.name}" — dropped fire`);
               return record;
@@ -1184,6 +1220,7 @@ export class SchedulerService {
             log.info(
               `Exclusive "${execution.name}" waiting for scheduler to idle (depth ${depth + 1})`
             );
+            this.recordSchedulerFire(execution, runId, 'queued');
             return new Promise<RunRecord>(resolve => {
               this.exclusiveWaiting.push({ execution, payload, runId, resolve });
             });
@@ -1207,6 +1244,7 @@ export class SchedulerService {
             triggerSummary: payload.summary,
             error: 'Skipped — an exclusive execution holds the scheduler lock',
           };
+          this.recordSchedulerSkip(execution, runId, record.error!);
           await appendRunRecord(execution.id, record);
           log.info(`Skipped non-exclusive fire for "${execution.name}" — exclusive lock held`);
           return record;
@@ -1237,6 +1275,7 @@ export class SchedulerService {
             triggerSummary: payload.summary,
             error: `Exclusive-block queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
           };
+          this.recordSchedulerSkip(execution, runId, record.error!);
           await appendRunRecord(execution.id, record);
           log.warn(`Exclusive-block queue full for "${execution.name}" — dropped fire`);
           return record;
@@ -1244,6 +1283,7 @@ export class SchedulerService {
         log.info(
           `Deferred non-exclusive fire for "${execution.name}" — exclusive lock held (depth ${depth + 1})`
         );
+        this.recordSchedulerFire(execution, runId, 'queued');
         return new Promise<RunRecord>(resolve => {
           this.blockedByExclusive.push({ execution, payload, runId, resolve });
         });
@@ -1266,6 +1306,7 @@ export class SchedulerService {
           // Stable reason string so historical run-history rows stay consistent.
           error: 'Previous run still in progress',
         };
+        this.recordSchedulerSkip(execution, runId, record.error!);
         await appendRunRecord(execution.id, record);
         log.info(`Skipped overlapping fire for "${execution.name}"`);
         return record;
@@ -1296,6 +1337,7 @@ export class SchedulerService {
             triggerSummary: payload.summary,
             error: `Overlap queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
           };
+          this.recordSchedulerSkip(execution, runId, record.error!);
           await appendRunRecord(execution.id, record);
           log.warn(`Overlap queue full for "${execution.name}" — dropped fire`);
           return record;
@@ -1304,6 +1346,7 @@ export class SchedulerService {
         // Resolve when the queued fire actually runs (drainQueue reuses fire()).
         // poll/url-watch onFire await THIS promise, so the commit-after-success
         // baseline still advances only on the queued run's real 'completed'.
+        this.recordSchedulerFire(execution, runId, 'queued');
         return new Promise<RunRecord>(resolve => {
           const queue = this.queued.get(execution.id) ?? [];
           queue.push({ execution, payload, runId, resolve });
@@ -1315,6 +1358,7 @@ export class SchedulerService {
 
     this.addRunning(execution.id, runId, firedAt);
     const conversationId = uuidv4();
+    this.recordSchedulerFire(execution, runId, 'fired', conversationId);
     let record: RunRecord;
     try {
       log.info(`Firing "${execution.name}" (${payload.kind})`);
@@ -1351,10 +1395,12 @@ export class SchedulerService {
         prompt: this.composePrompt(execution.prompt, payload, runInfo),
         mode,
         conversationId,
+        runId,
         // Tag origin so GET /api/runs/active can surface this as a scheduled run
         // (issue #113).
         source: 'schedule',
         plannedExecutionId: execution.id,
+        plannedExecutionName: execution.name,
         // Runtime lineage (#214): a flow-event/signal-fired run records the
         // upstream run's conversation as its parent (runFlow sets
         // parentConversationId + rootConversationId from this), so the chat

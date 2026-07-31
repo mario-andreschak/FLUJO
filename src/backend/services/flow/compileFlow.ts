@@ -2,7 +2,7 @@
  * Deterministic FlowSpec compilation as a public authoring operation (#14 follow-up).
  *
  * The no-LLM sibling of generateFlow: an external caller (typically itself an AI app,
- * via POST /api/flow/compile or the built-in MCP server's authoring tools) authors a
+ * via POST /api/flow/compile or the control-plane MCP package's authoring tools) authors a
  * FlowSpec directly and gets back the compiled Flow + validation — instant, free, and
  * deterministic. This makes FlowSpec the stable public contract for programmatic flow
  * creation; raw ReactFlow JSON (POST /api/flow) stays the internal/advanced surface.

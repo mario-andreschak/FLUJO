@@ -1,0 +1,233 @@
+import type { MCPStdioConfig } from '@/shared/types/mcp';
+import { Settings, StorageKey } from '@/shared/types/storage';
+import { createLogger } from '@/utils/logger';
+import { loadItem, saveItem } from '@/utils/storage/backend';
+import {
+  createShippedServerConfig,
+  SHIPPED_MCP_SERVERS,
+  type ShippedMcpServerDescriptor,
+} from './shippedServers';
+
+const log = createLogger('backend/services/mcp/shippedServerMigration');
+
+let migrationInFlight: Promise<void> | undefined;
+
+type LegacyServerOverride = {
+  disabled?: boolean;
+  roots?: string[];
+  exposeAsMcpServer?: boolean;
+  enableMcpApps?: boolean;
+};
+type LegacyServerOverrides = Record<string, LegacyServerOverride>;
+type StoredServer = Record<string, unknown>;
+type StoredServers = Record<string, StoredServer>;
+
+function applyLegacyOverride(
+  stored: StoredServer,
+  override?: LegacyServerOverride,
+): StoredServer {
+  const next = { ...stored };
+  for (const key of ['disabled', 'exposeAsMcpServer', 'enableMcpApps'] as const) {
+    if (typeof override?.[key] === 'boolean') next[key] = override[key];
+  }
+  if (Array.isArray(override?.roots)) next.roots = [...override.roots];
+  return next;
+}
+
+function persistedConfig(
+  config: MCPStdioConfig,
+  override?: LegacyServerOverride,
+): StoredServer {
+  return applyLegacyOverride(
+    Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'name')),
+    override,
+  );
+}
+
+function marketplacePackageId(stored: StoredServer): string | undefined {
+  const source = stored.source;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  const record = source as Record<string, unknown>;
+  return record.type === 'marketplace' && typeof record.id === 'string'
+    ? record.id
+    : undefined;
+}
+
+function isInstalledPackage(stored: StoredServer, packageId: string): boolean {
+  return marketplacePackageId(stored) === packageId || stored.internalPackage === packageId;
+}
+
+function hasInstalledPackage(
+  servers: StoredServers,
+  descriptor: ShippedMcpServerDescriptor,
+): boolean {
+  return Object.values(servers).some((stored) =>
+    isLegacyShippedRecord(stored, descriptor)
+  );
+}
+
+/**
+ * Seed records only when the default name is free and that package is not already
+ * present under a renamed key. A user-owned same-name record always wins.
+ */
+async function runLegacySeedMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const overrides = await loadItem<LegacyServerOverrides>(StorageKey.MCP_INTERNAL_OVERRIDES, {});
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+
+  for (const descriptor of SHIPPED_MCP_SERVERS) {
+    if (Object.prototype.hasOwnProperty.call(nextServers, descriptor.defaultName)) {
+      const stored = nextServers[descriptor.defaultName];
+      // A retry after a marker-write failure sees the record written by the first
+      // attempt. Reapply its restored override, while never touching a user-owned
+      // collision that merely shares the default name.
+      if (isLegacyShippedRecord(stored, descriptor)) {
+        nextServers[descriptor.defaultName] = applyLegacyOverride(
+          stored,
+          overrides?.[descriptor.defaultName],
+        );
+      }
+      continue;
+    }
+    if (hasInstalledPackage(nextServers, descriptor)) continue;
+    nextServers[descriptor.defaultName] = persistedConfig(
+      createShippedServerConfig(descriptor),
+      overrides?.[descriptor.defaultName],
+    );
+  }
+
+  let overridesCleared = false;
+  try {
+    await saveItem(StorageKey.MCP_SERVERS, nextServers);
+    await saveItem(StorageKey.MCP_INTERNAL_OVERRIDES, {});
+    overridesCleared = true;
+    await saveItem(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+  } catch (error) {
+    if (overridesCleared) {
+      try {
+        await saveItem(StorageKey.MCP_INTERNAL_OVERRIDES, overrides);
+      } catch (restoreError) {
+        log.error('Failed to restore MCP overrides after migration failure', restoreError);
+      }
+    }
+    throw error;
+  }
+}
+
+/** Seed browser for installations that completed V1 before that package shipped. */
+async function runBrowserSeedMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+  const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.packageDirectory === 'browser');
+  if (
+    descriptor
+    && !Object.prototype.hasOwnProperty.call(nextServers, descriptor.defaultName)
+    && !hasInstalledPackage(nextServers, descriptor)
+  ) {
+    nextServers[descriptor.defaultName] = persistedConfig(createShippedServerConfig(descriptor));
+    await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  }
+  await saveItem(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+}
+
+function isLegacyShippedRecord(
+  stored: StoredServer,
+  descriptor: ShippedMcpServerDescriptor,
+): boolean {
+  if (isInstalledPackage(stored, descriptor.packageId)) return true;
+  return stored.transport === 'stdio'
+    && stored.command === 'npx'
+    && Array.isArray(stored.args)
+    && stored.args[0] === '--no-install'
+    && stored.args[1] === `flujo-mcp-${descriptor.packageDirectory}`;
+}
+
+function normalizedInstalledRecord(
+  stored: StoredServer,
+  descriptor: ShippedMcpServerDescriptor,
+  legacyProtectedPaths: boolean | undefined,
+): StoredServer {
+  const expected = persistedConfig(createShippedServerConfig(descriptor));
+  const ordinary = { ...stored };
+  delete ordinary.internalPackage;
+  delete ordinary.packageCapabilities;
+  const storedEnv = ordinary.env && typeof ordinary.env === 'object' && !Array.isArray(ordinary.env)
+    ? ordinary.env as Record<string, unknown>
+    : {};
+  const next: StoredServer = {
+    ...ordinary,
+    transport: expected.transport,
+    command: expected.command,
+    args: expected.args,
+    cwd: expected.cwd,
+    env: { ...(expected.env as Record<string, unknown>), ...storedEnv },
+    source: expected.source,
+    disabled: typeof ordinary.disabled === 'boolean' ? ordinary.disabled : expected.disabled,
+    roots: Array.isArray(ordinary.roots) ? ordinary.roots : expected.roots,
+    exposeAsMcpServer: typeof ordinary.exposeAsMcpServer === 'boolean'
+      ? ordinary.exposeAsMcpServer
+      : expected.exposeAsMcpServer,
+    enableMcpApps: typeof ordinary.enableMcpApps === 'boolean'
+      ? ordinary.enableMcpApps
+      : expected.enableMcpApps,
+    ...(expected.hostPathAccess ? { hostPathAccess: expected.hostPathAccess } : {}),
+  };
+  if (
+    descriptor.hostPathAccess?.protectedPaths === true
+    && typeof next.protectedPathsEnabled !== 'boolean'
+    && typeof legacyProtectedPaths === 'boolean'
+  ) next.protectedPathsEnabled = legacyProtectedPaths;
+  return next;
+}
+
+/**
+ * Convert previously provisioned records to the same ordinary stdio shape used
+ * for fresh installs. Package/source identity is used only by this migration, so
+ * renamed records are upgraded without relying on their display name.
+ */
+async function runOrdinaryStdioMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+  const legacyProtectedPaths = settings?.experimental?.protectedPathsEnabled;
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+  let changed = false;
+
+  for (const [recordName, stored] of Object.entries(nextServers)) {
+    const descriptor = SHIPPED_MCP_SERVERS.find((candidate) =>
+      isLegacyShippedRecord(stored, candidate)
+    );
+    if (!descriptor) continue;
+    const normalized = normalizedInstalledRecord(stored, descriptor, legacyProtectedPaths);
+    if (JSON.stringify(normalized) !== JSON.stringify(stored)) {
+      nextServers[recordName] = normalized;
+      changed = true;
+    }
+  }
+
+  if (changed) await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  await saveItem(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
+}
+
+/** Provision and upgrade shipped packages without synthetic runtime injection. */
+export function migrateShippedMcpServers(): Promise<void> {
+  if (migrationInFlight) return migrationInFlight;
+  migrationInFlight = (async () => {
+    try {
+      await runLegacySeedMigration();
+      await runBrowserSeedMigration();
+      await runOrdinaryStdioMigration();
+    } finally {
+      migrationInFlight = undefined;
+    }
+  })();
+  return migrationInFlight;
+}

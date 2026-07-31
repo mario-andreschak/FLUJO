@@ -24,6 +24,8 @@ export interface ToolCallPair<TMessage extends FlujoChatMessage = FlujoChatMessa
   toolCall: OpenAI.ChatCompletionMessageToolCall;
   /** The matching `role: 'tool'` message, or undefined while the result is still pending. */
   result?: TMessage;
+  /** Resolved MCP Tool Tester destination, present only for persisted MCP calls. */
+  mcpDestination?: { serverName: string; toolName: string };
 }
 
 export interface ToolCallPairing<TMessage extends FlujoChatMessage = FlujoChatMessage> {
@@ -131,7 +133,7 @@ export function pairToolCallsWithResults<TMessage extends FlujoChatMessage>(
       const id = toolCall.id;
       const result = id ? resultByToolCallId.get(id) : undefined;
       if (id) consumedToolCallIds.add(id);
-      pairs.push({ toolCall, result });
+      pairs.push({ toolCall, result, mcpDestination: id ? message.mcpToolCalls?.[id] : undefined });
     }
 
     if (pairs.length > 0) {
@@ -280,7 +282,7 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
       const id = toolCall.id;
       const result = id ? resultByToolCallId.get(id) : undefined;
       if (id) consumedToolCallIds.add(id);
-      pairs.push({ toolCall, result });
+      pairs.push({ toolCall, result, mcpDestination: id ? message.mcpToolCalls?.[id] : undefined });
     }
 
     const hasText = hasMeaningfulTextContent(message);
