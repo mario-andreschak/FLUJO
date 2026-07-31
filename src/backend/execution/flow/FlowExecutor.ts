@@ -6,6 +6,11 @@ import { FlowEngine } from './engine/FlowEngine';
 import { PocketflowEngine } from './engine/PocketflowEngine';
 import { EmitFn } from '@/shared/types/execution/events';
 import { captureBefore, captureAfterAndEmit, SnapshotContext } from '@/backend/services/snapshot/snapshotHook';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -168,11 +173,17 @@ export class FlowExecutor {
     // Track the node we attempted, for error reporting. Seeded with the
     // resume target so an error during resolution still names a node.
     let attemptedNodeId: string | undefined = currentNodeId;
+    let attemptedNodeName: string | undefined;
+    let attemptedNodeType: string | undefined;
+    let nodeStartedAt: number | undefined;
 
     try {
       // Resolve the node to run (resume / start) via the engine.
       const node = await this.engine.resolveNode(sharedState);
       attemptedNodeId = node.id;
+      attemptedNodeName = node.name;
+      attemptedNodeType = node.type;
+      nodeStartedAt = Date.now();
       sharedState.currentNodeId = node.id;
       log.info(`Executing step for node ${node.id} (${node.type}) in conversation ${conversationId}`);
 
@@ -238,6 +249,17 @@ export class FlowExecutor {
       // Update state in map *after* successful execution and trace update
       this.conversationStates.set(conversationId, sharedState);
 
+      if (sharedState.logicalRunId) {
+        recordStatisticsEvent(createStatisticsEvent({
+          type: 'node.visit',
+          runId: sharedState.logicalRunId,
+          flow: { id: sharedState.flowId || 'unknown', name: sharedState.flowSnapshot?.name },
+          node: { id: node.id, name: node.name, type: node.type },
+          outcome: sharedState.isCancelled ? 'cancelled' : action === ERROR_ACTION ? 'error' : 'completed',
+          durationMs: Math.max(0, Date.now() - (nodeStartedAt ?? Date.now())),
+        }));
+      }
+
       log.debug(`[FlowExecutor] Returning from executeStep for node ${node.id} with action: "${action}"`);
       return { sharedState, action };
 
@@ -299,6 +321,18 @@ export class FlowExecutor {
 
       // Update state map with error state
       this.conversationStates.set(conversationId, sharedState);
+
+      if (sharedState.logicalRunId && nodeStartedAt !== undefined && attemptedNodeId) {
+        recordStatisticsEvent(createStatisticsEvent({
+          type: 'node.visit',
+          runId: sharedState.logicalRunId,
+          flow: { id: sharedState.flowId || 'unknown', name: sharedState.flowSnapshot?.name },
+          node: { id: attemptedNodeId, name: attemptedNodeName, type: attemptedNodeType },
+          outcome: sharedState.isCancelled ? 'cancelled' : 'error',
+          durationMs: Math.max(0, Date.now() - nodeStartedAt),
+          errorClass: classifyStatisticsError(error),
+        }));
+      }
 
       return { sharedState, action: ERROR_ACTION };
     }

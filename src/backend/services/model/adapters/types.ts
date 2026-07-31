@@ -48,6 +48,15 @@ export interface CompletionInput {
   model: Model;
   /** The decrypted API key / OAuth token. Never log this. */
   apiKey: string;
+  /** Observes each real provider request, including transport retries. The
+   * callback is metadata-only and must never receive request payloads. */
+  onProviderAttempt?: (observation: {
+    attempt: number;
+    durationMs: number;
+    outcome: 'completed' | 'error' | 'cancelled';
+    result?: unknown;
+    error?: unknown;
+  }) => void;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -60,6 +69,8 @@ export interface CompletionInput {
    * `localToolExecutors`). Omitted means session reuse is disabled for the call.
    */
   conversationId?: string;
+  /** Metadata-only logical run id for in-adapter tool attribution. */
+  runId?: string;
   nodeId?: string;
   /**
    * Opt-in to native session reuse for self-orchestrating adapters (Claude

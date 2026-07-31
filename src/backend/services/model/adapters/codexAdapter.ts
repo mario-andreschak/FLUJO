@@ -28,6 +28,11 @@ import {
   invalidateCodexSession,
 } from './codexSessionStore';
 import { extractMediaParts, extractNativeMediaParts } from './messageUtils';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -167,6 +172,7 @@ export class CodexAdapter implements CompletionAdapter {
       onModelDelta,
       signal,
       conversationId,
+      runId,
       nodeId,
       runResourceMarkers,
       sessionResume,
@@ -279,7 +285,18 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              const toolStartedAt = Date.now();
               handoffCalls.push({ name: fnName, args: args ?? {} });
+              if (runId) {
+                recordStatisticsEvent(createStatisticsEvent({
+                  type: 'tool.invocation',
+                  runId,
+                  node: nodeId ? { id: nodeId } : undefined,
+                  tool: { id: fnName, name: fnName, kind: 'handoff' },
+                  outcome: 'completed',
+                  durationMs: Math.max(0, Date.now() - toolStartedAt),
+                }));
+              }
               log.debug('Codex requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
               // Do NOT abort here — return cleanly so the CLI's tool round-trip
               // completes; the event loop ends the run at the next streamed
@@ -313,6 +330,7 @@ export class CodexAdapter implements CompletionAdapter {
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
               log.debug('Codex local tool call', { tool: fnName });
+              const toolStartedAt = Date.now();
               let resultContent: string;
               let isError = false;
               try {
@@ -322,6 +340,17 @@ export class CodexAdapter implements CompletionAdapter {
                 isError = true;
               }
               recordToolResult({ id: callId, resultContent });
+              if (runId) {
+                recordStatisticsEvent(createStatisticsEvent({
+                  type: 'tool.invocation',
+                  runId,
+                  node: nodeId ? { id: nodeId } : undefined,
+                  tool: { id: fnName, name: fnName, kind: 'synthetic' },
+                  outcome: isError ? 'error' : 'completed',
+                  durationMs: Math.max(0, Date.now() - toolStartedAt),
+                  errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
+                }));
+              }
               return isError
                 ? { content: [{ type: 'text', text: resultContent }], isError: true }
                 : { content: [{ type: 'text', text: resultContent }] };
@@ -367,6 +396,7 @@ export class CodexAdapter implements CompletionAdapter {
             );
             if (denied) return denied;
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
+            const toolStartedAt = Date.now();
             const result = await mcpService.callTool(
               server,
               originalTool,
@@ -377,6 +407,19 @@ export class CodexAdapter implements CompletionAdapter {
               abortController.signal,
               'model',
             );
+            if (runId) {
+              const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: { id: callerNodeId ?? nodeId ?? 'unknown' },
+                tool: { id: originalTool, name: originalTool, kind: 'mcp' },
+                provider: { id: server },
+                outcome: cancelled ? 'cancelled' : result.success ? 'completed' : 'error',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+                errorClass: !result.success ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : result.error) : undefined,
+              }));
+            }
             let callResult: CallToolResult;
             let resultContent: string;
             if (result.success) {

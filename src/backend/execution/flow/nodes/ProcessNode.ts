@@ -527,6 +527,7 @@ export class ProcessNode extends BaseNode {
     // Forwarded so self-orchestrating adapters can surface mid-run tool-approval
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
+    runId: sharedState.logicalRunId,
     codexSession: sharedState.codexSessions?.[nodeId],
     onCodexSessionChange: (session) => {
       if (session) {
@@ -980,6 +981,7 @@ export class ProcessNode extends BaseNode {
             nodeId: prepResult.nodeId, // Pass the node ID
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
             conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
+            runId: prepResult.runId,
             codexSession: prepResult.codexSession,
             onCodexSessionChange: prepResult.onCodexSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval

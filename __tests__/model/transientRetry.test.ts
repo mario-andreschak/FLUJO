@@ -122,6 +122,29 @@ describe('withTransientRetry', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
+  it('observes each real retry attempt without exposing request inputs', async () => {
+    const onAttempt = jest.fn();
+    const fn = jest.fn()
+      .mockRejectedValueOnce(new Error('read ECONNRESET'))
+      .mockResolvedValueOnce({ usage: { total_tokens: 3 } });
+
+    const resultPromise = withTransientRetry(fn, { baseDelayMs: 50, onAttempt });
+    await jest.runAllTimersAsync();
+    await expect(resultPromise).resolves.toEqual({ usage: { total_tokens: 3 } });
+
+    expect(onAttempt).toHaveBeenCalledTimes(2);
+    expect(onAttempt.mock.calls[0][0]).toMatchObject({ attempt: 1, outcome: 'error' });
+    expect(onAttempt.mock.calls[1][0]).toMatchObject({ attempt: 2, outcome: 'completed' });
+    expect(JSON.stringify(onAttempt.mock.calls)).not.toContain('request-body-canary');
+  });
+
+  it('does not let an observer failure alter provider behavior', async () => {
+    const fn = jest.fn().mockResolvedValue('ok');
+    await expect(withTransientRetry(fn, {
+      onAttempt: () => { throw new Error('observer failed'); },
+    })).resolves.toBe('ok');
+  });
+
   it('does NOT retry when the AbortSignal is already aborted before any attempt', async () => {
     const controller = new AbortController();
     controller.abort();

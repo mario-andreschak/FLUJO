@@ -40,6 +40,11 @@ import { evaluatePermission, extractResource } from '@/backend/execution/flow/pe
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -258,6 +263,9 @@ export interface FlowRunInput {
   mode?: 'ephemeral' | 'conversation';
   /** Required to resume/persist a conversation; a random id is used otherwise. */
   conversationId?: string;
+  /** Stable logical run id supplied by an orchestrator (the scheduler uses its
+   * existing RunRecord id). Approval/debug resumes recover it from SharedState. */
+  runId?: string;
   /** Sidebar title for a NEW persisted conversation (issue #156: spawn lanes
    *  are titled by their brief so parallel sub-agent runs are tellable apart).
    *  Ignored when resuming (the existing title wins) and for ephemeral runs. */
@@ -286,6 +294,8 @@ export interface FlowRunInput {
   /** For scheduler-originated runs: the planned execution id that fired this
    *  run (issue #113). Only meaningful when `source === 'schedule'`. */
   plannedExecutionId?: string;
+  /** Display-name snapshot for scheduler-originated statistics. */
+  plannedExecutionName?: string;
   /** Event-chain depth of this run (issue #116/#117). Set by the scheduler from
    *  the firing trigger's chainDepth so a `signal` node mid-run stamps the right
    *  depth onto what it emits, and passed by SubflowNode so a child inherits the
@@ -303,6 +313,8 @@ export interface FlowRunInput {
 export interface FlowRunResult {
   status: FlowRunStatus;
   conversationId: string;
+  /** Metadata-only logical run identity, stable across approval/debug resume. */
+  runId: string;
   /** Final assistant content (the default "output"), post external-tool XML wrap. */
   outputText: string;
   /** Tool calls to surface in a tool-calls response (undefined when XML-wrapped). */
@@ -403,6 +415,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       log.warn(`Error loading conversation state from storage for ${effectiveConvId}:`, error);
     }
   }
+
+  // Approval/debug resumes are continuations of the same logical run. A new
+  // user turn on a completed/error conversation receives a fresh id below.
+  const resumingPausedLogicalRun = Boolean(
+    loadedState?.logicalRunId
+    && (loadedState.status === 'awaiting_tool_approval' || loadedState.status === 'paused_debug')
+  );
 
   let sharedState: SharedState;
   if (loadedState) {
@@ -513,6 +532,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   if (input.plannedExecutionId) {
     sharedState.plannedExecutionId = input.plannedExecutionId;
   }
+  if (input.plannedExecutionName) {
+    sharedState.statisticsPlannedExecutionName = input.plannedExecutionName;
+  }
 
   // The persistence policy travels ON the state: persistConversationState (the
   // single chokepoint) refuses ephemeral states, so no path — including
@@ -553,10 +575,88 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // there is no interactive approver. Persisted on the state so a resumed
   // 'pause' run keeps re-pausing (not failing) on later tool calls.
   sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
+
+  if (!resumingPausedLogicalRun) {
+    sharedState.logicalRunId = input.runId ?? crypto.randomUUID();
+    sharedState.statisticsRunStartedAt = Date.now();
+    sharedState.statisticsRunStarted = false;
+    sharedState.statisticsRunFinished = false;
+    sharedState.statisticsFlowName = input.flowDefinition?.name
+      ?? (input.modelName?.startsWith('flow-') ? input.modelName.slice(5) : undefined);
+    sharedState.statisticsPlannedExecutionName = input.plannedExecutionName;
+  }
+  const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
+  sharedState.logicalRunId = logicalRunId;
+  sharedState.statisticsRunStartedAt ??= Date.now();
+  const flowSnapshot = () => ({
+    id: sharedState.flowId || input.flowId || input.flowDefinition?.id || input.modelName || 'unknown',
+    name: sharedState.statisticsFlowName ?? sharedState.flowSnapshot?.name ?? input.flowDefinition?.name,
+  });
+  const plannedExecution = sharedState.plannedExecutionId
+    ? {
+        id: sharedState.plannedExecutionId,
+        name: sharedState.statisticsPlannedExecutionName,
+      }
+    : undefined;
+  const ensureRunStarted = () => {
+    if (sharedState.statisticsRunStarted) return;
+    recordStatisticsEvent(createStatisticsEvent({
+      type: 'run.started',
+      runId: logicalRunId,
+      source: input.source,
+      flow: flowSnapshot(),
+      plannedExecution,
+      conversationId: effectiveConvId,
+    }));
+    sharedState.statisticsRunStarted = true;
+  };
+
+  const finalizeRun = (result: Omit<FlowRunResult, 'runId'>): FlowRunResult => {
+    ensureRunStarted();
+    const durationMs = Math.max(0, Date.now() - (sharedState.statisticsRunStartedAt ?? startTime));
+    if (result.status === 'awaiting_tool_approval' || result.status === 'paused_debug') {
+      recordStatisticsEvent(createStatisticsEvent({
+        type: 'run.paused',
+        runId: logicalRunId,
+        source: input.source,
+        flow: flowSnapshot(),
+        plannedExecution,
+        pauseKind: result.status === 'paused_debug' ? 'debug' : 'approval',
+        durationMs,
+      }));
+    } else if (!sharedState.statisticsRunFinished) {
+      const outcome = sharedState.isCancelled
+        ? 'cancelled' as const
+        : result.status === 'error'
+          ? 'error' as const
+          : result.status === 'capped' || sharedState.capped
+            ? 'capped' as const
+            : 'completed' as const;
+      recordStatisticsEvent(createStatisticsEvent({
+        type: 'run.finished',
+        runId: logicalRunId,
+        source: input.source,
+        flow: flowSnapshot(),
+        plannedExecution,
+        outcome,
+        durationMs,
+        errorClass: outcome === 'error' ? classifyStatisticsError(result.error) : undefined,
+        usage: result.usage ? {
+          inputTokens: result.usage.promptTokens,
+          outputTokens: result.usage.completionTokens,
+          totalTokens: result.usage.totalTokens,
+          cachedInputTokens: result.usage.cacheReadTokens,
+        } : undefined,
+      }));
+      sharedState.statisticsRunFinished = true;
+    }
+    return { ...result, runId: logicalRunId };
+  };
+
   if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
     log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
     sharedState.status = 'error';
-    return {
+    return finalizeRun({
       status: 'error',
       conversationId: effectiveConvId,
       outputText: '',
@@ -564,7 +664,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       error: { message: `Subflow recursion limit (${MAX_SUBFLOW_DEPTH}) exceeded`, statusCode: 500 },
       finalAction: ERROR_ACTION,
       sharedState,
-    };
+    });
   }
 
   // Snapshot the pre-turn messages for the log reconcile below: the incoming
@@ -589,7 +689,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       const reactFlow = await flowServiceWithGetByName.getFlowByName(flowName);
       if (!reactFlow) {
         log.error(`Flow not found: ${flowName}`);
-        return {
+        return finalizeRun({
           status: 'error',
           conversationId: effectiveConvId,
           outputText: '',
@@ -598,13 +698,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           error: { message: `Flow not found: ${flowName}`, statusCode: 400 },
           finalAction: ERROR_ACTION,
           sharedState,
-        };
+        });
       }
       resolvedFlowId = reactFlow.id;
     }
     if (!resolvedFlowId) {
       log.error('No flow specified for run (neither flowId nor model provided).');
-      return {
+      return finalizeRun({
         status: 'error',
         conversationId: effectiveConvId,
         outputText: '',
@@ -612,7 +712,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         error: { message: 'No flow specified (provide flowId or model).', statusCode: 400 },
         finalAction: ERROR_ACTION,
         sharedState,
-      };
+      });
     }
     sharedState.flowId = resolvedFlowId;
 
@@ -689,6 +789,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       }
     }
   }
+
+  if (!sharedState.statisticsFlowName && sharedState.flowId) {
+    try {
+      sharedState.statisticsFlowName = (await flowService.getFlow(sharedState.flowId))?.name;
+    } catch {
+      // Snapshot names are best-effort; the stable flow id remains authoritative.
+    }
+  }
+  ensureRunStarted();
 
   // --- Bring the append-only conversation log in line with this turn's input ---
   // Bootstraps the log for brand-new/legacy conversations and records the diff
@@ -1045,6 +1154,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             // Run-resource auto-capture: ephemeral (subflow-child) runs never
             // write resources — same policy as persistConversationState.
             conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+            runId: logicalRunId,
             node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
             shouldAbort: runCancelled,
             mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
@@ -1322,6 +1432,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                     toolNameMap: sharedState.toolNameMap,
                     emit,
                     conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                    runId: logicalRunId,
                     node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                     shouldAbort: runCancelled,
                     mcpNodes: sharedState.currentMCPNodes,
@@ -1385,6 +1496,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 const toolProcessingResult = await ModelHandler.processToolCalls({
                   toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                  runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
                   mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
@@ -1435,6 +1547,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 const toolProcessingResult = await ModelHandler.processToolCalls({
                   toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                  runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
                   mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
@@ -1841,12 +1954,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // --- Paused debug ---
   if (sharedState.status === 'paused_debug') {
     log.info(`Returning paused debug state for conv ${effectiveConvId}`);
-    return {
+    return finalizeRun({
       ...baseResult,
       status: 'paused_debug',
       outputText: '',
       pendingToolCalls: sharedState.pendingToolCalls,
-    };
+    });
   }
 
   // --- Error ---
@@ -1897,12 +2010,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
 
     cleanupEphemeral();
-    return {
+    return finalizeRun({
       ...baseResult,
       status: 'error',
       outputText: '',
       error: { message: errorMessage, details: errorDetails, statusCode },
-    };
+    });
   }
 
   // --- Success (Final, Tool Call, Stay, or Awaiting Approval) ---
@@ -1936,11 +2049,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   log.info(`Returning success result for conv ${effectiveConvId}`, { action: currentAction, status: sharedState.status, flujo, requireApproval, flujodebug });
 
   cleanupEphemeral();
-  return {
+  return finalizeRun({
     ...baseResult,
     status: (sharedState.status as FlowRunStatus) || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     outputText: responseContent,
     toolCalls,
     pendingToolCalls: sharedState.pendingToolCalls,
-  };
+  });
 }

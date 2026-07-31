@@ -32,6 +32,11 @@ import {
   invalidateSession,
 } from './claudeSessionStore';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
 
@@ -283,6 +288,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     onModelDelta,
     signal,
     conversationId,
+    runId,
     nodeId,
     runResourceMarkers,
     sessionResume,
@@ -486,7 +492,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
+            const toolStartedAt = Date.now();
             handoffCalls.push({ name: fnName, args: args ?? {} });
+            if (runId) {
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: nodeId ? { id: nodeId } : undefined,
+                tool: { id: fnName, name: fnName, kind: 'handoff' },
+                outcome: 'completed',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+              }));
+            }
             log.debug('Claude subscription requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
             // Do NOT abort here. Aborting inside the tool handler tears down the
             // SDK control stream mid-permission-round-trip and surfaces the
@@ -516,6 +533,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
             log.debug('Claude subscription local tool call', { tool: fnName });
             const callId = takeToolCall(fnName, args);
+            const toolStartedAt = Date.now();
             let resultContent: string;
             let isError = false;
             try {
@@ -528,6 +546,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               id: callId,
               resultContent,
             });
+            if (runId) {
+              recordStatisticsEvent(createStatisticsEvent({
+                type: 'tool.invocation',
+                runId,
+                node: nodeId ? { id: nodeId } : undefined,
+                tool: { id: fnName, name: fnName, kind: 'synthetic' },
+                outcome: isError ? 'error' : 'completed',
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+                errorClass: isError ? classifyStatisticsError({ type: 'tool' }) : undefined,
+              }));
+            }
             return isError
               ? { content: [{ type: 'text', text: resultContent }], isError: true }
               : { content: [{ type: 'text', text: resultContent }] };
@@ -550,6 +579,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           const callId = takeToolCall(readableName, args);
+          const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
           const result = await mcpService.callTool(
@@ -562,6 +592,19 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             abortController.signal,
             'model',
           );
+          if (runId) {
+            const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
+            recordStatisticsEvent(createStatisticsEvent({
+              type: 'tool.invocation',
+              runId,
+              node: { id: callerNodeId ?? nodeId ?? 'unknown' },
+              tool: { id: originalTool, name: originalTool, kind: 'mcp' },
+              provider: { id: server },
+              outcome: cancelled ? 'cancelled' : result.success ? 'completed' : 'error',
+              durationMs: Math.max(0, Date.now() - toolStartedAt),
+              errorClass: !result.success ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : result.error) : undefined,
+            }));
+          }
           let callResult: CallToolResult;
           let resultContent: string;
           if (result.success) {

@@ -528,6 +528,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     temperature,
     maxTokens,
     signal,
+    onProviderAttempt,
     conversationId,
     nodeId,
     promptCacheKey,
@@ -584,7 +585,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
             buildBody(omit) as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
             signal ? { signal } : undefined,
           ),
-        { signal },
+        { signal, onAttempt: onProviderAttempt },
       ) as Promise<OpenAI.Responses.Response>;
 
     // Negotiate away unsupported optional parameters, one per rejection. Bounded

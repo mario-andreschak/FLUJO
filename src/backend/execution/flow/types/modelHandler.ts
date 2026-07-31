@@ -51,6 +51,8 @@ export interface ModelCallInput {
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
+  /** Metadata-only logical run id for provider/tool attribution. */
+  runId?: string;
   codexSession?: CodexSessionMetadata;
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
@@ -116,6 +118,8 @@ export interface ToolCallProcessingInput {
    * (e.g. ephemeral subflow-child runs, or legacy call sites).
    */
   conversationId?: string;
+  /** Metadata-only logical run id for tool attribution. */
+  runId?: string;
   /** Process node driving these calls — recorded as resource lineage producer. */
   node?: NodeRef;
   /**

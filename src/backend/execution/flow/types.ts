@@ -604,6 +604,18 @@ export interface CodexSessionMetadata {
 
 // Shared state (minimized)
 export interface SharedState {
+    /** Stable logical execution id used only for metadata-only statistics. It is
+     * preserved while approval/debug is paused, then replaced for a new turn. */
+    logicalRunId?: string;
+    /** UTC epoch used to measure the logical run across pause/resume boundaries. */
+    statisticsRunStartedAt?: number;
+    /** Prevents a resumed approval/debug request from emitting a second start. */
+    statisticsRunStarted?: boolean;
+    /** Guards terminal lifecycle emission in reconciliation/error paths. */
+    statisticsRunFinished?: boolean;
+    /** Display-name snapshots captured once for this logical run. */
+    statisticsFlowName?: string;
+    statisticsPlannedExecutionName?: string;
     // Only tracking info in shared state
     trackingInfo: {
         executionId: string;
@@ -1022,6 +1034,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Conversation id, forwarded so self-orchestrating adapters can surface
      *  mid-run tool-approval prompts on the conversation's event stream. */
     conversationId?: string;
+    /** Metadata-only logical run id for model/tool attribution. */
+    runId?: string;
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;

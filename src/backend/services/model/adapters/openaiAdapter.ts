@@ -95,6 +95,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     temperature,
     maxTokens,
     signal,
+    onProviderAttempt,
     promptCacheKey,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({
@@ -162,7 +163,7 @@ export class OpenAiAdapter implements CompletionAdapter {
             body as OpenAI.Chat.ChatCompletionCreateParams,
             signal ? { signal } : undefined
           ),
-        { signal }
+        { signal, onAttempt: onProviderAttempt }
       ) as Promise<OpenAI.Chat.Completions.ChatCompletion>;
     };
 
