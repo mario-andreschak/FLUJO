@@ -4066,9 +4066,7 @@ const Chat: React.FC = () => {
         {/* Chat input */}
         <Box
           sx={{
-            px: { xs: 1.2, sm: 2.5, lg: 4 },
-            pt: 1.5,
-            pb: { xs: 1.2, sm: 2 },
+            p: 0,
             borderTop: 1,
             borderColor: 'divider',
             background: 'linear-gradient(to top, var(--background) 35%, transparent)',

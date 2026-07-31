@@ -550,13 +550,13 @@ const ChatInput: React.FC<ChatInputProps> = ({
         elevation={0}
         sx={{ 
           width: '100%',
-          maxWidth: { xs: 960, lg: 'none' },
-          mx: 'auto',
+          maxWidth: 'none',
+          mx: 0,
           p: { xs: 1, sm: 1.25 },
           display: 'flex', 
           flexDirection: 'column',
           border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
-          borderRadius: 4,
+          borderRadius: 0,
           bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === 'dark' ? 0.82 : 0.92),
           boxShadow: `0 22px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.12)}, 0 0 0 1px ${alpha(theme.palette.common.white, 0.03)} inset`,
           backdropFilter: 'blur(24px) saturate(145%)',

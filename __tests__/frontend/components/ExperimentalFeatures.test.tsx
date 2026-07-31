@@ -53,16 +53,18 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(primaryLinks.map((link) => link.textContent?.trim())).toEqual([
       'AI Setup',
       'Connected Apps',
+      'Agents',
       'Talk',
       'More',
     ]);
     expect(primaryLinks.map((link) => link.getAttribute('href'))).toEqual([
       '/models',
       '/mcp',
+      '/flows',
       '/chat',
       '/automation/triggers',
     ]);
-    expect(within(primaryNavigation).queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
+    expect(within(primaryNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/flows');
   });
 
   it('keeps every requested More destination available before settings hydrate', () => {

@@ -21,6 +21,7 @@ import {
   useTheme as useMuiTheme,
 } from '@mui/material';
 import {
+  AccountTreeRounded,
   BoltRounded,
   Brightness4Rounded,
   Brightness7Rounded,
@@ -69,6 +70,7 @@ type NavItem = NavLink | NavGroup;
 const navItems: NavItem[] = [
   { type: 'link', name: 'AI Setup', path: '/models', tour: 'nav-models', icon: MemoryRounded },
   { type: 'link', name: 'Connected Apps', path: '/mcp', tour: 'nav-mcp', icon: HubRounded },
+  { type: 'link', name: 'Agents', path: '/flows', tour: 'nav-flows', icon: AccountTreeRounded },
   { type: 'link', name: 'Talk', path: '/chat', tour: 'nav-chat', icon: ChatBubbleRounded },
   {
     type: 'group',
