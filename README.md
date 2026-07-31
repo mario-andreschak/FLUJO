@@ -1,9 +1,25 @@
+<div align="center">
 
-### ▶ FLUJO — Your AI. In Flow.
+# FLUJO
+
+### Build AI workflows visually. Run them your way.
+
+**Turn your models and MCP tools into AI workflows you can chat with, automate, and call from other apps.**
+
+FLUJO is open-source and local-first: connect models, tools, and reusable subflows with drag and drop; debug every step in chat; trigger runs on schedules or events; and serve flows through OpenAI-compatible and MCP endpoints — while your keys and data stay under your control.
+
+**Visual flows** · **MCP-native** · **Multi-model** · **Built-in debugger** · **Automation**
+
+[**Watch the 2:28 product film →**](https://mario-andreschak.github.io/FLUJO/githubpages/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features)
+
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-3.38.0-green.svg)](package.json)
+
+</div>
 
 [![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://mario-andreschak.github.io/FLUJO/githubpages/short/)
 
-*Click to watch the 2:28 interactive product film*
+<p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
 
 ## ⚡ Quick Install (recommended)
 
@@ -33,33 +49,12 @@ npx flujo-ai
 
 Prefer to set it up manually? See [Getting Started](#-getting-started). To remove FLUJO later, see [Uninstalling](#uninstalling-windows).
 
-## A few words in advance
-
-For *anything* that you struggle with (MCP Installation, Application Issues, Usability Issues, Feedback): **PLEASE LET ME KNOW!**
--> Create a Github Issue or write on Discord (https://discord.gg/KPyrjTSSat) and I will look into it! Maybe a response will take a day, but I will try to get back to each and every one of you.
-
-### FLUJO animated Short #1 — "A sad song about MCP"
-
-[![FLUJO animated short: A sad song about MCP](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
-
-# FLUJO
-
-[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.38.0-green.svg)](package.json)
-
-FLUJO is an open-source, local-first platform for building **MCP-powered AI workflows**. It brings together model management, Model-Context-Protocol (MCP) servers, a visual flow builder, and a chat interface in one app — so you can wire models and tools together, run them headlessly on triggers, and expose the result to other apps, without giving up control of your keys and data.
-
-FLUJO shares one anonymous daily-active pulse by default. The payload is limited
-to the app version, platform, install method, UTC date, and a random identifier
-that changes every day; it contains no flows, prompts, models, keys, filenames,
-account details, or permanent installation identifier. A daily in-app notice
-discloses the check. Sharing and the notice can be controlled independently
-under **Settings → Privacy & Usage**. Set `FLUJO_TELEMETRY_URL` to point at a
-self-hosted compatible collector.
+> [!TIP]
+> Stuck on MCP installation, the app, or anything else? [Open a GitHub issue](https://github.com/mario-andreschak/FLUJO/issues) or [join the Discord](https://discord.gg/KPyrjTSSat). I read every message and will do my best to get back to you within a day.
 
 ![FLUJO Overview](docs/images/readme/home.png)
 
-FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code and a lot of LOVE.
+FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code, and a lot of love.
 
 ## 🌟 Key Features
 
@@ -471,7 +466,7 @@ Beyond that, ideas we're keeping an eye on:
 - Deeper MCP roots support (checkpoints/restore)
 - Edge-device-friendly builds
 
-Have a feature request? Open a GitHub issue or drop it on Discord — see [above](#a-few-words-in-advance).
+Have a feature request? [Open a GitHub issue](https://github.com/mario-andreschak/FLUJO/issues) or [drop it on Discord](https://discord.gg/KPyrjTSSat).
 
 ## 🤝 Contributing
 
@@ -487,6 +482,20 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 - GitHub: [mario-andreschak](https://github.com/mario-andreschak)
 - LinkedIn: https://www.linkedin.com/in/mario-andreschak-674033299/
+
+### Bonus: “A sad song about MCP”
+
+[![FLUJO animated short: A sad song about MCP](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
+
+## Privacy & usage
+
+FLUJO shares one anonymous daily-active pulse by default. The payload is limited
+to the app version, platform, install method, UTC date, and a random identifier
+that changes every day; it contains no flows, prompts, models, keys, filenames,
+account details, or permanent installation identifier. A daily in-app notice
+discloses the check. Sharing and the notice can be controlled independently
+under **Settings → Privacy & Usage**. Set `FLUJO_TELEMETRY_URL` to point at a
+self-hosted compatible collector.
 
 ## Notes:
 - You can add ~FLUJO=HTML, ~FLUJO=MARKDOWN, ~FLUJO=JSON, ~FLUJO=TEXT in your message to format the response, this will give varying results in different tools where you integrate FLUJO.
