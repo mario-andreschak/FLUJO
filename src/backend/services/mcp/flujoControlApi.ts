@@ -19,7 +19,9 @@ export const FLUJO_AUTHORING_TOOLS = [
 
 export const FLUJO_FLOW_TOOLS = [
   'list_flows',
+  'discover_capabilities',
   'execute_flow',
+  'explain_flow',
   'read_flow',
   'update_flow',
   'list_flow_versions',

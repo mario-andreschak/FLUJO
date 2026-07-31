@@ -47,6 +47,7 @@ import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule
 import type { PlannedExecution, TriggerConfig } from '@/shared/types/plannedExecution';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
+import { explainCompiledFlow } from '@/backend/services/flow/explainFlow';
 import { truncate, MAX_FLOW_DESCRIPTION_CHARS } from '@/backend/services/flow/generationContext';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import {
@@ -205,9 +206,51 @@ export function internalToolDefinitions(): Tool[] {
       outputSchema: listOutputSchema(),
     },
     {
+      name: 'discover_capabilities',
+      description:
+        'Search FLUJO flows and tools exposed by configured MCP servers in one call. Returns exact invocation recipes and downstream input schemas, so you do not need to guess names or arguments. Use this before execute_flow or call_mcp_tool when you know the goal but not the capability.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string', minLength: 1, maxLength: 256, description: 'What you want to accomplish; matched against safe flow/tool names and descriptions.' },
+          kinds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: ['flow', 'mcp_tool'] }, description: 'Optional capability kinds to search (default: both).' },
+          server: { type: 'string', description: 'Optional exact MCP server name. Omit to search every enabled configured server.' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum combined results (default 20, maximum 50).' },
+        },
+        required: ['query'],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['flow', 'mcp_tool'] },
+                id: { type: 'string' },
+                server: { type: 'string' },
+                name: { type: 'string' },
+                description: { type: 'string' },
+                inputSchema: { type: 'object' },
+                invocation: { type: 'object' },
+                explanation: { type: 'object' },
+              },
+              required: ['kind', 'name', 'invocation'],
+            },
+          },
+          total: { type: 'integer', minimum: 0 },
+          hasMore: { type: 'boolean' },
+        },
+        required: ['items', 'total', 'hasMore'],
+      },
+    },
+    {
       name: 'execute_flow',
       description:
-        'Run another FLUJO flow (by name or id) with the given input and return its final output. The run is ephemeral (no chat conversation is created). Use list_flow_building_blocks to see the available flows. Nested runs are limited in depth — a flow cannot recurse through itself indefinitely.',
+        'Run another FLUJO flow (by name or id) with the given input and return its final output. The run is ephemeral (no chat conversation is created). Use list_flows or discover_capabilities to find a flow. Nested runs are limited in depth — a flow cannot recurse through itself indefinitely.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -215,6 +258,19 @@ export function internalToolDefinitions(): Tool[] {
           input: { type: 'string', description: 'The message to send to the flow as the user turn.' },
         },
         required: ['flow', 'input'],
+      },
+    },
+    {
+      name: 'explain_flow',
+      description:
+        'Explain one compiled FLUJO flow in natural language: its ordered steps, control connections and conditions, model/MCP capabilities, subflow invocation and fan-out behavior, signal emissions, and how planned executions connect it to trigger Waves. Read-only and deterministic.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          flow: { type: 'string', description: 'Flow name or flow id (see list_flows or discover_capabilities).' },
+        },
+        required: ['flow'],
       },
     },
     {
@@ -657,6 +713,19 @@ async function listFlowVersionsTool(args: Record<string, unknown>): Promise<Call
   };
 }
 
+async function explainFlow(args: Record<string, unknown>): Promise<CallToolResult> {
+  const ref = String(args?.flow ?? '').trim();
+  if (!ref) return textResult({ error: 'Provide "flow": a flow name or id.' }, true);
+  const flows = await flowService.loadFlows();
+  const flow = flows.find((candidate) => candidate.id === ref) ?? flows.find((candidate) => candidate.name === ref);
+  if (!flow) return textResult({ error: `No flow named or with id "${ref}". Use list_flows or discover_capabilities.` }, true);
+  const executions = await getSchedulerService().list().catch((error) => {
+    log.warn('explain_flow could not load planned executions; omitting Waves context', error);
+    return [];
+  });
+  return textResult(explainCompiledFlow(flow, flows, executions));
+}
+
 async function readFlowVersion(args: Record<string, unknown>): Promise<CallToolResult> {
   const ref = String(args?.flow ?? '').trim();
   const versionId = String(args?.version ?? '').trim();
@@ -832,6 +901,95 @@ async function listMcpServerTools(
       ? b.name.localeCompare(a.name)
       : a.name.localeCompare(b.name));
   return pagedCallToolResult(paginateList(summaries, parsed));
+}
+
+async function discoverCapabilities(
+  service: InternalDispatchService,
+  args: Record<string, unknown>,
+  source: ToolCallSource,
+): Promise<CallToolResult> {
+  const query = String(args?.query ?? '').trim();
+  if (!query) return textResult({ error: 'Provide a non-empty "query" describing the capability you need.' }, true);
+  if (query.length > 256) return textResult({ error: '"query" must be at most 256 characters.' }, true);
+  const rawKinds = args?.kinds;
+  const kinds = Array.isArray(rawKinds) ? rawKinds.map(String) : ['flow', 'mcp_tool'];
+  if (kinds.length === 0 || kinds.some((kind) => !['flow', 'mcp_tool'].includes(kind))) {
+    return textResult({ error: '"kinds" may contain only "flow" and "mcp_tool".' }, true);
+  }
+  const serverFilter = typeof args?.server === 'string' ? args.server.trim() : '';
+  const limit = typeof args?.limit === 'number' && Number.isInteger(args.limit)
+    ? Math.min(50, Math.max(1, args.limit))
+    : 20;
+  const needle = query.toLocaleLowerCase();
+  const stopWords = new Set(['and', 'for', 'from', 'into', 'need', 'that', 'the', 'this', 'tool', 'want', 'with']);
+  const tokens = [...new Set(needle.split(/[^a-z0-9_-]+/).filter((token) => token.length > 2 && !stopWords.has(token)))];
+  const score = (name: string, haystack: string): number => {
+    const normalizedName = name.toLocaleLowerCase();
+    const normalized = haystack.toLocaleLowerCase();
+    if (normalizedName === needle) return 1000;
+    if (normalizedName.includes(needle)) return 800;
+    if (normalized.includes(needle)) return 600;
+    const matched = tokens.filter((token) => normalized.includes(token));
+    if (matched.length === 0) return -1;
+    return matched.length * 100 + matched.filter((token) => normalizedName.includes(token)).length * 25;
+  };
+  const results: Array<{ score: number; item: Record<string, unknown> }> = [];
+
+  if (kinds.includes('flow')) {
+    const flows = await flowService.loadFlows();
+    for (const flow of flows) {
+      const relevance = score(flow.name, `${flow.name} ${flow.description ?? ''} ${flow.folder ?? ''}`);
+      if (relevance < 0) continue;
+      results.push({ score: relevance, item: {
+        kind: 'flow',
+        id: flow.id,
+        name: flow.name,
+        ...(flow.description ? { description: truncate(flow.description, MAX_FLOW_DESCRIPTION_CHARS) } : {}),
+        invocation: { tool: 'execute_flow', arguments: { flow: flow.id, input: '<user request>' } },
+        explanation: { tool: 'explain_flow', arguments: { flow: flow.id } },
+      } });
+    }
+  }
+
+  if (kinds.includes('mcp_tool')) {
+    const configs = await service.loadServerConfigs();
+    if (!Array.isArray(configs)) return textResult({ error: configs.error ?? 'Failed to load server configs.' }, true);
+    const candidates = configs.filter((config) => !config.disabled && (!serverFilter || config.name === serverFilter));
+    if (serverFilter && candidates.length === 0) {
+      return textResult({ error: `No enabled MCP server named "${serverFilter}".` }, true);
+    }
+    const audience: ToolListAudience = source === 'host' ? 'all' : source;
+    const discoveries = await Promise.all(candidates.map(async (config) => ({
+      config,
+      listed: await service.listServerTools(config.name, audience),
+    })));
+    for (const { config, listed } of discoveries) {
+      if (listed.error) continue;
+      for (const tool of listed.tools) {
+        const relevance = score(tool.name, `${config.name} ${tool.name} ${tool.description ?? ''}`);
+        if (relevance < 0) continue;
+        results.push({ score: relevance, item: {
+          kind: 'mcp_tool',
+          server: config.name,
+          name: tool.name,
+          ...(tool.description ? { description: tool.description } : {}),
+          inputSchema: tool.inputSchema,
+          invocation: { tool: 'call_mcp_tool', arguments: { server: config.name, tool: tool.name, args: {} } },
+        } });
+      }
+    }
+  }
+
+  results.sort((a, b) => {
+    const aName = `${a.item.name ?? ''}`.toLocaleLowerCase();
+    const bName = `${b.item.name ?? ''}`.toLocaleLowerCase();
+    return b.score - a.score || aName.localeCompare(bName) || `${a.item.server ?? ''}`.localeCompare(`${b.item.server ?? ''}`);
+  });
+  const items = results.slice(0, limit).map((result) => result.item);
+  return {
+    content: [{ type: 'text', text: JSON.stringify(items, null, 2) }],
+    structuredContent: { items, total: results.length, hasMore: results.length > items.length },
+  };
 }
 
 async function callMcpTool(
@@ -1514,8 +1672,12 @@ export async function internalCallTool(
     switch (toolName) {
       case 'list_flows':
         return await listFlows(args);
+      case 'discover_capabilities':
+        return await discoverCapabilities(service, args, source);
       case 'execute_flow':
         return await executeFlow(args);
+      case 'explain_flow':
+        return await explainFlow(args);
       case 'read_flow':
         return await readFlow(args);
       case 'update_flow':

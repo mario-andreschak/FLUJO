@@ -24,7 +24,9 @@ const AUTHORING_TOOLS = new Set([
 ]);
 const FLOW_TOOLS = new Set([
   'list_flows',
+  'discover_capabilities',
   'execute_flow',
+  'explain_flow',
   'read_flow',
   'update_flow',
   'list_flow_versions',

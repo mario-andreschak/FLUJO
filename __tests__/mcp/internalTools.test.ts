@@ -133,7 +133,9 @@ describe('internalToolDefinitions', () => {
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
         'list_flows',
+        'discover_capabilities',
         'execute_flow',
+        'explain_flow',
         'read_flow',
         'update_flow',
         'list_flow_versions',
@@ -610,6 +612,123 @@ describe('list_mcp_servers', () => {
       { name: 'alpha-web', transport: 'streamable', enabled: true, status: 'connected', folder: 'web' },
     ]);
     expect(service.getServerStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('discover_capabilities', () => {
+  it('searches flows and enabled MCP tools and returns exact invocation recipes', async () => {
+    flows.loadFlows.mockResolvedValue([
+      { id: 'research-flow', name: 'Research Brief', description: 'Research a topic and produce a brief.', nodes: [], edges: [] },
+      { id: 'unrelated', name: 'Invoice', nodes: [], edges: [] },
+    ]);
+    const service = makeService();
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'browser', transport: 'stdio', disabled: false },
+      { name: 'disabled-browser', transport: 'stdio', disabled: true },
+    ]);
+    service.listServerTools.mockResolvedValue({
+      tools: [{
+        name: 'research_web',
+        description: 'Research the web for a topic.',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      }],
+    });
+
+    const result = await internalCallTool(service, 'discover_capabilities', { query: 'research' });
+    const payload = JSON.parse(text(result));
+
+    expect(payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'flow',
+        id: 'research-flow',
+        invocation: { tool: 'execute_flow', arguments: { flow: 'research-flow', input: '<user request>' } },
+        explanation: { tool: 'explain_flow', arguments: { flow: 'research-flow' } },
+      }),
+      expect.objectContaining({
+        kind: 'mcp_tool',
+        server: 'browser',
+        name: 'research_web',
+        inputSchema: expect.objectContaining({ required: ['query'] }),
+        invocation: { tool: 'call_mcp_tool', arguments: { server: 'browser', tool: 'research_web', args: {} } },
+      }),
+    ]));
+    expect(service.listServerTools).toHaveBeenCalledTimes(1);
+    expect(result.structuredContent).toEqual(expect.objectContaining({ total: 2, hasMore: false }));
+  });
+
+  it('supports a server-scoped MCP-only search', async () => {
+    const service = makeService();
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'github', transport: 'stdio', disabled: false },
+      { name: 'browser', transport: 'stdio', disabled: false },
+    ]);
+    service.listServerTools.mockResolvedValue({ tools: [{ name: 'create_issue', description: 'Create issue', inputSchema: {} }] });
+
+    await internalCallTool(service, 'discover_capabilities', {
+      query: 'issue',
+      kinds: ['mcp_tool'],
+      server: 'github',
+    });
+
+    expect(flows.loadFlows).not.toHaveBeenCalled();
+    expect(service.listServerTools).toHaveBeenCalledTimes(1);
+    expect(service.listServerTools).toHaveBeenCalledWith('github', 'all');
+  });
+});
+
+describe('explain_flow', () => {
+  it('explains ordered steps, subflow semantics, signals, conditions, and Waves links', async () => {
+    flows.loadFlows.mockResolvedValue([
+      {
+        id: 'parent',
+        name: 'Parent Pipeline',
+        description: 'Coordinates research and publishes an event.',
+        nodes: [
+          { id: 'start', type: 'start', data: { type: 'start', label: 'Begin', properties: {} } },
+          { id: 'worker', type: 'subflow', data: { type: 'subflow', label: 'Research workers', properties: {
+            subflowId: 'child', inputMode: 'latest-message', spawnBriefs: ['facts', 'risks'], outputMode: 'final-only', saveConversation: false,
+          } } },
+          { id: 'signal', type: 'signal', data: { type: 'signal', label: 'Publish ready', properties: { topic: 'brief-ready' } } },
+          { id: 'finish', type: 'finish', data: { type: 'finish', label: 'Done', properties: {} } },
+        ],
+        edges: [
+          { id: 'e1', source: 'start', target: 'worker' },
+          { id: 'e2', source: 'worker', target: 'signal', data: { condition: { kind: 'always' } } },
+          { id: 'e3', source: 'signal', target: 'finish' },
+        ],
+      },
+      { id: 'child', name: 'Research Child', nodes: [], edges: [] },
+      { id: 'consumer', name: 'Publish Brief', nodes: [], edges: [] },
+    ]);
+    scheduler.list.mockResolvedValue([
+      {
+        execution: {
+          id: 'root-exec', name: 'Daily parent', enabled: true, flowId: 'parent', prompt: 'run',
+          trigger: { type: 'schedule', cron: '0 9 * * *' }, createdAt: '', updatedAt: '',
+        },
+        status: { nextRun: null },
+      },
+      {
+        execution: {
+          id: 'consumer-exec', name: 'Publish on ready', enabled: true, flowId: 'consumer', prompt: 'publish',
+          trigger: { type: 'flow-event', source: { topic: 'brief-ready' } }, createdAt: '', updatedAt: '',
+        },
+        status: {},
+      },
+    ]);
+
+    const result = await internalCallTool(makeService(), 'explain_flow', { flow: 'parent' });
+    const explanation = text(result);
+
+    expect(explanation).toContain('# Parent Pipeline');
+    expect(explanation).toContain('**Research workers** (`subflow`)');
+    expect(explanation).toContain('"Research Child" (child)');
+    expect(explanation).toContain('2 parallel child run(s)');
+    expect(explanation).toContain('Only the child’s final output');
+    expect(explanation).toContain('signal topic `brief-ready`');
+    expect(explanation).toContain('“Research workers” → “Publish ready” when always');
+    expect(explanation).toContain('Planned execution “Daily parent”');
+    expect(explanation).toContain('can start signal `brief-ready` and then invoke “Publish on ready”');
   });
 });
 
