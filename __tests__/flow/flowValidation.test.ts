@@ -9,6 +9,9 @@
 import {
   validateFlow,
   mcpServersConnectedToProcess,
+  PROCESS_FILEPATH_MCP_ROOTS_MISSING,
+  PROCESS_FILEPATH_MCP_UNAVAILABLE,
+  type FileAccessMcpSnapshot,
   type VFlow,
   type VNode,
   type VEdge,
@@ -422,6 +425,165 @@ describe('validateFlow — connectivity', () => {
     };
     const r = validateFlow(flow, { models: [{ id: 'm1' }], servers: [{ name: 'srv', status: 'connected' }] });
     expect(codes(r)).not.toContain('unreachable-node');
+  });
+});
+
+describe('validateFlow — Process prompt filepath lint (issue #321)', () => {
+  const unavailable: FileAccessMcpSnapshot = {
+    filesystem: { configured: false, disabled: false, usability: 'unavailable' },
+    bash: { configured: false, disabled: false, usability: 'unavailable' },
+  };
+
+  const usable = (
+    name: 'filesystem' | 'bash',
+    config: Partial<FileAccessMcpSnapshot['filesystem']> = {}
+  ): FileAccessMcpSnapshot => ({
+    filesystem: {
+      configured: name === 'filesystem',
+      disabled: false,
+      usability: name === 'filesystem' ? 'usable' : 'unavailable',
+      ...config,
+    },
+    bash: {
+      configured: name === 'bash',
+      disabled: false,
+      usability: name === 'bash' ? 'usable' : 'unavailable',
+      ...config,
+    },
+  });
+
+  const promptFlow = (properties: Record<string, any>, extraNodes: VNode[] = [], extraEdges: VEdge[] = []): VFlow => ({
+    nodes: [startNode(), processNode('p', { boundModel: 'm1', ...properties }, 'File step'), finishNode(), ...extraNodes],
+    edges: [edge('start', 'p'), edge('p', 'finish'), ...extraEdges],
+  });
+
+  it.each([
+    ['promptTemplate', { promptTemplate: 'Read /tmp/input.txt' }],
+    ['isolatedPrompt', { inputMode: 'isolated', isolatedPrompt: 'Open C:\\work\\input.txt' }],
+  ])('keeps a %s filepath warning advisory', (_field, properties) => {
+    const r = validateFlow(promptFlow(properties), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(codes(r)).toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(r.issues.find((issue) => issue.code === PROCESS_FILEPATH_MCP_UNAVAILABLE)).toMatchObject({
+      severity: 'warning',
+      nodeId: 'p',
+      nodeLabel: 'File step',
+    });
+    expect(r.errorCount).toBe(0);
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('warns once when neither built-in file-access server is available', () => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Compare /tmp/a.txt and file:///tmp/b.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(r.issues.filter((issue) => issue.code === PROCESS_FILEPATH_MCP_UNAVAILABLE)).toHaveLength(1);
+  });
+
+  it('warns when the usable built-in has no effective roots', () => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: usable('filesystem'),
+    });
+    expect(codes(r)).toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it.each([
+    ['server roots', { roots: ['/workspace'] }],
+    ['rootPath fallback', { rootPath: 'relative-workspace' }],
+    ['file URI root', { roots: ['file:///workspace'] }],
+    ['runtime global root', { roots: ['${global:WORKSPACE_ROOT}'] }],
+  ])('accepts a meaningful %s', (_label, config) => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: usable('filesystem', config),
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it('accepts additive roots from an MCP node in the current flow', () => {
+    const filesystemNode: VNode = {
+      id: 'fs',
+      type: 'mcp',
+      data: { label: 'Filesystem', type: 'mcp', properties: { boundServer: 'filesystem', roots: ['workspace'] } },
+    };
+    const r = validateFlow(
+      promptFlow(
+        { promptTemplate: 'Read /tmp/input.txt' },
+        [filesystemNode],
+        [edge('p', 'fs', true)]
+      ),
+      { models: [{ id: 'm1' }], fileAccessMcp: usable('filesystem') }
+    );
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it.each([
+    ['filesystem disabled, bash usable', {
+      filesystem: { configured: true, disabled: true, usability: 'unavailable' as const },
+      bash: { configured: true, disabled: false, usability: 'usable' as const, roots: ['/workspace'] },
+    }],
+    ['bash disabled, filesystem usable', {
+      filesystem: { configured: true, disabled: false, usability: 'usable' as const, roots: ['/workspace'] },
+      bash: { configured: true, disabled: true, usability: 'unavailable' as const },
+    }],
+  ])('uses the remaining built-in when %s', (_label, fileAccessMcp) => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it('ignores blank and malformed root entries', () => {
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: usable('filesystem', {
+        roots: ['', '   ', null, '${var:ROOT}', 'file://'],
+        rootPath: ' ',
+      }),
+    });
+    expect(codes(r)).toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it.each([
+    'Use ${var:FILE_PATH}',
+    'Read /tmp/${kv:FILE_NAME}',
+    'Open C:\\work\\${global:FILE_NAME}',
+    'Discuss version 2.0 and example.com/docs in ordinary prose',
+  ])('does not match dynamic tokens or ordinary prose: %s', (promptTemplate) => {
+    const r = validateFlow(promptFlow({ promptTemplate }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
+  });
+
+  it('ignores a stored isolatedPrompt unless the node is in isolated mode', () => {
+    const r = validateFlow(promptFlow({ inputMode: 'latest-message', isolatedPrompt: '/tmp/stale.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp: unavailable,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+  });
+
+  it('suppresses both warnings when enabled built-in availability is unknown', () => {
+    const fileAccessMcp: FileAccessMcpSnapshot = {
+      filesystem: { configured: true, disabled: false, usability: 'unknown' },
+      bash: { configured: false, disabled: false, usability: 'unavailable' },
+    };
+    const r = validateFlow(promptFlow({ promptTemplate: 'Read /tmp/input.txt' }), {
+      models: [{ id: 'm1' }],
+      fileAccessMcp,
+    });
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_UNAVAILABLE);
+    expect(codes(r)).not.toContain(PROCESS_FILEPATH_MCP_ROOTS_MISSING);
   });
 });
 

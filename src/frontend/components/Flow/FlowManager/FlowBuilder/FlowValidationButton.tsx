@@ -23,7 +23,12 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
-import { validateFlow, FlowValidationIssue } from '@/utils/shared/flowValidation';
+import {
+  validateFlow,
+  FlowValidationIssue,
+  type FileAccessMcpSnapshot,
+  type FileAccessMcpUsability,
+} from '@/utils/shared/flowValidation';
 import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
@@ -34,6 +39,27 @@ const log = createLogger('components/flow/FlowBuilder/FlowValidationButton');
 interface FlowValidationButtonProps {
   nodes: FlowNode[];
   edges: Edge[];
+}
+
+type FileAccessServerName = keyof FileAccessMcpSnapshot;
+
+function fileAccessSnapshot(
+  name: FileAccessServerName,
+  configs: MCPServerConfig[],
+  usabilityByName: Map<string, FileAccessMcpUsability>
+): FileAccessMcpSnapshot[FileAccessServerName] {
+  const config = configs.find((candidate) => candidate.name === name);
+  if (!config) {
+    return { configured: false, disabled: false, usability: 'unavailable' };
+  }
+  const disabled = !!config.disabled;
+  return {
+    configured: true,
+    disabled,
+    usability: disabled ? 'unavailable' : (usabilityByName.get(name) ?? 'unknown'),
+    roots: config.roots,
+    rootPath: config.rootPath,
+  };
 }
 
 /**
@@ -61,42 +87,59 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
       // Server live status isn't needed — names (and the disabled flag) are enough to
       // catch renames/deletions; a disabled server is reported as unavailable.
       const configs = await mcpService.loadServerConfigs();
-      const servers = Array.isArray(configs)
-        ? (configs as MCPServerConfig[]).map(s => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }))
-        : undefined;
+      const loadedConfigs = Array.isArray(configs) ? (configs as MCPServerConfig[]) : undefined;
+      const servers = loadedConfigs?.map(s => ({
+        name: s.name,
+        status: s.disabled ? 'disabled' : undefined,
+      }));
 
-      // Gather the live tool list for each MCP server THIS flow attaches to, so the
-      // checker can flag obsolete tool pills (tool-unavailable) and process nodes
-      // wired to a server exposing 0 tools (mcp-server-no-tools). We only query
-      // servers referenced by an MCP node in this flow, and never disabled ones
-      // (leaving them undefined so the checker treats them as "unknown", not empty).
-      // listServerTools never starts a server — an offline one returns an error and
-      // is left out of the map, so it can't produce a false zero-tools warning.
+      // Gather live tool lists for servers attached to this flow, plus the two built-ins
+      // needed by the filepath lint. A successful empty list is still a known/connected
+      // result; failures remain unknown and suppress conclusions about file access.
       const serverTools: Record<string, string[]> = {};
-      try {
-        const disabledByName = new Map(
-          (Array.isArray(configs) ? (configs as MCPServerConfig[]) : []).map(s => [s.name, !!s.disabled])
-        );
+      const toolListUsability = new Map<string, FileAccessMcpUsability>();
+      if (loadedConfigs) {
+        const disabledByName = new Map(loadedConfigs.map(s => [s.name, !!s.disabled]));
         const flowServers = new Set<string>();
         for (const n of nodes as any[]) {
           const nodeType = n?.data?.type ?? n?.type;
           const bound = n?.data?.properties?.boundServer;
           if (nodeType === 'mcp' && typeof bound === 'string' && bound) flowServers.add(bound);
         }
+        for (const name of ['filesystem', 'bash'] as const) {
+          if (disabledByName.has(name) && !disabledByName.get(name)) flowServers.add(name);
+        }
+
         await Promise.all([...flowServers].map(async (name) => {
-          if (disabledByName.get(name)) return; // disabled → leave undefined (unknown)
-          const res = await mcpService.listServerTools(name);
-          if (!res.error && Array.isArray(res.tools)) {
-            serverTools[name] = res.tools
-              .map((tool: { name?: string }) => tool?.name)
-              .filter((x): x is string => typeof x === 'string');
+          if (disabledByName.get(name)) return;
+          try {
+            const res = await mcpService.listServerTools(name);
+            if (!res.error && Array.isArray(res.tools)) {
+              serverTools[name] = res.tools
+                .map((tool: { name?: string }) => tool?.name)
+                .filter((x): x is string => typeof x === 'string');
+              toolListUsability.set(name, 'usable');
+            } else if (name === 'filesystem' || name === 'bash') {
+              toolListUsability.set(name, 'unknown');
+            }
+          } catch (error) {
+            if (name === 'filesystem' || name === 'bash') toolListUsability.set(name, 'unknown');
+            log.debug(`Could not gather MCP tool list for "${name}" during the flow check`, error);
           }
         }));
-      } catch (error) {
-        log.debug('Could not gather MCP tool lists for the flow check', error);
       }
 
-      const result = validateFlow({ nodes, edges } as any, { models, servers, serverTools });
+      const fileAccessMcp: FileAccessMcpSnapshot | undefined = loadedConfigs
+        ? {
+            filesystem: fileAccessSnapshot('filesystem', loadedConfigs, toolListUsability),
+            bash: fileAccessSnapshot('bash', loadedConfigs, toolListUsability),
+          }
+        : undefined;
+
+      const result = validateFlow(
+        { nodes, edges } as any,
+        { models, servers, serverTools, fileAccessMcp }
+      );
       setIssues(result.issues);
     } catch (error) {
       log.warn('Flow validation failed to run', error);
