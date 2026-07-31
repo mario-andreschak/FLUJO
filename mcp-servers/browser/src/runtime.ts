@@ -200,41 +200,76 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
 
   const activeBrowser = await acquireBrowser();
   if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
-  const context = await activeBrowser.newContext({
-    acceptDownloads: false,
-    serviceWorkers: 'block',
-    viewport: { width: 1280, height: 720 },
-  });
-  const session: BrowserSession = {
-    id,
-    context,
-    page: await context.newPage(),
-    touchedAt: Date.now(),
-    documentRequests: 0,
-    navigationBlocked: false,
-  };
-  const maxRedirects = integerEnv('FLUJO_BROWSER_MAX_REDIRECTS', DEFAULT_MAX_REDIRECTS, 0, 50);
 
-  await context.route('**/*', async (route) => {
-    const request = route.request();
-    try {
-      if (request.resourceType() === 'document') {
-        session.documentRequests += 1;
-        if (session.documentRequests > maxRedirects + 1) {
-          throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation exceeded the redirect limit.');
-        }
-      }
-      await assertNavigationAllowed(request.url());
-      await route.continue();
-    } catch {
-      session.navigationBlocked = true;
-      await route.abort('blockedbyclient').catch(() => undefined);
+  let context: BrowserContext | undefined;
+  let contextClosePromise: Promise<void> | undefined;
+  let cancelled = false;
+  const closeContext = (): Promise<void> => {
+    if (!context) return Promise.resolve();
+    contextClosePromise ??= context.close().catch(() => undefined);
+    return contextClosePromise;
+  };
+  const onAbort = () => {
+    cancelled = true;
+    void closeContext();
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    context = await activeBrowser.newContext({
+      acceptDownloads: false,
+      serviceWorkers: 'block',
+      viewport: { width: 1280, height: 720 },
+    });
+    if (cancelled || signal.aborted) {
+      throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
     }
-  });
-  session.page.on('download', (download) => void download.cancel().catch(() => undefined));
-  session.page.on('close', () => sessions.delete(id));
-  sessions.set(id, session);
-  return session;
+
+    const session: BrowserSession = {
+      id,
+      context,
+      page: await context.newPage(),
+      touchedAt: Date.now(),
+      documentRequests: 0,
+      navigationBlocked: false,
+    };
+    if (cancelled || signal.aborted) {
+      throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+    }
+    const maxRedirects = integerEnv('FLUJO_BROWSER_MAX_REDIRECTS', DEFAULT_MAX_REDIRECTS, 0, 50);
+
+    await context.route('**/*', async (route) => {
+      const request = route.request();
+      try {
+        if (request.resourceType() === 'document') {
+          session.documentRequests += 1;
+          if (session.documentRequests > maxRedirects + 1) {
+            throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation exceeded the redirect limit.');
+          }
+        }
+        await assertNavigationAllowed(request.url());
+        await route.continue();
+      } catch {
+        session.navigationBlocked = true;
+        await route.abort('blockedbyclient').catch(() => undefined);
+      }
+    });
+    if (cancelled || signal.aborted) {
+      throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+    }
+    session.page.on('download', (download) => void download.cancel().catch(() => undefined));
+    session.page.on('close', () => sessions.delete(id));
+    sessions.set(id, session);
+    return session;
+  } catch (error) {
+    await closeContext();
+    if (cancelled || signal.aborted) {
+      throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+    }
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 export function getSession(value: unknown): BrowserSession {

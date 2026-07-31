@@ -4,17 +4,35 @@ import {
   browserReadResource,
 } from '../../mcp-servers/browser/src/resources';
 import { browserToolDefinitions } from '../../mcp-servers/browser/src/tools';
-import { BrowserMcpError, assertNavigationAllowed, timeoutMs } from '../../mcp-servers/browser/src/runtime';
+import {
+  BrowserMcpError,
+  assertNavigationAllowed,
+  openSession,
+  runCancellable,
+  shutdownBrowserRuntime,
+  timeoutMs,
+} from '../../mcp-servers/browser/src/runtime';
+import {
+  SHIPPED_MCP_SERVERS,
+  createShippedServerConfig,
+} from '../../src/backend/services/mcp/shippedServers';
+
+const mockLaunchBrowser = jest.fn();
+jest.mock('patchright', () => ({
+  chromium: { launch: (...args: unknown[]) => mockLaunchBrowser(...args) },
+}));
 
 describe('bundled browser MCP', () => {
   const previousOrigins = process.env.FLUJO_BROWSER_ALLOWED_ORIGINS;
   const previousPrivate = process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
 
-  afterEach(() => {
+  afterEach(async () => {
     if (previousOrigins === undefined) delete process.env.FLUJO_BROWSER_ALLOWED_ORIGINS;
     else process.env.FLUJO_BROWSER_ALLOWED_ORIGINS = previousOrigins;
     if (previousPrivate === undefined) delete process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
     else process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = previousPrivate;
+    await shutdownBrowserRuntime();
+    mockLaunchBrowser.mockReset();
   });
 
   it('advertises a stable MCP Apps resource on every browser tool', () => {
@@ -75,5 +93,80 @@ describe('bundled browser MCP', () => {
     expect(timeoutMs(1)).toBe(1_000);
     expect(timeoutMs(500_000)).toBe(60_000);
     expect(() => timeoutMs('slow')).toThrow('timeoutMs must be a finite number');
+  });
+
+  it('enables MCP Apps only for the shipped browser record', () => {
+    const env = {
+      FLUJO_APP_ROOT: process.cwd(),
+      FLUJO_BROWSER_ENABLED: '1',
+    } as NodeJS.ProcessEnv;
+
+    for (const descriptor of SHIPPED_MCP_SERVERS) {
+      expect(createShippedServerConfig(descriptor, env).enableMcpApps).toBe(
+        descriptor.defaultName === 'browser',
+      );
+    }
+  });
+
+  it('closes an active session when its operation is cancelled', async () => {
+    const closeContext = jest.fn(async () => undefined);
+    const page = {
+      on: jest.fn(),
+      url: jest.fn(() => 'about:blank'),
+    };
+    const context = {
+      close: closeContext,
+      newPage: jest.fn(async () => page),
+      route: jest.fn(async () => undefined),
+    };
+    const fakeBrowser = {
+      close: jest.fn(async () => undefined),
+      isConnected: jest.fn(() => true),
+      newContext: jest.fn(async () => context),
+      once: jest.fn(),
+    };
+    mockLaunchBrowser.mockResolvedValue(fakeBrowser);
+    const session = await openSession('cancelled-operation', new AbortController().signal);
+    const controller = new AbortController();
+
+    const operation = runCancellable(
+      session,
+      controller.signal,
+      () => new Promise<never>(() => undefined),
+    );
+    controller.abort();
+
+    await expect(operation).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(closeContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a partially created context when session opening is cancelled', async () => {
+    const controller = new AbortController();
+    let rejectNewPage: (reason?: unknown) => void = () => undefined;
+    const pendingPage = new Promise<never>((_resolve, reject) => {
+      rejectNewPage = reject;
+    });
+    const closeContext = jest.fn(async () => {
+      rejectNewPage(new Error('context closed'));
+    });
+    const context = {
+      close: closeContext,
+      newPage: jest.fn(() => pendingPage),
+      route: jest.fn(),
+    };
+    const fakeBrowser = {
+      close: jest.fn(async () => undefined),
+      isConnected: jest.fn(() => true),
+      newContext: jest.fn(async () => context),
+      once: jest.fn(),
+    };
+    mockLaunchBrowser.mockResolvedValue(fakeBrowser);
+
+    const opening = openSession('cancelled-open', controller.signal);
+    while (context.newPage.mock.calls.length === 0) await Promise.resolve();
+    controller.abort();
+
+    await expect(opening).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(closeContext).toHaveBeenCalledTimes(1);
   });
 });

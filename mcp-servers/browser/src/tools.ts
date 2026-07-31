@@ -214,7 +214,7 @@ async function pageState(session: BrowserSession, timeout: number): Promise<Reco
 async function navigate(session: BrowserSession, rawUrl: string, timeout: number, signal: AbortSignal): Promise<Record<string, unknown>> {
   const url = await assertNavigationAllowed(rawUrl);
   resetNavigationCounter(session);
-  await runCancellable(session, signal, async () => {
+  return runCancellable(session, signal, async () => {
     try {
       await session.page.goto(url.href, { waitUntil: 'domcontentloaded', timeout });
     } catch (error) {
@@ -223,8 +223,8 @@ async function navigate(session: BrowserSession, rawUrl: string, timeout: number
       }
       throw error;
     }
+    return pageState(session, timeout);
   });
-  return pageState(session, timeout);
 }
 
 export async function browserCallTool(
@@ -259,14 +259,15 @@ export async function browserCallTool(
     if (name === 'browser_click') {
       const selector = stringArg(args, 'selector', MAX_SELECTOR_CHARS);
       resetNavigationCounter(session);
-      await runCancellable(session, signal, async () => {
+      const data = await runCancellable(session, signal, async () => {
         await session.page.locator(selector).first().click({ timeout });
         await session.page.waitForLoadState('domcontentloaded', { timeout }).catch(() => undefined);
+        if (session.navigationBlocked) {
+          throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The interaction attempted a navigation blocked by browser policy.');
+        }
+        return pageState(session, timeout);
       });
-      if (session.navigationBlocked) {
-        throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The interaction attempted a navigation blocked by browser policy.');
-      }
-      return success(await pageState(session, timeout));
+      return success(data);
     }
     if (name === 'browser_type') {
       const selector = stringArg(args, 'selector', MAX_SELECTOR_CHARS);
@@ -275,15 +276,16 @@ export async function browserCallTool(
         throw new BrowserMcpError('INVALID_ARGUMENT', 'text must be a string no longer than 100000 characters.');
       }
       resetNavigationCounter(session);
-      await runCancellable(session, signal, async () => {
+      const data = await runCancellable(session, signal, async () => {
         const locator = session.page.locator(selector).first();
         await locator.fill(text, { timeout });
         if (args.submit === true) await locator.press('Enter', { timeout });
+        if (session.navigationBlocked) {
+          throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The interaction attempted a navigation blocked by browser policy.');
+        }
+        return pageState(session, timeout);
       });
-      if (session.navigationBlocked) {
-        throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The interaction attempted a navigation blocked by browser policy.');
-      }
-      return success(await pageState(session, timeout));
+      return success(data);
     }
     if (name === 'browser_screenshot') {
       const png = await runCancellable(session, signal, () => session.page.screenshot({

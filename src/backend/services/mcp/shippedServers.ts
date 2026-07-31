@@ -6,6 +6,7 @@ export type ShippedMcpServerDescriptor = {
   packageId: string;
   packageDirectory: string;
   disabledByDefault?: (env: NodeJS.ProcessEnv) => boolean;
+  enableMcpApps?: boolean;
   hostPathAccess?: MCPHostPathAccessConfig;
 };
 
@@ -44,6 +45,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     defaultName: 'browser',
     packageId: '@flujo-ai/mcp-browser',
     packageDirectory: 'browser',
+    enableMcpApps: true,
     disabledByDefault: (env) => !/^(1|true|yes|on)$/i.test(
       env.FLUJO_BROWSER_ENABLED?.trim() ?? '',
     ),
@@ -124,7 +126,7 @@ export function createShippedServerConfig(
     _installCommand: '',
     source: { type: 'marketplace', id: descriptor.packageId },
     exposeAsMcpServer: true,
-    enableMcpApps: false,
+    enableMcpApps: descriptor.enableMcpApps ?? false,
     ...(descriptor.hostPathAccess
       ? { hostPathAccess: descriptor.hostPathAccess }
       : {}),
