@@ -63,6 +63,39 @@ describe('metadata-only statistics store', () => {
     expect(sanitizeStatisticsEvent({ ...runStarted('run-2'), schemaVersion: 99 })).toBeUndefined();
   });
 
+  it('allowlists scheduler fire metadata without persisting trigger content', () => {
+    const queued = createStatisticsEvent({
+      type: 'scheduler.fire',
+      runId: 'scheduled-run-1',
+      timestamp: '2026-07-30T12:00:00.000Z',
+      source: 'schedule',
+      plannedExecution: { id: 'plan-1', name: 'Plan One' },
+      outcome: 'queued',
+    });
+    const fired = sanitizeStatisticsEvent({
+      ...queued,
+      outcome: 'fired',
+      conversationId: 'ephemeral-conversation-1',
+      prompt: 'PROMPT_CANARY',
+      triggerContext: 'TRIGGER_CONTEXT_CANARY',
+      rawError: 'ERROR_CANARY',
+      requestUrl: 'https://secret.example.test/scheduler',
+    });
+
+    expect(queued).not.toHaveProperty('conversationId');
+    expect(fired).toEqual(expect.objectContaining({
+      type: 'scheduler.fire',
+      runId: 'scheduled-run-1',
+      outcome: 'fired',
+      conversationId: 'ephemeral-conversation-1',
+      plannedExecution: { id: 'plan-1', name: 'Plan One' },
+    }));
+    expect(JSON.stringify(fired)).not.toMatch(
+      /PROMPT_CANARY|TRIGGER_CONTEXT_CANARY|ERROR_CANARY|secret\.example/,
+    );
+    expect(sanitizeStatisticsEvent({ ...queued, outcome: 'suppressed' })).toBeUndefined();
+  });
+
   it('partitions by UTC day and preserves same-day concurrent append order', async () => {
     const events = Array.from({ length: 40 }, (_, index) =>
       runStarted(`run-${index}`, `2026-07-30T12:00:${String(index).padStart(2, '0')}.000Z`),

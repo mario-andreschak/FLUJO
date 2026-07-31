@@ -100,6 +100,23 @@ describe('statistics aggregation', () => {
   it('deduplicates logical runs while retaining retry, failure, duration, usage, and context metrics', async () => {
     await seedRun();
     await appendStatisticsEvent(createStatisticsEvent({
+      type: 'scheduler.fire',
+      runId: 'queued-run-1',
+      timestamp: '2026-07-30T09:59:00.000Z',
+      source: 'schedule',
+      plannedExecution: { id: 'plan-1', name: 'Plan One' },
+      outcome: 'queued',
+    }));
+    await appendStatisticsEvent(createStatisticsEvent({
+      type: 'scheduler.fire',
+      runId: 'run-1',
+      timestamp: '2026-07-30T09:59:01.000Z',
+      source: 'schedule',
+      plannedExecution: { id: 'plan-1', name: 'Plan One' },
+      outcome: 'fired',
+      conversationId: 'ephemeral-conversation-1',
+    }));
+    await appendStatisticsEvent(createStatisticsEvent({
       type: 'scheduler.skip',
       runId: 'skip-1',
       timestamp: '2026-07-31T00:00:00.000Z',

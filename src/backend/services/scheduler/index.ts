@@ -763,6 +763,22 @@ export class SchedulerService {
     };
   }
 
+  private recordSchedulerFire(
+    execution: PlannedExecution,
+    runId: string,
+    outcome: 'fired' | 'queued',
+    conversationId?: string
+  ): void {
+    recordStatisticsEvent(createStatisticsEvent({
+      type: 'scheduler.fire',
+      runId,
+      source: 'schedule',
+      plannedExecution: { id: execution.id, name: execution.name },
+      outcome,
+      ...(conversationId ? { conversationId } : {}),
+    }));
+  }
+
   private recordSchedulerSkip(execution: PlannedExecution, runId: string, reason: string): void {
     recordStatisticsEvent(createStatisticsEvent({
       type: 'scheduler.skip',
@@ -1204,6 +1220,7 @@ export class SchedulerService {
             log.info(
               `Exclusive "${execution.name}" waiting for scheduler to idle (depth ${depth + 1})`
             );
+            this.recordSchedulerFire(execution, runId, 'queued');
             return new Promise<RunRecord>(resolve => {
               this.exclusiveWaiting.push({ execution, payload, runId, resolve });
             });
@@ -1266,6 +1283,7 @@ export class SchedulerService {
         log.info(
           `Deferred non-exclusive fire for "${execution.name}" — exclusive lock held (depth ${depth + 1})`
         );
+        this.recordSchedulerFire(execution, runId, 'queued');
         return new Promise<RunRecord>(resolve => {
           this.blockedByExclusive.push({ execution, payload, runId, resolve });
         });
@@ -1328,6 +1346,7 @@ export class SchedulerService {
         // Resolve when the queued fire actually runs (drainQueue reuses fire()).
         // poll/url-watch onFire await THIS promise, so the commit-after-success
         // baseline still advances only on the queued run's real 'completed'.
+        this.recordSchedulerFire(execution, runId, 'queued');
         return new Promise<RunRecord>(resolve => {
           const queue = this.queued.get(execution.id) ?? [];
           queue.push({ execution, payload, runId, resolve });
@@ -1339,6 +1358,7 @@ export class SchedulerService {
 
     this.addRunning(execution.id, runId, firedAt);
     const conversationId = uuidv4();
+    this.recordSchedulerFire(execution, runId, 'fired', conversationId);
     let record: RunRecord;
     try {
       log.info(`Firing "${execution.name}" (${payload.kind})`);

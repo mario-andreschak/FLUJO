@@ -49,6 +49,15 @@ jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: jest.fn(async () => locked),
 }));
 
+const mockRecordStatisticsEvent = jest.fn();
+jest.mock('@/backend/services/statistics', () => ({
+  classifySchedulerSkip: jest.fn(() => 'encryption_locked'),
+  createStatisticsEvent: jest.fn((event: Record<string, unknown>) => event),
+  recordStatisticsEvent: jest.fn((event: Record<string, unknown>) =>
+    mockRecordStatisticsEvent(event)
+  ),
+}));
+
 const completedResult = {
   status: 'completed',
   outputText: 'All done',
@@ -79,6 +88,7 @@ describe('SchedulerService locked-encryption fire guard (#78)', () => {
     runFlowMock.mockReset();
     runFlowMock.mockResolvedValue(completedResult);
     locked = false;
+    mockRecordStatisticsEvent.mockReset();
     scheduler = new SchedulerService();
   });
 
@@ -96,6 +106,13 @@ describe('SchedulerService locked-encryption fire guard (#78)', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('skipped');
     expect(runs[0].error).toBe('encryption locked');
+    expect(mockRecordStatisticsEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'scheduler.skip',
+      runId: record.runId,
+      source: 'schedule',
+      plannedExecution: { id: execution!.id, name: execution!.name },
+      reason: 'encryption_locked',
+    }));
   });
 
   it('blocks a manual runNow while locked (same secrets)', async () => {
@@ -135,6 +152,13 @@ describe('SchedulerService locked-encryption fire guard (#78)', () => {
     const record = await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
     expect(record.status).toBe('completed');
     expect(runFlowMock).toHaveBeenCalledTimes(1);
+    expect(mockRecordStatisticsEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'scheduler.fire',
+      runId: record.runId,
+      outcome: 'fired',
+      conversationId: record.conversationId,
+      plannedExecution: { id: execution!.id, name: execution!.name },
+    }));
 
     const statuses = readRuns(execution!.id).map(r => r.status).sort();
     expect(statuses).toEqual(['completed', 'skipped']);

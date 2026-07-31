@@ -609,6 +609,9 @@ export async function aggregateStatistics(
         });
         continue;
       }
+      // Fire/queue admission is event-level scheduler metadata. The matching
+      // run lifecycle records remain the sole source of logical-run counts.
+      if (event.type === 'scheduler.fire') continue;
       let bundle = runs.get(event.runId);
       if (!bundle) {
         bundle = {

@@ -119,6 +119,14 @@ export interface ToolInvocationStatisticsEvent extends StatisticsEventBase {
   errorClass?: StatisticsErrorClass;
 }
 
+export interface SchedulerFireStatisticsEvent extends StatisticsEventBase {
+  type: 'scheduler.fire';
+  source: 'schedule';
+  plannedExecution: StatisticsSnapshot;
+  outcome: 'fired' | 'queued';
+  conversationId?: string;
+}
+
 export interface SchedulerSkipStatisticsEvent extends StatisticsEventBase {
   type: 'scheduler.skip';
   source: 'schedule';
@@ -133,6 +141,7 @@ export type StatisticsEvent =
   | NodeVisitStatisticsEvent
   | ModelAttemptStatisticsEvent
   | ToolInvocationStatisticsEvent
+  | SchedulerFireStatisticsEvent
   | SchedulerSkipStatisticsEvent;
 
 const RUN_SOURCES = new Set<StatisticsRunSource>([
@@ -283,6 +292,22 @@ export function sanitizeStatisticsEvent(value: unknown): StatisticsEvent | undef
       const node = snapshot(record.node);
       const provider = snapshot(record.provider);
       return { ...common, type: record.type, tool: { ...toolBase, kind: toolKind }, outcome, durationMs, ...(node ? { node } : {}), ...(provider ? { provider } : {}), ...(errorClass ? { errorClass } : {}) };
+    }
+    case 'scheduler.fire': {
+      const plannedExecution = snapshot(record.plannedExecution);
+      const outcome = record.outcome === 'fired' || record.outcome === 'queued'
+        ? record.outcome
+        : undefined;
+      if (record.source !== 'schedule' || !plannedExecution || !outcome) return undefined;
+      const conversationId = stringValue(record.conversationId);
+      return {
+        ...common,
+        type: record.type,
+        source: 'schedule',
+        plannedExecution,
+        outcome,
+        ...(conversationId ? { conversationId } : {}),
+      };
     }
     case 'scheduler.skip': {
       const plannedExecution = snapshot(record.plannedExecution);
