@@ -23,28 +23,24 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { NodeType } from '@/frontend/types/flow/flow';
+import { flowNodeColors, flowNodeLightColors } from '@/frontend/utils/flowPaletteTokens';
 import { buildNodeInformation } from './nodeInformation';
 
-// Resource nodes (Tier 3) use a teal literal — the MUI palette slots are all
-// taken (secondary=process, success=finish, info=mcp, warning=subflow) and the
-// start node set the hex-literal precedent.
-export const RESOURCE_COLOR = '#18AFA3';
-const RESOURCE_COLOR_LIGHT = '#63D8CE';
+// Resource, signal, and trigger nodes use shared semantic tokens because the
+// MUI palette slots are already occupied by the other FlowBuilder node types.
+export const RESOURCE_COLOR = flowNodeColors.light.resource;
+const RESOURCE_COLOR_LIGHT = flowNodeLightColors.resource;
 
-// Signal nodes (issue #117) use a deep-purple literal — same reason as the
-// resource teal: the MUI palette slots are all taken.
-export const SIGNAL_COLOR = '#9A78FF';
-const SIGNAL_COLOR_LIGHT = '#C4B2FF';
+export const SIGNAL_COLOR = flowNodeColors.light.signal;
+const SIGNAL_COLOR_LIGHT = flowNodeLightColors.signal;
 
-// Trigger nodes (issue #241) use a pink/rose literal — visually distinct from
-// all other node types.
-export const TRIGGER_COLOR = '#EF5D8E';
-export const TRIGGER_COLOR_LIGHT = '#FF9ABD';
+export const TRIGGER_COLOR = flowNodeColors.light.trigger;
+export const TRIGGER_COLOR_LIGHT = flowNodeLightColors.trigger;
 
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
 const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
-  start: { main: () => '#7E889E', light: () => '#B7C0D2' },
+  start: { main: () => flowNodeColors.light.start, light: () => flowNodeColors.dark.start },
   process: { main: (t) => t.palette.primary.main, light: (t) => t.palette.primary.light },
   finish: { main: (t) => t.palette.success.main, light: (t) => t.palette.success.light },
   mcp: { main: (t) => t.palette.info.main, light: (t) => t.palette.info.light },

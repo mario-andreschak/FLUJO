@@ -550,7 +550,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         elevation={0}
         sx={{ 
           width: '100%',
-          maxWidth: 960,
+          maxWidth: { xs: 960, lg: 'none' },
           mx: 'auto',
           p: { xs: 1, sm: 1.25 },
           display: 'flex', 

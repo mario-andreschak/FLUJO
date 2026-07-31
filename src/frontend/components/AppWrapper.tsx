@@ -2,6 +2,8 @@
 
 import React, { Suspense } from 'react';
 import dynamic from 'next/dynamic';
+import LivingWorldGate from './AmbientWorld/LivingWorldGate';
+import RouteStage from './shared/RouteStage';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/AppWrapper');
@@ -146,13 +148,14 @@ export default function AppWrapper({ children }: AppWrapperProps) {
             <TourProvider>
               <div className="app-shell">
                 <a className="skip-link" href="#main-content">Skip to content</a>
+                <LivingWorldGate />
                 <Suspense fallback={<AppLoading label="Loading navigation" compact />}>
                   <Navigation />
                   <EncryptionAuthDialog />
                   <TelemetryNotice />
                 </Suspense>
                 <main id="main-content" className="app-main" tabIndex={-1}>
-                  {children}
+                  <RouteStage>{children}</RouteStage>
                 </main>
                 <TourOverlay />
               </div>

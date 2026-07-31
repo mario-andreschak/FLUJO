@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "./living-watershed.css";
 import { createLogger } from '@/utils/logger';
 import AppWrapper from "@/frontend/components/AppWrapper";
 

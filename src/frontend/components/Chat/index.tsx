@@ -3790,7 +3790,7 @@ const Chat: React.FC = () => {
             py: 2.5,
             '& > *': {
               width: '100%',
-              maxWidth: 960,
+              maxWidth: { xs: 960, lg: 'none' },
               mx: 'auto',
             },
           }}

@@ -125,6 +125,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
         <ListItemButton
           key={item.path}
           component={Link}
+          className={`living-watershed-mobile-nav-link${active ? ' is-active' : ''}`}
           href={item.path}
           aria-current={active ? 'page' : undefined}
           data-tour={item.tour}
@@ -167,6 +168,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
       <Box
         key={item.path}
         component={Link}
+        className={`living-watershed-nav-link${active ? ' is-active' : ''}`}
         href={item.path}
         aria-current={active ? 'page' : undefined}
         data-tour={item.tour}
@@ -251,6 +253,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
           <Box
             key={item.name}
             component={Link}
+            className={`living-watershed-nav-link living-watershed-nav-group-link${active ? ' is-active' : ''}`}
             href={landingPage.path}
             aria-current={isActive(landingPage, pathname) ? 'page' : undefined}
             data-tour={landingPage.tour}
@@ -377,6 +380,7 @@ export default function Navigation() {
 
         <Box
           component={Link}
+          className="living-watershed-brand"
           href="/"
           onClick={handleNavClick('/')}
           aria-label="FLUJO home"
@@ -390,6 +394,7 @@ export default function Navigation() {
           }}
         >
           <Box
+            className="living-watershed-brand-mark"
             aria-hidden="true"
             sx={{
               position: 'relative',
@@ -537,21 +542,36 @@ export default function Navigation() {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         ModalProps={{ keepMounted: true }}
+        slotProps={{
+          backdrop: {
+            sx: {
+              backgroundColor: alpha(theme.palette.common.black, isDarkMode ? 0.2 : 0.1),
+              backdropFilter: 'blur(2px)',
+            },
+          },
+        }}
         PaperProps={{
           sx: {
             width: { xs: 'min(88vw, 340px)', sm: 340 },
             p: 1,
+            borderRight: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
+            backgroundColor: alpha(theme.palette.background.paper, isDarkMode ? 0.68 : 0.6),
+            backgroundImage: `linear-gradient(145deg, ${alpha(theme.palette.primary.main, 0.06)}, transparent 42%)`,
+            boxShadow: `18px 0 56px ${alpha(theme.palette.common.black, isDarkMode ? 0.3 : 0.12)}`,
+            backdropFilter: 'blur(20px) saturate(125%)',
           },
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1, py: 1.2 }}>
           <Box
             component={Link}
+            className="living-watershed-brand"
             href="/"
             onClick={handleDrawerNavClick('/')}
             sx={{ display: 'flex', alignItems: 'center', gap: 1.2, color: 'text.primary', textDecoration: 'none' }}
           >
             <Box
+              className="living-watershed-brand-mark"
               sx={{
                 display: 'grid',
                 width: 38,

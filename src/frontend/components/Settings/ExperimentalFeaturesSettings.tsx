@@ -157,8 +157,10 @@ export default function ExperimentalFeaturesSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           Experimental features may be incomplete or unstable and can change or be
-          removed at any time. When enabled, they become visible in the app — for
-          example the <strong>Waves</strong> entry in the top navigation.
+          removed at any time. Enabling this makes them visible in the app — for
+          example the <strong>Waves</strong> entry in the top navigation — and also
+          turns on the new <strong>Living Watershed</strong> animated interface in
+          Modern themes.
         </Typography>
       </FormControl>
 

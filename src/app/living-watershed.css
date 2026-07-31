@@ -1,0 +1,545 @@
+/*
+ * Living Watershed — experimental visual layer.
+ *
+ * RiverWorld adds `living-world-active` only when the Modern theme and the
+ * experimental setting are both active. Keeping every rule behind that gate
+ * guarantees the default and Legacy presentations remain unchanged.
+ */
+
+/* RiverWorld adds the root gate in an effect. These first-render defaults
+   keep its client render hidden and out of normal document flow. */
+.living-watershed {
+  display: none;
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.living-watershed__location {
+  display: none;
+  position: fixed;
+  pointer-events: none;
+}
+:root.modern-theme.living-world-active {
+  --living-world-accent: var(--river-scene-accent, var(--accent-secondary));
+  --living-world-glass: rgba(250, 252, 255, 0.72);
+  --living-world-glass-strong: rgba(250, 252, 255, 0.88);
+  --living-world-line: color-mix(in srgb, var(--living-world-accent) 44%, var(--border));
+}
+
+:root.modern-theme.living-world-active body {
+  background: var(--background);
+}
+
+/* The canvas owns the atmosphere while active; retire the generic fog/grid so
+   two ambient systems never compete. */
+:root.modern-theme.living-world-active body::before,
+:root.modern-theme.living-world-active body::after {
+  opacity: 0;
+  animation: none;
+}
+
+:root.modern-theme.living-world-active .app-shell {
+  isolation: isolate;
+}
+
+:root.modern-theme.living-world-active .living-watershed {
+  display: block;
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  contain: strict;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+:root.modern-theme.living-world-active .living-watershed__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0.96;
+  pointer-events: none;
+}
+
+:root.modern-theme.living-world-active .living-watershed__atmosphere,
+:root.modern-theme.living-world-active .living-watershed__caustics {
+  position: absolute;
+  inset: -8%;
+  pointer-events: none;
+  transform: translate3d(0, 0, 0);
+}
+
+:root.modern-theme.living-world-active .living-watershed__atmosphere {
+  opacity: 0.72;
+  background:
+    radial-gradient(circle at 20% 14%, color-mix(in srgb, var(--living-world-accent) 17%, transparent), transparent 28%),
+    radial-gradient(circle at 82% 22%, rgba(255, 255, 255, 0.36), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 46%, rgba(83, 207, 216, 0.06));
+  background-size: 115% 115%, 108% 108%, 100% 100%;
+  filter: blur(24px) saturate(112%);
+  animation: living-watershed-caustics 24s ease-in-out infinite alternate;
+}
+
+:root.modern-theme.living-world-active .living-watershed__caustics {
+  inset: 10% -12% -18%;
+  opacity: 0.2;
+  background-image:
+    repeating-radial-gradient(
+      ellipse at 50% 45%,
+      transparent 0 17px,
+      rgba(255, 255, 255, 0.2) 19px,
+      transparent 23px 42px
+    ),
+    repeating-linear-gradient(
+      112deg,
+      transparent 0 76px,
+      color-mix(in srgb, var(--living-world-accent) 18%, transparent) 82px,
+      transparent 90px 158px
+    );
+  background-size: 270px 118px, 340px 190px;
+  mix-blend-mode: screen;
+  mask-image: linear-gradient(to bottom, transparent, #000 28%, #000 78%, transparent);
+  animation: living-watershed-caustics 18s linear infinite alternate;
+}
+
+:root.modern-theme.living-world-active .app-main {
+  z-index: 1;
+}
+
+/* Frosted navigation remains the stable instrument panel above the world. */
+:root.modern-theme.living-world-active [data-app-navigation] {
+  border-bottom-color: color-mix(in srgb, var(--living-world-line) 74%, transparent);
+  background-color: var(--living-world-glass);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 72%),
+    linear-gradient(90deg, color-mix(in srgb, var(--living-world-accent) 7%, transparent), transparent 42%);
+  box-shadow: 0 14px 46px rgba(47, 72, 100, 0.08);
+  backdrop-filter: blur(26px) saturate(148%);
+}
+
+:root.modern-theme.living-world-active .living-watershed-brand {
+  position: relative;
+}
+
+:root.modern-theme.living-world-active .living-watershed-brand::after {
+  position: absolute;
+  right: 4px;
+  bottom: -6px;
+  left: 4px;
+  height: 2px;
+  border-radius: 999px;
+  content: '';
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--living-world-accent), transparent);
+  transform: scaleX(0.35);
+  transition: opacity 220ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root.modern-theme.living-world-active .living-watershed-brand:hover::after,
+:root.modern-theme.living-world-active .living-watershed-brand:focus-visible::after {
+  opacity: 0.78;
+  transform: scaleX(1);
+}
+
+:root.modern-theme.living-world-active .living-watershed-brand-mark {
+  background-size: 180% 180%;
+  animation: living-watershed-current 9s ease-in-out infinite alternate;
+  transition: filter 220ms ease, box-shadow 220ms ease, transform 220ms ease;
+}
+
+:root.modern-theme.living-world-active .living-watershed-brand:hover .living-watershed-brand-mark,
+:root.modern-theme.living-world-active .living-watershed-brand:focus-visible .living-watershed-brand-mark {
+  filter: brightness(1.08) saturate(1.12);
+  box-shadow:
+    0 12px 32px color-mix(in srgb, var(--living-world-accent) 34%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--living-world-accent) 24%, transparent);
+}
+
+:root.modern-theme.living-world-active .living-watershed-nav-link {
+  transition-property: color, background-color, border-color, box-shadow, filter, transform;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+
+:root.modern-theme.living-world-active .living-watershed-nav-link:hover,
+:root.modern-theme.living-world-active .living-watershed-nav-link:focus-visible {
+  filter: brightness(1.035) saturate(1.08);
+}
+
+:root.modern-theme.living-world-active .living-watershed-nav-link.is-active {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--living-world-accent) 20%, transparent),
+    0 8px 24px color-mix(in srgb, var(--living-world-accent) 9%, transparent);
+}
+
+:root.modern-theme.living-world-active .living-watershed-nav-link.is-active::after {
+  background: linear-gradient(90deg, var(--accent), var(--living-world-accent), var(--accent-secondary), var(--accent));
+  background-size: 240% 100%;
+  animation: living-watershed-current 4.8s linear infinite;
+}
+
+:root.modern-theme.living-world-active .living-watershed-mobile-nav-link.is-active {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--living-world-accent) 28%, transparent),
+    0 8px 24px color-mix(in srgb, var(--living-world-accent) 10%, transparent);
+}
+
+/* Extend transition lists but never set transform values here; existing MUI
+   hover/press motion and card-specific transforms remain authoritative. */
+:root.modern-theme.living-world-active :where(.MuiButton-root, .MuiIconButton-root) {
+  transition-property: transform, filter, box-shadow, background-color, border-color, color;
+  transition-duration: 190ms;
+  transition-timing-function: ease;
+}
+
+:root.modern-theme.living-world-active :where(.MuiCard-root, .premium-surface) {
+  transition-property: transform, filter, box-shadow, background-color, border-color;
+  transition-duration: 220ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root.modern-theme.living-world-active :where(.MuiButton-root, .MuiIconButton-root):not(.Mui-disabled):hover,
+:root.modern-theme.living-world-active :where(.MuiCard-root, .premium-surface):hover {
+  filter: brightness(1.018) saturate(1.045);
+}
+
+:root.modern-theme.living-world-active .premium-surface:hover {
+  box-shadow: var(--shadow-soft), 0 0 0 1px color-mix(in srgb, var(--living-world-accent) 14%, transparent);
+}
+
+/* Route/location HUD ------------------------------------------------------ */
+:root.modern-theme.living-world-active .living-watershed__location {
+  position: fixed;
+  z-index: 1200;
+  top: calc((var(--app-bar-height) - 60px) / 2);
+  right: clamp(300px, 18vw, 340px);
+  bottom: auto;
+  display: grid;
+  grid-template-columns: 42px minmax(0, auto) auto;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, calc(100vw - 40px));
+  padding: 10px 12px;
+  border: 1px solid var(--living-world-line);
+  border-radius: 18px;
+  color: var(--foreground);
+  background: var(--living-world-glass-strong);
+  box-shadow:
+    0 18px 54px rgba(37, 66, 91, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(24px) saturate(150%);
+  pointer-events: none;
+  animation: living-watershed-location-arrival 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: border-color 260ms ease, box-shadow 260ms ease, background-color 260ms ease;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location.is-travelling {
+  border-color: color-mix(in srgb, var(--living-world-accent) 66%, transparent);
+  box-shadow:
+    0 20px 62px color-mix(in srgb, var(--living-world-accent) 22%, rgba(37, 66, 91, 0.12)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.44);
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-orbit {
+  position: relative;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--living-world-accent) 58%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--living-world-accent) 25%, transparent), transparent 62%);
+  animation: living-watershed-orbit 9s linear infinite;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-orbit::before {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  content: '';
+  background: var(--living-world-accent);
+  box-shadow: 0 0 12px var(--living-world-accent);
+  transform: translateX(-50%);
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-orbit::after {
+  position: absolute;
+  inset: 8px;
+  border: 1px solid color-mix(in srgb, var(--living-world-accent) 48%, transparent);
+  border-radius: 50%;
+  content: '';
+  animation: living-watershed-ripple 2.8s ease-out infinite;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-orbit > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--living-world-accent);
+  box-shadow: 0 0 16px var(--living-world-accent);
+}
+
+:root.modern-theme.living-world-active .living-watershed__location.is-travelling .living-watershed__location-orbit {
+  animation-duration: 1.5s;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.16;
+  animation: living-watershed-location-arrival 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-copy > span {
+  color: var(--text-secondary);
+  font-size: 0.61rem;
+  font-weight: 760;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location-copy > strong {
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 0.8rem;
+  font-weight: 760;
+  letter-spacing: -0.012em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root.modern-theme.living-world-active .living-watershed__location.is-travelling .living-watershed__location-copy > strong {
+  color: color-mix(in srgb, var(--living-world-accent) 78%, var(--foreground));
+}
+
+:root.modern-theme.living-world-active .living-watershed__experimental {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--living-world-accent) 28%, var(--border));
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--living-world-accent) 7%, transparent);
+  font-size: 0.58rem;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+/* The existing Home grid becomes a connected current without changing its
+   layout or card semantics. It is vertical until the grid becomes 3-column. */
+html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Getting started'] {
+  --living-current-from: 0 0;
+  --living-current-to: 0 220%;
+  position: relative;
+  isolation: isolate;
+}
+
+html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Getting started']::before {
+  position: absolute;
+  z-index: 0;
+  top: 5%;
+  bottom: 5%;
+  left: calc(50% - 2px);
+  width: 4px;
+  border-radius: 999px;
+  content: '';
+  pointer-events: none;
+  opacity: 0.62;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--accent-secondary) 74%, transparent),
+    color-mix(in srgb, var(--accent) 72%, transparent),
+    color-mix(in srgb, var(--living-world-accent) 76%, transparent),
+    transparent
+  );
+  background-size: 100% 220%;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--living-world-accent) 34%, transparent));
+  animation: living-watershed-current 7.5s linear infinite;
+}
+
+html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Getting started'] > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Dark mode remains luminous without turning the navigation or HUD opaque. */
+:root.modern-theme.dark-theme.living-world-active {
+  --living-world-glass: rgba(8, 13, 25, 0.72);
+  --living-world-glass-strong: rgba(10, 16, 30, 0.88);
+  --living-world-line: color-mix(in srgb, var(--living-world-accent) 36%, var(--border));
+}
+
+:root.modern-theme.dark-theme.living-world-active .living-watershed__canvas {
+  opacity: 0.92;
+}
+
+:root.modern-theme.dark-theme.living-world-active .living-watershed__atmosphere {
+  opacity: 0.58;
+  background:
+    radial-gradient(circle at 20% 14%, color-mix(in srgb, var(--living-world-accent) 20%, transparent), transparent 30%),
+    radial-gradient(circle at 82% 18%, rgba(76, 111, 164, 0.16), transparent 27%),
+    linear-gradient(180deg, rgba(11, 24, 42, 0.18), transparent 46%, rgba(26, 212, 220, 0.035));
+}
+
+:root.modern-theme.dark-theme.living-world-active .living-watershed__caustics {
+  opacity: 0.14;
+}
+
+:root.modern-theme.dark-theme.living-world-active [data-app-navigation] {
+  border-bottom-color: color-mix(in srgb, var(--living-world-line) 78%, transparent);
+  background-color: var(--living-world-glass);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 76%),
+    linear-gradient(90deg, color-mix(in srgb, var(--living-world-accent) 8%, transparent), transparent 42%);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.24);
+}
+
+:root.modern-theme.dark-theme.living-world-active .living-watershed__location {
+  box-shadow: 0 20px 64px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+:root.modern-theme.dark-theme.living-world-active .living-watershed__location.is-travelling {
+  box-shadow:
+    0 22px 72px color-mix(in srgb, var(--living-world-accent) 18%, rgba(0, 0, 0, 0.38)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+:root.modern-theme.dark-theme.living-world-active .premium-surface:hover {
+  box-shadow:
+    var(--shadow-soft),
+    0 0 0 1px color-mix(in srgb, var(--living-world-accent) 20%, transparent),
+    0 18px 60px color-mix(in srgb, var(--living-world-accent) 8%, transparent);
+}
+
+@keyframes living-watershed-current {
+  from {
+    background-position: var(--living-current-from, 0% 50%);
+  }
+  to {
+    background-position: var(--living-current-to, 220% 50%);
+  }
+}
+
+@keyframes living-watershed-ripple {
+  0% {
+    opacity: 0.72;
+    transform: scale(0.68);
+  }
+  72%,
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+@keyframes living-watershed-orbit {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes living-watershed-caustics {
+  from {
+    transform: translate3d(-1.2%, -0.6%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(1.4%, 1%, 0) scale(1.035);
+  }
+}
+
+@keyframes living-watershed-location-arrival {
+  from {
+    opacity: 0;
+    transform: translate3d(12px, 10px, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@media (min-width: 1200px) {
+  html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Getting started'] {
+    --living-current-from: 0 0;
+    --living-current-to: 220% 0;
+  }
+
+  html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Getting started']::before {
+    top: calc(50% - 2px);
+    right: 5%;
+    bottom: auto;
+    left: 5%;
+    width: auto;
+    height: 4px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--accent-secondary) 74%, transparent),
+      color-mix(in srgb, var(--accent) 72%, transparent),
+      color-mix(in srgb, var(--living-world-accent) 76%, transparent),
+      transparent
+    );
+    background-size: 220% 100%;
+  }
+}
+
+@media (min-width: 1280px) and (max-width: 1599px) {
+  :root.modern-theme.living-world-active .living-watershed__location {
+    grid-template-columns: 42px minmax(0, auto);
+  }
+
+  :root.modern-theme.living-world-active .living-watershed__experimental {
+    display: none;
+  }
+}
+
+/* The location plaque is desktop ambience, not compact-workspace chrome. */
+@media (max-width: 1279px), (max-height: 620px) {
+  :root.modern-theme.living-world-active .living-watershed__location {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root.modern-theme.living-world-active .living-watershed__atmosphere,
+  :root.modern-theme.living-world-active .living-watershed__caustics,
+  :root.modern-theme.living-world-active .living-watershed-brand-mark,
+  :root.modern-theme.living-world-active .living-watershed-nav-link.is-active::after,
+  :root.modern-theme.living-world-active .living-watershed__location,
+  :root.modern-theme.living-world-active .living-watershed__location-copy,
+  :root.modern-theme.living-world-active .living-watershed__location-orbit,
+  :root.modern-theme.living-world-active .living-watershed__location-orbit::after,
+  html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Getting started']::before {
+    animation: none !important;
+  }
+
+  :root.modern-theme.living-world-active .living-watershed__atmosphere,
+  :root.modern-theme.living-world-active .living-watershed__caustics,
+  :root.modern-theme.living-world-active .living-watershed__location,
+  :root.modern-theme.living-world-active .living-watershed__location-copy,
+  :root.modern-theme.living-world-active .living-watershed__location-orbit {
+    transform: none !important;
+  }
+
+  :root.modern-theme.living-world-active .living-watershed__location-orbit::after {
+    opacity: 0;
+  }
+}
+
+@media print {
+  :root.modern-theme.living-world-active .living-watershed,
+  :root.modern-theme.living-world-active .living-watershed__canvas,
+  :root.modern-theme.living-world-active .living-watershed__location {
+    display: none !important;
+  }
+}
