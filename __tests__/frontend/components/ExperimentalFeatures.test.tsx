@@ -46,6 +46,7 @@ describe('Automation navigation and experimental gating (#184, #325)', () => {
     mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
     expect(screen.queryByText('Waves')).not.toBeInTheDocument();
+    expect(screen.queryByText('Statistics')).not.toBeInTheDocument();
     expect(screen.getAllByText('Automation').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Triggers').length).toBeGreaterThan(0);
     screen.getAllByRole('link', { name: 'Triggers' }).forEach((link) => {
@@ -63,6 +64,7 @@ describe('Automation navigation and experimental gating (#184, #325)', () => {
     };
     render(<Navigation />);
     expect(screen.queryByText('Waves')).not.toBeInTheDocument();
+    expect(screen.queryByText('Statistics')).not.toBeInTheDocument();
     expect(screen.getAllByText('Triggers').length).toBeGreaterThan(0);
   });
 
@@ -76,6 +78,10 @@ describe('Automation navigation and experimental gating (#184, #325)', () => {
     expect(screen.getAllByText('Automation').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Triggers').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Waves').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Statistics').length).toBeGreaterThan(0);
+    screen.getAllByRole('link', { name: 'Statistics' }).forEach((link) => {
+      expect(link).toHaveAttribute('href', '/statistics');
+    });
     screen.getAllByRole('link', { name: 'Waves' }).forEach((link) => {
       expect(link).toHaveAttribute('href', '/automation/waves');
     });

@@ -58,6 +58,7 @@ const navItems: NavItem[] = [
     ],
   },
   { type: 'link', name: 'Packages', path: '/packages', tour: 'nav-packages', experimental: true },
+  { type: 'link', name: 'Statistics', path: '/statistics', tour: 'nav-statistics', experimental: true },
   { type: 'link', name: 'Chat', path: '/chat', tour: 'nav-chat' },
   { type: 'link', name: 'Docs', path: '/docs', tour: 'nav-docs' },
   { type: 'link', name: 'Settings', path: '/settings', tour: 'nav-settings' },
