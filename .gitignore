@@ -133,6 +133,16 @@ node_modules
 dist
 # Standalone MCP package sources/manifests are tracked; their compiled dist
 # directories remain covered by the generic dist rule above.
+# Runtime-installed MCP servers are user data. Keep every clone/install private
+# to the local FLUJO instance while retaining only FLUJO's package workspaces.
+/mcp-servers/*
+!/mcp-servers/README.md
+!/mcp-servers/embed-shared.mjs
+!/mcp-servers/bash/
+!/mcp-servers/browser/
+!/mcp-servers/filesystem/
+!/mcp-servers/flujo/
+!/mcp-servers/shared/
 build
 .vscode
 *.code-workspace
