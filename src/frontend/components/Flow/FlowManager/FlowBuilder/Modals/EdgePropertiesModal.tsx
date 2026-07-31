@@ -48,7 +48,7 @@ const KIND_LABELS: Record<EdgeConditionKind, string> = {
 };
 
 const TARGET_LABELS: Record<EdgeConditionTarget, string> = {
-  'last-assistant': "Last assistant reply (this step's output)",
+  'last-assistant': "Last agent reply (this step's output)",
   'last-message': 'Last message (any role)',
 };
 

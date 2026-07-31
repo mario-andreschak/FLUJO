@@ -1,12 +1,9 @@
 "use client";
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useId, useRef } from 'react';
 import {
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
+  ClickAwayListener,
   List,
   ListItem,
   ListItemButton,
@@ -16,6 +13,9 @@ import {
   Typography,
   CircularProgress,
   Chip,
+  Divider,
+  Paper,
+  Popper,
 } from '@mui/material';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -69,11 +69,44 @@ function fileAccessSnapshot(
  */
 export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ nodes, edges }) => {
   const [open, setOpen] = useState(false);
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [issues, setIssues] = useState<FlowValidationIssue[] | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const triggerId = useId();
+  const dialogId = useId();
+  const dialogTitleId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => {
+      dialogRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  const closeAndRestoreFocus = useCallback(() => {
+    setOpen(false);
+    window.requestAnimationFrame(() => {
+      triggerRef.current?.focus();
+    });
+  }, []);
+
+  const handleClickAway = useCallback(() => {
+    const focusWasInside = dialogRef.current?.contains(document.activeElement);
+    setOpen(false);
+    if (focusWasInside) {
+      window.requestAnimationFrame(() => {
+        triggerRef.current?.focus();
+      });
+    }
+  }, []);
 
   const runCheck = useCallback(async () => {
     setLoading(true);
+    setCheckError(null);
     try {
       // Load the current models and servers so we can detect deleted/renamed references.
       // Crucially, only pass a context when the load genuinely SUCCEEDED — a failed load
@@ -144,24 +177,28 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
       setIssues(result.issues);
     } catch (error) {
       log.warn('Flow validation failed to run', error);
-      setIssues([]);
+      setIssues(null);
+      setCheckError('The flow check could not finish. Your graph was not marked healthy—try again.');
     } finally {
       setLoading(false);
     }
   }, [nodes, edges]);
 
-  const handleOpen = useCallback(() => {
+  const handleOpen = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    setAnchorEl(event.currentTarget);
     setOpen(true);
     setIssues(null);
+    setCheckError(null);
     runCheck();
   }, [runCheck]);
 
-  // Reuse the Canvas's existing 'editNode' listener to open the node's properties modal.
+  // Reveal the offending node in the persistent inspector instead of swapping
+  // one blocking dialog for another.
   const goToNode = useCallback((nodeId?: string) => {
     if (!nodeId) return;
-    setOpen(false);
-    document.dispatchEvent(new CustomEvent('editNode', { detail: { nodeId } }));
-  }, []);
+    closeAndRestoreFocus();
+    document.dispatchEvent(new CustomEvent('selectNode', { detail: { nodeId } }));
+  }, [closeAndRestoreFocus]);
 
   const errorCount = issues?.filter((i) => i.severity === 'error').length ?? 0;
   const warningCount = (issues?.length ?? 0) - errorCount;
@@ -169,77 +206,130 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
   return (
     <>
       <Button
+        ref={triggerRef}
+        id={triggerId}
         variant="outlined"
         color="primary"
         onClick={handleOpen}
         startIcon={<FactCheckIcon />}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={dialogId}
         sx={{ textTransform: 'none' }}
       >
         Check Flow
+        {issues && issues.length > 0 && (
+          <Chip
+            size="small"
+            color={errorCount > 0 ? 'error' : 'warning'}
+            label={issues.length}
+            sx={{ ml: 1, height: 20 }}
+          />
+        )}
       </Button>
 
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle component="div" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <span>Flow Check</span>
-          {issues && (
-            <Box sx={{ display: 'flex', gap: 1, ml: 1 }}>
-              {errorCount > 0 && <Chip size="small" color="error" label={`${errorCount} error${errorCount === 1 ? '' : 's'}`} />}
-              {warningCount > 0 && <Chip size="small" color="warning" label={`${warningCount} warning${warningCount === 1 ? '' : 's'}`} />}
+      <Popper
+        open={open}
+        anchorEl={anchorEl}
+        placement="bottom-end"
+        sx={{ zIndex: (theme) => theme.zIndex.modal + 1 }}
+        modifiers={[{ name: 'offset', options: { offset: [0, 10] } }]}
+      >
+        <ClickAwayListener onClickAway={handleClickAway}>
+          <Paper
+            ref={dialogRef}
+            id={dialogId}
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby={dialogTitleId}
+            aria-busy={loading}
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                closeAndRestoreFocus();
+              }
+            }}
+            elevation={18}
+            sx={{
+              width: 'min(92vw, 440px)',
+              maxHeight: 'min(68dvh, 560px)',
+              overflow: 'hidden',
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 3,
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.5 }}>
+              <Typography id={dialogTitleId} variant="subtitle1" fontWeight={800}>Flow Check</Typography>
+              {issues && (
+                <Box sx={{ display: 'flex', gap: 0.75, ml: 0.5 }}>
+                  {errorCount > 0 && <Chip size="small" color="error" label={`${errorCount} error${errorCount === 1 ? '' : 's'}`} />}
+                  {warningCount > 0 && <Chip size="small" color="warning" label={`${warningCount} warning${warningCount === 1 ? '' : 's'}`} />}
+                </Box>
+              )}
             </Box>
-          )}
-        </DialogTitle>
-        <DialogContent dividers>
-          {loading ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3, justifyContent: 'center' }}>
-              <CircularProgress size={22} />
-              <Typography color="text.secondary">Checking flow…</Typography>
+            <Divider />
+            <Box sx={{ maxHeight: 'min(52dvh, 420px)', overflowY: 'auto', p: 1 }}>
+              {loading ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3, justifyContent: 'center' }}>
+                  <CircularProgress size={22} />
+                  <Typography color="text.secondary">Checking flow…</Typography>
+                </Box>
+              ) : checkError ? (
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, py: 2, px: 1 }}>
+                  <ErrorOutlineIcon color="error" />
+                  <Box>
+                    <Typography fontWeight={700}>Check unavailable</Typography>
+                    <Typography variant="body2" color="text.secondary">{checkError}</Typography>
+                  </Box>
+                </Box>
+              ) : issues && issues.length === 0 ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3, px: 1, justifyContent: 'center' }}>
+                  <CheckCircleIcon color="success" />
+                  <Typography>No problems found — this flow looks runnable.</Typography>
+                </Box>
+              ) : (
+                <List dense disablePadding>
+                  {(issues ?? []).map((issue, i) => {
+                    const clickable = !!issue.nodeId;
+                    const content = (
+                      <>
+                        <ListItemIcon sx={{ minWidth: 36 }}>
+                          {issue.severity === 'error' ? (
+                            <ErrorOutlineIcon color="error" fontSize="small" />
+                          ) : (
+                            <WarningAmberIcon color="warning" fontSize="small" />
+                          )}
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={issue.message}
+                          secondary={clickable ? `Node: ${issue.nodeLabel ?? issue.nodeId} — reveal in inspector` : undefined}
+                        />
+                      </>
+                    );
+                    return clickable ? (
+                      <ListItemButton key={i} onClick={() => goToNode(issue.nodeId)} alignItems="flex-start">
+                        {content}
+                      </ListItemButton>
+                    ) : (
+                      <ListItem key={i} alignItems="flex-start">
+                        {content}
+                      </ListItem>
+                    );
+                  })}
+                </List>
+              )}
             </Box>
-          ) : issues && issues.length === 0 ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3, justifyContent: 'center' }}>
-              <CheckCircleIcon color="success" />
-              <Typography>No problems found — this flow looks runnable.</Typography>
+            <Divider />
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, p: 1 }}>
+              <Button onClick={runCheck} disabled={loading}>Re-check</Button>
+              <Button onClick={closeAndRestoreFocus} variant="contained">Done</Button>
             </Box>
-          ) : (
-            <List dense disablePadding>
-              {(issues ?? []).map((issue, i) => {
-                const clickable = !!issue.nodeId;
-                const content = (
-                  <>
-                    <ListItemIcon sx={{ minWidth: 36 }}>
-                      {issue.severity === 'error' ? (
-                        <ErrorOutlineIcon color="error" fontSize="small" />
-                      ) : (
-                        <WarningAmberIcon color="warning" fontSize="small" />
-                      )}
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={issue.message}
-                      secondary={clickable ? `Node: ${issue.nodeLabel ?? issue.nodeId} — click to open` : undefined}
-                    />
-                  </>
-                );
-                return clickable ? (
-                  <ListItemButton key={i} onClick={() => goToNode(issue.nodeId)} alignItems="flex-start">
-                    {content}
-                  </ListItemButton>
-                ) : (
-                  <ListItem key={i} alignItems="flex-start">
-                    {content}
-                  </ListItem>
-                );
-              })}
-            </List>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={runCheck} disabled={loading}>
-            Re-check
-          </Button>
-          <Button onClick={() => setOpen(false)} variant="contained">
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
+          </Paper>
+        </ClickAwayListener>
+      </Popper>
     </>
   );
 };

@@ -108,7 +108,7 @@ const DATE_OPTIONS: { value: DateFilter; label: string }[] = [
 const GROUP_OPTIONS: { value: GroupMode; label: string }[] = [
   { value: 'none', label: 'No grouping' },
   { value: 'date', label: 'Group by date' },
-  { value: 'flow', label: 'Group by flow' },
+  { value: 'flow', label: 'Group by agent' },
   { value: 'wave', label: 'Group by wave' },
   { value: 'chain', label: 'Group by chain' },
 ];
@@ -242,9 +242,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // flow" rather than dropped, so the conversation stays discoverable.
   const flowMeta = React.useCallback(
     (flowId: string | null): { key: string; label: string } => {
-      if (!flowId) return { key: 'flow:__none__', label: 'No flow' };
+      if (!flowId) return { key: 'flow:__none__', label: 'No agent' };
       if (isQuickChatFlowId(flowId)) return { key: 'flow:__quickchat__', label: 'Quick Chat' };
-      return { key: `flow:${flowId}`, label: flowNames[flowId] ?? 'Unknown flow' };
+      return { key: `flow:${flowId}`, label: flowNames[flowId] ?? 'Unknown agent' };
     },
     [flowNames],
   );
@@ -446,7 +446,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 {/* Which flow this conversation used (issue #147) — hidden when
                     grouping by flow to avoid redundancy with the section header. */}
                 {groupMode !== 'flow' && (
-                  <Tooltip title={isQuickChat ? 'Quick Chat (no saved flow)' : `Flow: ${meta.label}`}>
+                  <Tooltip title={isQuickChat ? 'Quick Chat (no saved agent)' : `Agent: ${meta.label}`}>
                     <Chip
                       icon={isQuickChat ? <BoltIcon /> : undefined}
                       label={meta.label}
@@ -474,7 +474,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   return (
     <>
-      <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+      <Box
+        sx={{
+          p: 1.5,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 0.7,
+          background: 'linear-gradient(120deg, rgba(139,124,255,.09), transparent 62%)',
+        }}
+      >
         {onCollapse && (
           <Tooltip title="Hide sidebar">
             <IconButton size="small" onClick={onCollapse} aria-label="Hide conversation sidebar">
@@ -482,7 +491,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             </IconButton>
           </Tooltip>
         )}
-        <Typography variant="h6" sx={{ flex: 1 }} noWrap>Conversations</Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="caption" sx={{ display: 'block', color: 'primary.light', fontWeight: 760, letterSpacing: '.1em' }}>
+            AGENT RUNS
+          </Typography>
+          <Typography variant="h6" noWrap>Conversations</Typography>
+        </Box>
         {conversations.length > 0 && (
           <Tooltip title="Delete all conversations">
             <span>{/* span wrapper needed for Tooltip on (potentially) disabled buttons */}
@@ -520,7 +534,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Tooltip>
         )}
         {onQuickChat && (
-          <Tooltip title="Quick Chat: a model + optional MCP servers, no saved flow">
+          <Tooltip title="Quick Chat: a model + optional connected apps, no saved agent">
             <Button
               variant="outlined"
               color="primary"
@@ -546,12 +560,22 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       <Divider />
 
       {/* Search + filter + group controls (issue #147). */}
-      <Box sx={{ px: 2, pt: 1.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box
+        sx={{
+          px: 1.5,
+          pt: 1.5,
+          pb: 1.2,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          bgcolor: 'rgba(127,127,160,.035)',
+        }}
+      >
         <Box sx={{ display: 'flex', gap: 1 }}>
         <TextField
           size="small"
           sx={{ flex: 1 }}
-          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title or flow…'}
+          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title or agent…'}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           InputProps={{
@@ -607,9 +631,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <Select
               value={flowOptions.some((o) => o.key === flowFilter) ? flowFilter : 'all'}
               onChange={(e) => setFlowFilter(e.target.value)}
-              aria-label="Filter by flow"
+              aria-label="Filter by agent"
             >
-              <MenuItem value="all">Any flow</MenuItem>
+              <MenuItem value="all">Any agent</MenuItem>
               {flowOptions.map((o) => (
                 <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
               ))}
@@ -649,7 +673,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
       <Divider />
 
-      <List sx={{ overflow: 'auto', flex: 1 }}>
+      <List sx={{ overflow: 'auto', flex: 1, p: 1 }}>
         {totalCount === 0 ? (
           <ListItem>
             <ListItemText

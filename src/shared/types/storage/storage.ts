@@ -6,6 +6,9 @@ export enum StorageKey {
   FLOWS = 'flows',
   CHAT_HISTORY = 'history',
   THEME = 'theme',
+  // Visual generation is stored separately from light/dark for backwards
+  // compatibility with every existing theme preference.
+  THEME_STYLE = 'theme_style',
   ENCRYPTION_KEY = 'encryption_key',
   MCP_SERVERS = 'mcp_servers',
   GLOBAL_ENV_VARS = 'global_env_vars',
@@ -59,6 +62,7 @@ export const StorageKeys = {
   FLOWS: StorageKey.FLOWS,
   CHAT_HISTORY: StorageKey.CHAT_HISTORY,
   THEME: StorageKey.THEME,
+  THEME_STYLE: StorageKey.THEME_STYLE,
   ENCRYPTION_KEY: StorageKey.ENCRYPTION_KEY,
   MCP_SERVERS: StorageKey.MCP_SERVERS,
   GLOBAL_ENV_VARS: StorageKey.GLOBAL_ENV_VARS,

@@ -21,7 +21,9 @@ import {
   Typography,
   FormControlLabel, // Added for checkbox
   Checkbox, // Added for checkbox
-  Chip
+  Chip,
+  alpha,
+  useTheme,
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
@@ -31,7 +33,6 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CheckIcon from '@mui/icons-material/Check';
 import EditIcon from '@mui/icons-material/Edit';
 import FlowNodePicker from './FlowNodePicker';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
 import GlobalReferenceEditor from '@/frontend/components/shared/GlobalReferenceEditor';
@@ -44,6 +45,7 @@ import {
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
   disabled?: boolean;
+  placeholder?: string;
   // Add callback and state for the approval toggle
   requireApproval?: boolean;
   onRequireApprovalChange?: (checked: boolean) => void;
@@ -72,6 +74,7 @@ interface ChatInputProps {
 const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   disabled = false,
+  placeholder = 'Type a message...',
   requireApproval = false,
   onRequireApprovalChange,
   executeInDebugger = false, // Default to false
@@ -87,6 +90,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onSaveEdit,
   onCancelEdit
 }) => {
+  const theme = useTheme();
   const { settings, globalEnvVars } = useStorage();
   const globalNames = useMemo(
     () => Object.entries(globalEnvVars)
@@ -543,12 +547,19 @@ const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <>
       <Paper 
-        elevation={3} 
+        elevation={0}
         sx={{ 
-          p: 2, 
+          width: '100%',
+          maxWidth: 960,
+          mx: 'auto',
+          p: { xs: 1, sm: 1.25 },
           display: 'flex', 
           flexDirection: 'column',
-          borderRadius: 2
+          border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
+          borderRadius: 4,
+          bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === 'dark' ? 0.82 : 0.92),
+          boxShadow: `0 22px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.12)}, 0 0 0 1px ${alpha(theme.palette.common.white, 0.03)} inset`,
+          backdropFilter: 'blur(24px) saturate(145%)',
         }}
       >
         {/* Attachments display */}
@@ -610,7 +621,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         )}
 
         {/* Input area */}
-        <Box sx={{ display: 'flex', alignItems: 'flex-end' }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 0.35 }}>
           <GlobalReferenceEditor
             value={isEditing ? (editing?.content ?? '') : message}
             onChange={handleMessageChange}
@@ -621,12 +632,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
             maxRows={isEditing ? 12 : 4}
             dataTour="chat-input"
             ariaLabel={isEditing ? 'Edit message' : 'Message'}
-            placeholder={isEditing ? 'Edit message...' : 'Type a message...'}
+            placeholder={isEditing ? 'Edit message...' : placeholder}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
             disabled={isEditing ? false : disabled}
             autoFocus={isEditing}
-            containerSx={{ mr: 1, flex: 1 }}
+            containerSx={{ flex: 1 }}
           />
 
           {/* Compose-only controls (attachments, audio) are hidden while editing. */}
@@ -685,6 +696,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 <span>
                   <IconButton
                     color="primary"
+                    aria-label="Save edit"
                     onClick={handleSaveEdit}
                     disabled={!editing?.content.trim()}
                   >
@@ -693,7 +705,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 </span>
               </Tooltip>
               <Tooltip title="Cancel edit">
-                <IconButton color="default" onClick={() => onCancelEdit?.()}>
+                <IconButton color="default" aria-label="Cancel edit" onClick={() => onCancelEdit?.()}>
                   <CloseIcon />
                 </IconButton>
               </Tooltip>
@@ -706,6 +718,23 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   color="primary"
                   onClick={handleSend}
                   disabled={disabled || (!message.trim() && attachments.length === 0)}
+                  aria-label="Send message"
+                  sx={{
+                    width: 44,
+                    height: 44,
+                    color: '#fff',
+                    background: `linear-gradient(135deg, ${theme.palette.primary.light}, ${theme.palette.primary.main} 58%, ${theme.palette.secondary.main})`,
+                    boxShadow: `0 10px 24px ${alpha(theme.palette.primary.main, 0.28)}`,
+                    '&:hover': {
+                      background: `linear-gradient(135deg, ${theme.palette.primary.light}, ${theme.palette.primary.main} 48%, ${theme.palette.secondary.main})`,
+                      boxShadow: `0 14px 30px ${alpha(theme.palette.primary.main, 0.38)}`,
+                    },
+                    '&.Mui-disabled': {
+                      color: 'text.disabled',
+                      background: alpha(theme.palette.text.disabled, 0.12),
+                      boxShadow: 'none',
+                    },
+                  }}
                 >
                   <SendIcon />
                 </IconButton>
@@ -716,16 +745,28 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
         {/* Run options: current-node pill + tool approval + execute-in-debugger */}
         {(onRequireApprovalChange || ((onSelectNode || isEditing) && availableNodes.length > 0)) && (
-          <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+          <Box
+            sx={{
+              mt: 1,
+              pt: 1,
+              display: 'flex',
+              justifyContent: 'flex-start',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 1,
+              borderTop: 1,
+              borderColor: 'divider',
+            }}
+          >
             {/* Node picker: shows the node this turn runs on; click to open the
                 visual picker and choose a node from the pre-rendered flow. */}
             {(onSelectNode || isEditing) && availableNodes.length > 0 && (
               <>
                 <Tooltip title={isEditing
-                  ? 'Node this message runs on — click to pick from the flow'
+                  ? 'Node this message runs on — click to pick from the agent'
                   : (nodeOverrideActive
                     ? 'Next message will run on this manually picked node — click to change'
-                    : 'Node the next message will run on — click to pick from the flow')}>
+                    : 'Node the next message will run on — click to pick from the agent')}>
                   <Chip
                     icon={<AccountTreeIcon />}
                     label={currentNodeLabel}

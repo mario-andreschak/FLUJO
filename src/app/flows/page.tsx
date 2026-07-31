@@ -24,16 +24,17 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import ChatIcon from '@mui/icons-material/Chat';
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import FlowBuilder, { FlowBuilderHandle } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import GenerateFlowDialog, { GeneratedFlowInfo } from '@/frontend/components/Flow/FlowManager/GenerateFlowDialog';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 import { setNavigationGuard, clearNavigationGuard, NavigationGuard } from '@/frontend/utils/navigationGuard';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
+import { writeUiPreference } from '@/frontend/hooks/useUiPreference';
 
 const log = createLogger('app/flows/page');
 
@@ -57,6 +58,7 @@ const FlowsPage = () => {
   // the draft discards these too.
   const [draftDescendants, setDraftDescendants] = useState<Flow[]>([]);
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
+  const createAssistantHandled = useRef(false);
 
   // Copy flow dialog state
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
@@ -96,7 +98,7 @@ const FlowsPage = () => {
         }
       } catch (error) {
         log.error('Error loading flows', error);
-        showSnackbar('Failed to load flows', 'error');
+        showSnackbar('Failed to load agents', 'error');
       } finally {
         setIsLoading(false);
       }
@@ -119,16 +121,11 @@ const FlowsPage = () => {
     router.push(`/chat?flow=${encodeURIComponent(flowId)}`);
   }, [router]);
 
-  // "Chat with this flow" from the editor header (#148). Route through the
-  // builder's navigation guard so unsaved edits get a Save/Discard prompt first.
+  // The builder saves before calling this action, so Try can move straight into
+  // a normal chat without reopening the unsaved-changes guard.
   const handleOpenSelectedFlowInChat = useCallback(() => {
     if (!selectedFlow) return;
-    const go = () => router.push(`/chat?flow=${encodeURIComponent(selectedFlow)}`);
-    if (flowBuilderRef.current) {
-      flowBuilderRef.current.requestNavigation(go);
-    } else {
-      go();
-    }
+    router.push(`/chat?flow=${encodeURIComponent(selectedFlow)}`);
   }, [selectedFlow, router]);
 
   // Deep link: ?flow=<id> opens that flow straight in the editor (used by the
@@ -220,27 +217,27 @@ const FlowsPage = () => {
     // Check if name is empty
     if (!name.trim()) {
       log.debug('Flow name validation failed: empty name');
-      return "Flow name cannot be empty";
+      return "Agent name cannot be empty";
     }
     
-    // Check if name contains only allowed characters (alphanumeric, underscores, dashes)
-    if (!/^[\w-]+$/.test(name)) {
+    // Names are for people; the flow ID remains the stable machine identifier.
+    if (!/^[\p{L}\p{N}_ -]+$/u.test(name.trim())) {
       log.debug('Flow name validation failed: invalid characters');
-      return "Flow name can only contain letters, numbers, underscores, and dashes";
+      return "Use letters, numbers, spaces, underscores, or dashes";
     }
     
     // Check for duplicate names
-    const isDuplicate = flows.some(flow => flow.name.toLowerCase() === name.toLowerCase());
+    const isDuplicate = flows.some(flow => flow.name.trim().toLowerCase() === name.trim().toLowerCase());
     if (isDuplicate) {
       log.debug('Flow name validation failed: duplicate name');
-      return "A flow with this name already exists";
+      return "An agent with this name already exists";
     }
     
     log.debug('Flow name validation passed');
     return null;
   }, [flows]);
 
-  const handleSaveFlow = async (flow: Flow) => {
+  const handleSaveFlow = async (flow: Flow): Promise<boolean> => {
     log.info('Saving flow', { flowId: flow.id, flowName: flow.name });
     try {
       // Multi-level draft: persist the auto-generated descendant flows FIRST (they arrive in
@@ -256,7 +253,7 @@ const FlowsPage = () => {
           if (!childResult.success) {
             log.error('Failed to save a generated subflow', { error: childResult.error, childId: child.id });
             showSnackbar(childResult.error || 'Failed to save a generated subflow', 'error');
-            return;
+            return false;
           }
         }
         setFlows(prev => {
@@ -276,7 +273,7 @@ const FlowsPage = () => {
       if (!result.success) {
         log.error('Failed to save flow', { error: result.error });
         showSnackbar(result.error || 'Failed to save flow', 'error');
-        return;
+        return false;
       }
       log.debug('Flow saved successfully');
 
@@ -302,10 +299,12 @@ const FlowsPage = () => {
       }
 
       setSelectedFlow(flow.id);
-      showSnackbar('Flow saved successfully', 'success');
+      showSnackbar('Agent saved', 'success');
+      return true;
     } catch (error) {
       log.error('Error saving flow', error);
       showSnackbar('Failed to save flow', 'error');
+      return false;
     }
   };
 
@@ -396,11 +395,11 @@ const FlowsPage = () => {
     if (flowToCopy) {
       log.debug('Found flow to copy', { flowName: flowToCopy.name });
       setFlowToCopy(flowToCopy);
-      setNewFlowName(`${flowToCopy.name}_copy`);
+      setNewFlowName(`${flowToCopy.name} copy`);
       setCopyDialogOpen(true);
     } else {
       log.warn('Flow to copy not found', { flowId });
-      showSnackbar('Flow not found', 'error');
+      showSnackbar('Agent not found', 'error');
     }
   };
   
@@ -416,7 +415,7 @@ const FlowsPage = () => {
     log.info('Confirming flow copy');
     if (!flowToCopy) {
       log.warn('No flow to copy');
-      showSnackbar('No flow selected to copy', 'error');
+      showSnackbar('No agent selected to copy', 'error');
       return;
     }
     
@@ -442,7 +441,8 @@ const FlowsPage = () => {
     };
     
     // Save the new flow
-    await handleSaveFlow(newFlow);
+    const saved = await handleSaveFlow(newFlow);
+    if (!saved) return;
     
     // Close the dialog
     handleCopyDialogClose();
@@ -480,45 +480,68 @@ const FlowsPage = () => {
     setIsEditing(true);
     const freshInstalls = result.installedServers?.filter(s => !s.alreadyExisted) ?? [];
     const installNote = freshInstalls.length > 0
-      ? ` Installed MCP server(s): ${freshInstalls.map(s => s.name).join(', ')}.`
+      ? ` Connected ${freshInstalls.map(s => s.name).join(', ')}.`
       : '';
     const subflowNote = descendants.length > 0
-      ? ` Includes ${descendants.length} auto-generated subflow(s) that save with it.`
+      ? ` It also includes ${descendants.length} helper agent${descendants.length === 1 ? '' : 's'}.`
       : '';
     if (result.errorCount > 0) {
       showSnackbar(
-        `Draft generated with ${result.errorCount} error(s) and ${result.warningCount} warning(s) — use the Check button, fix, then save.${subflowNote}${installNote}`,
+        `Your draft is ready, but ${result.errorCount} thing${result.errorCount === 1 ? '' : 's'} need attention before it can run. Review it here; Expert view has the detailed fixes.${subflowNote}${installNote}`,
         'warning'
       );
     } else if (result.warningCount > 0) {
-      showSnackbar(`Draft generated with ${result.warningCount} warning(s) — review, then save to keep it.${subflowNote}${installNote}`, 'info');
+      showSnackbar(`Your agent draft is ready. Review the suggestions, then try it.${subflowNote}${installNote}`, 'info');
     } else {
-      showSnackbar(`Flow drafted — review it and save to keep it.${subflowNote}${installNote}`, 'success');
+      showSnackbar(`Your agent draft is ready. Review it, then choose Try it.${subflowNote}${installNote}`, 'success');
     }
   }, [showSnackbar]);
 
   // Create a new flow with a unique name
-  const createNewFlow = async () => {
+  const createNewFlow = useCallback(() => {
     log.info('Creating new flow');
     // Generate a unique name for the new flow
-    let baseName = "NewFlow";
+    const baseName = "Untitled agent";
     let newName = baseName;
-    let counter = 1;
+    let counter = 2;
     
     // Check if a flow with this name already exists
     while (flows.some(flow => flow.name === newName)) {
-      newName = `${baseName}${counter}`;
+      newName = `${baseName} ${counter}`;
       counter++;
     }
     
     // Create a new flow with the unique name (includes the default Start node)
     const newFlow = flowService.createNewFlow(newName);
 
-    // Save the new flow
-    await handleSaveFlow(newFlow);
-    setIsEditing(true); // Switch to editor mode automatically
-    showSnackbar('New flow created', 'success');
-  };
+    // "Start simple" is the explicit easy-mode path. Reset the authoring view
+    // before the builder mounts so even expert users arrive in the simple,
+    // step-by-step composer and can opt back into the graph when they want it.
+    writeUiPreference('flujo-ui:flow-builder:mode', 'guided');
+
+    // Keep manual creations as drafts too. Abandoning the editor no longer
+    // leaves an empty flow card behind; the first successful Save persists it.
+    setDraftFlow(newFlow);
+    setDraftDescendants([]);
+    setSelectedFlow(newFlow.id);
+    setIsEditing(true);
+    showSnackbar('Your new agent is ready. Give it a name, add a task, then try it.', 'info');
+  }, [flows, showSnackbar]);
+
+  // The setup journey deep-links directly into easy creation. Wait for the
+  // assistant list so the generated draft name is unique, consume the query
+  // once, and leave /flows as the clean stable URL in browser history.
+  useEffect(() => {
+    if (createAssistantHandled.current || isLoading) return;
+    const requestedMode = new URLSearchParams(window.location.search).get('create');
+    if (requestedMode !== 'assistant') {
+      createAssistantHandled.current = true;
+      return;
+    }
+    createAssistantHandled.current = true;
+    createNewFlow();
+    router.replace('/flows');
+  }, [createNewFlow, isLoading, router]);
 
   // Render content based on state (dashboard or editor)
   const renderContent = () => {
@@ -531,14 +554,14 @@ const FlowsPage = () => {
         return (
           <Box sx={{ p: 4, textAlign: 'center' }}>
             <Typography variant="h6" color="error">
-              Selected flow not found
+              Agent not found
             </Typography>
             <Button 
               variant="contained" 
               onClick={handleBackToDashboard}
               sx={{ mt: 2 }}
             >
-              Back to Dashboard
+              Back to My Agents
             </Button>
           </Box>
         );
@@ -546,7 +569,7 @@ const FlowsPage = () => {
       
       return (
         <Fade in={true} timeout={300}>
-          <Box sx={{ height: '100%' }}>
+          <Box sx={{ height: { xs: 'auto', md: '100%' } }}>
             <FlowBuilder
               key={selectedFlow}
               ref={flowBuilderRef}
@@ -555,6 +578,8 @@ const FlowsPage = () => {
               onDelete={handleDeleteFlow}
               onConversionCommitted={handleConversionCommitted}
               allFlows={flows}
+              isDraft={draftFlow?.id === selectedFlowData.id}
+              onTry={handleOpenSelectedFlowInChat}
             />
           </Box>
         </Fade>
@@ -563,7 +588,7 @@ const FlowsPage = () => {
     
     return (
       <Fade in={true} timeout={300}>
-        <Box sx={{ height: '100%' }}>
+        <Box sx={{ height: { xs: 'auto', md: '100%' } }}>
           <FlowDashboard
             flows={flows}
             selectedFlow={selectedFlow}
@@ -582,87 +607,72 @@ const FlowsPage = () => {
   };
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header with breadcrumbs and actions */}
-      <Box
-        sx={{
-          p: 2,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          {isEditing && selectedFlow && (
-            <IconButton 
-              color="primary" 
+    <Box
+      sx={{
+        height: { xs: 'auto', md: 'calc(100dvh - var(--app-bar-height))' },
+        minHeight: 'calc(100dvh - var(--app-bar-height))',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: { xs: 'visible', md: 'hidden' },
+      }}
+    >
+      <PageHeader
+        eyebrow={isEditing ? 'My agents' : 'Create'}
+        icon={AccountTreeRoundedIcon}
+        compact={isEditing}
+        title={
+          isEditing && selectedFlow
+            ? draftFlow?.id === selectedFlow
+              ? `${draftFlow.name} · Draft`
+              : flows.find(f => f.id === selectedFlow)?.name || 'Agent'
+            : 'My agents'
+        }
+        description={
+          isEditing
+            ? 'Choose what it should do, in order. You can always change it later.'
+            : 'Create helpful AI agents, keep them organized, and try them whenever you need them.'
+        }
+        leading={
+          isEditing && selectedFlow ? (
+            <IconButton
+              color="primary"
               onClick={handleBackToDashboard}
-              sx={{ mr: 1 }}
+              aria-label="Back to my agents"
+              sx={{ border: 1, borderColor: 'divider' }}
             >
               <ArrowBackIcon />
             </IconButton>
-          )}
-          
-          <Box>
-            {/* Breadcrumbs were removed for consistency with the Models/MCP pages;
-                the back arrow (left) plus this dynamic title handle editor nav. */}
-            <Typography variant="h5">
-              {isEditing && selectedFlow
-                ? draftFlow?.id === selectedFlow
-                  ? `Editing: ${draftFlow.name} (unsaved draft)`
-                  : `Editing: ${flows.find(f => f.id === selectedFlow)?.name || 'Flow'}`
-                : 'Flow Dashboard'
-              }
-            </Typography>
-          </Box>
-        </Box>
-        
-        {/* When editing a SAVED flow, offer a jump to a new chat bound to it (#148).
-            Hidden for unsaved generated drafts, which have no backend flow to chat with. */}
-        {isEditing && selectedFlow && draftFlow?.id !== selectedFlow && (
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Tooltip title="Start a new conversation with this flow">
+          ) : undefined
+        }
+        actions={
+          !isEditing ? (
+            <>
+            <Tooltip title="Describe what you need in everyday language">
               <Button
-                variant="outlined"
-                color="primary"
-                startIcon={<ChatIcon />}
-                onClick={handleOpenSelectedFlowInChat}
-              >
-                Chat with this flow
-              </Button>
-            </Tooltip>
-          </Box>
-        )}
-
-        {!isEditing && (
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Tooltip title="Describe a flow in plain language and let a model draft it">
-              <Button
-                variant="outlined"
+                variant="contained"
                 color="primary"
                 startIcon={<AutoAwesomeIcon />}
                 onClick={() => setGenerateDialogOpen(true)}
                 data-tour="generate-flow"
               >
-                Generate Flow
+                Create with AI
               </Button>
             </Tooltip>
-            <Tooltip title="Create a new flow with a starter template">
+            <Tooltip title="Create an agent step by step in easy mode">
               <Button
-                variant="contained"
+                variant="outlined"
                 color="primary"
                 startIcon={<AddIcon />}
                 onClick={createNewFlow}
                 data-tour="new-flow"
               >
-                New Flow
+                Start simple
               </Button>
             </Tooltip>
-          </Box>
-        )}
-      </Box>
+            </>
+          ) : undefined
+        }
+      />
 
       {/* Notification banner - shown at the top of the content so it isn't easy
           to miss (replaces the old bottom-right toast/snackbar). */}
@@ -677,21 +687,21 @@ const FlowsPage = () => {
       </Collapse>
 
       {/* Main content area - switches between dashboard and editor */}
-      <Box sx={{ flex: 1, overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, minHeight: 0, overflow: { xs: 'visible', md: 'hidden' } }}>
         {renderContent()}
       </Box>
       
-      {/* Copy Flow Dialog */}
+      {/* Copy agent dialog */}
       <Dialog open={copyDialogOpen} onClose={handleCopyDialogClose}>
-        <DialogTitle>Copy Flow</DialogTitle>
+        <DialogTitle>Copy agent</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Enter a name for the copied flow:
+            Give the copy a name:
           </DialogContentText>
           <TextField
             autoFocus
             margin="dense"
-            label="Flow Name"
+            label="Agent name"
             type="text"
             fullWidth
             value={newFlowName}

@@ -5,7 +5,7 @@ import {
   NodeProps,
   Connection
 } from '@xyflow/react';
-import { styled, useTheme } from '@mui/material/styles';
+import { alpha, styled, useTheme } from '@mui/material/styles';
 import {
   Accordion,
   AccordionDetails,
@@ -28,24 +28,24 @@ import { buildNodeInformation } from './nodeInformation';
 // Resource nodes (Tier 3) use a teal literal — the MUI palette slots are all
 // taken (secondary=process, success=finish, info=mcp, warning=subflow) and the
 // start node set the hex-literal precedent.
-export const RESOURCE_COLOR = '#009688';
-const RESOURCE_COLOR_LIGHT = '#4DB6AC';
+export const RESOURCE_COLOR = '#18AFA3';
+const RESOURCE_COLOR_LIGHT = '#63D8CE';
 
 // Signal nodes (issue #117) use a deep-purple literal — same reason as the
 // resource teal: the MUI palette slots are all taken.
-export const SIGNAL_COLOR = '#7E57C2';
-const SIGNAL_COLOR_LIGHT = '#B39DDB';
+export const SIGNAL_COLOR = '#9A78FF';
+const SIGNAL_COLOR_LIGHT = '#C4B2FF';
 
 // Trigger nodes (issue #241) use a pink/rose literal — visually distinct from
 // all other node types.
-export const TRIGGER_COLOR = '#E91E63';
-export const TRIGGER_COLOR_LIGHT = '#F48FB1';
+export const TRIGGER_COLOR = '#EF5D8E';
+export const TRIGGER_COLOR_LIGHT = '#FF9ABD';
 
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
 const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
-  start: { main: () => '#795548', light: () => '#A1887F' }, // Brown
-  process: { main: (t) => t.palette.secondary.main, light: (t) => t.palette.secondary.light },
+  start: { main: () => '#7E889E', light: () => '#B7C0D2' },
+  process: { main: (t) => t.palette.primary.main, light: (t) => t.palette.primary.light },
   finish: { main: (t) => t.palette.success.main, light: (t) => t.palette.success.light },
   mcp: { main: (t) => t.palette.info.main, light: (t) => t.palette.info.light },
   subflow: { main: (t) => t.palette.warning.main, light: (t) => t.palette.warning.light },
@@ -63,20 +63,24 @@ const NodeContainer = styled(Paper, {
   nodeType: NodeType;
   selected?: boolean;
 }>(({ theme, nodeType, selected }) => ({
-  padding: theme.spacing(1.5),
+  padding: theme.spacing(1.6),
   // Fixed (not min) width so every node is the same size: with equal widths and
   // grid snapping, node centers line up vertically, so top/bottom handles align
   // and edges run straight instead of jogging "around the corner".
-  width: '200px',
-  borderRadius: '8px',
+  width: '210px',
+  borderRadius: '16px',
   backgroundColor: theme.palette.background.paper,
-  border: `2px solid ${nodeMainColor(nodeType, theme)}`,
+  backgroundImage: `linear-gradient(145deg, ${alpha(nodeMainColor(nodeType, theme), 0.08)}, transparent 42%)`,
+  border: `1px solid ${theme.palette.divider}`,
+  borderLeft: `3px solid ${nodeMainColor(nodeType, theme)}`,
   boxShadow: selected
-    ? `0 0 0 2px ${theme.palette.primary.main}, 0 3px 10px rgba(0,0,0,0.2)`
-    : theme.shadows[2],
-  transition: 'all 0.2s ease',
+    ? `0 0 0 3px ${alpha(theme.palette.secondary.main, 0.28)}, 0 18px 45px ${alpha(nodeMainColor(nodeType, theme), 0.18)}`
+    : `0 12px 34px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.28 : 0.1)}`,
+  transition: 'transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease',
   '&:hover': {
-    boxShadow: `0 0 0 1px ${nodeMainColor(nodeType, theme)}, 0 3px 10px rgba(0,0,0,0.1)`
+    borderColor: alpha(nodeMainColor(nodeType, theme), 0.58),
+    boxShadow: `0 0 0 1px ${alpha(nodeMainColor(nodeType, theme), 0.35)}, 0 18px 45px ${alpha(nodeMainColor(nodeType, theme), 0.16)}`,
+    transform: 'translateY(-2px)',
   }
 }));
 
@@ -86,7 +90,7 @@ const NodeHeader = styled(Box, {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  borderBottom: `1px solid ${nodeLightColor(nodeType, theme)}`,
+  borderBottom: `1px solid ${alpha(nodeLightColor(nodeType, theme), 0.28)}`,
   marginBottom: theme.spacing(1),
   paddingBottom: theme.spacing(0.5),
 }));
@@ -109,9 +113,9 @@ interface CustomNodeProps extends NodeProps {
 const getNodeIcon = (type: NodeType) => {
   switch (type) {
     case 'start':
-      return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
+      return <ChatIcon sx={{ color: '#7E889E' }} />;
     case 'process':
-      return <SettingsIcon color="secondary" />;
+      return <SettingsIcon color="primary" />;
     case 'finish':
       return <OutputIcon color="success" />;
     case 'mcp':
@@ -126,7 +130,7 @@ const getNodeIcon = (type: NodeType) => {
     case 'trigger':
       return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
     default:
-      return <ChatIcon sx={{ color: '#795548' }} />; // Brown color for icon
+      return <ChatIcon sx={{ color: '#7E889E' }} />;
   }
 };
 
@@ -143,7 +147,7 @@ const getMCPHandleStyle = (theme: any) => ({
 });
 
 const getProcessHandleStyle = (theme: any) => ({
-  backgroundColor: theme.palette.secondary.main,
+  backgroundColor: theme.palette.primary.main,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,
   height: 16,

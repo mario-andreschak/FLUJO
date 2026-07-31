@@ -6,6 +6,7 @@ import {
   CardActionArea, 
   CardContent, 
   CardActions, 
+  Button,
   Typography, 
   Box, 
   IconButton, 
@@ -25,9 +26,10 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ChatIcon from '@mui/icons-material/Chat';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { Flow } from '@/frontend/types/flow/flow';
+import { Flow, NodeType } from '@/frontend/types/flow/flow';
 import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { FlowValidationResult } from '@/utils/shared/flowValidation';
+import { getFlowCardMetrics } from '@/utils/shared/flowCardMetrics';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
 
@@ -63,37 +65,62 @@ interface FlowCardProps {
 const StyledCard = styled(Card, {
   shouldForwardProp: (prop) => prop !== 'selected',
 })<{ selected: boolean }>(({ theme, selected }) => ({
-  display: 'flex',
-  flexDirection: 'column',
+  display: 'grid',
+  gridTemplateColumns: 'minmax(138px, 1.05fr) minmax(0, 0.95fr)',
+  gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
+  gridTemplateAreas: `
+    "title title"
+    "preview details"
+    "preview primary"
+    "preview footer"
+  `,
   height: '100%',
-  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  minHeight: 286,
   position: 'relative',
-  border: selected ? `2px solid ${theme.palette.primary.main}` : 'none',
-  boxShadow: selected ? theme.shadows[4] : theme.shadows[1],
+  overflow: 'hidden',
+  border: `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
+  boxShadow: selected
+    ? `0 0 0 3px ${alpha(theme.palette.primary.main, 0.14)}, 0 24px 70px ${alpha(theme.palette.primary.main, 0.18)}`
+    : `0 16px 45px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.18 : 0.07)}`,
+  transition: 'transform 220ms cubic-bezier(0.2, 0.75, 0.2, 1), border-color 220ms ease, box-shadow 220ms ease',
   '&:hover': {
-    boxShadow: theme.shadows[6],
+    borderColor: alpha(theme.palette.primary.main, 0.42),
+    boxShadow: `0 26px 70px ${alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.16 : 0.12)}`,
     transform: 'translateY(-4px)',
   },
-  '&::before': selected ? {
+  '&::before': {
     content: '""',
     position: 'absolute',
+    zIndex: 2,
     top: 0,
     left: 0,
     width: '100%',
-    height: '4px',
-    backgroundColor: theme.palette.primary.main,
-  } : {},
+    height: selected ? '3px' : '1px',
+    opacity: selected ? 1 : 0.5,
+    background: `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main}, transparent)`,
+  },
 }));
 
 // Preview area to show a simplified graph visualization
 const PreviewArea = styled(Box)(({ theme }) => ({
-  height: '140px',
-  backgroundColor: alpha(theme.palette.background.default, 0.7),
-  borderRadius: theme.shape.borderRadius,
+  gridArea: 'preview',
+  flex: 1,
+  minWidth: 0,
+  height: 236,
+  backgroundColor: alpha(theme.palette.background.default, 0.82),
+  backgroundImage: `
+    linear-gradient(${alpha(theme.palette.divider, 0.55)} 1px, transparent 1px),
+    linear-gradient(90deg, ${alpha(theme.palette.divider, 0.55)} 1px, transparent 1px),
+    radial-gradient(circle at 25% 0%, ${alpha(theme.palette.primary.main, 0.12)}, transparent 52%)
+  `,
+  backgroundSize: '22px 22px, 22px 22px, auto',
+  border: `1px solid ${theme.palette.divider}`,
+  borderRadius: 14,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  margin: theme.spacing(1),
+  margin: theme.spacing(1.25),
+  marginRight: theme.spacing(0),
   overflow: 'hidden',
   position: 'relative',
 }));
@@ -120,6 +147,7 @@ const FlowCard = ({
   // advisory warnings. The tooltip lists the first few issues.
   const errorCount = validation?.errorCount ?? 0;
   const warningCount = validation?.warningCount ?? 0;
+  const { stepCount, subagentCount, signalCount } = getFlowCardMetrics(flow);
   const badgeSeverity: 'error' | 'warning' | null =
     errorCount > 0 ? 'error' : warningCount > 0 ? 'warning' : null;
   const badgeTooltip = validation ? (
@@ -155,6 +183,7 @@ const FlowCard = ({
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onEdit) onEdit(flow.id);
+    else onSelect(flow.id);
   };
 
   const handleOpenInChatClick = (e: React.MouseEvent) => {
@@ -182,7 +211,7 @@ const FlowCard = ({
       return (
         <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography color="textSecondary" align="center">
-            Empty Flow
+            Nothing added yet
           </Typography>
         </Box>
       );
@@ -240,7 +269,7 @@ const FlowCard = ({
           {flow.nodes.map((node) => {
             const x = node.position?.x ?? 0;
             const y = node.position?.y ?? 0;
-            const type = (node.data?.type ?? 'process') as 'start' | 'process' | 'finish' | 'mcp';
+            const type = (node.data?.type ?? 'process') as NodeType;
             const color = getNodeColor(type, theme);
             return (
               <g key={node.id}>
@@ -330,32 +359,57 @@ const FlowCard = ({
       )}
       <CardActionArea
         onClick={() => onSelect(flow.id)}
-        sx={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
+        sx={{
+          gridArea: 'title',
+          display: 'block',
+          minWidth: 0,
+          px: 1.5,
+          py: 1.25,
+          pl: onToggleFavorite ? 5.5 : 1.5,
+          pr: badgeSeverity ? 7 : 1.5,
+          borderBottom: `1px solid ${theme.palette.divider}`,
+        }}
+      >
+        <Typography variant="h6" component="div" noWrap title={flow.name}>
+          {flow.name}
+        </Typography>
+      </CardActionArea>
+
+      <CardActionArea
+        onClick={() => onSelect(flow.id)}
+        aria-label={`Open ${flow.name}`}
+        sx={{
+          gridArea: 'preview',
+          minWidth: 0,
+          height: 256,
+          display: 'flex',
           alignItems: 'stretch',
-          height: '100%',
-          position: 'relative',
         }}
       >
         <PreviewArea>
           {renderFlowPreview()}
         </PreviewArea>
-        
-        <CardContent sx={{ flexGrow: 1, pb: 0 }}>
-          <Typography variant="h6" component="div" noWrap>
-            {flow.name}
-          </Typography>
+      </CardActionArea>
 
-          {flow.description && (
+      <CardActionArea
+        onClick={() => onSelect(flow.id)}
+        sx={{
+          gridArea: 'details',
+          gridRow: pickerMode ? '2 / 5' : undefined,
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'stretch',
+        }}
+      >
+        <CardContent sx={{ width: '100%', minWidth: 0, p: 1.5, '&:last-child': { pb: 1.25 } }}>
+          {flow.description ? (
             <Tooltip title={flow.description} placement="bottom-start">
               <Typography
                 variant="body2"
                 color="text.secondary"
                 sx={{
-                  mt: 0.5,
                   display: '-webkit-box',
-                  WebkitLineClamp: 2,
+                  WebkitLineClamp: 3,
                   WebkitBoxOrient: 'vertical',
                   overflow: 'hidden',
                 }}
@@ -363,20 +417,32 @@ const FlowCard = ({
                 {flow.description}
               </Typography>
             </Tooltip>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              No description yet
+            </Typography>
           )}
           
-          <Box sx={{ display: 'flex', gap: 0.5, mt: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 0.5, mt: 1.25, flexWrap: 'wrap' }}>
             <Chip 
               size="small" 
-              label={`${flow.nodes.length} nodes`} 
+              label={`${stepCount} step${stepCount === 1 ? '' : 's'}`}
               color="primary" 
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
             />
-            <Chip 
-              size="small" 
-              label={`${flow.edges.length} connections`} 
-              color="secondary" 
+            {subagentCount > 0 && (
+              <Chip
+                size="small"
+                label={`${subagentCount} subagent${subagentCount === 1 ? '' : 's'}`}
+                color="secondary"
+                variant="outlined"
+                sx={{ fontSize: '0.7rem', height: 20 }}
+              />
+            )}
+            <Chip
+              size="small"
+              label={`${signalCount} signal${signalCount === 1 ? '' : 's'}`}
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
             />
@@ -385,58 +451,73 @@ const FlowCard = ({
       </CardActionArea>
       
       {!pickerMode && (
-      <CardActions sx={{ 
-        justifyContent: 'flex-end', 
-        p: 1,
-        opacity: 0.7,
-        '&:hover': {
-          opacity: 1
-        }
-      }}>
-        {onOpenInChat && (
-          <Tooltip title="Start a conversation with this flow">
-            <IconButton size="small" onClick={handleOpenInChatClick} color="primary">
-              <ChatIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
+        <>
+          <CardActions sx={{ gridArea: 'primary', gap: 0.75, px: 1.25, pb: 1, pt: 0 }}>
+            {onOpenInChat && (
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<ChatIcon fontSize="small" />}
+                onClick={handleOpenInChatClick}
+                sx={{ flex: 1, minWidth: 0 }}
+              >
+                Use
+              </Button>
+            )}
 
-        {onEdit && (
-          <Tooltip title="Edit flow metadata">
-            <IconButton size="small" onClick={handleEditClick}>
-              <EditIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-        
-        {onCopy && (
-          <Tooltip title="Copy flow">
-            <IconButton size="small" onClick={handleCopyClick}>
-              <ContentCopyIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-
-        {onSetFolder && (
-          <Tooltip title={flow.folder ? `Folder: ${flow.folder}` : 'Move to folder'}>
-            <IconButton
+            <Button
               size="small"
-              onClick={handleFolderClick}
-              color={flow.folder ? 'primary' : 'default'}
+              variant="outlined"
+              startIcon={<EditIcon fontSize="small" />}
+              onClick={handleEditClick}
+              sx={{ flex: 1, minWidth: 0 }}
             >
-              <DriveFileMoveOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-        
-        {onDelete && (
-          <Tooltip title="Delete flow">
-            <IconButton size="small" onClick={handleDeleteClick} color="error">
-              <DeleteIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-      </CardActions>
+              Edit
+            </Button>
+          </CardActions>
+
+          <CardActions
+            sx={{
+              gridArea: 'footer',
+              justifyContent: 'flex-end',
+              gap: 0.25,
+              px: 1,
+              py: 0.625,
+              minHeight: 42,
+              borderTop: `1px solid ${theme.palette.divider}`,
+              backgroundColor: alpha(theme.palette.background.default, 0.55),
+            }}
+          >
+            {onCopy && (
+              <Tooltip title="Make a copy">
+                <IconButton size="small" onClick={handleCopyClick} aria-label="Make a copy">
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {onSetFolder && (
+              <Tooltip title={flow.folder ? `Folder: ${flow.folder}` : 'Organize in a folder'}>
+                <IconButton
+                  size="small"
+                  onClick={handleFolderClick}
+                  color={flow.folder ? 'primary' : 'default'}
+                  aria-label="Move to folder"
+                >
+                  <DriveFileMoveOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {onDelete && (
+              <Tooltip title="Delete agent">
+                <IconButton size="small" onClick={handleDeleteClick} color="error" aria-label="Delete agent">
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </CardActions>
+        </>
       )}
 
       {!pickerMode && onSetFolder && (
@@ -455,18 +536,34 @@ const FlowCard = ({
 
 // Loading skeleton version of the card
 export const FlowCardSkeleton = () => (
-  <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-    <Box sx={{ p: 1 }}>
-      <Skeleton variant="rectangular" height={140} />
+  <Card
+    sx={{
+      height: '100%',
+      minHeight: 286,
+      display: 'grid',
+      gridTemplateColumns: 'minmax(138px, 1.05fr) minmax(0, 0.95fr)',
+      gridTemplateRows: 'auto 1fr auto auto',
+    }}
+  >
+    <Box sx={{ gridColumn: '1 / -1', px: 1.5, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+      <Skeleton variant="text" width="55%" height={30} />
     </Box>
-    <CardContent sx={{ flexGrow: 1 }}>
-      <Skeleton variant="text" width="80%" height={30} />
-      <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+    <Box sx={{ gridColumn: 1, gridRow: '2 / 5', p: 1.25, pr: 0 }}>
+      <Skeleton variant="rounded" height="100%" sx={{ minHeight: 220 }} />
+    </Box>
+    <CardContent sx={{ gridColumn: 2, gridRow: 2, p: 1.5 }}>
+      <Skeleton variant="text" />
+      <Skeleton variant="text" width="85%" />
+      <Box sx={{ display: 'flex', gap: 0.5, mt: 1 }}>
         <Skeleton variant="rectangular" width={60} height={20} />
-        <Skeleton variant="rectangular" width={90} height={20} />
+        <Skeleton variant="rectangular" width={55} height={20} />
       </Box>
     </CardContent>
-    <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
+    <CardActions sx={{ gridColumn: 2, gridRow: 3, px: 1.25, pb: 1 }}>
+      <Skeleton variant="rounded" width="48%" height={30} />
+      <Skeleton variant="rounded" width="48%" height={30} />
+    </CardActions>
+    <CardActions sx={{ gridColumn: 2, gridRow: 4, justifyContent: 'flex-end', p: 0.75, borderTop: 1, borderColor: 'divider' }}>
       <Skeleton variant="circular" width={28} height={28} />
       <Skeleton variant="circular" width={28} height={28} />
       <Skeleton variant="circular" width={28} height={28} />

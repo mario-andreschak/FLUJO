@@ -1,10 +1,12 @@
 import { Suspense } from 'react';
 import dynamicImport from 'next/dynamic';
-import { Box, Typography } from '@mui/material';
+import { Box } from '@mui/material';
+import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import { createLogger } from '@/utils/logger';
 import * as serverAdapter from '@/app/api/model/backend-model-adapter';
 import Spinner from '@/frontend/components/shared/Spinner';
 import ScrollArea from '@/frontend/components/shared/ScrollArea';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 
 // Use dynamic import to prevent SSR issues with client-side code
 const ModelClient = dynamicImport(() => import('./ModelClient'), {
@@ -26,19 +28,16 @@ async function ModelsPage() {
     
     return (
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <Box
-          sx={{
-            p: 2,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            borderBottom: 1,
-            borderColor: 'divider',
-          }}
+        <PageHeader
+          eyebrow="Step 1"
+          title="AI Setup"
+          description="Connect the AI provider FLUJO will use for every agent and conversation."
+          icon={MemoryRoundedIcon}
+        />
+        <ScrollArea
+          storageKey="flujo-ui:scroll:models"
+          sx={{ p: { xs: 2, md: 3, lg: 4 }, flex: 1, width: '100%', maxWidth: 1440, mx: 'auto' }}
         >
-          <Typography variant="h5">Models</Typography>
-        </Box>
-        <ScrollArea storageKey="flujo-ui:scroll:models" sx={{ p: 2, flex: 1 }}>
           <Suspense fallback={<Spinner />}>
             <ModelClient initialModels={models} />
           </Suspense>

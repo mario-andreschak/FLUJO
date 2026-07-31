@@ -20,14 +20,15 @@
   --shadow-lifted: 0 28px 80px rgba(50, 45, 104, 0.18);
   --app-bar-height: 72px;
   --subnav-height: 44px;
+  --active-subnav-height: 0px;
 }
 
 :root.dark-theme {
   color-scheme: dark;
   --background: #070912;
   --foreground: #f4f6ff;
-  --paper-background: #101426;
-  --surface-raised: #181e34;
+  --paper-background: #12182c;
+  --surface-raised: #1c243b;
   --surface-glass: rgba(13, 17, 31, 0.76);
   --surface-glass-strong: rgba(13, 17, 31, 0.94);
   --text-secondary: #aab2c8;
@@ -39,6 +40,45 @@
   --focus-ring: rgba(139, 124, 255, 0.34);
   --shadow-soft: 0 22px 70px rgba(0, 0, 0, 0.34);
   --shadow-lifted: 0 34px 100px rgba(0, 0, 0, 0.5);
+}
+
+/* The two Legacy presets intentionally restore the original compact palette.
+   UX improvements remain available, but the modern ambient/glass treatment is
+   kept behind the visual-style preference instead of leaking across themes. */
+:root.legacy-theme {
+  --background: #ffffff;
+  --foreground: #2c3e50;
+  --paper-background: #f5f6fa;
+  --surface-raised: #ffffff;
+  --surface-glass: #f5f6fa;
+  --surface-glass-strong: #ffffff;
+  --text-secondary: #7f8c8d;
+  --border: #e5e7eb;
+  --border-strong: #d1d5db;
+  --accent: #007bff;
+  --accent-secondary: #6c757d;
+  --accent-soft: rgba(0, 123, 255, 0.1);
+  --focus-ring: rgba(0, 123, 255, 0.26);
+  --shadow-soft: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lifted: 0 10px 24px rgba(0, 0, 0, 0.14);
+}
+
+:root.legacy-theme.dark-theme {
+  --background: #0f1319;
+  --foreground: #eef1f5;
+  --paper-background: #1a212b;
+  --surface-raised: #242d3a;
+  --surface-glass: #1a212b;
+  --surface-glass-strong: #242d3a;
+  --text-secondary: #b4bdca;
+  --border: #37404e;
+  --border-strong: #4b5563;
+  --accent: #4f93f5;
+  --accent-secondary: #a3adba;
+  --accent-soft: rgba(79, 147, 245, 0.12);
+  --focus-ring: rgba(79, 147, 245, 0.3);
+  --shadow-soft: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lifted: 0 12px 28px rgba(0, 0, 0, 0.42);
 }
 
 *,
@@ -101,6 +141,15 @@ body::after {
   mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), transparent 68%);
 }
 
+:root.legacy-theme body {
+  background: var(--background);
+}
+
+:root.legacy-theme body::before,
+:root.legacy-theme body::after {
+  display: none;
+}
+
 button,
 input,
 textarea,
@@ -153,10 +202,30 @@ a {
   min-height: 100dvh;
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 9999;
+  top: 10px;
+  left: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--foreground);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform 150ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .app-main {
   position: relative;
   z-index: 0;
-  min-height: calc(100dvh - var(--app-bar-height));
+  min-height: calc(100dvh - var(--app-bar-height) - var(--active-subnav-height));
 }
 
 .app-loading {
@@ -246,6 +315,27 @@ a {
   animation-delay: 210ms;
 }
 
+:root.legacy-theme .premium-surface {
+  background: var(--paper-background);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: none;
+}
+
+:root.legacy-theme .stagger-in {
+  animation: none;
+}
+
+:root.legacy-theme .app-loading__mark {
+  border-radius: 8px;
+  background: var(--accent);
+  box-shadow: var(--shadow-soft);
+  animation: none;
+}
+
+:root.legacy-theme .app-loading__mark::after {
+  display: none;
+}
+
 /* Global styles that were previously provided by Tailwind. */
 .sr-only {
   position: absolute;
@@ -303,6 +393,12 @@ a {
 @media (max-width: 1199px) {
   :root {
     --app-bar-height: 64px;
+  }
+}
+
+@media (min-width: 900px) {
+  :root.has-app-subnav {
+    --active-subnav-height: var(--subnav-height);
   }
 }
 

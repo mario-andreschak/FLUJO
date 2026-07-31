@@ -88,7 +88,7 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
           return;
         }
         if (!flowId) {
-          throw new Error('No flow is associated with this conversation yet.');
+          throw new Error('No agent is associated with this conversation yet.');
         }
         log.debug(`Loading flow definition for ID: ${flowId}`);
         const flow = await flowService.getFlow(flowId);
@@ -97,7 +97,7 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
       } catch (err) {
         log.error('Error loading flow definition:', err);
         if (!cancelled) {
-          setFlowError(err instanceof Error ? err.message : 'Failed to load flow definition.');
+          setFlowError(err instanceof Error ? err.message : 'Failed to load the agent.');
           setFlowDefinition(null);
         }
       } finally {

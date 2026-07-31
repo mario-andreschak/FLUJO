@@ -20,6 +20,17 @@ export interface CanvasProps {
   onInit?: (reactFlowInstance: ReactFlowInstance<FlowNode, Edge>) => void;
   reactFlowWrapper?: React.RefObject<HTMLDivElement | null>;
   onEditNode?: (node: FlowNode) => void;
+  /**
+   * Centralized node factory owned by FlowBuilder. Returning null rejects the
+   * creation (for example, a second Trigger node).
+   */
+  onCreateNode?: (
+    nodeType: NodeType,
+    position: { x: number; y: number },
+    preparedNode?: FlowNode,
+  ) => FlowNode | null;
+  /** Select a node in the parent-owned graph without opening full settings. */
+  onSelectNode?: (node: FlowNode) => void;
   /** Open the non-mutating Process -> Subflow conversion workflow. */
   onConvertProcessToSubflow?: (node: FlowNode) => void;
   /** Open the edge-properties editor (Tier 2b condition) for a flow-control edge. */
@@ -33,6 +44,7 @@ export interface EditNodeEventDetail {
 export interface NodeSelectionModalProps {
   open: boolean;
   position: { x: number; y: number } | null;
+  anchorPosition?: { x: number; y: number } | null;
   onClose: () => void;
   onSelectNodeType: (nodeType: NodeType, position: { x: number; y: number }) => void;
   sourceNodeType?: NodeType;

@@ -140,10 +140,14 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
     return (
         <Box>
             {/* Sort + group toolbar, mirroring the Flow dashboard */}
-            <Paper elevation={1} sx={{ mb: 2, p: 1 }}>
+            <Paper
+                elevation={0}
+                variant="outlined"
+                sx={{ mb: 2.5, p: 1.1, borderRadius: 3, bgcolor: 'transparent' }}
+            >
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
                     <Typography variant="body2" color="textSecondary">
-                        {models.length} model{models.length === 1 ? '' : 's'}
+                        {models.length} AI connection{models.length === 1 ? '' : 's'}
                         <Box component="span" sx={{ mx: 1, opacity: 0.5 }}>·</Box>
                         Sorted by: {MODEL_SORT_LABELS[sortOption]}
                     </Typography>
@@ -170,9 +174,31 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
             </Paper>
 
             {!models || models.length === 0 ? (
-                <Box textAlign="center" py={4}>
-                    No models found
-                </Box>
+                <Paper
+                    variant="outlined"
+                    sx={{
+                        display: 'grid',
+                        minHeight: 240,
+                        p: 4,
+                        placeItems: 'center',
+                        textAlign: 'center',
+                        borderStyle: 'dashed',
+                        bgcolor: 'transparent',
+                    }}
+                >
+                    <Box>
+                        <MemoryIcon sx={{ mb: 1.5, fontSize: 38, color: 'primary.light' }} />
+                        <Typography variant="h6">Your AI is not connected yet</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.7, mb: 2 }}>
+                            Connect a provider once, then use it across agents and conversations.
+                        </Typography>
+                        <Box>
+                            <IconButton color="primary" onClick={onAdd} title="Connect AI">
+                                <MemoryIcon />
+                            </IconButton>
+                        </Box>
+                    </Box>
+                </Paper>
             ) : groupMode === 'none' ? (
                 renderModelGrid(sortedModels)
             ) : (

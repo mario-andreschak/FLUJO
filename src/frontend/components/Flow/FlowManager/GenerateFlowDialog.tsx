@@ -29,7 +29,6 @@ import {
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import type { Flow } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types/model';
@@ -187,9 +186,16 @@ function extractInstalledServers(
 }
 
 function draftSummary(draft: DraftPayload, revised: boolean): string {
-  const action = revised ? 'Draft updated' : 'Draft generated';
-  const subflowCount = Math.max(0, draft.flows.length - 1);
-  return `${action}: ${draft.flow.name} · ${draft.flow.nodes.length} nodes · ${subflowCount} subflow${subflowCount === 1 ? '' : 's'} · ${draft.errorCount} errors · ${draft.warningCount} warnings.`;
+  const action = revised ? 'I updated your agent' : 'Your agent is ready';
+  const helperCount = Math.max(0, draft.flows.length - 1);
+  const helperNote = helperCount
+    ? ` It includes ${helperCount} helper agent${helperCount === 1 ? '' : 's'}.`
+    : '';
+  const reviewCount = draft.errorCount + draft.warningCount;
+  const reviewNote = reviewCount
+    ? ` I found ${reviewCount} thing${reviewCount === 1 ? '' : 's'} worth reviewing before you try it.`
+    : ' It is ready for you to review and try.';
+  return `${action}: ${draft.flow.name}.${helperNote}${reviewNote}`;
 }
 
 const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogProps) => {
@@ -423,7 +429,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AutoAwesomeIcon color="primary" />
         <Box sx={{ flex: 1 }}>
-          Generate a flow
+          Create an agent
           {flowBasedExperimental && (
             <Chip
               label="Experimental · Flow-based"
@@ -436,7 +442,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           <Typography variant="body2" color="text.secondary">
             {flowBasedExperimental
               ? 'The editable multi-stage Generation Flow handles drafting and revisions.'
-              : 'Your first message generates a draft immediately. Follow-ups apply AI improvements to it.'}
+              : 'Describe what you need in your own words. You can refine it together before saving.'}
           </Typography>
         </Box>
         {flowBasedExperimental && (
@@ -466,54 +472,79 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
               fall back to the production generator if that Flow fails to submit a draft.
             </Alert>
           )}
-          <FormControl
-            size="small"
-            fullWidth
-            disabled={isWorking || (flowBasedExperimental && !!conversationId)}
+          <Box
+            component="details"
+            sx={{
+              mt: error || flowBasedExperimental ? 1.5 : 0,
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 2.5,
+              '&[open]': { p: 1.5 },
+              '&[open] > summary': { mb: 1.5 },
+            }}
           >
-            <InputLabel id="flow-generator-model-label">Generator model</InputLabel>
-            <Select
-              labelId="flow-generator-model-label"
-              label="Generator model"
-              value={modelId}
-              onChange={(event) => setModelId(event.target.value)}
+            <Box
+              component="summary"
+              sx={{
+                px: 1.5,
+                py: 1.1,
+                cursor: 'pointer',
+                color: 'text.secondary',
+                fontSize: '0.86rem',
+                fontWeight: 700,
+              }}
             >
-              {models.map((model) => (
-                <MenuItem key={model.id} value={model.id}>
-                  {model.displayName?.trim() || model.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControlLabel
-            sx={{ mt: 1 }}
-            control={
-              <Checkbox
-                checked={allowInstall}
-                onChange={(event) => setAllowInstall(event.target.checked)}
-                disabled={isWorking || (flowBasedExperimental && !!conversationId)}
-              />
-            }
-            label="Allow installing MCP servers for this draft"
-          />
-          <Typography variant="caption" color="text.secondary" display="block">
-            New subflows are enabled by default (up to {DEFAULT_SUBFLOW_DEPTH} levels). MCP installation stays off unless you opt in above.
-            {flowBasedExperimental && ' In experimental mode, choose this before the first message; the Flow session toolset is then fixed.'}
-          </Typography>
-          {allowInstall && (
-            <Alert severity="warning" sx={{ mt: 1 }}>
-              The generator may download, install, and run third-party MCP servers on this
-              machine. Installed servers remain configured after this draft.
-            </Alert>
-          )}
+              Advanced options
+            </Box>
+            <FormControl
+              size="small"
+              fullWidth
+              disabled={isWorking || (flowBasedExperimental && !!conversationId)}
+            >
+              <InputLabel id="flow-generator-model-label">AI used to build it</InputLabel>
+              <Select
+                labelId="flow-generator-model-label"
+                label="AI used to build it"
+                value={modelId}
+                onChange={(event) => setModelId(event.target.value)}
+              >
+                {models.map((model) => (
+                  <MenuItem key={model.id} value={model.id}>
+                    {model.displayName?.trim() || model.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControlLabel
+              sx={{ mt: 1 }}
+              control={
+                <Checkbox
+                  checked={allowInstall}
+                  onChange={(event) => setAllowInstall(event.target.checked)}
+                  disabled={isWorking || (flowBasedExperimental && !!conversationId)}
+                />
+              }
+              label="Allow adding new connected tools"
+            />
+            <Typography variant="caption" color="text.secondary" display="block">
+              Leave this off unless the agent truly needs an app or service that is not connected yet.
+              {flowBasedExperimental && ` Expert generation may also create helper flows up to ${DEFAULT_SUBFLOW_DEPTH} levels deep.`}
+            </Typography>
+            {allowInstall && (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                FLUJO may download and run third-party connectors on this device. They remain
+                installed after the agent is created.
+              </Alert>
+            )}
+          </Box>
         </Box>
 
         <Box sx={{ minHeight: 360, maxHeight: '55vh', overflowY: 'auto', p: 2 }}>
           {visibleMessages.length === 0 ? (
             <Box sx={{ py: 8, textAlign: 'center', color: 'text.secondary' }}>
-              <Typography variant="h6">What should the flow accomplish?</Typography>
+              <Typography variant="h6">What should your agent help with?</Typography>
               <Typography variant="body2">
-                Send the request once to generate it; then describe any changes you want.
+                Try: “Turn my rough notes into a warm, clear email” or “Research a topic and give me the important points.”
               </Typography>
             </Box>
           ) : (
@@ -528,9 +559,9 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
 
         {draft && (
           <Alert severity={draft.errorCount ? 'warning' : 'success'} sx={{ mx: 2, mb: 1 }}>
-            Draft ready: {draft.flow.name} · {draft.flow.nodes.length} nodes ·{' '}
-            {Math.max(0, draft.flows.length - 1)} subflows · {draft.errorCount} errors ·{' '}
-            {draft.warningCount} warnings
+            {draft.errorCount
+              ? `The draft is ready, but ${draft.errorCount} thing${draft.errorCount === 1 ? '' : 's'} still need attention.`
+              : 'Your draft is ready. You can ask for changes or continue to the simple builder.'}
           </Alert>
         )}
 
@@ -538,14 +569,15 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           <ChatInput
             onSendMessage={(content) => { void handleSend(content); }}
             disabled={isWorking || !modelId}
+            placeholder="Describe the helper you want…"
           />
           {isWorking && (
             <Typography variant="caption" color="text.secondary">
               {draft
-                ? 'Applying your changes and checking the revised draft…'
+                ? 'Applying your changes and checking the agent…'
                 : flowBasedExperimental
                   ? 'Running the Flow Architect and Generation Compiler…'
-                  : 'Generating and checking the draft…'}
+                  : 'Building your agent and checking that it is ready…'}
             </Typography>
           )}
         </Box>
@@ -558,7 +590,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           disabled={!draft || isWorking}
           startIcon={<AutoAwesomeIcon />}
         >
-          Open draft in builder
+          Continue to simple builder
         </Button>
       </DialogActions>
     </Dialog>

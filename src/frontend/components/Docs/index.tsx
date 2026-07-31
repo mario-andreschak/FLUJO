@@ -13,7 +13,9 @@ import {
   Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import MenuBookRoundedIcon from '@mui/icons-material/MenuBookRounded';
 import { API_GROUPS, ApiEndpoint, HttpMethod } from './apiReference';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 
 const METHOD_COLORS: Record<HttpMethod, string> = {
   GET: '#2e7d32',
@@ -149,14 +151,15 @@ export default function Docs() {
   }, [query]);
 
   return (
-    <Container maxWidth="md" sx={{ py: 5 }}>
-      <Typography variant="h4" gutterBottom>
-        API Documentation
-      </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-        FLUJO exposes an OpenAI-compatible chat API and a REST surface for managing models, MCP
-        servers, flows, and conversations. All endpoints are served from this instance.
-      </Typography>
+    <>
+      <PageHeader
+        eyebrow="Reference"
+        title="API documentation"
+        description="Use FLUJO as an OpenAI-compatible runtime or automate every core resource directly."
+        icon={MenuBookRoundedIcon}
+        maxWidth={960}
+      />
+      <Container maxWidth="md" sx={{ py: { xs: 3, md: 5 } }}>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
@@ -224,6 +227,7 @@ export default function Docs() {
         </MuiLink>{' '}
         for source-level details.
       </Typography>
-    </Container>
+      </Container>
+    </>
   );
 }

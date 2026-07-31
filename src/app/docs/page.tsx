@@ -9,7 +9,7 @@ const log = createLogger('app/docs/page');
 export default function DocsPage() {
   log.debug('Rendering DocsPage');
   return (
-    <Box component="main" sx={{ minHeight: '100vh' }}>
+    <Box component="div" sx={{ minHeight: '100%' }}>
       <Docs />
     </Box>
   );

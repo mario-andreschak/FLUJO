@@ -6,7 +6,6 @@ import {
   Button,
   Chip,
   Paper,
-  Stack,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -15,6 +14,7 @@ import PackageWizard from './PackageWizard';
 import InstalledPackagesList from './InstalledPackagesList';
 import InstallPackageCard from './InstallPackageCard';
 import RegistryAccountSettings from './RegistryAccountSettings';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/Packages');
@@ -33,29 +33,23 @@ export default function PackagesManager() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box
-        sx={{
-          p: 2,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="h5">Packages</Typography>
-          <Chip label="experimental" size="small" color="warning" variant="outlined" />
-        </Stack>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setWizardOpen(true)}
-          data-tour="packages-create"
-        >
-          Create package
-        </Button>
-      </Box>
+      <PageHeader
+        eyebrow="Share"
+        title="Packages"
+        description="Bundle complete FLUJO systems into portable, secret-safe manifests."
+        icon={Inventory2OutlinedIcon}
+        badge={<Chip label="Experimental" size="small" color="warning" variant="outlined" />}
+        actions={(
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setWizardOpen(true)}
+            data-tour="packages-create"
+          >
+            Create package
+          </Button>
+        )}
+      />
 
       <Box sx={{ flex: 1, overflow: 'auto', p: 3 }}>
         <Paper

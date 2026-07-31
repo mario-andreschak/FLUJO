@@ -513,7 +513,7 @@ const ToolCallTimeline: React.FC<{
       <Box sx={{ display: 'flex', alignItems: 'center', color: 'primary.main', mb: 1 }}>
         <HandymanIcon fontSize="small" sx={{ mr: 1 }} />
         <Typography variant="body2">
-          {pairs.length === 1 ? 'The assistant used a tool' : `The assistant used ${pairs.length} tools`}
+          {pairs.length === 1 ? 'The agent used a tool' : `The agent used ${pairs.length} tools`}
         </Typography>
       </Box>
 
@@ -754,7 +754,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           {message.role === 'user'
             ? 'You'
             : message.role === 'assistant'
-              ? 'Assistant'
+              ? 'Agent'
               : message.role === 'tool'
                 ? 'Tool'
                 : 'System'} • {formatTime(message.timestamp)}
@@ -962,7 +962,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           <Box>
             <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', mb: 1 }}>
               <TerminalIcon fontSize="small" sx={{ mr: 1 }} />
-              The tool responded to the assistant
+              The tool responded to the agent
             </Typography>
 
             <Accordion
@@ -1248,7 +1248,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
       elevation={2}
       sx={{ p: 2, mt: 2, bgcolor: 'info.light', border: '1px solid', borderColor: 'info.main', borderRadius: 2 }}
     >
-      <Typography variant="h6" sx={{ mb: 1 }}>The assistant is asking</Typography>
+      <Typography variant="h6" sx={{ mb: 1 }}>The agent is asking</Typography>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {questions.map((q, qi) => (
           <FormControl key={qi} component="fieldset" sx={{ display: 'flex' }}>
@@ -1668,7 +1668,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             <HandymanIcon sx={{ mr: 1 }} /> Tool Approval Required
           </Typography>
           <Typography variant="body2" sx={{ mb: 2 }}>
-            The assistant wants to use the following tool(s). Please approve or reject each request.
+            The agent wants to use the following tool(s). Please approve or reject each request.
           </Typography>
           {pendingToolCalls.map((toolCall, ptcIndex) => { // Added index for key
             const toolName = displayToolName(toolCall.function.name);

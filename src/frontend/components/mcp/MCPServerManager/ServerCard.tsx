@@ -344,11 +344,17 @@ const ServerCard: React.FC<ServerCardProps> = ({
         cursor: 'pointer',
         position: 'relative',
         height: pickerMode ? '100%' : undefined,
-        transition: 'box-shadow 0.3s ease, border-color 0.12s ease',
+        overflow: 'hidden',
+        transition: 'transform 200ms ease, box-shadow 200ms ease, border-color 180ms ease',
         border: (theme) =>
-          pickerMode && selected ? `2px solid ${theme.palette.primary.main}` : '2px solid transparent',
+          `1px solid ${pickerMode && selected ? theme.palette.primary.main : theme.palette.divider}`,
+        boxShadow: pickerMode && selected
+          ? `0 0 0 3px ${alpha(muiTheme.palette.primary.main, 0.13)}`
+          : undefined,
         '&:hover': {
-          boxShadow: 3
+          borderColor: alpha(muiTheme.palette.primary.main, 0.38),
+          boxShadow: `0 22px 60px ${alpha(muiTheme.palette.primary.main, 0.12)}`,
+          transform: 'translateY(-4px)',
         }
       }}
       onClick={() => {
@@ -443,7 +449,15 @@ const ServerCard: React.FC<ServerCardProps> = ({
         {/* Expose to external apps (#17A) */}
         {!pickerMode && (
         <Box
-          sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
+          sx={{
+            mt: 1,
+            mb: 1,
+            p: 1.1,
+            borderRadius: 2.5,
+            border: '1px solid',
+            borderColor: 'divider',
+            bgcolor: alpha(muiTheme.palette.background.default, 0.42),
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -487,7 +501,15 @@ const ServerCard: React.FC<ServerCardProps> = ({
             isolated ui:// apps. Off by default. */}
         {!pickerMode && (
         <Box
-          sx={{ mt: 1, mb: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
+          sx={{
+            mt: 1,
+            mb: 1,
+            p: 1.1,
+            borderRadius: 2.5,
+            border: '1px solid',
+            borderColor: 'divider',
+            bgcolor: alpha(muiTheme.palette.background.default, 0.42),
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           <Box sx={{ display: 'flex', alignItems: 'center' }}>

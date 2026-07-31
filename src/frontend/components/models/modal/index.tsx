@@ -390,7 +390,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     >
       <form onSubmit={handleSubmit}>
         <DialogTitle>
-          {model ? 'Edit Model' : 'Add Model'}
+          {model.name ? 'Edit AI connection' : 'Connect your AI'}
         </DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', height: 'calc(90vh - 130px)' }}>
           {errors.submit && (
@@ -409,7 +409,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             <Grid item xs={6} sx={{ height: '100%' }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2, overflowY: 'auto' }}>
                 <Typography variant="h6" gutterBottom>
-                  Model Configuration
+                  Connection details
                 </Typography>
                 
                 <TextField

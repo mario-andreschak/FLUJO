@@ -6,20 +6,45 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/AppWrapper');
 
+function AppLoading({ label = 'Preparing your workspace', compact = false }: { label?: string; compact?: boolean }) {
+  if (compact) {
+    return (
+      <div
+        aria-label={label}
+        style={{
+          height: 'var(--app-bar-height)',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--surface-glass)',
+          backdropFilter: 'blur(20px)',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="app-loading" role="status" aria-live="polite">
+      <div className="app-loading__content">
+        <div className="app-loading__mark" aria-hidden="true"><span>F</span></div>
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
 // Dynamically import components with loading fallbacks
 const ThemeProvider = dynamic(() => import('../contexts/ThemeContext').then(mod => mod.ThemeProvider), {
   ssr: false,
-  loading: () => <div>Loading theme...</div>
+  loading: () => <AppLoading label="Lighting up FLUJO" />
 });
 
 const StorageProvider = dynamic(() => import('../contexts/StorageContext').then(mod => mod.StorageProvider), {
   ssr: false,
-  loading: () => <div>Loading storage...</div>
+  loading: () => <AppLoading label="Opening your workspace" />
 });
 
 const Navigation = dynamic(() => import("./Navigation"), {
   ssr: false,
-  loading: () => <div>Loading navigation...</div>
+  loading: () => <AppLoading label="Loading navigation" compact />
 });
 
 const EncryptionAuthDialog = dynamic(() => import("./EncryptionAuthDialog"), {
@@ -63,23 +88,42 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '20px', textAlign: 'center' }}>
-          <h2>Something went wrong loading the application.</h2>
-          <p>Please try refreshing the page.</p>
-          <button 
-            onClick={() => window.location.reload()}
+        <div className="app-loading">
+          <div
+            className="premium-surface"
             style={{
-              padding: '8px 16px',
-              background: '#3498DB',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginTop: '10px'
+              width: 'min(92vw, 520px)',
+              padding: '42px',
+              borderRadius: '28px',
+              textAlign: 'center',
             }}
           >
-            Refresh
-          </button>
+            <div className="app-loading__mark" style={{ margin: '0 auto 24px' }} aria-hidden="true">
+              <span>!</span>
+            </div>
+            <h2 style={{ margin: '0 0 10px', letterSpacing: '-0.035em' }}>
+              The workspace hit a snag
+            </h2>
+            <p style={{ margin: '0 auto 24px', maxWidth: 380, color: 'var(--text-secondary)' }}>
+              Your data is safe. Reload FLUJO to reconnect the interface to the local runtime.
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                minHeight: 46,
+                padding: '0 22px',
+                border: 0,
+                borderRadius: 14,
+                cursor: 'pointer',
+                color: '#fff',
+                background: 'linear-gradient(135deg, #9b8cff, #6253e8 55%, #18b8d7)',
+                boxShadow: '0 14px 34px rgba(102, 87, 245, 0.32)',
+                fontWeight: 700,
+              }}
+            >
+              Reload workspace
+            </button>
+          </div>
         </div>
       );
     }
@@ -96,19 +140,22 @@ export default function AppWrapper({ children }: AppWrapperProps) {
   log.debug('Rendering AppWrapper');
   return (
     <ErrorBoundary>
-      <Suspense fallback={<div>Loading application...</div>}>
+      <Suspense fallback={<AppLoading />}>
         <ThemeProvider>
           <StorageProvider>
             <TourProvider>
-              <Suspense fallback={<div>Loading navigation...</div>}>
-                <Navigation />
-                <EncryptionAuthDialog />
-                <TelemetryNotice />
-              </Suspense>
-              <main>
-                {children}
-              </main>
-              <TourOverlay />
+              <div className="app-shell">
+                <a className="skip-link" href="#main-content">Skip to content</a>
+                <Suspense fallback={<AppLoading label="Loading navigation" compact />}>
+                  <Navigation />
+                  <EncryptionAuthDialog />
+                  <TelemetryNotice />
+                </Suspense>
+                <main id="main-content" className="app-main" tabIndex={-1}>
+                  {children}
+                </main>
+                <TourOverlay />
+              </div>
             </TourProvider>
           </StorageProvider>
         </ThemeProvider>

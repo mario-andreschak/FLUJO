@@ -23,9 +23,29 @@ describe('onboarding tour steps (#4)', () => {
     }
   });
 
-  it('starts on the landing page and ends with a finish step', () => {
-    expect(TOUR_STEPS[0].path).toBe('/');
-    expect(TOUR_STEPS[TOUR_STEPS.length - 1].placement).toBe('center');
+  it('follows the dependency chain: AI setup, simple builder, then Talk', () => {
+    expect(TOUR_STEPS.map(({ id, path, target }) => ({ id, path, target }))).toEqual([
+      {
+        id: 'add-model',
+        path: '/models',
+        target: '[data-tour="add-model"]',
+      },
+      {
+        id: 'new-flow',
+        path: '/flows',
+        target: '[data-tour="new-flow"]',
+      },
+      {
+        id: 'chat-input',
+        path: '/chat',
+        target: '[data-tour="chat-input"]',
+      },
+    ]);
+    expect(TOUR_STEPS.map((step) => step.title)).toEqual([
+      '1. Start by connecting your AI',
+      '2. Create your first agent',
+      '3. Talk to your agent',
+    ]);
   });
 });
 

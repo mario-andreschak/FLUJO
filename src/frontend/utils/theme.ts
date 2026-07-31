@@ -2,7 +2,7 @@
 
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { createLogger } from '@/utils/logger';
-import { themeColors } from './paletteTokens';
+import { legacyThemeColors, themeColors } from './paletteTokens';
 
 const log = createLogger('frontend/utils/theme');
 
@@ -13,8 +13,8 @@ const log = createLogger('frontend/utils/theme');
  * be imported in plain Node contexts / tests) and is re-exported here to keep
  * every existing `import { themeColors } from '@/frontend/utils/theme'` working.
  */
-export { themeColors } from './paletteTokens';
-export type { ThemeColors } from './paletteTokens';
+export { legacyThemeColors, themeColors } from './paletteTokens';
+export type { LegacyThemeColors, ThemeColors } from './paletteTokens';
 
 /**
  * Get a CSS variable value based on the current theme
@@ -30,7 +30,7 @@ export function getCssVar(variableName: string): string {
  * @returns Object with theme utility functions
  */
 export function useThemeUtils() {
-  const { isDarkMode } = useTheme();
+  const { isDarkMode, visualStyle } = useTheme();
   
   log.debug(`useThemeUtils called with isDarkMode: ${isDarkMode}`);
   
@@ -53,7 +53,8 @@ export function useThemeUtils() {
     const theme = isDarkMode ? 'dark' : 'light';
     const parts = colorPath.split('.');
     
-    let value: any = themeColors[theme];
+    const activeColors = visualStyle === 'legacy' ? legacyThemeColors : themeColors;
+    let value: any = activeColors[theme];
     for (const part of parts) {
       if (value && typeof value === 'object' && part in value) {
         value = value[part];
@@ -69,8 +70,11 @@ export function useThemeUtils() {
   return {
     getThemeValue,
     getThemeColor,
-    colors: isDarkMode ? themeColors.dark : themeColors.light,
+    colors: visualStyle === 'legacy'
+      ? (isDarkMode ? legacyThemeColors.dark : legacyThemeColors.light)
+      : (isDarkMode ? themeColors.dark : themeColors.light),
     isDarkMode,
+    visualStyle,
   };
 }
 

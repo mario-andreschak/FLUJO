@@ -113,7 +113,13 @@ function WaveSummaryCard({ wave, selected, now, onSelect }: WaveSummaryCardProps
  * the right (stacked mini-canvases were too small). Selection persists across
  * reloads and the 30s poll.
  */
-export type WavesManagerHeight = number | string | { xs: number | string; sm: number | string };
+export type WavesManagerHeight = number | string | {
+  xs: number | string;
+  sm?: number | string;
+  md?: number | string;
+  lg?: number | string;
+  xl?: number | string;
+};
 
 interface WavesManagerProps {
   /** Definite height supplied by a full-page route; embedded views keep using their parent height. */

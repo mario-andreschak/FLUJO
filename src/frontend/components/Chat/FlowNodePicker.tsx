@@ -179,7 +179,7 @@ export const FlowNodePicker: React.FC<FlowNodePickerProps> = ({
               }}
             >
               <Typography variant="body2" color="text.secondary">
-                No flow to display.
+                No agent to display.
               </Typography>
             </Box>
           )}

@@ -285,7 +285,7 @@ const FlowDashboard = ({
         }}>
           {/* Search field */}
           <TextField
-            placeholder="Search flows..."
+            placeholder="Search agents..."
             variant="outlined"
             size="small"
             fullWidth
@@ -311,6 +311,7 @@ const FlowDashboard = ({
               overflow: 'hidden'
             }}>
               <IconButton 
+                aria-label="Show agent cards"
                 size="small" 
                 onClick={() => setViewMode('grid')}
                 color={viewMode === 'grid' ? 'primary' : 'default'}
@@ -323,6 +324,7 @@ const FlowDashboard = ({
                 <ViewModuleIcon fontSize="small" />
               </IconButton>
               <IconButton 
+                aria-label="Show compact agent list"
                 size="small" 
                 onClick={() => setViewMode('compact')}
                 color={viewMode === 'compact' ? 'primary' : 'default'}
@@ -346,12 +348,14 @@ const FlowDashboard = ({
                 backgroundColor: theme.palette.background.default
               }}
               title="Group cards"
+              aria-label="Group agents"
             >
               <LayersIcon fontSize="small" />
             </IconButton>
             
             {/* Sort button */}
             <IconButton
+              aria-label="Sort agents"
               size="small"
               onClick={handleSortMenuOpen}
               sx={{
@@ -375,18 +379,18 @@ const FlowDashboard = ({
         px: 1
       }}>
         <Typography variant="body2" color="textSecondary">
-          {filteredFlows.length} of {flows.length} flows
+          {filteredFlows.length} of {flows.length} agents
           {searchTerm && ` matching "${searchTerm}"`}
         </Typography>
         
         <Typography variant="body2" color="textSecondary">
-          Sorted by: {
+          Showing: {
             sortOption === 'name-asc' ? 'Name (A-Z)' :
             sortOption === 'name-desc' ? 'Name (Z-A)' :
             sortOption === 'newest' ? 'Newest first' :
             sortOption === 'oldest' ? 'Oldest first' :
-            sortOption === 'most-nodes' ? 'Most nodes' :
-            'Least nodes'
+            sortOption === 'most-nodes' ? 'Most steps' :
+            'Fewest steps'
           }
         </Typography>
       </Box>
@@ -433,18 +437,18 @@ const FlowDashboard = ({
             minHeight: 200
           }}>
             <Typography variant="h6" gutterBottom color="textSecondary">
-              No flows found
+              {searchTerm ? 'No matching agents' : 'No agents yet'}
             </Typography>
             {searchTerm ? (
               <Typography variant="body2" color="textSecondary" align="center">
-                No flows match your search criteria.
+                No agents match that search.
                 <Box component="span" display="block" mt={1}>
                   Try a different search term or <Button size="small" onClick={() => setSearchTerm('')}>clear the search</Button>
                 </Box>
               </Typography>
             ) : (
               <Typography variant="body2" color="textSecondary" align="center">
-                Get started by creating your first flow.
+                Create a helper for something you do often. You can explain the job in everyday language.
                 {onCreateFlow && (
                   <Box component="span" display="block" mt={2}>
                     <Button 
@@ -453,7 +457,7 @@ const FlowDashboard = ({
                       startIcon={<AddIcon />}
                       onClick={onCreateFlow}
                     >
-                      Create New Flow
+                      Create My First Agent
                     </Button>
                   </Box>
                 )}

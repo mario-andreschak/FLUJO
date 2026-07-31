@@ -2,13 +2,12 @@
  * Component tests for the Experimental Features feature (issue #184).
  *
  * Covers the two deterministically-checkable behaviours:
- *  - Navigation always shows Automation > Trigger as section tabs, hides the "Waves" tab
- *    when experimental features are disabled/undefined (and while settings are
- *    not yet hydrated), and shows it once experimental features are enabled.
+ *  - The setup-first primary navigation remains small and ordered, while
+ *    secondary/experimental destinations stay inside More.
  *  - The ExperimentalFeaturesSettings toggle calls updateSettings with the
  *    correctly merged payload.
  */
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 
 // --- Shared useStorage mock (configured per-test) -------------------------
 const mockUpdateSettings = jest.fn();
@@ -38,29 +37,35 @@ jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({
 import Navigation from '@/frontend/components/Navigation';
 import ExperimentalFeaturesSettings from '@/frontend/components/Settings/ExperimentalFeaturesSettings';
 
-describe('Automation navigation and experimental gating (#184, #325)', () => {
+describe('setup-first navigation and experimental gating (#184, #325)', () => {
   beforeEach(() => {
     mockUpdateSettings.mockClear();
     mockPathname = '/';
   });
 
-  it('hides the Waves entry when experimental features are disabled/undefined', () => {
-    mockPathname = '/automation/triggers';
+  it('orders the primary navigation around the required setup journey', () => {
     mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
-    expect(screen.queryByText('Waves')).not.toBeInTheDocument();
-    expect(screen.queryByText('Statistics')).not.toBeInTheDocument();
-    expect(screen.getAllByText('Automation').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Trigger').length).toBeGreaterThan(0);
-    expect(screen.getByRole('tab', { name: 'Trigger' })).toHaveAttribute(
-      'href',
-      '/automation/triggers'
-    );
-    // Non-experimental items still render.
-    expect(screen.getAllByText('Flows').length).toBeGreaterThan(0);
+
+    const primaryNavigation = screen.getByRole('navigation', { name: 'Primary navigation' });
+    const primaryLinks = within(primaryNavigation).getAllByRole('link');
+
+    expect(primaryLinks.map((link) => link.textContent?.trim())).toEqual([
+      'AI Setup',
+      'Connected Apps',
+      'Talk',
+      'More',
+    ]);
+    expect(primaryLinks.map((link) => link.getAttribute('href'))).toEqual([
+      '/models',
+      '/mcp',
+      '/chat',
+      '/automation/triggers',
+    ]);
+    expect(within(primaryNavigation).queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
   });
 
-  it('hides the Waves entry while settings are not yet hydrated even if enabled', () => {
+  it('keeps every requested More destination available before settings hydrate', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = {
       settings: { experimental: { enabled: true } },
@@ -68,12 +73,19 @@ describe('Automation navigation and experimental gating (#184, #325)', () => {
       updateSettings: mockUpdateSettings,
     };
     render(<Navigation />);
-    expect(screen.queryByText('Waves')).not.toBeInTheDocument();
-    expect(screen.queryByText('Statistics')).not.toBeInTheDocument();
-    expect(screen.getAllByText('Trigger').length).toBeGreaterThan(0);
+
+    const moreSections = screen.getByRole('tablist', { name: 'More sections' });
+    expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
+      'href',
+      '/automation/triggers',
+    );
+    expect(within(moreSections).getByRole('tab', { name: 'Help' })).toHaveAttribute('href', '/docs');
+    expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
+    expect(within(moreSections).getByRole('tab', { name: 'Extensions' })).toHaveAttribute('href', '/packages');
+    expect(within(moreSections).getByRole('tab', { name: 'Activity' })).toHaveAttribute('href', '/statistics');
   });
 
-  it('shows the Waves entry when experimental features are enabled', () => {
+  it('puts Automations, Extensions, Activity, Help, and Settings in More when experiments are enabled', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = {
       settings: { experimental: { enabled: true } },
@@ -81,45 +93,26 @@ describe('Automation navigation and experimental gating (#184, #325)', () => {
       updateSettings: mockUpdateSettings,
     };
     render(<Navigation />);
-    expect(screen.getAllByText('Automation').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Trigger').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Waves').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Statistics').length).toBeGreaterThan(0);
-    screen.getAllByRole('link', { name: 'Statistics' }).forEach((link) => {
-      expect(link).toHaveAttribute('href', '/statistics');
-    });
-    expect(screen.getByRole('tab', { name: 'Waves' })).toHaveAttribute(
-      'href',
-      '/automation/waves'
-    );
-  });
 
-  it('renders Automation as a primary link and its destinations as section tabs', () => {
-    mockPathname = '/automation/triggers';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-
-    render(<Navigation />);
-
-    expect(screen.getByRole('link', { name: 'Automation' })).toHaveAttribute(
-      'href',
-      '/automation/triggers'
-    );
-    expect(screen.getByRole('tablist', { name: 'Automation sections' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Trigger' })).toHaveAttribute(
-      'href',
-      '/automation/triggers'
-    );
-    expect(screen.getByRole('tab', { name: 'Waves' })).toHaveAttribute(
-      'href',
-      '/automation/waves'
-    );
-    expect(screen.getByRole('tab', { name: 'Trigger' })).toHaveAttribute(
+    const moreSections = screen.getByRole('tablist', { name: 'More sections' });
+    const tabs = within(moreSections).getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+      'Automations',
+      'Extensions',
+      'Activity',
+      'Help',
+      'Settings',
+    ]);
+    expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
+      '/automation/triggers',
+      '/packages',
+      '/statistics',
+      '/docs',
+      '/settings',
+    ]);
+    expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
       'aria-selected',
-      'true'
+      'true',
     );
   });
 });

@@ -50,7 +50,9 @@ import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import AppsIcon from '@mui/icons-material/Apps';
+import HubRoundedIcon from '@mui/icons-material/HubRounded';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 import {
   groupByFolder,
   groupItems,
@@ -569,18 +571,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
   return (
     <Box sx={{ color: 'text.primary' }}>
-      <Box
-        sx={{
-          p: 2,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Typography variant="h5">MCP</Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+      <PageHeader
+        eyebrow="Connect"
+        title="MCP servers"
+        description="Equip your agents with secure tools, resources, and live capabilities."
+        icon={HubRoundedIcon}
+        actions={(
+          <>
           <Button
             variant="outlined"
             color="primary"
@@ -649,11 +646,16 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           >
             Add Server
           </Button>
-        </Box>
-      </Box>
+          </>
+        )}
+      />
 
       {/* Toolbar with search, sort, and bulk actions */}
-      <Paper elevation={1} sx={{ m: 2, mb: 1, p: 1 }}>
+      <Paper
+        elevation={0}
+        variant="outlined"
+        sx={{ mx: { xs: 2, md: 3, lg: 4 }, mt: 3, mb: 1.5, p: 1.2, borderRadius: 3 }}
+      >
         <Box sx={{ 
           display: 'flex', 
           flexDirection: { xs: 'column', sm: 'row' }, 

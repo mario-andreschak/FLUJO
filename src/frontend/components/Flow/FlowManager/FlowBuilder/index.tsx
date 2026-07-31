@@ -13,8 +13,8 @@ import {
   Divider,
   IconButton,
   Tooltip,
-  FormControlLabel,
-  Switch,
+  Chip,
+  CircularProgress,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
@@ -31,28 +31,28 @@ import {
 } from '@mui/material';
 import { 
   ReactFlowProvider, 
-  Node, 
   Edge, 
   NodeChange, 
   EdgeChange, 
   ReactFlowInstance, 
-  useReactFlow,
-  Panel,
   applyNodeChanges,
   applyEdgeChanges
 } from '@xyflow/react';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
-import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
+import { Flow, FlowNode, HistoryEntry, NodeType } from '@/shared/types/flow';
 import { PermissionEffect, PermissionRule } from '@/shared/types/permissions';
 import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
-import { createEdgeFromConnection } from './Canvas/utils/edgeUtils';
+import { modelService } from '@/frontend/services/model';
+import { createEdgeFromConnection, validateConnection } from './Canvas/utils/edgeUtils';
+import { defaultTargetHandleFor } from './Canvas/utils/connectionRules';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
 import { migrateHandoffPills } from './utils/handoffPillMigration';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { FlowValidationButton } from './FlowValidationButton';
+import InspectorPanel from './InspectorPanel';
+import GuidedFlowComposer from './GuidedFlowComposer';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
@@ -68,8 +68,6 @@ import type { ProcessToSubflowDraft } from './utils/convertProcessToSubflow';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -79,6 +77,10 @@ import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { Collapse } from '@mui/material';
+import AutoAwesomeMotionRoundedIcon from '@mui/icons-material/AutoAwesomeMotionRounded';
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
+import CloudOffRoundedIcon from '@mui/icons-material/CloudOffRounded';
+import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   flowUsesAdvancedFeatures,
@@ -95,76 +97,72 @@ const AI_REPAIR_DESCRIPTION =
 
 const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
-  height: 'calc(100vh - 64px)',
-  gap: '16px',
-  padding: '16px',
-  backgroundColor: theme.palette.background.default,
+  height: '100%',
+  minHeight: 0,
+  gap: '12px',
+  padding: '12px',
+  overflow: 'hidden',
+  backgroundColor: 'transparent',
+  [theme.breakpoints.down('md')]: {
+    flexDirection: 'column',
+    gap: '8px',
+    padding: '8px',
+    height: 'auto',
+    overflow: 'visible',
+  },
 }));
 
 const ToolbarContainer = styled(Paper)(({ theme }) => ({
-  padding: theme.spacing(1),
+  padding: theme.spacing(1.1),
   display: 'flex',
   flexWrap: 'wrap',
   gap: theme.spacing(1),
-  borderBottom: '1px solid',
-  borderColor: theme.palette.divider,
+  border: `1px solid ${theme.palette.divider}`,
+  borderRadius: 14,
   alignItems: 'center',
   marginBottom: theme.spacing(1),
-  backgroundColor: theme.palette.background.paper,
-  boxShadow: theme.shadows[1],
+  backgroundColor: theme.palette.mode === 'dark'
+    ? 'rgba(17, 22, 41, 0.86)'
+    : 'rgba(255, 255, 255, 0.9)',
+  boxShadow: theme.palette.mode === 'dark'
+    ? '0 16px 45px rgba(0,0,0,.25)'
+    : '0 16px 45px rgba(49,45,99,.1)',
+  backdropFilter: 'blur(20px) saturate(140%)',
 }));
 
-const ToolbarFields = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: theme.spacing(1),
-  flex: '1 1 520px',
-  minWidth: 0,
-  [theme.breakpoints.down('sm')]: {
-    alignItems: 'stretch',
-    flexBasis: '100%',
-    flexDirection: 'column',
-  },
-}));
-
-const ToolbarPrimaryActions = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: theme.spacing(1),
-  [theme.breakpoints.down('sm')]: {
-    width: '100%',
-  },
-}));
-
-const ToolbarSecondaryActions = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: theme.spacing(0.5),
-  marginLeft: 'auto',
-  [theme.breakpoints.down('md')]: {
-    width: '100%',
-    justifyContent: 'flex-end',
-  },
-  [theme.breakpoints.down('sm')]: {
-    justifyContent: 'flex-start',
-  },
-}));
-
-const MainContent = styled(Box)({
+const MainContent = styled(Box)(({ theme }) => ({
   flex: 1,
   display: 'flex',
   flexDirection: 'column',
   position: 'relative',
   overflow: 'hidden',
-});
+  minWidth: 0,
+  minHeight: 0,
+  [theme.breakpoints.down('md')]: {
+    flex: '0 0 640px',
+    height: 640,
+    overflow: 'hidden',
+  },
+  [theme.breakpoints.down('sm')]: {
+    flexBasis: 'auto',
+    height: 'auto',
+    minHeight: 0,
+    overflow: 'visible',
+  },
+}));
 
 interface FlowBuilderProps {
   initialFlow?: Flow;
-  onSave: (flow: Flow) => void;
+  /**
+   * Resolves false when persistence failed. The builder only clears its dirty
+   * state after this promise succeeds.
+   */
+  onSave: (flow: Flow) => boolean | void | Promise<boolean | void>;
   onDelete: (flowId: string) => void;
   onConversionCommitted?: (parentFlow: Flow, childFlow: Flow) => void;
   allFlows: Flow[];
+  isDraft?: boolean;
+  onTry?: () => void;
 }
 
 // Imperative handle for the parent page: navigation away from the builder
@@ -180,11 +178,66 @@ type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
 // What handleSave actually did — callers that navigate afterwards must only
 // proceed on 'saved' ('rename-dialog' means the save was diverted into the
 // rename dialog, 'invalid-name' means nothing was saved).
-type SaveResult = 'saved' | 'invalid-name' | 'rename-dialog';
+type SaveResult = 'saved' | 'invalid-name' | 'failed';
+type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
 type PermissionRuleDraft = PermissionRule & { id: string };
 
-export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows }, ref) => {
+const GUIDED_CONTROL_TYPES = new Set<NodeType>(['start', 'process', 'finish', 'subflow', 'signal']);
+
+/**
+ * Guided mode is intentionally a lossless view over one linear control path.
+ * Attachment edges are ignored, while branches, cycles, duplicate endpoints,
+ * and disconnected control steps are handed off to the expert editor.
+ */
+const analyzeGuidedGraph = (nodes: FlowNode[], edges: Edge[]) => {
+  const controlNodes = nodes.filter(node => GUIDED_CONTROL_TYPES.has(node.data.type as NodeType));
+  const controlNodeIds = new Set(controlNodes.map(node => node.id));
+  const controlEdges = edges.filter(edge =>
+    controlNodeIds.has(edge.source)
+    && controlNodeIds.has(edge.target)
+    && (edge.data as { edgeType?: string } | undefined)?.edgeType !== 'resource'
+  );
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, Edge[]>();
+
+  controlEdges.forEach((edge) => {
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge]);
+    incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge]);
+  });
+
+  const startNodes = controlNodes.filter(node => node.data.type === 'start');
+  const finishNodes = controlNodes.filter(node => node.data.type === 'finish');
+  let unsafe = startNodes.length !== 1 || finishNodes.length > 1;
+
+  controlNodes.forEach((node) => {
+    const incomingCount = incoming.get(node.id)?.length ?? 0;
+    const outgoingCount = outgoing.get(node.id)?.length ?? 0;
+    if (node.data.type === 'start') {
+      unsafe ||= incomingCount !== 0 || outgoingCount > 1;
+    } else if (node.data.type === 'finish') {
+      unsafe ||= incomingCount !== 1 || outgoingCount !== 0;
+    } else {
+      unsafe ||= incomingCount !== 1 || outgoingCount > 1;
+    }
+  });
+
+  const orderedNodeIds: string[] = [];
+  const visited = new Set<string>();
+  let currentId = startNodes[0]?.id;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    orderedNodeIds.push(currentId);
+    const nextEdges = outgoing.get(currentId) ?? [];
+    if (nextEdges.length !== 1) break;
+    currentId = nextEdges[0].target;
+  }
+
+  unsafe ||= controlNodes.length === 0 || visited.size !== controlNodes.length;
+  return { unsafe, orderedNodeIds };
+};
+
+export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows, isDraft = false, onTry }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
@@ -196,7 +249,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edge => edge.source && edge.target && edge.sourceHandle && edge.targetHandle
     )
   );
-  const [flowName, setFlowName] = useState<string>(initialFlow?.name || 'NewFlow');
+  const [flowName, setFlowName] = useState<string>(initialFlow?.name || 'Untitled agent');
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
   const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
@@ -226,6 +279,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     edges,
     permissionRules: initialFlow?.permissionRules,
   });
+  const guidedGraph = analyzeGuidedGraph(nodes, edges);
+  const hasUnsafeGuidedGraph = hasHiddenAdvancedFeatures || guidedGraph.unsafe;
 
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState<boolean>(false);
@@ -242,8 +297,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [signalModalOpen, setSignalModalOpen] = useState(false);
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
-  // Notice shown when the user tries to drop a second Trigger node (one per flow).
-  const [triggerDropNotice, setTriggerDropNotice] = useState<string | null>(null);
+  // Compact, non-blocking feedback for rejected quick-authoring actions.
+  const [builderNotice, setBuilderNotice] = useState<string | null>(null);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
   const [processNodeModalMode, setProcessNodeModalMode] = useState<'create' | 'edit'>('edit');
   // The edge whose properties (Tier 2b routing condition) are being edited.
@@ -258,7 +313,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   >(null);
   // Secondary toolbar actions are grouped into accessible overflow menus.
   // AI repair still reuses the Improve dialog with a pre-filled instruction.
-  const [flowToolsMenuAnchor, setFlowToolsMenuAnchor] = useState<null | HTMLElement>(null);
   const [moreActionsMenuAnchor, setMoreActionsMenuAnchor] = useState<null | HTMLElement>(null);
   const [improveInitialDescription, setImproveInitialDescription] = useState('');
 
@@ -270,6 +324,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isHistoryAction, setIsHistoryAction] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>(isDraft ? 'unsaved' : 'saved');
+  const [guidedDefaultModelId, setGuidedDefaultModelId] = useState<string | null>(null);
+  const editRevisionRef = useRef(0);
+  const savePromiseRef = useRef<Promise<SaveResult> | null>(null);
+  // Synchronous reservation closes the gap between rapid creation events and
+  // React's next render, so two quick clicks cannot enqueue two Trigger nodes.
+  const triggerCreationReservedRef = useRef(nodes.some(node => node.type === 'trigger'));
+  triggerCreationReservedRef.current = nodes.some(node => node.type === 'trigger');
   // Navigation deferred by the unsaved-changes dialog; runs on Save/Discard,
   // cleared on Cancel.
   const pendingNavigationRef = useRef<(() => void) | null>(null);
@@ -281,6 +343,21 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // which otherwise marks a freshly-opened flow as "dirty" and forces the
   // Save/Discard dialog on navigate-away even when nothing was changed (#69).
   const isInitializingRef = useRef(true);
+
+  useEffect(() => {
+    let active = true;
+    void modelService.loadModels().then((models) => {
+      if (!active) return;
+      const preferred = [...models].sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite))[0];
+      setGuidedDefaultModelId(preferred?.id ?? null);
+    }).catch((error) => {
+      log.warn('Could not load a default AI for Guided mode', error);
+      if (active) setGuidedDefaultModelId(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
@@ -312,8 +389,15 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     // (nodes/edges/history) don't register as a user edit in the
     // history-tracking effect below.
     isInitializingRef.current = true;
+    editRevisionRef.current = 0;
+    setHasUnsavedChanges(false);
+    setSaveStatus(isDraft ? 'unsaved' : 'saved');
     if (initialFlow) {
-      setNodes(initialFlow.nodes || []);
+      const rawNodes = initialFlow.nodes || [];
+      const seededNodes = isDraft
+        ? rawNodes.map(node => ({ ...node, selected: false }))
+        : rawNodes;
+      setNodes(seededNodes);
       
       // Filter out invalid edges before setting them
       const validEdges = filterInvalidEdges(initialFlow.edges || []);
@@ -329,7 +413,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
       // Initialize history with initial state
       const initialState: HistoryEntry = {
-        nodes: initialFlow.nodes || [],
+        nodes: seededNodes,
         edges: validEdges
       };
       setHistory([initialState]);
@@ -340,7 +424,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
       setNodes([startNode]);
       setEdges([]);
-      setFlowName('NewFlow');
+      setFlowName('Untitled agent');
       setFlowDescription('');
       setPermissionRules([]);
       setPermissionRulesConfigured(false);
@@ -405,6 +489,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setHistory([...newHistory, newEntry]);
       setHistoryIndex(historyIndex + 1);
       setHasUnsavedChanges(true);
+      editRevisionRef.current += 1;
+      setSaveStatus('unsaved');
     }
   }, [nodes, edges]);
 
@@ -430,63 +516,54 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const validateFlowName = (name: string): string | null => {
     // Check if name is empty
     if (!name.trim()) {
-      return "Flow name cannot be empty";
+      return "Agent name cannot be empty";
     }
     
-    // Check if name contains only allowed characters (alphanumeric, underscores, dashes)
-    if (!/^[\w-]+$/.test(name)) {
-      return "Flow name can only contain letters, numbers, underscores, and dashes";
+    // Human-facing names may contain spaces; IDs remain the stable machine key.
+    if (!/^[\p{L}\p{N}_ -]+$/u.test(name.trim())) {
+      return "Use letters, numbers, spaces, underscores, or dashes";
     }
     
     // Check for duplicate names (only if it's a new flow or the name has changed)
     if (!initialFlow || (initialFlow && initialFlow.name !== name)) {
       const isDuplicate = allFlows.some(flow => 
         flow.id !== (initialFlow?.id || '') && 
-        flow.name.toLowerCase() === name.toLowerCase()
+        flow.name.trim().toLowerCase() === name.trim().toLowerCase()
       );
       
       if (isDuplicate) {
-        return "A flow with this name already exists";
+        return "An agent with this name already exists";
       }
     }
     
     return null;
   };
 
-  // Handle flow name change
-  const handleFlowNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newName = e.target.value;
-    setFlowName(newName);
-    setFlowNameError(validateFlowName(newName));
-  };
-
-  // Handle flow description change. The history-tracking effect only watches
-  // nodes/edges, so a description edit must flag unsaved changes explicitly so
-  // the navigate-away guard still offers Save/Discard.
-  const handleFlowDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFlowDescription(e.target.value);
+  const markDirty = useCallback(() => {
     setHasUnsavedChanges(true);
-  };
+    editRevisionRef.current += 1;
+    setSaveStatus('unsaved');
+  }, []);
 
   const updatePermissionRule = (id: string, changes: Partial<PermissionRule>) => {
     setPermissionRules(rules => rules.map(rule => rule.id === id ? { ...rule, ...changes } : rule));
     setPermissionRulesConfigured(true);
     setPermissionRulesError(null);
-    setHasUnsavedChanges(true);
+    markDirty();
   };
 
   const addPermissionRule = () => {
     setPermissionRules(rules => [...rules, createPermissionRuleDraft({ action: '', resource: '', effect: 'ask' })]);
     setPermissionRulesConfigured(true);
     setPermissionRulesError(null);
-    setHasUnsavedChanges(true);
+    markDirty();
   };
 
   const removePermissionRule = (id: string) => {
     setPermissionRules(rules => rules.filter(rule => rule.id !== id));
     setPermissionRulesConfigured(true);
     setPermissionRulesError(null);
-    setHasUnsavedChanges(true);
+    markDirty();
   };
 
   const movePermissionRule = (index: number, direction: -1 | 1) => {
@@ -498,7 +575,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       return reordered;
     });
     setPermissionRulesConfigured(true);
-    setHasUnsavedChanges(true);
+    markDirty();
   };
 
   const getPermissionRulesForSave = useCallback((): PermissionRule[] | undefined =>
@@ -516,56 +593,91 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   }, [permissionRules]);
 
   // Handle save flow
-  const handleSave = useCallback((): SaveResult => {
-    log.debug(`handleSave: Attempting to save flow "${flowName}"`);
+  const handleSave = useCallback((): Promise<SaveResult> => {
+    // Keyboard shortcuts and pointer actions share this promise. This matters
+    // most for a new draft, where duplicate in-flight POSTs could create two
+    // flows before the parent has received the first saved result.
+    if (savePromiseRef.current) return savePromiseRef.current;
 
-    // Validate flow name
-    const error = validateFlowName(flowName);
-    if (error) {
-      log.warn(`handleSave: Invalid flow name - ${error}`);
-      setFlowNameError(error);
-      return 'invalid-name';
-    }
-    if (!validatePermissionRules()) {
-      return 'invalid-name';
-    }
-    
-    // Ensure there's at least a Start node in the flow
-    let flowNodes = [...nodes];
-    
-    // If there are no nodes, add a Start node
-    if (flowNodes.length === 0) {
-      log.debug(`handleSave: No nodes found, adding a default Start node`);
-      flowNodes = [flowService.createStartNode()];
-      setNodes(flowNodes);
-    }
-    
-    // Check if we're trying to save with a new name for an existing flow
-    if (initialFlow && initialFlow.name !== flowName) {
-      log.debug(`handleSave: Flow name changed from "${initialFlow.name}" to "${flowName}", opening rename dialog`);
-      // Ask if user wants to rename or copy
-      setDialogType('rename');
-      setNewFlowName(flowName);
-      setDialogOpen(true);
-      return 'rename-dialog';
-    }
+    const savePromise = (async (): Promise<SaveResult> => {
+      log.debug(`handleSave: Attempting to save flow "${flowName}"`);
 
-    const flow: Flow = {
-      id: initialFlow?.id || uuidv4(),
-      name: flowName,
-      description: flowDescription,
-      nodes: flowNodes,
-      edges,
-      folder: initialFlow?.folder,    // Preserve folder assignment
-      favorite: initialFlow?.favorite, // Preserve favorite status
-      permissionRules: getPermissionRulesForSave(),
-    };
+      // Validate flow name
+      const error = validateFlowName(flowName);
+      if (error) {
+        log.warn(`handleSave: Invalid flow name - ${error}`);
+        setFlowNameError(error);
+        return 'invalid-name';
+      }
+      if (!validatePermissionRules()) {
+        return 'invalid-name';
+      }
 
-    log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
-    onSave(flow);
-    setHasUnsavedChanges(false);
-    return 'saved';
-  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave, allFlows, getPermissionRulesForSave, validatePermissionRules]);
+      // Ensure there's at least a Start node in the flow
+      let flowNodes = [...nodes];
+
+      // If there are no nodes, add a Start node
+      if (flowNodes.length === 0) {
+        log.debug(`handleSave: No nodes found, adding a default Start node`);
+        flowNodes = [flowService.createStartNode()];
+        setNodes(flowNodes);
+      }
+
+      const flow: Flow = {
+        id: initialFlow?.id || uuidv4(),
+        name: flowName.trim(),
+        description: flowDescription,
+        nodes: flowNodes,
+        edges,
+        folder: initialFlow?.folder,    // Preserve folder assignment
+        favorite: initialFlow?.favorite, // Preserve favorite status
+        permissionRules: getPermissionRulesForSave(),
+      };
+
+      log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
+      const submittedRevision = editRevisionRef.current;
+      setSaveStatus('saving');
+      try {
+        const result = await onSave(flow);
+        if (result === false) {
+          setSaveStatus('error');
+          return 'failed';
+        }
+        // If the user changed the canvas while the request was in flight, the
+        // submitted snapshot is saved but the newer working state remains dirty.
+        if (editRevisionRef.current === submittedRevision) {
+          setHasUnsavedChanges(false);
+          setSaveStatus('saved');
+        } else {
+          setHasUnsavedChanges(true);
+          setSaveStatus('unsaved');
+        }
+        return 'saved';
+      } catch (error) {
+        log.error('handleSave: Persistence failed', error);
+        setSaveStatus('error');
+        setHasUnsavedChanges(true);
+        return 'failed';
+      }
+    })();
+
+    savePromiseRef.current = savePromise;
+    void savePromise.finally(() => {
+      if (savePromiseRef.current === savePromise) {
+        savePromiseRef.current = null;
+      }
+    });
+    return savePromise;
+  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave, getPermissionRulesForSave, validatePermissionRules]);
+
+  const handleTry = useCallback(async () => {
+    if (!onTry) return;
+    if (isDraft || hasUnsavedChanges || saveStatus !== 'saved') {
+      const result = await handleSave();
+      if (result !== 'saved') return;
+    }
+    onTry();
+  }, [onTry, isDraft, hasUnsavedChanges, saveStatus, handleSave]);
 
   // Navigation guard: the parent must route "leave the builder" actions
   // (back to dashboard, switching flows) through here so unsaved changes get
@@ -671,7 +783,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // same row = parallel). Runs entirely client-side (no model), applied as an unsaved,
   // undoable change just like AI-Improve. No-op flows report "nothing to repair".
   const handleRepairStatic = useCallback(() => {
-    setFlowToolsMenuAnchor(null);
+    setMoreActionsMenuAnchor(null);
     const currentFlow: Flow = {
       id: initialFlow?.id || '',
       name: flowName,
@@ -706,13 +818,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
   // it, so model selection / install opt-in / result handling are all reused.
   const handleRepairWithAI = useCallback(() => {
-    setFlowToolsMenuAnchor(null);
+    setMoreActionsMenuAnchor(null);
     setImproveInitialDescription(AI_REPAIR_DESCRIPTION);
     setImproveDialogOpen(true);
   }, []);
 
   // Handle copy flow
-  const handleCopyFlow = useCallback((flowToCopy: Flow, newName: string) => {
+  const handleCopyFlow = useCallback(async (flowToCopy: Flow, newName: string) => {
     log.debug(`handleCopyFlow: Copying flow "${flowToCopy.name}" to "${newName}"`);
     
     // Create a new flow with the same nodes and edges but a new ID and name
@@ -728,7 +840,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     };
     
     log.info(`handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`);
-    onSave(newFlow);
+    return (await onSave(newFlow)) !== false;
   }, [onSave]);
   
   // Run and clear the navigation deferred by the unsaved-changes dialog.
@@ -750,7 +862,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   };
 
   // Handle dialog confirm
-  const handleDialogConfirm = () => {
+  const handleDialogConfirm = async () => {
     // Validate new flow name
     const error = validateFlowName(newFlowName);
     if (error) {
@@ -761,7 +873,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     if (dialogType === 'duplicate') {
       // Copy the flow with a new name
       if (initialFlow) {
-        handleCopyFlow(initialFlow, newFlowName);
+        const saved = await handleCopyFlow(initialFlow, newFlowName);
+        if (!saved) return;
       }
     } else if (dialogType === 'rename') {
       // Save the flow with the new name
@@ -775,8 +888,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         favorite: initialFlow?.favorite,
         permissionRules: getPermissionRulesForSave(),
       };
-      onSave(flow);
+      const saved = (await onSave(flow)) !== false;
+      if (!saved) {
+        setSaveStatus('error');
+        return;
+      }
       setHasUnsavedChanges(false);
+      setSaveStatus('saved');
       // If the rename was reached from "Save Changes" in the unsaved-changes
       // dialog, the save is now done — continue the interrupted navigation.
       runPendingNavigation();
@@ -794,8 +912,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   // Handle save and continue: only navigate when something was actually
   // saved — an invalid name or a rename diversion must not lose the edits.
-  const handleSaveAndContinue = () => {
-    const result = handleSave();
+  const handleSaveAndContinue = async () => {
+    const result = await handleSave();
     if (result === 'saved') {
       runPendingNavigation();
       handleDialogClose();
@@ -804,8 +922,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       // name (the error is shown on the flow-name field).
       handleDialogClose();
     }
-    // 'rename-dialog': handleSave switched this dialog to the rename flow;
-    // keep the deferred navigation so it continues after a successful rename.
   };
   
   // Handle new flow name change in dialog
@@ -827,10 +943,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setNodes(prevState.nodes);
       setEdges(prevState.edges);
       setHistoryIndex(newIndex);
-      setHasUnsavedChanges(true);
+      markDirty();
       log.info(`handleUndo: Restored flow state to previous version (${prevState.nodes.length} nodes, ${prevState.edges.length} edges)`);
     }
-  }, [history, historyIndex, canUndo]);
+  }, [history, historyIndex, canUndo, markDirty]);
   
   const handleRedo = useCallback(() => {
     if (canRedo) {
@@ -841,10 +957,46 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setNodes(nextState.nodes);
       setEdges(nextState.edges);
       setHistoryIndex(newIndex);
-      setHasUnsavedChanges(true);
+      markDirty();
       log.info(`handleRedo: Restored flow state to next version (${nextState.nodes.length} nodes, ${nextState.edges.length} edges)`);
     }
-  }, [history, historyIndex, canRedo]);
+  }, [history, historyIndex, canRedo, markDirty]);
+
+  useEffect(() => {
+    const handleBuilderShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTyping =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable;
+      const modifier = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+
+      if (modifier && key === 's') {
+        event.preventDefault();
+        void handleSave();
+        return;
+      }
+      if (!isTyping && modifier && key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if (!isTyping && modifier && key === 'y') {
+        event.preventDefault();
+        handleRedo();
+        return;
+      }
+      if (!isTyping && ((modifier && key === 'k') || (!modifier && (key === 'a' || event.key === '/')))) {
+        event.preventDefault();
+        document.dispatchEvent(new CustomEvent('openFlowQuickAdd'));
+      }
+    };
+
+    document.addEventListener('keydown', handleBuilderShortcut);
+    return () => document.removeEventListener('keydown', handleBuilderShortcut);
+  }, [handleSave, handleUndo, handleRedo]);
 
   const handleAcceptProcessConversion = useCallback(async (draft: ProcessToSubflowDraft) => {
     if (!initialFlow || !conversionProcessId || !draft.parentFlow || !draft.childFlow) {
@@ -869,6 +1021,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setNodes(result.parentFlow.nodes);
     setEdges(result.parentFlow.edges);
     setHasUnsavedChanges(false);
+    setSaveStatus('saved');
     setConversionProcessId(null);
     onConversionCommitted?.(result.parentFlow, result.childFlow);
   }, [initialFlow, conversionProcessId, history, historyIndex, onConversionCommitted]);
@@ -922,6 +1075,221 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
 
+  const showBuilderNotice = useCallback((message: string) => {
+    setBuilderNotice(message);
+    setTimeout(() => setBuilderNotice(current => current === message ? null : current), 5000);
+  }, []);
+
+  const handleCreateNode = useCallback((
+    nodeType: NodeType,
+    position: { x: number; y: number },
+    preparedNode?: FlowNode,
+  ): FlowNode | null => {
+    if (nodeType === 'trigger' && triggerCreationReservedRef.current) {
+      showBuilderNotice('A Trigger node already exists in this flow. Only one Trigger node is allowed per flow.');
+      return null;
+    }
+    if (nodeType === 'trigger') triggerCreationReservedRef.current = true;
+
+    const newNode = preparedNode ?? flowService.createNode(nodeType, position);
+    setNodes(current => [
+      ...current.map(node => ({ ...node, selected: false })),
+      { ...newNode, selected: true },
+    ]);
+    return newNode;
+  }, [showBuilderNotice]);
+
+  const handleQuickAddNode = useCallback((nodeType: NodeType): FlowNode | null => {
+    const selected = nodes.find(node => node.selected)
+      ?? (nodes.length === 1 && nodes[0].data.type === 'start' ? nodes[0] : undefined);
+    const wrapperRect = reactFlowWrapper.current?.getBoundingClientRect();
+    const viewportCenter = wrapperRect && reactFlowInstance
+      ? reactFlowInstance.screenToFlowPosition({
+          x: wrapperRect.left + wrapperRect.width / 2,
+          y: wrapperRect.top + wrapperRect.height / 2,
+        })
+      : { x: 250, y: 180 };
+
+    let position = selected && !['mcp', 'resource', 'trigger'].includes(nodeType)
+      ? { x: selected.position.x, y: selected.position.y + 180 }
+      : viewportCenter;
+
+    // Repeated one-click additions fan out instead of stacking on the same
+    // coordinates. The loop is intentionally bounded for very large graphs.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const collides = nodes.some(node =>
+        Math.abs(node.position.x - position.x) < 90 &&
+        Math.abs(node.position.y - position.y) < 70
+      );
+      if (!collides) break;
+      position = { x: position.x + 36, y: position.y + 36 };
+    }
+
+    // When a control-flow step is selected, one-click Add means "append after
+    // this step". Attachment nodes remain unconnected so their semantic MCP /
+    // resource handle can be chosen deliberately.
+    const controlSources: Partial<Record<NodeType, string>> = {
+      start: 'start-bottom',
+      process: 'process-bottom',
+      subflow: 'subflow-bottom',
+      signal: 'signal-bottom',
+    };
+    const controlTargets: NodeType[] = ['process', 'finish', 'subflow', 'signal'];
+    const shouldAppend = !!selected && controlTargets.includes(nodeType);
+    const preparedNode = flowService.createNode(nodeType, position);
+
+    if (selected && shouldAppend) {
+      const sourceHandle = controlSources[selected.type as NodeType];
+      if (!sourceHandle) {
+        showBuilderNotice(
+          `${selected.data.label || 'The selected node'} cannot lead to another step. Select a Start, Process, Subflow, or Signal node first.`,
+        );
+        return null;
+      }
+      const connection = {
+        source: selected.id,
+        sourceHandle,
+        target: preparedNode.id,
+        targetHandle: defaultTargetHandleFor(nodeType, sourceHandle),
+      };
+      const graphWithCandidate = [...nodes, preparedNode];
+      if (!validateConnection(connection, graphWithCandidate, edges)) {
+        showBuilderNotice('That step cannot be appended here. Choose another source node or adjust its existing connection.');
+        return null;
+      }
+      const newNode = handleCreateNode(nodeType, position, preparedNode);
+      if (!newNode) return null;
+      const edge = createEdgeFromConnection(connection, graphWithCandidate);
+      setEdges(current => [...current, edge]);
+      return newNode;
+    }
+
+    return handleCreateNode(nodeType, position, preparedNode);
+  }, [nodes, edges, reactFlowInstance, handleCreateNode, showBuilderNotice]);
+
+  const handleAddGuidedTask = useCallback((prompt: string) => {
+    if (hasUnsafeGuidedGraph) {
+      showBuilderNotice('This agent uses custom wiring. Open Expert mode before changing its sequence.');
+      return;
+    }
+
+    const start = nodes.find(node => node.data.type === 'start');
+    const existingFinish = nodes.find(node => node.data.type === 'finish');
+    const orderedControls = guidedGraph.orderedNodeIds
+      .map(nodeId => nodes.find(node => node.id === nodeId))
+      .filter((node): node is FlowNode => !!node);
+    const source = [...orderedControls]
+      .reverse()
+      .find(node => ['start', 'process', 'subflow', 'signal'].includes(node.data.type))
+      ?? start;
+    if (!source) {
+      showBuilderNotice('This agent is missing its starting point. Open Expert mode to repair it.');
+      return;
+    }
+
+    const sourceHandles: Partial<Record<NodeType, string>> = {
+      start: 'start-bottom',
+      process: 'process-bottom',
+      subflow: 'subflow-bottom',
+      signal: 'signal-bottom',
+    };
+    const sourceHandle = sourceHandles[source.data.type as NodeType];
+    if (!sourceHandle) {
+      showBuilderNotice('Add this step from Expert mode so its custom connection stays safe.');
+      return;
+    }
+
+    const processNode = flowService.createNode('process', {
+      x: source.position.x,
+      y: source.position.y + 180,
+    });
+    processNode.data = {
+      ...processNode.data,
+      label: 'AI task',
+      properties: {
+        ...(processNode.data.properties ?? {}),
+        promptTemplate: prompt,
+        ...(guidedDefaultModelId ? { boundModel: guidedDefaultModelId } : {}),
+      },
+    };
+
+    const finishNode = existingFinish ?? flowService.createNode('finish', {
+      x: source.position.x,
+      y: source.position.y + 360,
+    });
+    const nextNodes = [
+      ...nodes
+        .filter(node => node.id !== finishNode.id)
+        .map(node => ({ ...node, selected: false })),
+      { ...processNode, selected: true },
+      {
+        ...finishNode,
+        position: { x: source.position.x, y: source.position.y + 360 },
+        selected: false,
+      },
+    ];
+
+    // A Guided sequence is linear. Inserting a step replaces the last direct
+    // hop to Finish, then owns the two new "then" connections.
+    const remainingEdges = edges.filter(edge =>
+      !(existingFinish && edge.source === source.id && edge.target === existingFinish.id)
+    );
+    const intoTask = {
+      source: source.id,
+      sourceHandle,
+      target: processNode.id,
+      targetHandle: defaultTargetHandleFor('process', sourceHandle),
+    };
+    const intoFinish = {
+      source: processNode.id,
+      sourceHandle: 'process-bottom',
+      target: finishNode.id,
+      targetHandle: defaultTargetHandleFor('finish', 'process-bottom'),
+    };
+    setNodes(nextNodes);
+    setEdges([
+      ...remainingEdges,
+      createEdgeFromConnection(intoTask, nextNodes),
+      createEdgeFromConnection(intoFinish, nextNodes),
+    ]);
+
+    if (!guidedDefaultModelId) {
+      showBuilderNotice('Step added. Connect an AI model before trying this agent.');
+    }
+  }, [
+    nodes,
+    edges,
+    guidedDefaultModelId,
+    guidedGraph.orderedNodeIds,
+    hasUnsafeGuidedGraph,
+    showBuilderNotice,
+  ]);
+
+  const selectedNode = nodes.find(node => node.selected) ?? null;
+  const hasGuidedTask = nodes.some(node => ['process', 'subflow'].includes(node.data.type));
+  const guidedModelsReady = nodes
+    .filter(node => node.data.type === 'process')
+    .every(node => typeof node.data.properties?.boundModel === 'string' && !!node.data.properties.boundModel);
+  const hasFriendlyFlowName = !!flowName.trim()
+    && !/^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(flowName.trim())
+    && !flowNameError;
+  const canTryGuided = hasGuidedTask
+    && guidedModelsReady
+    && hasFriendlyFlowName
+    && !hasUnsafeGuidedGraph
+    && saveStatus !== 'saving';
+
+  const handleSelectGuidedNode = useCallback((nodeId: string) => {
+    setNodes(current => current.map(node => ({ ...node, selected: node.id === nodeId })));
+  }, []);
+
+  const handleClearNodeSelection = useCallback(() => {
+    const changes = nodes
+      .filter(node => node.selected)
+      .map(node => ({ type: 'select' as const, id: node.id, selected: false }));
+    if (changes.length > 0) onNodesChange(changes);
+  }, [nodes, onNodesChange]);
+
   // Auto-Align (issue #100): re-arrange nodes into a clean top-to-bottom
   // layered layout. Uses the functional setNodes so it stacks on the latest
   // state; because positions change outside a drag gesture, the history effect
@@ -934,9 +1302,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.2 }));
   }, [edges, reactFlowInstance]);
 
-  const handleNodeUpdate = useCallback((nodeId: string, data: any) => {
+  const updateNodeData = useCallback((nodeId: string, data: FlowNode['data']) => {
     log.debug(`handleNodeUpdate: Updating node ${nodeId} properties`);
-    
     setNodes((nds) => {
       const nextNodes = nds.map((node) => {
         if (node.id === nodeId) {
@@ -951,7 +1318,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       // (issue #178). No-op when nothing was renamed.
       return migrateHandoffPills(nds, nextNodes, edges);
     });
-    
+  }, [edges]);
+
+  const handleNodeUpdate = useCallback((nodeId: string, data: FlowNode['data']) => {
+    updateNodeData(nodeId, data);
     // Close any open modals
     setProcessModalOpen(false);
     setProcessNodeModalMode('edit');
@@ -964,7 +1334,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setTriggerModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
-  }, [edges]);
+  }, [updateNodeData]);
   
   // Connect-a-server shortcut from the Process node properties modal: create
   // an MCP node bound to the server, place it next to the process node, and
@@ -1048,16 +1418,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       const type = event.dataTransfer.getData('application/reactflow');
       log.debug(`onDrop: Node type from data transfer: ${type}`);
       
-      // Enforce one-trigger-per-flow constraint (issue #241).
-      if (type === 'trigger') {
-        const hasTrigger = (reactFlowInstance?.getNodes() || []).some(n => n.type === 'trigger');
-        if (hasTrigger) {
-          setTriggerDropNotice('A Trigger node already exists in this flow. Only one Trigger node is allowed per flow.');
-          setTimeout(() => setTriggerDropNotice(null), 5000);
-          return;
-        }
-      }
-
       // Check if we have all the required data to create a node
       if (!type || !reactFlowInstance) {
         log.debug(`onDrop: Missing required data - type: ${!!type}, reactFlowInstance: ${!!reactFlowInstance}`);
@@ -1072,32 +1432,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       log.debug(`onDrop: Calculated position: (${position.x}, ${position.y})`);
       
       // Create the new node using flowService
-      const newNode = flowService.createNode(type, position);
+      const newNode = handleCreateNode(type as NodeType, position);
+      if (!newNode) return;
       log.info(`onDrop: Created new ${type} node with ID: ${newNode.id}`);
-      
-      // Add the new node to the existing nodes
-      setNodes((nds) => {
-        // Deselect all existing nodes
-        const updatedNodes = nds.map(node => ({
-          ...node,
-          selected: false
-        }));
-        
-        // Add the new node with selected property
-        return [
-          ...updatedNodes,
-          {
-            ...newNode,
-            selected: true
-          }
-        ];
-      });
-      
-      // Automatically open the edit properties modal for the new node
-      openNodeProperties(newNode, 'create');
-      log.debug(`onDrop: Opened properties modal for new node: ${newNode.id}`);
+      log.debug(`onDrop: Selected new node ${newNode.id} in the inspector`);
     },
-    [reactFlowInstance, openNodeProperties]
+    [reactFlowInstance, handleCreateNode]
   );
 
   const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
@@ -1113,240 +1453,228 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   return (
     <FlowBuilderContainer>
-      <NodePalette authoringMode={authoringMode} />
+      {authoringMode === 'advanced' && (
+        <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
+      )}
       <ReactFlowProvider>
         <MainContent>
           <ToolbarContainer elevation={1}>
-            <ToolbarFields>
-              <TextField
-                size="small"
-                label="Flow Name"
-                value={flowName}
-                onChange={handleFlowNameChange}
-                sx={{
-                  flex: { xs: '1 1 100%', sm: '0 1 300px' },
-                  minWidth: { xs: 0, sm: 220 },
-                  width: { xs: '100%', sm: 'auto' },
-                }}
-                error={!!flowNameError}
-                helperText={flowNameError}
-              />
+            <Box sx={{ minWidth: 0, flex: '1 1 180px' }}>
+              <Typography variant="subtitle2" fontWeight={850} noWrap>{flowName}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {authoringMode === 'guided'
+                  ? `${nodes.filter(node => ['process', 'subflow', 'signal'].includes(node.data.type)).length} agent step${
+                      nodes.filter(node => ['process', 'subflow', 'signal'].includes(node.data.type)).length === 1 ? '' : 's'
+                    }`
+                  : `${nodes.length} nodes · ${edges.length} connections`}
+              </Typography>
+            </Box>
 
-              <TextField
-                size="small"
-                label="Description"
-                value={flowDescription}
-                onChange={handleFlowDescriptionChange}
-                multiline
-                maxRows={3}
-                sx={{
-                  flex: '1 1 300px',
-                  minWidth: { xs: 0, sm: 240 },
-                  width: { xs: '100%', sm: 'auto' },
-                }}
-                placeholder="Optional — shown on the flow card"
-              />
-            </ToolbarFields>
+            <Chip
+              size="small"
+              variant="outlined"
+              color={saveStatus === 'error' ? 'error' : saveStatus === 'saved' ? 'success' : 'default'}
+              icon={
+                saveStatus === 'saving'
+                  ? <CircularProgress size={14} />
+                  : saveStatus === 'error'
+                    ? <CloudOffRoundedIcon />
+                    : saveStatus === 'saved'
+                      ? <CheckCircleRoundedIcon />
+                      : undefined
+              }
+              label={
+                saveStatus === 'saving'
+                  ? 'Saving…'
+                  : saveStatus === 'error'
+                    ? 'Save failed'
+                    : saveStatus === 'unsaved'
+                      ? (isDraft && !hasUnsavedChanges ? 'Draft' : 'Unsaved')
+                      : 'Saved'
+              }
+              aria-label={`Save status: ${saveStatus === 'error' ? 'failed' : hasUnsavedChanges ? 'unsaved' : saveStatus}`}
+            />
 
-            <ToolbarPrimaryActions>
-              <Tooltip
-                describeChild
-                title="Guided shows the common flow controls. Advanced reveals runtime, routing, resource, fan-out, and scheduling controls."
-              >
-                <FormControlLabel
-                  control={
-                    <Switch
-                      size="small"
-                      checked={authoringMode === 'advanced'}
-                      onChange={(event) => setAuthoringMode(event.target.checked ? 'advanced' : 'guided')}
-                    />
-                  }
-                  label={authoringMode === 'advanced' ? 'Advanced' : 'Guided'}
-                  sx={{ whiteSpace: 'nowrap' }}
-                />
-              </Tooltip>
-
-              {authoringMode === 'advanced' && (
+            {authoringMode === 'advanced' && (
+              <>
                 <Button
                   variant="outlined"
-                  onClick={() => setPermissionRulesDialogOpen(true)}
-                  sx={{ whiteSpace: 'nowrap' }}
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => handleQuickAddNode('process')}
+                  aria-label="Add node"
+                  title="Append a Process node after the selected node"
                 >
-                  Permission Rules{permissionRules.length ? ` (${permissionRules.length})` : ''}
+                  Add node
                 </Button>
-              )}
 
+                <FlowValidationButton nodes={nodes} edges={edges} />
+
+                <Tooltip title="Auto-align nodes">
+                  <span>
+                    <IconButton
+                      aria-label="Auto-Align"
+                      onClick={handleAutoAlign}
+                      disabled={nodes.length <= 1}
+                      color="primary"
+                      size="small"
+                    >
+                      <AutoAwesomeMotionRoundedIcon />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+
+                <Divider orientation="vertical" flexItem />
+
+                <Tooltip title="Undo · Ctrl/⌘ Z">
+                  <span>
+                    <IconButton aria-label="Undo" onClick={handleUndo} disabled={!canUndo} color="primary" size="small">
+                      <UndoIcon />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+
+                <Tooltip title="Redo · Ctrl/⌘ Shift Z">
+                  <span>
+                    <IconButton aria-label="Redo" onClick={handleRedo} disabled={!canRedo} color="primary" size="small">
+                      <RedoIcon />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </>
+            )}
+
+            <Button
+              variant={authoringMode === 'guided' ? 'outlined' : 'contained'}
+              color="primary"
+              onClick={() => void handleSave()}
+              startIcon={saveStatus === 'saving' ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
+              disabled={!!flowNameError || saveStatus === 'saving'}
+              aria-label="Save Flow"
+            >
+              Save
+            </Button>
+
+            {authoringMode === 'guided' && onTry && (
               <Button
                 variant="contained"
                 color="primary"
-                onClick={handleSave}
-                startIcon={<SaveIcon />}
-                disabled={!!flowNameError}
+                onClick={() => void handleTry()}
+                startIcon={<PlayArrowRoundedIcon />}
+                disabled={!canTryGuided}
               >
-                Save Flow
+                Try it
               </Button>
+            )}
 
-              <FlowValidationButton nodes={nodes} edges={edges} />
-            </ToolbarPrimaryActions>
-
-            <ToolbarSecondaryActions>
-              <Button
-                id="flow-tools-button"
-                variant="outlined"
-                size="small"
-                startIcon={<AccountTreeIcon />}
-                endIcon={<ArrowDropDownIcon />}
-                aria-label="Flow tools"
-                aria-controls={flowToolsMenuAnchor ? 'flow-tools-menu' : undefined}
+            <Tooltip title="More commands">
+              <IconButton
+                id="more-actions-button"
+                data-tour="improve-flow"
+                aria-label="More actions"
+                aria-controls={moreActionsMenuAnchor ? 'more-actions-menu' : undefined}
                 aria-haspopup="menu"
-                aria-expanded={flowToolsMenuAnchor ? 'true' : undefined}
-                onClick={(event) => setFlowToolsMenuAnchor(event.currentTarget)}
+                aria-expanded={moreActionsMenuAnchor ? 'true' : undefined}
+                onClick={(event) => setMoreActionsMenuAnchor(event.currentTarget)}
+                color="primary"
+                size="small"
               >
-                Flow tools
-              </Button>
-              <Menu
-                id="flow-tools-menu"
-                anchorEl={flowToolsMenuAnchor}
-                open={!!flowToolsMenuAnchor}
-                onClose={() => setFlowToolsMenuAnchor(null)}
-                MenuListProps={{ 'aria-labelledby': 'flow-tools-button' }}
+                <MoreHorizIcon />
+              </IconButton>
+            </Tooltip>
+            <Menu
+              id="more-actions-menu"
+              anchorEl={moreActionsMenuAnchor}
+              open={!!moreActionsMenuAnchor}
+              onClose={() => setMoreActionsMenuAnchor(null)}
+              MenuListProps={{ 'aria-labelledby': 'more-actions-button' }}
+            >
+              <MenuItem
+                onClick={() => {
+                  setMoreActionsMenuAnchor(null);
+                  setAuthoringMode(authoringMode === 'guided' ? 'advanced' : 'guided');
+                }}
               >
+                {authoringMode === 'guided' ? 'Open expert editor' : 'Use simple setup'}
+              </MenuItem>
+              {authoringMode === 'advanced' && <Divider />}
+              {authoringMode === 'advanced' && (
                 <MenuItem
                   disabled={nodes.length <= 1}
                   onClick={() => {
-                    setFlowToolsMenuAnchor(null);
+                    setMoreActionsMenuAnchor(null);
                     handleAutoAlign();
                   }}
                 >
                   Auto-Align
                 </MenuItem>
+              )}
+              {authoringMode === 'advanced' && (
                 <MenuItem disabled={nodes.length === 0} onClick={handleRepairStatic}>
                   Repair automatically (no model)
                 </MenuItem>
+              )}
+              {authoringMode === 'advanced' && (
                 <MenuItem disabled={nodes.length === 0} onClick={handleRepairWithAI}>
                   Repair with AI…
                 </MenuItem>
-              </Menu>
-
-              {initialFlow && (
-                <>
-                  <Tooltip title="More actions">
-                    <IconButton
-                      id="more-actions-button"
-                      data-tour="improve-flow"
-                      aria-label="More actions"
-                      aria-controls={moreActionsMenuAnchor ? 'more-actions-menu' : undefined}
-                      aria-haspopup="menu"
-                      aria-expanded={moreActionsMenuAnchor ? 'true' : undefined}
-                      onClick={(event) => setMoreActionsMenuAnchor(event.currentTarget)}
-                      color="primary"
-                      size="small"
-                    >
-                      <MoreHorizIcon />
-                    </IconButton>
-                  </Tooltip>
-                  <Menu
-                    id="more-actions-menu"
-                    anchorEl={moreActionsMenuAnchor}
-                    open={!!moreActionsMenuAnchor}
-                    onClose={() => setMoreActionsMenuAnchor(null)}
-                    MenuListProps={{ 'aria-labelledby': 'more-actions-button' }}
-                  >
-                    <MenuItem
-                      onClick={() => {
-                        setMoreActionsMenuAnchor(null);
-                        setImproveInitialDescription('');
-                        setImproveDialogOpen(true);
-                      }}
-                    >
-                      AI-Improve
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        setMoreActionsMenuAnchor(null);
-                        setVersionHistoryOpen(true);
-                      }}
-                    >
-                      History
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        setMoreActionsMenuAnchor(null);
-                        setDialogType('duplicate');
-                        setNewFlowName(`${initialFlow.name}_copy`);
-                        setDialogOpen(true);
-                      }}
-                    >
-                      Copy Flow
-                    </MenuItem>
-                    <MenuItem
-                      sx={{ color: 'error.main' }}
-                      onClick={() => {
-                        setMoreActionsMenuAnchor(null);
-                        handleDelete();
-                      }}
-                    >
-                      Delete Flow
-                    </MenuItem>
-                  </Menu>
-                </>
               )}
-
-              <Divider orientation="vertical" flexItem />
-
-              <Tooltip title="Undo">
-                <span>
-                  <IconButton
-                    aria-label="Undo"
-                    onClick={handleUndo}
-                    disabled={!canUndo}
-                    color="primary"
-                    size="small"
-                  >
-                    <UndoIcon />
-                  </IconButton>
-                </span>
-              </Tooltip>
-
-              <Tooltip title="Redo">
-                <span>
-                  <IconButton
-                    aria-label="Redo"
-                    onClick={handleRedo}
-                    disabled={!canRedo}
-                    color="primary"
-                    size="small"
-                  >
-                    <RedoIcon />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </ToolbarSecondaryActions>
+              {initialFlow && !isDraft && <Divider />}
+              {initialFlow && !isDraft && authoringMode === 'advanced' && (
+                <MenuItem
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    setImproveInitialDescription('');
+                    setImproveDialogOpen(true);
+                  }}
+                >
+                  AI-Improve
+                </MenuItem>
+              )}
+              {initialFlow && !isDraft && (
+                <MenuItem
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    setVersionHistoryOpen(true);
+                  }}
+                >
+                  {authoringMode === 'guided' ? 'Previous versions' : 'History'}
+                </MenuItem>
+              )}
+              {initialFlow && !isDraft && (
+                <MenuItem
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    setDialogType('duplicate');
+                    setNewFlowName(`${initialFlow.name} copy`);
+                    setDialogOpen(true);
+                  }}
+                >
+                  {authoringMode === 'guided' ? 'Duplicate agent' : 'Duplicate Flow'}
+                </MenuItem>
+              )}
+              {initialFlow && !isDraft && (
+                <MenuItem
+                  sx={{ color: 'error.main' }}
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    handleDelete();
+                  }}
+                >
+                  {authoringMode === 'guided' ? 'Delete agent' : 'Delete Flow'}
+                </MenuItem>
+              )}
+            </Menu>
           </ToolbarContainer>
 
-          <Collapse in={authoringMode === 'guided' && hasHiddenAdvancedFeatures} unmountOnExit>
-            <Alert
-              severity="info"
-              action={
-                <Button color="inherit" size="small" onClick={() => setAuthoringMode('advanced')}>
-                  Switch to Advanced
-                </Button>
-              }
-              sx={{ mb: 1 }}
-            >
-              This flow contains advanced settings. Guided mode preserves them but hides their editors.
-            </Alert>
-          </Collapse>
-
-          {/* One-per-flow Trigger drop notice (issue #241). */}
-          <Collapse in={!!triggerDropNotice} unmountOnExit>
-            {triggerDropNotice && (
+          <Collapse in={!!builderNotice} unmountOnExit>
+            {builderNotice && (
               <Alert
                 severity="warning"
-                onClose={() => setTriggerDropNotice(null)}
+                onClose={() => setBuilderNotice(null)}
                 sx={{ mb: 1 }}
               >
-                {triggerDropNotice}
+                {builderNotice}
               </Alert>
             )}
           </Collapse>
@@ -1364,24 +1692,84 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
           </Collapse>
           
-          <Box sx={{ flex: 1, position: 'relative' }}>
-            <Canvas
-              ref={reactFlowWrapper}
+          {authoringMode === 'guided' ? (
+            <GuidedFlowComposer
               nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onDrop={onDrop}
-              onDragOver={onDragOver}
-              onInit={onInit}
-              reactFlowWrapper={reactFlowWrapper}
-              onEditNode={openNodeProperties}
-              onConvertProcessToSubflow={initialFlow ? node => setConversionProcessId(node.id) : undefined}
-              onEditEdge={(edge) => setEditingEdge(edge)}
+              orderedStepIds={guidedGraph.orderedNodeIds}
+              selectedNodeId={selectedNode?.id}
+              flowName={flowName}
+              flowNameError={flowNameError}
+              onFlowNameChange={(value) => {
+                setFlowName(value);
+                setFlowNameError(validateFlowName(value));
+                markDirty();
+              }}
+              onSelectNode={handleSelectGuidedNode}
+              onAddTask={handleAddGuidedTask}
+              onTry={onTry ? () => { void handleTry(); } : undefined}
+              isSaving={saveStatus === 'saving'}
+              hasAdvancedFeatures={hasUnsafeGuidedGraph}
+              readyToTry={canTryGuided}
+              needsAIConnection={!guidedModelsReady}
+              onSwitchAdvanced={() => setAuthoringMode('advanced')}
             />
-          </Box>
+          ) : (
+            <Box
+              sx={{
+                flex: 1,
+                width: '100%',
+                minWidth: 0,
+                minHeight: 0,
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              <Canvas
+                ref={reactFlowWrapper}
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onDrop={onDrop}
+                onDragOver={onDragOver}
+                onInit={onInit}
+                reactFlowWrapper={reactFlowWrapper}
+                onEditNode={openNodeProperties}
+                onCreateNode={handleCreateNode}
+                onConvertProcessToSubflow={initialFlow ? node => setConversionProcessId(node.id) : undefined}
+                onEditEdge={(edge) => setEditingEdge(edge)}
+              />
+            </Box>
+          )}
         </MainContent>
       </ReactFlowProvider>
+
+      {(authoringMode === 'advanced' || selectedNode) && (
+        <InspectorPanel
+          selectedNode={selectedNode}
+          onClearSelection={handleClearNodeSelection}
+          onCommitNode={updateNodeData}
+          onOpenAdvanced={openNodeProperties}
+          flowName={flowName}
+          flowNameError={flowNameError}
+          onFlowNameChange={(value) => {
+            setFlowName(value);
+            setFlowNameError(validateFlowName(value));
+            markDirty();
+          }}
+          flowDescription={flowDescription}
+          onFlowDescriptionChange={(value) => {
+            setFlowDescription(value);
+            markDirty();
+          }}
+          authoringMode={authoringMode}
+          beginnerMode={authoringMode === 'guided'}
+          onAuthoringModeChange={setAuthoringMode}
+          permissionRuleCount={permissionRules.length}
+          onOpenPermissionRules={() => setPermissionRulesDialogOpen(true)}
+        />
+      )}
       
       {/* Node Properties Modals */}
       <ProcessNodePropertiesModal
@@ -1575,27 +1963,27 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       <Dialog open={dialogOpen} onClose={handleDialogClose}>
         <DialogTitle>
           {dialogType === 'duplicate' 
-            ? 'Copy Flow' 
+            ? authoringMode === 'guided' ? 'Copy agent' : 'Copy Flow'
             : dialogType === 'rename' 
-              ? 'Rename Flow' 
-              : 'Unsaved Changes'}
+              ? authoringMode === 'guided' ? 'Rename agent' : 'Rename Flow'
+              : 'Unsaved changes'}
         </DialogTitle>
         <DialogContent>
           {dialogType === 'unsaved' ? (
             <DialogContentText>
-              You have unsaved changes in the current flow. What would you like to do?
+              You have unsaved changes in this agent. What would you like to do?
             </DialogContentText>
           ) : (
             <>
               <DialogContentText>
                 {dialogType === 'duplicate' 
-                  ? 'Enter a name for the copied flow:' 
-                  : 'You are changing the name of this flow. Do you want to rename it or create a copy with the new name?'}
+                  ? 'Give the copy a name:'
+                  : 'You are changing this agent’s name. Would you like to rename it or create a copy?'}
               </DialogContentText>
               <TextField
                 autoFocus
                 margin="dense"
-                label="Flow Name"
+                label={authoringMode === 'guided' ? 'Agent name' : 'Flow Name'}
                 type="text"
                 fullWidth
                 value={newFlowName}

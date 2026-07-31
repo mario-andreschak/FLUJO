@@ -132,14 +132,26 @@ export const ModelCard = ({
 
   const body = (
     <>
-      <CardContent sx={{ flexGrow: 1 }}>
-        <Typography variant="h6" gutterBottom>
-          {model.displayName || model.name}
-        </Typography>
+      <CardContent sx={{ flexGrow: 1, p: 2.25 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 1.2 }}>
+          <Typography variant="h6" sx={{ pr: 1 }}>
+            {model.displayName || model.name}
+          </Typography>
+          <Chip
+            label={getProviderProfile(model.provider, model.adapter).label}
+            size="small"
+            sx={{
+              flexShrink: 0,
+              color: 'primary.light',
+              bgcolor: alpha(theme.palette.primary.main, 0.09),
+              border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
+            }}
+          />
+        </Box>
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: 2 }}
+          sx={{ mb: 2, minHeight: 42 }}
           style={{
             display: '-webkit-box',
             WebkitLineClamp: 3,
@@ -150,18 +162,26 @@ export const ModelCard = ({
         >
           {model.description}
         </Typography>
-        <Box sx={{ mb: 1 }}>
-          <Typography variant="body2" color="text.secondary">
-            Provider: {getProviderProfile(model.provider, model.adapter).label}
-          </Typography>
+        <Box
+          sx={{
+            mb: 1,
+            p: 1.25,
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: 2.5,
+            bgcolor: alpha(theme.palette.background.default, 0.44),
+          }}
+        >
           {model.displayName && (
             <Typography variant="body2" color="text.secondary" noWrap>
-              Model: {model.name}
+              <Box component="span" sx={{ color: 'text.primary', fontWeight: 650 }}>Model</Box>
+              {' · '}{model.name}
             </Typography>
           )}
           {typeof model.contextWindow === 'number' && (
             <Typography variant="body2" color="text.secondary">
-              Context: {model.contextWindow.toLocaleString()} tokens
+              <Box component="span" sx={{ color: 'text.primary', fontWeight: 650 }}>Context</Box>
+              {' · '}{model.contextWindow.toLocaleString()} tokens
             </Typography>
           )}
         </Box>
@@ -191,7 +211,7 @@ export const ModelCard = ({
   if (selectable) {
     return (
       <Card
-        elevation={selected ? 4 : 2}
+        elevation={0}
         role="radio"
         aria-checked={selected}
         sx={{
@@ -199,8 +219,13 @@ export const ModelCard = ({
           display: 'flex',
           flexDirection: 'column',
           position: 'relative',
-          border: (theme) => (selected ? `2px solid ${theme.palette.primary.main}` : '2px solid transparent'),
-          transition: 'border-color 120ms, box-shadow 120ms',
+          border: (theme) => `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
+          boxShadow: selected ? `0 0 0 3px ${alpha(theme.palette.primary.main, 0.13)}` : undefined,
+          transition: 'transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease',
+          '&:hover': {
+            borderColor: alpha(theme.palette.primary.main, 0.42),
+            transform: 'translateY(-3px)',
+          },
         }}
       >
         {favoriteButton}
@@ -215,10 +240,24 @@ export const ModelCard = ({
   }
 
   return (
-    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <Card
+      elevation={0}
+      sx={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+        transition: 'transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease',
+        '&:hover': {
+          borderColor: alpha(theme.palette.primary.main, 0.38),
+          boxShadow: `0 22px 60px ${alpha(theme.palette.primary.main, 0.12)}`,
+          transform: 'translateY(-4px)',
+        },
+      }}
+    >
       {favoriteButton}
       {body}
-      <CardActions disableSpacing>
+      <CardActions disableSpacing sx={{ px: 1.5, pb: 1.4, borderTop: 1, borderColor: 'divider' }}>
         <Tooltip title="Test model (direct SDK call, no flow)" arrow>
           <IconButton aria-label="test" onClick={handleOpenTest}>
             <ScienceIcon />

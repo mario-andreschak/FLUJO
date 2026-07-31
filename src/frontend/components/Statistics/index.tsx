@@ -30,7 +30,9 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import InsightsRoundedIcon from '@mui/icons-material/InsightsRounded';
 import Spinner from '@/frontend/components/shared/Spinner';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 import {
   createDefaultStatisticsFilters,
   statisticsService,
@@ -451,24 +453,15 @@ export default function Statistics() {
     : 0;
 
   return (
-    <Box component="main" sx={{ p: { xs: 2, md: 3 }, overflow: 'auto' }}>
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        gap={2}
-        sx={{ mb: 2 }}
-      >
-        <Box>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Typography component="h1" variant="h4">Statistics</Typography>
-            <Chip label="Experimental" size="small" color="secondary" variant="outlined" />
-          </Stack>
-          <Typography color="text.secondary">
-            Aggregate, redacted execution analytics. Dates use inclusive UTC days.
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={1}>
+    <Box component="section" sx={{ overflow: 'auto' }}>
+      <PageHeader
+        eyebrow="Observe"
+        title="Statistics"
+        description="Redacted execution analytics that reveal how your agent systems are behaving."
+        icon={InsightsRoundedIcon}
+        badge={<Chip label="Experimental" size="small" color="secondary" variant="outlined" />}
+        actions={(
+          <>
           <Button
             variant="outlined"
             startIcon={<RestartAltIcon />}
@@ -485,9 +478,11 @@ export default function Statistics() {
           >
             Refresh
           </Button>
-        </Stack>
-      </Stack>
+          </>
+        )}
+      />
 
+      <Box sx={{ p: { xs: 2, md: 3 }, width: '100%', maxWidth: 1440, mx: 'auto' }}>
       <Paper component="section" variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Typography component="h2" variant="h6" sx={{ mb: 1.5 }}>Shared filters</Typography>
         <Box
@@ -764,6 +759,7 @@ export default function Statistics() {
           </Box>
         </>
       )}
+      </Box>
     </Box>
   );
 }

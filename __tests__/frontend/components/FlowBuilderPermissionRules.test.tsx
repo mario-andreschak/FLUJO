@@ -33,6 +33,9 @@ jest.mock('@/frontend/services/flow', () => ({
   flowService: { createStartNode: jest.fn(() => ({ id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { label: 'Start', type: 'start' } })) },
 }));
 jest.mock('@/frontend/services/mcp', () => ({ mcpService: {} }));
+jest.mock('@/frontend/services/model', () => ({
+  modelService: { loadModels: jest.fn().mockResolvedValue([]) },
+}));
 
 const initialFlow: any = {
   id: 'flow-1',
@@ -48,9 +51,10 @@ const initialFlow: any = {
 describe('FlowBuilder permission rules', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
   });
 
-  it('omits the unattended control and strips historical values from saves', () => {
+  it('omits the unattended control and strips historical values from saves', async () => {
     const onSave = jest.fn();
     const legacyFlow = {
       ...initialFlow,
@@ -62,19 +66,18 @@ describe('FlowBuilder permission rules', () => {
     expect(screen.queryByText(/This flow contains advanced settings/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /Unattended/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
     expect(screen.queryByRole('checkbox', { name: /Unattended/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave.mock.calls[0][0]).not.toHaveProperty('unattended');
+    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
   });
 
   it('edits, reorders, and saves rules in their displayed order without editor IDs', async () => {
     const onSave = jest.fn();
     render(<FlowBuilder initialFlow={initialFlow} onSave={onSave} onDelete={() => {}} allFlows={[initialFlow]} />);
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
     fireEvent.click(screen.getByRole('button', { name: /Permission Rules/i }));
     expect(screen.getByText('Flow permission rules')).toBeInTheDocument();
 
@@ -90,13 +93,13 @@ describe('FlowBuilder permission rules', () => {
         { action: 'read_config', resource: '/tmp/*', effect: 'allow' },
       ],
     }));
+    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
   });
 
   it('prevents saving an incomplete newly added rule', async () => {
     const onSave = jest.fn();
     render(<FlowBuilder initialFlow={initialFlow} onSave={onSave} onDelete={() => {}} allFlows={[initialFlow]} />);
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
     fireEvent.click(screen.getByRole('button', { name: /Permission Rules/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));

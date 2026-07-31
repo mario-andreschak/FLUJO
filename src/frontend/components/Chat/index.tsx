@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { useRouter } from 'next/navigation';
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, IconButton, Tooltip, Fab, Zoom, TextField } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, Fab, Zoom, TextField, useMediaQuery } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -296,6 +297,8 @@ const isCancellationError = (err: unknown): boolean => {
 
 const Chat: React.FC = () => {
   const router = useRouter();
+  const theme = useTheme();
+  const isCompactLayout = useMediaQuery(theme.breakpoints.down('lg'), { noSsr: true });
   // --- State Management ---
   // List of conversation summaries for the sidebar, fetched from backend
   const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
@@ -529,7 +532,13 @@ const Chat: React.FC = () => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem('flujo-chat-sidebar-collapsed') === '1';
   });
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const effectiveSidebarCollapsed = isCompactLayout ? !mobileSidebarOpen : sidebarCollapsed;
   const toggleSidebarCollapsed = useCallback(() => {
+    if (isCompactLayout) {
+      setMobileSidebarOpen(open => !open);
+      return;
+    }
     setSidebarCollapsed(prev => {
       const next = !prev;
       if (typeof window !== 'undefined') {
@@ -537,7 +546,11 @@ const Chat: React.FC = () => {
       }
       return next;
     });
-  }, []);
+  }, [isCompactLayout]);
+  const selectSidebarConversation = useStableCallback((conversationId: string) => {
+    setCurrentConversationId(conversationId);
+    if (isCompactLayout) setMobileSidebarOpen(false);
+  });
   const startSidebarResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const previousUserSelect = document.body.style.userSelect;
@@ -823,13 +836,11 @@ const Chat: React.FC = () => {
     });
     silentListRefreshInFlightRef.current = trackedRequest;
     return trackedRequest;
-     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setCurrentConversationId]); // Include dependencies that affect auto-selection logic if needed
 
   useEffect(() => {
     // Fetch initial list on mount
     fetchConversations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty array ensures this runs only once on mount
 
   // Keep the sidebar live from the server's filtered global lifecycle stream.
@@ -1026,7 +1037,6 @@ const Chat: React.FC = () => {
     if (detailedConversation) {
       setRequireApproval(detailedConversation.requireApproval ?? false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailedConversation?.id]);
 
   // Toggle handler: update the checkbox and immediately persist the setting on the
@@ -1144,7 +1154,7 @@ const Chat: React.FC = () => {
     const selectedFlowId = (explicitFlow ?? rememberedFlow ?? flows.find(f => f.favorite) ?? flows[0])?.id || null;
     if (!selectedFlowId) {
       log.error('Cannot create conversation: No flows available or first flow has no ID.');
-      setError('Cannot create a new conversation: No flows available.');
+      setError('Cannot create a new conversation: No agents available.');
       return;
     }
 
@@ -1213,7 +1223,6 @@ const Chat: React.FC = () => {
       createNewConversation(wanted);
     }
     router.replace('/chat');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flows]);
 
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
@@ -1753,7 +1762,6 @@ const Chat: React.FC = () => {
     markConvRunning(currentConversationId, true);
     setLiveStats(prev => prev ?? { totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
     openEventStream(currentConversationId, 0); // replay buffered events from the start
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentConversationId, currentConversationSummary?.status, openEventStream]);
 
   // Delete conversation
@@ -1966,7 +1974,7 @@ const Chat: React.FC = () => {
 
     } catch (err) {
       log.error('Error updating flowId on backend:', { conversationId: currentConversationId, flowId, err });
-      let errorMsg = 'Failed to update the selected flow.';
+      let errorMsg = 'Failed to update the selected agent.';
       if (err instanceof ChatApiError) {
         errorMsg += ` Error: ${err.body?.error || err.message}`;
       } else if (err instanceof Error) {
@@ -2187,7 +2195,7 @@ const Chat: React.FC = () => {
       //   await fetchConversations(currentConversationId); // Refetch list, keeping current selection
       // }
     } else {
-      setError('Please select a flow for this conversation before sending messages');
+      setError('Please select an agent for this conversation before sending messages');
       // Revert optimistic update?
        setDetailedConversation(detailedConversation); // Revert to previous detailed state
     }
@@ -2377,7 +2385,6 @@ const Chat: React.FC = () => {
 
 
     return false; // Indicate standard response was handled
-     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning, patchConversationStatus, markConversationStopped]);
 
 
@@ -2408,7 +2415,7 @@ const Chat: React.FC = () => {
     // Ensure we use the detailed conversation's ID and flowId
     if (!conversation?.id || !conversation.flowId || !openaiRef.current) {
        log.error("Cannot send to completions: Missing conversation ID or flow ID.", { id: conversation?.id, flowId: conversation?.flowId });
-       setError("Cannot send message: Missing conversation ID or flow ID.");
+       setError("Cannot send message: This conversation is missing its agent.");
        return false;
     }
 
@@ -3470,7 +3477,6 @@ const Chat: React.FC = () => {
     return () => clearTimeout(timer);
     // handleSendMessage is intentionally omitted (stable behavior; including it
     // would re-run this effect every render on its fresh identity).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentConversationId,
     detailedConversation,
@@ -3491,12 +3497,43 @@ const Chat: React.FC = () => {
   const sidebarCreateNewConversation = useStableCallback(createNewConversation);
   const sidebarOpenQuickChat = useCallback(() => setQuickChatOpen(true), []);
 
+  const sidebarPanelContent = isLoadingHistory ? (
+    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
+      <Spinner size="medium" color="primary" />
+    </Box>
+  ) : historyError ? (
+    <Alert severity="error" sx={{ m: 2 }}>{historyError}</Alert>
+  ) : (
+    <ChatHistory
+      conversations={conversationList}
+      flowNames={flowNames}
+      currentConversationId={currentConversationId}
+      onSelectConversation={selectSidebarConversation}
+      onDeleteConversation={sidebarDeleteConversation}
+      onBulkDelete={sidebarBulkDeleteConversations}
+      onStopConversation={sidebarStopConversation}
+      onNewConversation={sidebarCreateNewConversation}
+      onQuickChat={sidebarOpenQuickChat}
+      onCollapse={toggleSidebarCollapsed}
+    />
+  );
 
   return (
-    <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        height: 'calc(100dvh - var(--app-bar-height))',
+        minHeight: 0,
+        overflow: 'hidden',
+        position: 'relative',
+        bgcolor: 'transparent',
+      }}
+    >
+      <Typography component="h1" className="sr-only">Chat</Typography>
+
       {/* Collapsed state: a slim always-visible affordance to bring the sidebar
           back (so the conversation list is never permanently lost). */}
-      {sidebarCollapsed && (
+      {effectiveSidebarCollapsed && (
         <Box
           sx={{
             width: 40,
@@ -3505,7 +3542,10 @@ const Chat: React.FC = () => {
             borderColor: 'divider',
             display: 'flex',
             justifyContent: 'center',
-            pt: 1,
+            alignItems: 'flex-start',
+            pt: 1.4,
+            bgcolor: 'var(--surface-glass)',
+            backdropFilter: 'blur(18px)',
           }}
         >
           <Tooltip title="Show conversation sidebar">
@@ -3516,8 +3556,33 @@ const Chat: React.FC = () => {
         </Box>
       )}
 
-      {/* Left sidebar with conversation history (resizable + collapsible) */}
-      {!sidebarCollapsed && (
+      {/* Compact layouts use a temporary drawer so focus, Escape, backdrop,
+          and restoration behavior remain accessible without crushing chat. */}
+      {isCompactLayout && (
+        <Drawer
+          anchor="left"
+          open={mobileSidebarOpen}
+          onClose={() => setMobileSidebarOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          PaperProps={{
+            sx: {
+              width: 'min(86vw, 340px)',
+              maxWidth: 'calc(100vw - 28px)',
+              display: 'flex',
+              flexDirection: 'column',
+              bgcolor: 'var(--surface-glass)',
+              backgroundImage: 'none',
+              backdropFilter: 'blur(22px) saturate(140%)',
+              boxShadow: '24px 0 70px rgba(0,0,0,.45)',
+            },
+          }}
+        >
+          {sidebarPanelContent}
+        </Drawer>
+      )}
+
+      {/* Desktop conversation history remains resizable and collapsible. */}
+      {!isCompactLayout && !sidebarCollapsed && (
         <Box
           sx={{
             width: sidebarWidth,
@@ -3525,43 +3590,53 @@ const Chat: React.FC = () => {
             borderRight: 1,
             borderColor: 'divider',
             display: 'flex',
-            flexDirection: 'column'
+            flexDirection: 'column',
+            bgcolor: 'var(--surface-glass)',
+            backdropFilter: 'blur(18px) saturate(135%)',
           }}
         >
-          {isLoadingHistory ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
-              <Spinner size="medium" color="primary" />
-            </Box>
-          ) : historyError ? (
-             <Alert severity="error" sx={{ m: 2 }}>{historyError}</Alert>
-          ) : (
-            <ChatHistory
-              conversations={conversationList} // Pass the list state (ConversationListItem[])
-              flowNames={flowNames}
-              currentConversationId={currentConversationId}
-              onSelectConversation={setCurrentConversationId}
-              onDeleteConversation={sidebarDeleteConversation}
-              onBulkDelete={sidebarBulkDeleteConversations}
-              onStopConversation={sidebarStopConversation}
-              onNewConversation={sidebarCreateNewConversation}
-              onQuickChat={sidebarOpenQuickChat}
-              onCollapse={toggleSidebarCollapsed}
-            />
-          )}
+          {sidebarPanelContent}
         </Box>
       )}
 
       {/* Draggable divider: resizes the sidebar. Hidden when collapsed. */}
-      {!sidebarCollapsed && (
+      {!isCompactLayout && !sidebarCollapsed && (
         <Box
           onPointerDown={startSidebarResize}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            setSidebarWidth(width => {
+              const next = Math.min(560, Math.max(220, width + (event.key === 'ArrowRight' ? 16 : -16)));
+              window.localStorage.setItem('flujo-chat-sidebar-width', String(next));
+              return next;
+            });
+          }}
+          role="separator"
+          tabIndex={0}
+          aria-orientation="vertical"
+          aria-valuemin={220}
+          aria-valuemax={560}
+          aria-valuenow={Math.round(sidebarWidth)}
           sx={{
-            width: '6px',
+            position: 'relative',
+            width: '8px',
             flexShrink: 0,
             cursor: 'col-resize',
-            bgcolor: 'divider',
+            bgcolor: 'transparent',
             transition: 'background-color 120ms',
-            '&:hover': { bgcolor: 'primary.main' },
+            '&::after': {
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: '50%',
+              width: 1,
+              content: '""',
+              bgcolor: 'divider',
+              transition: 'width 120ms, background-color 120ms',
+            },
+            '&:hover::after': { width: 2, bgcolor: 'primary.main' },
+            '&:focus-visible::after': { width: 3, bgcolor: 'primary.main' },
             touchAction: 'none',
           }}
           aria-label="Resize conversation sidebar"
@@ -3577,7 +3652,20 @@ const Chat: React.FC = () => {
               Shown once a conversation is selected. Click the pencil (or the
               title) to edit; Enter/blur saves, Escape cancels. */}
           {currentConversationId && (
-            <Box sx={{ px: 2, pt: 2, pb: 1, display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+            <Box
+              sx={{
+                px: { xs: 2, md: 3 },
+                py: 1.35,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                minWidth: 0,
+                borderBottom: 1,
+                borderColor: 'divider',
+                bgcolor: 'var(--surface-glass)',
+                backdropFilter: 'blur(16px)',
+              }}
+            >
               {isEditingTitle ? (
                 <TextField
                   value={titleDraft}
@@ -3628,7 +3716,19 @@ const Chat: React.FC = () => {
               selected; with no conversation it's confusing (nothing to assign a
               flow to). */}
           {currentConversationId && (
-            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box
+              sx={{
+                px: { xs: 2, md: 3 },
+                py: 1.25,
+                borderBottom: 1,
+                borderColor: 'divider',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+                bgcolor: 'var(--surface-glass)',
+                backdropFilter: 'blur(16px)',
+              }}
+            >
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 {isQuickChatFlowId(currentConversationSummary?.flowId || detailedConversation?.flowId) ? (
                   // Quick chats have no stored flow to select — the flow lives on
@@ -3650,7 +3750,7 @@ const Chat: React.FC = () => {
                         currentConversationSummary?.flowId || detailedConversation?.flowId || null;
                       if (!builderFlowId) return null;
                       return (
-                        <Tooltip title="Open this flow in the FlowBuilder">
+                        <Tooltip title="Open this agent in the editor">
                           <IconButton
                             color="primary"
                             onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
@@ -3679,7 +3779,17 @@ const Chat: React.FC = () => {
         <Box
           ref={messagesScrollRef}
           onScroll={handleMessagesScroll}
-          sx={{ flex: 1, overflow: 'auto', p: 2 }}
+          sx={{
+            flex: 1,
+            overflow: 'auto',
+            px: { xs: 1.5, sm: 2.5, lg: 4 },
+            py: 2.5,
+            '& > *': {
+              width: '100%',
+              maxWidth: 960,
+              mx: 'auto',
+            },
+          }}
         >
           {isLoadingDetails ? (
              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
@@ -3950,7 +4060,16 @@ const Chat: React.FC = () => {
         />}
 
         {/* Chat input */}
-        <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
+        <Box
+          sx={{
+            px: { xs: 1.2, sm: 2.5, lg: 4 },
+            pt: 1.5,
+            pb: { xs: 1.2, sm: 2 },
+            borderTop: 1,
+            borderColor: 'divider',
+            background: 'linear-gradient(to top, var(--background) 35%, transparent)',
+          }}
+        >
           {/* Queued messages (issue #177): follow-ups submitted while a run is in
               flight. Shown as removable chips; auto-sent one at a time once the
               conversation is idle. */}
@@ -4005,31 +4124,56 @@ const Chat: React.FC = () => {
             that renders the current conversation's flow and highlights the
             executed path. Independent of the debugger — works for normal,
             non-debug chats. */}
-        {workflowPanelVisible && currentConversationId && (
+        {workflowPanelVisible && currentConversationId && !isCompactLayout && (
           <>
             {/* Draggable divider: resizes the executed-steps panel. */}
             <Box
               onPointerDown={startWorkflowResize}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                event.preventDefault();
+                setWorkflowPanelWidth(width => {
+                  const max = Math.max(240, Math.round(window.innerWidth * 0.7));
+                  const next = Math.min(max, Math.max(240, width + (event.key === 'ArrowRight' ? -16 : 16)));
+                  window.localStorage.setItem('flujo-workflow-panel-width', String(next));
+                  return next;
+                });
+              }}
+              role="separator"
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-valuemin={240}
+              aria-valuemax={Math.max(240, Math.round((typeof window === 'undefined' ? 1440 : window.innerWidth) * 0.7))}
+              aria-valuenow={Math.min(
+                Math.max(240, Math.round((typeof window === 'undefined' ? 1440 : window.innerWidth) * 0.7)),
+                Math.round(workflowPanelWidth),
+              )}
               sx={{
                 width: '6px',
                 flexShrink: 0,
+                display: { xs: 'none', lg: 'block' },
                 cursor: 'col-resize',
                 bgcolor: 'divider',
                 transition: 'background-color 120ms',
                 '&:hover': { bgcolor: 'primary.main' },
+                '&:focus-visible': { bgcolor: 'primary.main' },
                 touchAction: 'none',
               }}
               aria-label="Resize executed steps panel"
             />
             <Box
               sx={{
-                width: `${workflowPanelWidth}px`,
-                minWidth: 240,
-                maxWidth: '70vw',
+                width: { xs: '100%', lg: `${workflowPanelWidth}px` },
+                minWidth: { xs: 0, lg: 240 },
+                maxWidth: { xs: 'none', lg: '70vw' },
                 flexShrink: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 height: '100%',
+                position: { xs: 'absolute', lg: 'static' },
+                inset: { xs: 0, lg: 'auto' },
+                zIndex: { xs: 36, lg: 'auto' },
+                bgcolor: 'background.default',
               }}
             >
               <ExecutedFlowPanel
@@ -4046,31 +4190,57 @@ const Chat: React.FC = () => {
         {/* Debugger Area (open for the whole debug session, not only when paused).
             Docked side-panel layout — shown unless the user expanded it into the
             full-screen modal (issue #162). */}
-        {debugPanelOpen && debugState && currentConversationId && !debuggerExpanded && (
+        {debugPanelOpen && debugState && currentConversationId && !debuggerExpanded && !isCompactLayout && (
           <>
             {/* Draggable divider: resizes the debugger panel. */}
             <Box
               onPointerDown={startDebuggerResize}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                event.preventDefault();
+                setDebuggerWidth(width => {
+                  const max = Math.max(360, Math.round(window.innerWidth * 0.85));
+                  const current = width || Math.round(window.innerWidth * 0.5);
+                  const next = Math.min(max, Math.max(360, current + (event.key === 'ArrowRight' ? -16 : 16)));
+                  window.localStorage.setItem('flujo-debugger-width', String(next));
+                  return next;
+                });
+              }}
+              role="separator"
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-valuemin={360}
+              aria-valuemax={Math.max(360, Math.round((typeof window === 'undefined' ? 1440 : window.innerWidth) * 0.85))}
+              aria-valuenow={Math.min(
+                Math.max(360, Math.round((typeof window === 'undefined' ? 1440 : window.innerWidth) * 0.85)),
+                Math.round(debuggerWidth || (typeof window === 'undefined' ? 720 : window.innerWidth * 0.5)),
+              )}
               sx={{
                 width: '6px',
                 flexShrink: 0,
+                display: { xs: 'none', lg: 'block' },
                 cursor: 'col-resize',
                 bgcolor: 'divider',
                 transition: 'background-color 120ms',
                 '&:hover': { bgcolor: 'primary.main' },
+                '&:focus-visible': { bgcolor: 'primary.main' },
                 touchAction: 'none',
               }}
               aria-label="Resize debugger panel"
             />
             <Box
               sx={{
-                width: debuggerWidth ? `${debuggerWidth}px` : '50%',
-                minWidth: 360,
-                maxWidth: '85vw',
+                width: { xs: '100%', lg: debuggerWidth ? `${debuggerWidth}px` : '50%' },
+                minWidth: { xs: 0, lg: 360 },
+                maxWidth: { xs: 'none', lg: '85vw' },
                 flexShrink: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 height: '100%',
+                position: { xs: 'absolute', lg: 'static' },
+                inset: { xs: 0, lg: 'auto' },
+                zIndex: { xs: 40, lg: 'auto' },
+                bgcolor: 'background.default',
               }}
             >
               <DebuggerCanvas
@@ -4094,12 +4264,39 @@ const Chat: React.FC = () => {
         )}
       </Box> {/* End Main Content */}
 
+      {workflowPanelVisible && currentConversationId && isCompactLayout && !debugPanelOpen && (
+        <Dialog
+          fullScreen
+          open
+          onClose={() => setWorkflowPanelVisible(false)}
+          aria-label="Executed steps"
+        >
+          <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
+            <ExecutedFlowPanel
+              flowId={detailedConversation?.flowId || currentConversationSummary?.flowId || null}
+              flowSnapshot={debugState?.flowSnapshot ?? null}
+              executedNodeIds={executedNodeIds}
+              liveActivity={liveActivity}
+              onClose={() => setWorkflowPanelVisible(false)}
+            />
+          </Box>
+        </Dialog>
+      )}
+
       {/* Debugger full-screen modal (issue #162): the same DebuggerCanvas, given
           the whole viewport so the 3 sections (Conversation / Execution Tracker
           / Detail) have room. Toggled by the expand button in the debugger
           header; the debug session/state is untouched. */}
-      {debugPanelOpen && debugState && currentConversationId && debuggerExpanded && (
-        <Dialog fullScreen open onClose={() => setDebuggerExpanded(false)}>
+      {debugPanelOpen && debugState && currentConversationId && (debuggerExpanded || isCompactLayout) && (
+        <Dialog
+          fullScreen
+          open
+          onClose={() => {
+            if (isCompactLayout) handleDebugClose();
+            else setDebuggerExpanded(false);
+          }}
+          aria-label="Flow debugger"
+        >
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <DebuggerCanvas
               debugState={debugState}
@@ -4114,8 +4311,11 @@ const Chat: React.FC = () => {
               breakpoints={breakpoints}
               onToggleBreakpoint={handleToggleBreakpoint}
               onClose={handleDebugClose}
-              isExpanded={debuggerExpanded}
-              onToggleExpand={() => setDebuggerExpanded(v => !v)}
+              isExpanded={debuggerExpanded || isCompactLayout}
+              onToggleExpand={() => {
+                if (isCompactLayout) handleDebugClose();
+                else setDebuggerExpanded(v => !v);
+              }}
             />
           </Box>
         </Dialog>
@@ -4126,13 +4326,13 @@ const Chat: React.FC = () => {
           keeps the current flow (the selector is controlled, so no revert is
           needed — we simply never apply the change). */}
       <Dialog open={!!pendingFlowSwitch} onClose={() => setPendingFlowSwitch(null)}>
-        <DialogTitle>Switch flow?</DialogTitle>
+        <DialogTitle>Switch agent?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This conversation has already been processed with its current flow.
+            This conversation has already been processed with its current agent.
             {' '}If you switch to
-            {' '}<strong>{flows.find(f => f.id === pendingFlowSwitch)?.name || 'the selected flow'}</strong>,
-            {' '}the conversation will continue processing from that flow&apos;s Start node again.
+            {' '}<strong>{flows.find(f => f.id === pendingFlowSwitch)?.name || 'the selected agent'}</strong>,
+            {' '}the conversation will continue from that agent&apos;s starting point.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -4145,7 +4345,7 @@ const Chat: React.FC = () => {
               if (flowId) applyFlowSelect(flowId);
             }}
           >
-            Switch Flow
+            Switch Agent
           </Button>
         </DialogActions>
       </Dialog>

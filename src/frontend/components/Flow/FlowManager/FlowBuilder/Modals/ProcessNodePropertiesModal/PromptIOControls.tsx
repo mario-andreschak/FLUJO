@@ -154,7 +154,7 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
               {inputMode === 'isolated'
                 ? '(the prompt below, as the user message)'
                 : inputMode === 'latest-message'
-                  ? '(the last user message + the last assistant response)'
+                  ? '(the last user message + the last agent response)'
                   : '(coming from ChatCompletion endpoint)'}
             </Typography>
           </Box>
@@ -179,7 +179,7 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
             onClick={() => setInputMode('latest-message')}
             icon={<ShortTextIcon fontSize="small" />}
             title="Latest message only"
-            description="The model sees this node's prompt plus the most recent exchange — the last user message and the last assistant response — plus this turn's own in-flight tool calls and results."
+            description="The model sees this node's prompt plus the most recent exchange — the last user message and the last agent response — plus this turn's own in-flight tool calls and results."
           />
           <OptionCard
             selected={inputMode === 'isolated'}

@@ -1,7 +1,16 @@
 "use client";
 
 import React, { useCallback, forwardRef, useRef, useEffect, useMemo, useState } from 'react';
-import { Modal, Box, Typography } from '@mui/material';
+import {
+  Box,
+  ClickAwayListener,
+  InputAdornment,
+  Paper,
+  Portal,
+  TextField,
+  Typography,
+  useMediaQuery,
+} from '@mui/material';
 import {
   ReactFlow,
   ConnectionLineType,
@@ -18,7 +27,7 @@ import {
   useStoreApi,
   OnConnectEnd
 } from '@xyflow/react';
-import { styled, useTheme } from '@mui/material/styles';
+import { alpha, styled, useTheme } from '@mui/material/styles';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -35,6 +44,7 @@ import { shouldOpenNodePicker } from './utils/nodePickerGate';
 import { findNodeById } from './utils/nodeUtils';
 import { CanvasControls } from './components/CanvasControls';
 import { createLogger } from '@/utils/logger';
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/Canvas.tsx');
@@ -82,12 +92,18 @@ export const edgeTypes = {
 const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   open,
   position,
+  anchorPosition,
   onClose,
   onSelectNodeType,
   sourceNodeType,
   sourceHandleId,
 }) => {
   const theme = useTheme();
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    if (open) setQuery('');
+  }, [open]);
 
   // Valid target node types come from the shared connection rules, so the
   // picker always agrees with validateConnection.
@@ -141,13 +157,18 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   ];
 
   // Filter node types based on validation
-  const availableNodeTypes = allNodeTypes.filter(node => validNodeTypes.includes(node.type));
+  const availableNodeTypes = allNodeTypes
+    .filter(node => validNodeTypes.includes(node.type))
+    .filter(node => {
+      const normalized = query.trim().toLowerCase();
+      return !normalized || `${node.label} ${node.description}`.toLowerCase().includes(normalized);
+    });
 
   // Helper function to get the appropriate icon for each node type
   const getNodeIcon = (type: NodeType) => {
     switch (type) {
       case 'process':
-        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
+        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.primary.main, borderRadius: '50%' }}></div>;
       case 'finish':
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.success.main, borderRadius: '50%' }}></div>;
       case 'mcp':
@@ -161,88 +182,170 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       case 'trigger':
         return <div style={{ width: 24, height: 24, backgroundColor: TRIGGER_COLOR, borderRadius: '50%' }}></div>;
       default:
-        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.secondary.main, borderRadius: '50%' }}></div>;
+        return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.primary.main, borderRadius: '50%' }}></div>;
     }
   };
 
-  if (!position) return null;
+  if (!open || !position) return null;
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      aria-labelledby="node-selection-modal"
-    >
-      <Box
-        sx={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 300,
-          bgcolor: 'background.paper',
-          borderRadius: 2,
-          boxShadow: 24,
-          p: 4,
+    <Portal>
+      <ClickAwayListener onClickAway={onClose}>
+        <Paper
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="node-selection-title"
+        elevation={16}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onClose();
+          }
         }}
-      >
-        <Typography variant="h6" component="h2" gutterBottom>
-          Select Node Type
+        sx={{
+          position: 'fixed',
+          top: {
+            xs: 'auto',
+            sm: anchorPosition
+              ? `clamp(12px, ${anchorPosition.y + 10}px, calc(100dvh - 460px))`
+              : '50%',
+          },
+          bottom: { xs: 12, sm: 'auto' },
+          left: {
+            xs: 12,
+            sm: anchorPosition
+              ? `clamp(12px, ${anchorPosition.x + 10}px, calc(100vw - 392px))`
+              : '50%',
+          },
+          right: { xs: 12, sm: 'auto' },
+          transform: { xs: 'none', sm: anchorPosition ? 'none' : 'translate(-50%, -50%)' },
+          zIndex: (muiTheme) => muiTheme.zIndex.modal + 1,
+          width: { xs: 'auto', sm: 380 },
+          maxHeight: 'min(70dvh, 520px)',
+          overflow: 'hidden',
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 3.5,
+          bgcolor: 'background.paper',
+          boxShadow: theme.palette.mode === 'dark'
+            ? '0 28px 80px rgba(0,0,0,.55)'
+            : '0 28px 80px rgba(31,27,74,.22)',
+          p: 1.5,
+        }}
+        >
+        <Typography id="node-selection-title" variant="subtitle1" fontWeight={800}>
+          Add the next step
         </Typography>
-        <Box display="flex" flexDirection="column" gap={2}>
+        <Typography variant="caption" color="text.secondary">
+          It will be connected and selected automatically.
+        </Typography>
+        <TextField
+          autoFocus
+          fullWidth
+          size="small"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search legal node types"
+          inputProps={{ 'aria-label': 'Search legal node types' }}
+          sx={{ my: 1.25 }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchRoundedIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <Box display="flex" flexDirection="column" gap={0.75} sx={{ overflowY: 'auto', maxHeight: 360 }}>
           {availableNodeTypes.map((node) => (
-            <Box
+            <Paper
+              component="button"
+              type="button"
               key={node.type}
+              onClick={() => onSelectNodeType(node.type, position)}
               sx={{
-                padding: 2,
-                borderRadius: 1,
-                border: `2px solid ${
-                  node.type === 'process'
-                    ? theme.palette.secondary.main
-                    : node.type === 'finish'
-                    ? theme.palette.success.main
-                    : node.type === 'subflow'
-                    ? theme.palette.warning.main
-                    : node.type === 'resource'
-                    ? RESOURCE_COLOR
-                    : theme.palette.info.main
-                }`,
+                appearance: 'none',
+                width: '100%',
+                p: 1.1,
+                textAlign: 'left',
+                color: 'text.primary',
+                bgcolor: 'transparent',
+                borderRadius: 2.5,
+                border: 1,
+                borderColor: 'divider',
                 cursor: 'pointer',
-                '&:hover': {
-                  boxShadow: 3,
+                transition: 'border-color 160ms ease, background-color 160ms ease, transform 160ms ease',
+                '&:hover, &:focus-visible': {
+                  outline: 'none',
+                  borderColor:
+                    node.type === 'finish'
+                      ? theme.palette.success.main
+                      : node.type === 'subflow'
+                      ? theme.palette.warning.main
+                      : node.type === 'resource'
+                      ? RESOURCE_COLOR
+                      : theme.palette.primary.main,
+                  bgcolor: alpha(theme.palette.primary.main, 0.06),
+                  transform: 'translateX(2px)',
                 },
               }}
-              onClick={() => onSelectNodeType(node.type, position)}
             >
-              <Box display="flex" alignItems="center" gap={1} mb={1}>
+              <Box display="flex" alignItems="center" gap={1.25}>
                 {getNodeIcon(node.type)}
-                <Typography variant="subtitle1" fontWeight="bold">
-                  {node.label}
-                </Typography>
+                <Box>
+                  <Typography variant="subtitle2" fontWeight={800}>
+                    {node.label}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {node.description}
+                  </Typography>
+                </Box>
               </Box>
-              <Typography variant="body2" color="text.secondary">
-                {node.description}
-              </Typography>
-            </Box>
+            </Paper>
           ))}
+          {availableNodeTypes.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+              No matching node types are valid for this connection.
+            </Typography>
+          )}
         </Box>
-      </Box>
-    </Modal>
+        </Paper>
+      </ClickAwayListener>
+    </Portal>
   );
 };
 
 const FlowContainer = styled('div')(({ theme }) => ({
+  flex: '1 1 0',
+  height: '100%',
+  minHeight: 0,
   width: '100%',
-  height: '80vh',
   border: `1px solid ${theme.palette.divider}`,
-  borderRadius: '4px',
-  background: theme.palette.background.paper,
+  borderRadius: '18px',
+  overflow: 'hidden',
+  backgroundColor: theme.palette.background.paper,
+  backgroundImage: `
+    linear-gradient(${theme.palette.divider} 1px, transparent 1px),
+    linear-gradient(90deg, ${theme.palette.divider} 1px, transparent 1px),
+    radial-gradient(circle at 22% 0%, ${alpha(theme.palette.primary.main, 0.1)}, transparent 38%)
+  `,
+  backgroundSize: '28px 28px, 28px 28px, auto',
+  boxShadow: theme.palette.mode === 'dark'
+    ? 'inset 0 1px 0 rgba(255,255,255,.035), 0 22px 65px rgba(0,0,0,.24)'
+    : 'inset 0 1px 0 rgba(255,255,255,.7), 0 22px 65px rgba(53,48,105,.1)',
   position: 'relative',
+  [theme.breakpoints.down('sm')]: {
+    flex: 'none',
+    height: 440,
+    minHeight: 440,
+    maxWidth: '100%',
+  },
 }));
 
 
 export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const theme = useTheme();
+  const isCompactCanvas = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const {
     nodes,
     edges,
@@ -253,6 +356,8 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onInit,
     reactFlowWrapper,
     onEditNode,
+    onCreateNode,
+    onSelectNode,
     onConvertProcessToSubflow,
     onEditEdge,
   } = props;
@@ -279,6 +384,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const [nodeSelectionModal, setNodeSelectionModal] = useState<{
     open: boolean;
     position: { x: number; y: number } | null;
+    screenPosition?: { x: number; y: number } | null;
     sourceNodeId?: string;
     sourceNodeType?: NodeType;
     sourceHandleId?: string;
@@ -316,6 +422,28 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       document.removeEventListener('editNode', handleEditNodeEvent);
     };
   }, [nodes, onEditNode]);
+
+  // Validation and other non-modal surfaces use this event to reveal a node
+  // in the persistent inspector. It deliberately selects instead of opening
+  // the full properties editor.
+  useEffect(() => {
+    const handleSelectNodeEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<EditNodeEventDetail>;
+      const nodeId = customEvent.detail?.nodeId;
+      if (!nodeId) return;
+      const node = findNodeById(nodeId, nodes);
+      if (!node) return;
+      onNodesChange([
+        ...nodes
+          .filter(candidate => candidate.selected && candidate.id !== nodeId)
+          .map(candidate => ({ type: 'select' as const, id: candidate.id, selected: false })),
+        { type: 'select' as const, id: nodeId, selected: true },
+      ]);
+      onSelectNode?.(node);
+    };
+    document.addEventListener('selectNode', handleSelectNodeEvent);
+    return () => document.removeEventListener('selectNode', handleSelectNodeEvent);
+  }, [nodes, onNodesChange, onSelectNode]);
 
   // Enhanced onConnect handler with edge type determination and validation.
   // A new edge replaces any edge it logically duplicates (one MCP connection
@@ -513,32 +641,6 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     }
   }, [onInit]);
 
-  // Add event listener for adding nodes from palette via double-click
-  useEffect(() => {
-    const handleAddNodeFromPalette = (e: Event) => {
-      const customEvent = e as CustomEvent<{ nodeType: string; position: { x: number; y: number } }>;
-      if (!customEvent.detail || !reactFlowInstance) return;
-
-      const { nodeType, position } = customEvent.detail;
-
-      // Create the new node
-      const newNode = flowService.createNode(nodeType, position);
-
-      onNodesChange(buildAddNodeChanges(newNode));
-
-      // Select the newly created node in the properties panel
-      if (onEditNode) {
-        onEditNode(newNode);
-      }
-    };
-
-    document.addEventListener('addNodeFromPalette', handleAddNodeFromPalette);
-
-    return () => {
-      document.removeEventListener('addNodeFromPalette', handleAddNodeFromPalette);
-    };
-  }, [reactFlowInstance, onNodesChange, buildAddNodeChanges, onEditNode]);
-
   // Handle edit properties from context menu. Branches on whether the menu
   // targets a node or an edge — an edge opens the EdgePropertiesModal (Tier 2b
   // condition editor) via the onEditEdge callback surfaced from FlowBuilder.
@@ -678,6 +780,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       setNodeSelectionModal({
         open: true,
         position,
+        screenPosition: { x: point.clientX, y: point.clientY },
         sourceNodeId: fromNode.id,
         sourceNodeType: fromNode.type as NodeType,
         sourceHandleId: fromHandle.id,
@@ -691,50 +794,73 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     (nodeType: NodeType, position: { x: number; y: number }) => {
       log.debug(`handleNodeTypeSelection: Selected node type ${nodeType} at position (${position.x}, ${position.y})`);
 
-      // Create a new node of the selected type
-      const newNode = flowService.createNode(nodeType, position);
+      // Create through the parent-owned factory so every creation path shares
+      // constraints (notably the one-Trigger limit) and selection behavior.
+      if (nodeType === 'trigger' && nodes.some(node => node.type === 'trigger')) {
+        setNodeSelectionModal({ open: false, position: null });
+        return;
+      }
 
-      onNodesChange(buildAddNodeChanges(newNode));
-
-      // Get the pending connection source captured when the drag was dropped
+      // Validate the proposed edge before committing the node. The picker is a
+      // one-click "insert and connect" action; if that insertion is no longer
+      // legal (for example because the source gained a successor), it must not
+      // leave a disconnected node behind.
+      const preparedNode = flowService.createNode(nodeType, position);
       const { sourceNodeId, sourceHandleId } = nodeSelectionModal;
       const sourceNode = sourceNodeId ? findNodeById(sourceNodeId, nodes) : undefined;
-
+      let pendingConnection: Connection | null = null;
       if (sourceNode && sourceHandleId) {
-        const targetHandle = defaultTargetHandleFor(nodeType, sourceHandleId);
-
-        // Create a connection from the source node to the new node
-        const connection = {
+        pendingConnection = {
           source: sourceNode.id,
           sourceHandle: sourceHandleId,
-          target: newNode.id,
-          targetHandle,
+          target: preparedNode.id,
+          targetHandle: defaultTargetHandleFor(nodeType, sourceHandleId),
         };
-
-        log.debug(`handleNodeTypeSelection: Creating connection from ${connection.source} to ${connection.target}`);
-
-        // Create and add the edge if the connection is valid
-        if (validateConnection(connection, [...nodes, newNode], edges)) {
-          const edge = createEdgeFromConnection(connection, [...nodes, newNode]);
-          const replaced = getReplacedEdgeIds(edge, edges);
-          onEdgesChange([
-            ...replaced.map(id => ({ type: 'remove' as const, id })),
-            { type: 'add' as const, item: edge },
-          ]);
-
-          log.debug(`handleNodeTypeSelection: Edge created with id ${edge.id}`);
+        if (!validateConnection(pendingConnection, [...nodes, preparedNode], edges)) {
+          setNodeSelectionModal({ open: false, position: null });
+          return;
         }
+      }
+
+      const newNode = onCreateNode
+        ? onCreateNode(nodeType, position, preparedNode)
+        : preparedNode;
+      if (!newNode) {
+        setNodeSelectionModal({ open: false, position: null });
+        return;
+      }
+      if (!onCreateNode) {
+        onNodesChange(buildAddNodeChanges(newNode));
+      }
+
+      if (pendingConnection) {
+        log.debug(`handleNodeTypeSelection: Creating connection from ${pendingConnection.source} to ${pendingConnection.target}`);
+        const edge = createEdgeFromConnection(pendingConnection, [...nodes, newNode]);
+        const replaced = getReplacedEdgeIds(edge, edges);
+        onEdgesChange([
+          ...replaced.map(id => ({ type: 'remove' as const, id })),
+          { type: 'add' as const, item: edge },
+        ]);
+
+        log.debug(`handleNodeTypeSelection: Edge created with id ${edge.id}`);
       }
 
       // Close the modal; this also discards the consumed connection source.
       setNodeSelectionModal({ open: false, position: null });
 
-      // Select the newly created node in the properties panel
-      if (onEditNode) {
-        onEditNode(newNode);
-      }
+      // The persistent inspector follows selection; no blocking editor opens.
+      onSelectNode?.(newNode);
     },
-    [nodeSelectionModal, nodes, edges, buildAddNodeChanges, onNodesChange, onEdgesChange, onEditNode]
+    [
+      nodeSelectionModal,
+      nodes,
+      edges,
+      buildAddNodeChanges,
+      onNodesChange,
+      onEdgesChange,
+      onCreateNode,
+      onSelectNode,
+    ]
   );
 
   // Close the node selection modal, abandoning the pending connection.
@@ -884,6 +1010,13 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
   return (
     <FlowContainer
+      style={isCompactCanvas ? {
+        flex: 'none',
+        width: '100%',
+        maxWidth: '100%',
+        height: 440,
+        minHeight: 440,
+      } : undefined}
       ref={(el) => {
         // Set both refs
         if (ref) {
@@ -908,7 +1041,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         edgeTypes={edgeTypes}
         defaultEdgeOptions={useMemo(() => ({
           type: 'custom',
-          animated: true,
+          animated: false,
           style: { stroke: theme.palette.text.secondary, strokeWidth: 2 },
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -939,6 +1072,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         onSelectionContextMenu={onSelectionContextMenu}
         onKeyDown={handleCanvasKeyDown}
         onNodeDoubleClick={onNodeDoubleClick}
+        onNodeClick={(_event, node) => onSelectNode?.(node as FlowNode)}
         onConnectEnd={onConnectEnd}
         tabIndex={0}
         fitView
@@ -980,6 +1114,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       <NodeSelectionModal
         open={nodeSelectionModal.open}
         position={nodeSelectionModal.position}
+        anchorPosition={nodeSelectionModal.screenPosition}
         onClose={handleCloseNodeSelectionModal}
         onSelectNodeType={handleNodeTypeSelection}
         sourceNodeType={nodeSelectionModal.sourceNodeType}

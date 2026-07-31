@@ -39,6 +39,7 @@ import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined';
 import MonitorHeartOutlinedIcon from '@mui/icons-material/MonitorHeartOutlined';
+import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded';
 import { PlannedExecution, TriggerType } from '@/shared/types/plannedExecution';
 import {
   plannedExecutionsService,
@@ -65,6 +66,7 @@ import {
 } from '@/utils/shared/plannedExecutionGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
+import PageHeader from '@/frontend/components/shared/PageHeader';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
 
@@ -246,21 +248,17 @@ const PlannedExecutionsManager = () => {
   );
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto', width: '100%' }}>
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 2,
-          mb: 1,
-        }}
-      >
-        <Typography variant="h5">Triggers</Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+    <Box sx={{ width: '100%' }}>
+      <PageHeader
+        eyebrow="Automate"
+        title="Triggers"
+        description="Run flows on a schedule or when the world changes — without opening chat."
+        icon={ScheduleRoundedIcon}
+        maxWidth={1200}
+        actions={(
+          <>
           <Tooltip title="Refresh">
-            <IconButton onClick={() => void refresh()}>
+            <IconButton onClick={() => void refresh()} aria-label="Refresh triggers">
               <RefreshIcon />
             </IconButton>
           </Tooltip>
@@ -284,13 +282,13 @@ const PlannedExecutionsManager = () => {
           >
             Add trigger
           </Button>
-        </Box>
-      </Box>
+          </>
+        )}
+      />
 
+      <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto', width: '100%' }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Run your flows automatically — on a schedule or when something happens —
-        without opening the chat. FLUJO must be running for triggers to fire.
-        The Active/Paused switch above gates <em>all</em> triggers globally.
+        FLUJO must be running for triggers to fire. The Active/Paused switch above gates all triggers globally.
       </Typography>
 
       {paused && entries.length > 0 && (
@@ -303,7 +301,7 @@ const PlannedExecutionsManager = () => {
 
       {entries.length > 0 && (
         <>
-          <Paper elevation={1} sx={{ mb: 1, p: 1 }}>
+          <Paper elevation={0} variant="outlined" sx={{ mb: 1.5, p: 1.2, borderRadius: 3 }}>
             <Box
               sx={{
                 display: 'flex',
@@ -622,6 +620,7 @@ const PlannedExecutionsManager = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      </Box>
     </Box>
   );
 };

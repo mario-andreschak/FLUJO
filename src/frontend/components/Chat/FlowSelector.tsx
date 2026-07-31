@@ -20,7 +20,7 @@ interface FlowSelectorProps {
   selectedFlowId: string | null;
   onSelectFlow: (flowId: string) => void;
   disabled?: boolean; // Add disabled prop
-  /** Hide the internal "Select Flow" subtitle when the host already renders a heading. */
+  /** Hide the internal "Select Agent" subtitle when the host already renders a heading. */
   hideLabel?: boolean;
 }
 
@@ -46,7 +46,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         setFlows(loadedFlows);
       } catch (err) {
         console.error('Error loading flows:', err);
-        setError('Failed to load flows');
+        setError('Failed to load agents');
       } finally {
         setIsLoading(false);
       }
@@ -109,7 +109,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     <Box>
       {!hideLabel && (
         <Typography variant="subtitle1" gutterBottom>
-          Select Flow
+          Select Agent
         </Typography>
       )}
 
@@ -117,7 +117,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
           <Typography variant="body2" color="text.secondary">
-            Loading flows...
+          Loading agents...
           </Typography>
         </Box>
       ) : error ? (
@@ -126,7 +126,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         </Typography>
       ) : flows.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          No flows available. Create some flows in the Flow Builder first.
+          No agents available. Create an agent first.
         </Typography>
       ) : (
         <>
@@ -140,24 +140,24 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
             sx={{ textTransform: 'none', maxWidth: '100%' }}
           >
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {selectedFlowId ? (selectedFlowName || 'Select a flow') : 'Select a flow'}
+              {selectedFlowId ? (selectedFlowName || 'Select an agent') : 'Select an agent'}
             </Box>
           </Button>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
             {selectedFlowId
-              ? `Using "${selectedFlowName}" flow for this conversation`
-              : 'Select a flow to use for this conversation'}
+              ? `Using "${selectedFlowName}" agent for this conversation`
+              : 'Select an agent for this conversation'}
           </Typography>
 
           <CardPickerDialog
             open={pickerOpen}
             onClose={() => setPickerOpen(false)}
-            title="Select a flow"
-            description="Pick the flow this conversation will run."
+            title="Select an agent"
+            description="Pick the agent for this conversation."
             skeleton={<FlowCardSkeleton />}
-            emptyMessage="No flows available. Create some flows in the Flow Builder first."
+            emptyMessage="No agents available. Create an agent first."
             searchable
-            searchPlaceholder="Search flows…"
+            searchPlaceholder="Search agents…"
             searchTerm={flowPicker.searchTerm}
             onSearchChange={flowPicker.setSearchTerm}
             items={flowPickerItems}

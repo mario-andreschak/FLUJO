@@ -237,7 +237,11 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   return (
     <>
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
-      <Paper elevation={1} sx={{ mb: 2, p: 1 }}>
+      <Paper
+        elevation={0}
+        variant="outlined"
+        sx={{ mb: 2.5, p: 1.2, borderRadius: 3 }}
+      >
         <Box
           sx={{
             display: 'flex',
@@ -248,7 +252,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
           }}
         >
           <TextField
-            placeholder="Search models..."
+            placeholder="Search AI connections..."
             variant="outlined"
             size="small"
             value={searchTerm}
@@ -269,7 +273,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             onClick={handleAdd}
             data-tour="add-model"
           >
-            Add Model
+            Connect AI
           </Button>
         </Box>
       </Paper>

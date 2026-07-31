@@ -47,8 +47,8 @@ describe('Automation route composition (#325)', () => {
     const lastManagerCall = mockWavesManager.mock.calls[mockWavesManager.mock.calls.length - 1];
     expect(lastManagerCall?.[0]).toEqual({
       height: {
-        xs: 'calc(100dvh - 56px)',
-        sm: 'calc(100dvh - 64px)',
+        xs: 'calc(100dvh - var(--app-bar-height))',
+        md: 'calc(100dvh - var(--app-bar-height) - var(--active-subnav-height))',
       },
     });
   });

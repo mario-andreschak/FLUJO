@@ -222,7 +222,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
           minRows={2}
           maxRows={6}
           label="System prompt (optional)"
-          placeholder="e.g. You are a concise coding assistant."
+          placeholder="e.g. You are a concise coding agent."
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
           sx={{ mb: 2 }}

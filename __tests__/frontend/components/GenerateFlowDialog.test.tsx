@@ -42,13 +42,17 @@ jest.mock('@/frontend/contexts/StorageContext', () => ({
 
 jest.mock('@/frontend/components/Chat/ChatInput', () => ({
   __esModule: true,
-  default: ({ onSendMessage, disabled }: {
+  default: ({ onSendMessage, disabled, placeholder }: {
     onSendMessage: (content: string) => void;
     disabled?: boolean;
+    placeholder?: string;
   }) => (
-    <button disabled={disabled} onClick={() => onSendMessage('Build the requested flow')}>
-      Send request
-    </button>
+    <>
+      <span>{placeholder}</span>
+      <button disabled={disabled} onClick={() => onSendMessage('Build the requested flow')}>
+        Send request
+      </button>
+    </>
   ),
 }));
 
@@ -123,6 +127,12 @@ describe('GenerateFlowDialog generation contract', () => {
       <GenerateFlowDialog open onClose={() => undefined} onGenerated={onGenerated} />
     );
 
+    expect(screen.getByText('Create an agent')).toBeInTheDocument();
+    expect(screen.getByText('What should your agent help with?')).toBeInTheDocument();
+    expect(screen.getByText('Describe the helper you want…')).toBeInTheDocument();
+    const advancedOptions = screen.getByText('Advanced options');
+    expect(advancedOptions.closest('details')).not.toHaveAttribute('open');
+
     const send = await screen.findByRole('button', { name: 'Send request' });
     await waitFor(() => expect(send).toBeEnabled());
     fireEvent.click(send);
@@ -137,7 +147,7 @@ describe('GenerateFlowDialog generation contract', () => {
       }
     ));
     expect(improveFlowMock).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Draft generated:/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your agent is ready:/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send request' }));
     await waitFor(() => expect(improveFlowMock).toHaveBeenCalledWith(
@@ -150,9 +160,9 @@ describe('GenerateFlowDialog generation contract', () => {
       }
     ));
     expect(generateFlowMock).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/Draft updated:/)).toBeInTheDocument();
+    expect(await screen.findByText(/I updated your agent:/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open draft in builder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to simple builder' }));
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({
       flow: revisedRoot,
       flows: [child, revisedRoot],
@@ -165,8 +175,11 @@ describe('GenerateFlowDialog generation contract', () => {
     render(
       <GenerateFlowDialog open onClose={() => undefined} onGenerated={() => undefined} />
     );
+    const advancedOptions = screen.getByText('Advanced options');
+    fireEvent.click(advancedOptions);
+    expect(advancedOptions.closest('details')).toHaveAttribute('open');
     const consent = await screen.findByRole('checkbox', {
-      name: 'Allow installing MCP servers for this draft',
+      name: 'Allow adding new connected tools',
     });
     expect(consent).not.toBeChecked();
     fireEvent.click(consent);
@@ -232,7 +245,7 @@ describe('GenerateFlowDialog generation contract', () => {
     expect(improveFlowMock).not.toHaveBeenCalled();
     await waitFor(() => expect(completeFlowGeneratorTurnMock).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open draft in builder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to simple builder' }));
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({
       flow: root,
       flows: [child, root],
