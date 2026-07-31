@@ -3660,11 +3660,51 @@ const Chat: React.FC = () => {
                 </Box>
               )}
 
+              {/* Durable recovery status (issue #355). Unknown tool effects are
+                  never presented as a safe node retry; the conservative action
+                  remains the existing restart-from-turn-entry path. */}
+              {!isLoading && !isDebugPaused && !viewedConversationStopped && detailedConversation?.recovery &&
+                (detailedConversation.recovery.classification === 'interrupted' || detailedConversation.recovery.manualActionRequired) && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                  <Alert
+                    icon={<ErrorOutlineIcon fontSize="inherit" />}
+                    severity="warning"
+                    variant="filled"
+                    sx={{ borderRadius: 2, py: 0.5, alignItems: 'center', maxWidth: 760 }}
+                    action={
+                      <Button
+                        color="inherit"
+                        size="small"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => sendToChatCompletions(detailedConversation)}
+                      >
+                        Restart turn
+                      </Button>
+                    }
+                  >
+                    <Typography variant="body2" fontWeight={600}>
+                      Recovery required
+                      {detailedConversation.recovery.currentCheckpoint?.nodeId
+                        ? ` at node ${detailedConversation.recovery.currentCheckpoint.nodeId}`
+                        : ''}
+                    </Typography>
+                    {detailedConversation.recovery.sideEffectWarning && (
+                      <Typography variant="caption" component="div">
+                        {detailedConversation.recovery.sideEffectWarning}
+                      </Typography>
+                    )}
+                  </Alert>
+                </Box>
+              )}
+
               {/* Error banner: the run ended in an error state. Guarded by !error
                   so it doesn't duplicate the transient error Alert shown right
                   after a live failure; this one persists across reloads. Not shown
                   for a user Stop (viewedConversationStopped owns that case). */}
-              {!isLoading && !isDebugPaused && !error && !viewedConversationStopped && currentConversationSummary?.status === 'error' && (
+              {!isLoading && !isDebugPaused && !error && !viewedConversationStopped &&
+                detailedConversation?.recovery?.classification !== 'interrupted' &&
+                !detailedConversation?.recovery?.manualActionRequired &&
+                currentConversationSummary?.status === 'error' && (
                 <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
                   <Alert
                     icon={<ErrorOutlineIcon fontSize="inherit" />}

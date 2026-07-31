@@ -20,6 +20,7 @@ import { quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteRunResources } from '@/backend/services/runResources';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { deleteCollectionItem } from '@/utils/storage/backend';
+import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -119,6 +120,7 @@ export async function GET(
         sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
         if (sharedState) {
           stateSource = 'storage';
+          await reconcileInterruptedRecovery(storageKey, sharedState);
           log.debug(`Found conversation state in storage`, { requestId, conversationId });
           // Optional: Add to in-memory map if loaded from storage?
           // FlowExecutor.conversationStates.set(conversationId, sharedState);
@@ -181,6 +183,9 @@ export async function GET(
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
         status: sharedState.status,
+        // Additive recovery metadata: precise cancellation/interruption/failure
+        // classification, latest safe checkpoint, lane identity, and warnings.
+        recovery: sharedState.recovery,
         // Where execution currently sits — powers the chat input's node pill
         // (the manual node picker). May reference a node of a previously
         // selected flow after a flow switch; the frontend validates it.

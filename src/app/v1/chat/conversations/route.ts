@@ -14,6 +14,8 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { deleteRunResources } from '@/backend/services/runResources';
 import { quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
+import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
+import type { StorageKey } from '@/shared/types/storage';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -141,6 +143,12 @@ export async function GET(request: NextRequest) {
           const fileContent = await fs.readFile(filePath, 'utf-8');
           const state = JSON.parse(fileContent) as SharedState;
           parsedState = state;
+          // On the first sidebar load after a process restart, convert a running
+          // record owned by the prior process into a durable interrupted state.
+          await reconcileInterruptedRecovery(
+            `conversations/${state.conversationId || conversationIdFromFile}` as StorageKey,
+            state,
+          );
 
           // Ensure ID consistency if possible
           if (state.conversationId && state.conversationId !== conversationIdFromFile) {
@@ -156,6 +164,7 @@ export async function GET(request: NextRequest) {
             updatedAt: state.updatedAt || 0,
             lastUserMessageAt: state.lastUserMessageAt ?? null,
             status: state.status,
+            recovery: state.recovery,
             // Wave grouping (issue #181): expose the already-persisted planned-
             // execution id so the sidebar can bucket conversations by wave.
             // null for ad-hoc chat/API runs. Read-only pass-through; no schema

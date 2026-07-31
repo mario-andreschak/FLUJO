@@ -9,7 +9,7 @@ import {
 } from '@/backend/execution/flow/steeringInbox';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
-import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import { EmitFn, type RecoveryLaneIdentity, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import {
   SharedState,
@@ -45,6 +45,15 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import {
+  classifyRecoveryFailure,
+  commitRecoveryCheckpoint,
+  commitRecoveryTransition,
+  commitToolCheckpoint,
+  initializeRecovery,
+  markDanglingToolEffectsUnknown,
+  reconcileInterruptedRecovery,
+} from '@/backend/execution/flow/recoveryCheckpoint';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -284,6 +293,8 @@ export interface FlowRunInput {
   /** Conversation id of the spawning run (subflows). Recorded on the child's
    *  SharedState so cancelling an ancestor stops this run too (issue #109). */
   parentRunId?: string;
+  /** Durable identity for a persisted parallel subflow lane (issue #355). */
+  lane?: RecoveryLaneIdentity;
   depth?: number;
 
   /** Explicit invocation context (issue #113/#339). Required at the runFlow
@@ -407,6 +418,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         // only written at run boundaries. Fold in anything it missed (e.g. a
         // crash mid-run after messages were streamed/appended).
         await recoverMessagesFromLog(loadedState);
+        await reconcileInterruptedRecovery(storageKey, loadedState);
         FlowExecutor.conversationStates.set(effectiveConvId, loadedState);
       } else {
         log.info(`No state found in storage for conversation: ${effectiveConvId}. Will create new state.`);
@@ -588,6 +600,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
   sharedState.logicalRunId = logicalRunId;
   sharedState.statisticsRunStartedAt ??= Date.now();
+  initializeRecovery(sharedState, logicalRunId);
+  if (input.lane) sharedState.recovery!.lane = input.lane;
   const flowSnapshot = () => ({
     id: sharedState.flowId || input.flowId || input.flowDefinition?.id || input.modelName || 'unknown',
     name: sharedState.statisticsFlowName ?? sharedState.flowSnapshot?.name ?? input.flowDefinition?.name,
@@ -813,7 +827,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     const repaired = repairDanglingToolCalls(sharedState);
     if (repaired.length) {
       log.info(`Repaired ${repaired.length} dangling tool call(s) for ${effectiveConvId} at run start (issue #256).`);
-      await appendRawForState(sharedState, repaired.map(m => ({ type: 'message', message: m })));
+      markDanglingToolEffectsUnknown(sharedState, 'running');
+      await appendRawForState(sharedState, [
+        ...repaired.map(m => ({ type: 'message' as const, message: m })),
+        { type: 'recovery:checkpoint', checkpoint: sharedState.recovery!.currentCheckpoint! },
+        { type: 'recovery:transition', recovery: { ...sharedState.recovery! } },
+      ]);
     }
   } catch (error) {
     log.warn(`Conversation-log reconcile failed for ${effectiveConvId}; continuing`, error);
@@ -897,6 +916,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- Execution event emission (live progress + debugger) ---
   const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
+  // A custom emitter forwards child events onto the parent channel. Recovery
+  // records for persisted children must instead append to the child's own log;
+  // omitting the emitter selects that direct durable path.
+  const recoveryEmit: EmitFn | undefined = input.emit ? undefined : emit;
   // Emission is tracked by message IDENTITY, not index: ProcessNode.post
   // REPLACES sharedState.messages with a system-message-prefixed copy of the
   // node context, so an index cursor shifts and re-emits the last pre-step
@@ -961,6 +984,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   };
 
   emit({ type: 'run:start', flowId: sharedState.flowId });
+  await commitRecoveryTransition(storageKey, sharedState, 'running', {}, recoveryEmit);
 
   // --- Elicitation context: bind active run to each MCP server in this flow ---
   // The elicitation handler (registered at connect time) looks up the active
@@ -1029,13 +1053,31 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // subflow child has its own SharedState, so the parent's flag only reaches it
   // through the parentRunId chain. Once an ancestor is found cancelled, the flag
   // is copied onto this state so descendants (and later checks) short-circuit.
+  let cancelledByAncestor = false;
   const runCancelled = (): boolean => {
     if (sharedState.isCancelled) return true;
     if (isCancelledByAncestry(sharedState.parentRunId, FlowExecutor.conversationStates)) {
+      cancelledByAncestor = true;
       sharedState.isCancelled = true;
       return true;
     }
     return false;
+  };
+
+  const processToolCallsRecoverably = async (
+    args: Parameters<typeof ModelHandler.processToolCalls>[0],
+  ): ReturnType<typeof ModelHandler.processToolCalls> => {
+    await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'before', recoveryEmit);
+    try {
+      const result = await ModelHandler.processToolCalls(args);
+      if (!result.success) {
+        await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
+      }
+      return result;
+    } catch (error) {
+      await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
+      throw error;
+    }
   };
 
   // --- Mid-run steering (user intervention while the run is in flight) --------
@@ -1149,7 +1191,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           const pendingCalls = sharedState.debugPendingToolCalls;
           sharedState.debugPendingToolCalls = undefined;
           log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
-          const toolProcessingResult = await ModelHandler.processToolCalls({
+          const toolProcessingResult = await processToolCallsRecoverably({
             toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap, emit,
             // Run-resource auto-capture: ephemeral (subflow-child) runs never
             // write resources — same policy as persistConversationState.
@@ -1174,6 +1216,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           sharedState.messages.push(...toolResultMessages);
           FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
           emitNewMessages();
+          await commitToolCheckpoint(storageKey, sharedState, pendingCalls, 'completed', recoveryEmit);
           try {
             sharedState.updatedAt = Date.now();
             await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
@@ -1226,19 +1269,27 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           log.verbose(`No messages in history before step ${internalIterations}`);
         }
 
-        // 2a. Execute one step of the flow
+        // 2a. Execute one step of the flow. Recovery checkpoints deliberately
+        // order journal append before snapshot persistence, so a restart can
+        // always select the latest fully committed safe boundary.
+        const checkpointNodeId = await FlowExecutor.peekNextNodeId(sharedState)
+          ?? sharedState.currentNodeId;
+        await commitRecoveryCheckpoint(storageKey, sharedState, {
+          phase: 'node:before',
+          nodeId: checkpointNodeId,
+          safe: true,
+        }, recoveryEmit);
         const stepResult = await FlowExecutor.executeStep(sharedState, emit);
         sharedState = stepResult.sharedState;
         currentAction = stepResult.action;
         emitNewMessages();
-
-        // No mid-loop state snapshot: per-step durability is the append-only
-        // conversation log (every emitted event is appended by the bus tap;
-        // this replaced the old rewrite-the-whole-file-per-step and its 500ms
-        // throttle). The full SharedState snapshot is written only at run
-        // boundaries — initial save, every pause, breakpoints, the final save —
-        // and a storage load folds log messages the snapshot missed back in
-        // (recoverMessagesFromLog).
+        if (currentAction !== ERROR_ACTION) {
+          await commitRecoveryCheckpoint(storageKey, sharedState, {
+            phase: 'node:after',
+            nodeId: checkpointNodeId,
+            safe: true,
+          }, recoveryEmit);
+        }
         sharedState.updatedAt = Date.now();
         if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
           const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
@@ -1427,7 +1478,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
                 // Process immediately-resolved (allow/deny) calls
                 if (toolCallsToProcessNow.length > 0) {
-                  const immediateResult = await ModelHandler.processToolCalls({
+                  const immediateResult = await processToolCallsRecoverably({
                     toolCalls: toolCallsToProcessNow,
                     toolNameMap: sharedState.toolNameMap,
                     emit,
@@ -1449,6 +1500,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                     }));
                     sharedState.messages.push(...immediateMessages);
                     emitNewMessages();
+                    await commitToolCheckpoint(storageKey, sharedState, toolCallsToProcessNow, 'completed', recoveryEmit);
                   }
                 }
 
@@ -1493,7 +1545,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 break;
               } else {
                 log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
-                const toolProcessingResult = await ModelHandler.processToolCalls({
+                const toolProcessingResult = await processToolCallsRecoverably({
                   toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   runId: logicalRunId,
@@ -1522,6 +1574,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 sharedState.messages.push(...toolResultMessagesWithTimestamp);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
+                await commitToolCheckpoint(storageKey, sharedState, lastAssistantMsg.tool_calls, 'completed', recoveryEmit);
                 log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
                 continue;
               }
@@ -1544,7 +1597,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
               if (internalTools.length > 0) {
                 log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);
-                const toolProcessingResult = await ModelHandler.processToolCalls({
+                const toolProcessingResult = await processToolCallsRecoverably({
                   toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   runId: logicalRunId,
@@ -1569,6 +1622,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 }));
                 sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                emitNewMessages();
+                await commitToolCheckpoint(storageKey, sharedState, internalTools, 'completed', recoveryEmit);
                 log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (flujo=false).`);
                 continue;
 
@@ -1885,6 +1940,36 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const finalExecutionTime = Date.now() - startTime;
   const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
+
+  // Persist the precise recovery transition before the legacy terminal event.
+  // Existing status values remain unchanged for backward compatibility.
+  if (sharedState.isCancelled) {
+    await commitRecoveryTransition(storageKey, sharedState, 'cancelled', {
+      failure: {
+        category: cancelledByAncestor ? 'ancestor_cancelled' : 'user_cancelled',
+        message: cancelledByAncestor
+          ? 'Execution was cancelled because an ancestor run was cancelled.'
+          : 'Execution was cancelled by the user.',
+        retryable: false,
+      },
+      cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
+    }, recoveryEmit);
+  } else if (finalStatus === 'completed') {
+    await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, recoveryEmit);
+  } else if (finalStatus === 'capped') {
+    await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, recoveryEmit);
+  } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
+    await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, recoveryEmit);
+  } else if (finalStatus === 'error') {
+    const classified = classifyRecoveryFailure(sharedState.lastResponse);
+    await commitRecoveryTransition(storageKey, sharedState, classified.classification, {
+      failure: classified.failure,
+      retryAfterAt: classified.retryAfterAt,
+      manualActionRequired: classified.failure.category === 'tool_failure'
+        ? true
+        : sharedState.recovery?.manualActionRequired,
+    }, recoveryEmit);
+  }
 
   // Flush any trailing messages and signal terminal completion to live consumers.
   emitNewMessages();

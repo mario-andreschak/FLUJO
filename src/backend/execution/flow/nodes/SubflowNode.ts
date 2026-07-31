@@ -792,6 +792,12 @@ export class SubflowNode extends BaseNode {
           depth: prepResult.depth,
           chainDepth: prepResult.chainDepth,
           parentRunId: prepResult.parentRunId,
+          lane: {
+            laneIndex: lane.itemIndex ?? i,
+            laneCount: lane.itemCount ?? laneCount,
+            ...(laneTitle ? { laneTitle } : {}),
+            ...(laneConversationId ? { conversationId: laneConversationId } : {}),
+          },
           ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
           ...(emit ? { emit } : {}),
         });

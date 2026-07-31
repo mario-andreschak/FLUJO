@@ -5,6 +5,10 @@ import { SharedState } from './types';
 import { recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from './conversationLog';
 import { persistConversationState } from './persistConversationState';
 import { createLogger } from '@/utils/logger';
+import {
+  markDanglingToolEffectsUnknown,
+  reconcileInterruptedRecovery,
+} from './recoveryCheckpoint';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
 
@@ -41,6 +45,11 @@ export async function loadConversationState(conversationId: string): Promise<Sha
       // Per-step durability lives in the append-only log; the snapshot is only
       // written at run boundaries. Fold in anything the snapshot missed.
       await recoverMessagesFromLog(state);
+      // Issue #355: a persisted running record owned by a prior process did not
+      // reach a terminal boundary. Reclassify it before any resume/control route
+      // can accidentally treat it as live. Legacy states without owner metadata
+      // remain untouched.
+      await reconcileInterruptedRecovery(storageKey, state);
       // Issue #256: a crash mid-tool leaves an assistant tool_calls turn with no
       // matching role:'tool' result, which every provider 400s on. Heal it on
       // first load (covers /respond, /approvals, /debug/*, /edit-state) so the
@@ -51,7 +60,12 @@ export async function loadConversationState(conversationId: string): Promise<Sha
         const repaired = repairDanglingToolCalls(state);
         if (repaired.length) {
           log.info('Repaired dangling tool call(s) on load', { conversationId, count: repaired.length });
-          await appendRawForState(state, repaired.map(m => ({ type: 'message', message: m })));
+          markDanglingToolEffectsUnknown(state);
+          await appendRawForState(state, [
+            ...repaired.map(m => ({ type: 'message' as const, message: m })),
+            { type: 'recovery:checkpoint', checkpoint: state.recovery!.currentCheckpoint! },
+            { type: 'recovery:transition', recovery: { ...state.recovery! } },
+          ]);
           await persistConversationState(storageKey, state);
         }
       } catch (repairError) {

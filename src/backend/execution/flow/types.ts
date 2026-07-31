@@ -1,7 +1,7 @@
 import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
-import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import { EmitFn, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -607,6 +607,12 @@ export interface SharedState {
     /** Stable logical execution id used only for metadata-only statistics. It is
      * preserved while approval/debug is paused, then replaced for a new turn. */
     logicalRunId?: string;
+    /**
+     * Additive durable recovery metadata (issue #355). Legacy status values stay
+     * authoritative for compatibility; this versioned record supplies the more
+     * precise cancellation/interruption/failure classification and safe boundary.
+     */
+    recovery?: RecoveryRecord;
     /** UTC epoch used to measure the logical run across pause/resume boundaries. */
     statisticsRunStartedAt?: number;
     /** Prevents a resumed approval/debug request from emitting a second start. */

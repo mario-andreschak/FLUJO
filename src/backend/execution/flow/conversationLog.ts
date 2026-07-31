@@ -44,6 +44,9 @@ const log = createLogger('backend/execution/flow/conversationLog');
 const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<ExecutionEventType>([
   'run:start',
   'run:done',
+  'recovery:checkpoint',
+  'recovery:transition',
+  'recovery:retry',
   'node:enter',
   'node:exit',
   'node:snapshot',

@@ -11,6 +11,7 @@ import { listPendingToolCalls, clearPendingApprovals } from '@/backend/execution
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
+import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheckpoint';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
@@ -64,7 +65,18 @@ export async function POST(
       return NextResponse.json({ success: true, message: 'Conversation not found, assumed cancelled.' });
     }
 
-    // 3. Set the cancellation flag
+    // 3. Durably record the cancellation request BEFORE signalling the live
+    // state. The legacy isCancelled flag remains the cooperative abort signal;
+    // recovery metadata distinguishes this from provider/tool failure.
+    log.info(`Persisting cancellation transition for conversation`, { requestId, conversationId });
+    await commitRecoveryTransition(storageKey, sharedState, 'cancelled', {
+      failure: {
+        category: 'user_cancelled',
+        message: 'Execution was cancelled by the user.',
+        retryable: false,
+      },
+      cancellationRequestedAt: Date.now(),
+    }, executionEventBus.emitterFor(conversationId));
     log.info(`Setting cancellation flag for conversation`, { requestId, conversationId });
     sharedState.isCancelled = true;
 
