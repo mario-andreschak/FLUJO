@@ -12,7 +12,6 @@
  * feed the SAME live tab (`updateCanvasApp`); they never spawn a second entry.
  */
 
-import { isBuiltInServerName } from '@/utils/shared/mcpConstants';
 
 /** Default number of concurrently-live canvas tabs before LRU eviction. */
 export const DEFAULT_CANVAS_TAB_CAP = 16;
@@ -251,26 +250,21 @@ export function updateCanvasApp(
 /**
  * Route an observed tool result into the canvas.
  *
- * First-party apps shipped by FLUJO are trusted to mount directly in the PiP
- * canvas (#331), so their first result opens a tab without the click-to-mount
- * gate. Third-party apps remain consent-gated and are ignored until the user
- * explicitly opens them. Once any app is open, later results re-feed its
- * existing bridge as before.
+ * Every app uses the same click-to-mount consent gate. Results are ignored until
+ * the user explicitly opens an app; later results then re-feed its existing
+ * bridge without granting trust based on the server name.
  */
 export function syncCanvasAppResult(
   state: CanvasState,
   input: CanvasAppInput,
   now: number = Date.now(),
-  cap: number = DEFAULT_CANVAS_TAB_CAP,
+  _cap: number = DEFAULT_CANVAS_TAB_CAP,
 ): CanvasMutationResult {
   const key = input.instanceKey ?? canvasKey(input.serverName, input.uri);
   if (state.entries[key]) {
     return { state: updateCanvasApp(state, input, now), evicted: [] };
   }
-  if (!isBuiltInServerName(input.serverName)) {
-    return { state, evicted: [] };
-  }
-  return openCanvasApp(state, input, now, cap);
+  return { state, evicted: [] };
 }
 
 /** Focus a tab: mark it read and bump its recency (LRU). No-op if absent. */

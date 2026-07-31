@@ -4,8 +4,8 @@ import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import {
   BROWSER_SERVER_NAME,
-  builtInServerConfig,
-  BUILTIN_SERVER_NAMES,
+  shippedServerConfig,
+  SHIPPED_SERVER_NAMES,
   InternalServerOverrides,
 } from './registry';
 
@@ -18,7 +18,7 @@ function persistedInternalConfig(
   override: InternalServerOverrides[string] | undefined,
 ): Record<string, unknown> {
   const stored = Object.fromEntries(
-    Object.entries(config).filter(([key]) => key !== 'name' && key !== 'builtIn'),
+    Object.entries(config).filter(([key]) => key !== 'name'),
   );
 
   if (typeof override?.disabled === 'boolean') {
@@ -39,9 +39,9 @@ async function runV1Migration(): Promise<void> {
   const overrides = await loadItem<InternalServerOverrides>(StorageKey.MCP_INTERNAL_OVERRIDES, {});
   const nextServers = { ...(servers && typeof servers === 'object' ? servers : {}) };
 
-  for (const name of BUILTIN_SERVER_NAMES) {
+  for (const name of SHIPPED_SERVER_NAMES) {
     if (Object.prototype.hasOwnProperty.call(nextServers, name)) continue;
-    nextServers[name] = persistedInternalConfig(builtInServerConfig(name), overrides?.[name]);
+    nextServers[name] = persistedInternalConfig(shippedServerConfig(name), overrides?.[name]);
   }
 
   let overridesCleared = false;
@@ -72,7 +72,7 @@ async function runV1Migration(): Promise<void> {
 }
 
 function isShippedRecord(name: string, stored: Record<string, unknown>): boolean {
-  const expected = builtInServerConfig(name);
+  const expected = shippedServerConfig(name);
   return stored.transport === expected.transport
     && stored.command === expected.command
     && stored.cwd === expected.cwd
@@ -92,10 +92,10 @@ async function runV2CapabilitiesMigration(): Promise<void> {
   const nextServers = { ...(servers && typeof servers === 'object' ? servers : {}) };
   let changed = false;
 
-  for (const name of BUILTIN_SERVER_NAMES) {
+  for (const name of SHIPPED_SERVER_NAMES) {
     const stored = nextServers[name];
     if (!stored || !isShippedRecord(name, stored)) continue;
-    const expected = builtInServerConfig(name);
+    const expected = shippedServerConfig(name);
     const next: Record<string, unknown> = {
       ...stored,
       internalPackage: expected.internalPackage,
@@ -128,7 +128,7 @@ async function runV3BrowserMigration(): Promise<void> {
   const nextServers = { ...(servers && typeof servers === 'object' ? servers : {}) };
   if (!Object.prototype.hasOwnProperty.call(nextServers, BROWSER_SERVER_NAME)) {
     nextServers[BROWSER_SERVER_NAME] = persistedInternalConfig(
-      builtInServerConfig(BROWSER_SERVER_NAME),
+      shippedServerConfig(BROWSER_SERVER_NAME),
       undefined,
     );
     await saveItem(StorageKey.MCP_SERVERS, nextServers);

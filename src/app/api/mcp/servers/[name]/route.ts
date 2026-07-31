@@ -80,9 +80,7 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
         ? 404
         : errMsg.includes('already exists')
           ? 409
-          : errMsg.includes('built-in')
-            ? 403
-            : 400;
+          : 400;
       log.warn(`Error updating config for ${name}:`, result.error);
       return json({ error: result.error }, status);
     }
@@ -114,7 +112,7 @@ export async function DELETE(request: NextRequest, { params }: RouteContext) {
 
     if (!result.success) {
       const errMsg = typeof result.error === 'string' ? result.error : '';
-      const status = errMsg.includes('not found') ? 404 : errMsg.includes('built-in') ? 403 : 500;
+      const status = errMsg.includes('not found') ? 404 : 500;
       log.warn(`Error deleting config for ${name}:`, result.error);
       return json({ success: false, error: result.error }, status);
     }

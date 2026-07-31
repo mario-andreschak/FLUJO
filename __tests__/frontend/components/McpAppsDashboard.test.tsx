@@ -46,7 +46,7 @@ describe('McpAppsDashboard', () => {
       { name: 'enabled-apps', disabled: false, enableMcpApps: true },
       { name: 'disabled-apps', disabled: true, enableMcpApps: true },
       { name: 'not-opted-in', disabled: false, enableMcpApps: false },
-      { name: 'flujo', disabled: false, builtIn: true },
+      { name: 'flujo', disabled: false, enableMcpApps: false },
     ] as any);
     service.listServerResources.mockImplementation(async (serverName: string) => ({
       resources: serverName === 'enabled-apps'
@@ -62,12 +62,12 @@ describe('McpAppsDashboard', () => {
     renderDashboard();
 
     expect(await screen.findByText('Valid App')).toBeInTheDocument();
-    expect(screen.getByText('Built-in App')).toBeInTheDocument();
+    expect(screen.queryByText('Built-in App')).not.toBeInTheDocument();
     expect(screen.queryByText('Bad URI')).not.toBeInTheDocument();
     expect(screen.queryByText('Bad MIME')).not.toBeInTheDocument();
-    expect(service.listServerResources).toHaveBeenCalledTimes(2);
+    expect(service.listServerResources).toHaveBeenCalledTimes(1);
     expect(service.listServerResources).toHaveBeenCalledWith('enabled-apps');
-    expect(service.listServerResources).toHaveBeenCalledWith('flujo');
+    expect(service.listServerResources).not.toHaveBeenCalledWith('flujo');
 
     fireEvent.click(screen.getByText('Valid App'));
     const frame = await screen.findByTestId('mcp-app-frame');

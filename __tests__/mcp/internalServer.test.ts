@@ -7,14 +7,12 @@ jest.mock('@/utils/storage/backend', () => ({
 
 import path from 'node:path';
 import { mcpService } from '@/backend/services/mcp';
-import { saveConfig } from '@/backend/services/mcp/config';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import {
-  INTERNAL_SERVER_NAME,
-  builtInStdioEnv,
+  bundledStdioEnv,
   internalServerConfig,
 } from '@/backend/services/mcp/internalServerConfig';
-import { builtInServerConfig } from '@/backend/services/mcp/internal/registry';
+import { shippedServerConfig } from '@/backend/services/mcp/internal/registry';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { MCPServerConfig } from '@/shared/types/mcp';
@@ -38,9 +36,9 @@ beforeEach(() => {
   storage = new Map([
     [StorageKey.MCP_SERVERS, {
       flujo: persisted({ ...internalServerConfig(), disabled: true }),
-      filesystem: persisted({ ...builtInServerConfig('filesystem'), disabled: true }),
-      bash: persisted({ ...builtInServerConfig('bash'), disabled: true }),
-      browser: persisted({ ...builtInServerConfig('browser'), disabled: true }),
+      filesystem: persisted({ ...shippedServerConfig('filesystem'), disabled: true }),
+      bash: persisted({ ...shippedServerConfig('bash'), disabled: true }),
+      browser: persisted({ ...shippedServerConfig('browser'), disabled: true }),
     }],
   ]);
   loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) =>
@@ -60,7 +58,7 @@ describe('persisted internal configs', () => {
     for (const name of ['flujo', 'filesystem', 'bash', 'browser']) {
       const config = list.find((candidate) => candidate.name === name);
       expect(config).toBeDefined();
-      expect(config?.builtIn).toBeUndefined();
+      expect(config).not.toHaveProperty('builtIn');
       expect(config?.exposeAsMcpServer).toBe(true);
     }
   });
@@ -86,7 +84,7 @@ describe('persisted internal configs', () => {
 });
 
 describe('standalone stdio configuration', () => {
-  it('persists portable offline package-runner commands for every built-in', () => {
+  it('persists portable offline package-runner commands for every bundled server', () => {
     const expectedCommands: Record<string, string> = {
       flujo: 'flujo-mcp-flujo',
       filesystem: 'flujo-mcp-filesystem',
@@ -94,7 +92,7 @@ describe('standalone stdio configuration', () => {
       browser: 'flujo-mcp-browser',
     };
     for (const [name, executable] of Object.entries(expectedCommands)) {
-      const config = builtInServerConfig(name);
+      const config = shippedServerConfig(name);
       expect(config.command).toBe('npx');
       expect(config.args).toEqual(['--no-install', executable]);
       expect(config.cwd).toBe('');
@@ -104,7 +102,7 @@ describe('standalone stdio configuration', () => {
   });
 
   it('declares the Bash package MCP Apps/resource capabilities', () => {
-    expect(builtInServerConfig('bash')).toMatchObject({
+    expect(shippedServerConfig('bash')).toMatchObject({
       disabled: false,
       internalPackage: '@flujo-ai/mcp-bash',
       packageCapabilities: { mcpApps: true, resources: true },
@@ -115,20 +113,20 @@ describe('standalone stdio configuration', () => {
     const previous = process.env.FLUJO_BROWSER_ENABLED;
     delete process.env.FLUJO_BROWSER_ENABLED;
     try {
-      expect(builtInServerConfig('browser')).toMatchObject({
+      expect(shippedServerConfig('browser')).toMatchObject({
         disabled: true,
         internalPackage: '@flujo-ai/mcp-browser',
         packageCapabilities: { mcpApps: true, resources: true },
       });
       process.env.FLUJO_BROWSER_ENABLED = '1';
-      expect(builtInServerConfig('browser').disabled).toBe(false);
+      expect(shippedServerConfig('browser').disabled).toBe(false);
     } finally {
       if (previous === undefined) delete process.env.FLUJO_BROWSER_ENABLED;
       else process.env.FLUJO_BROWSER_ENABLED = previous;
     }
   });
 
-  it('resolves a built-in app root at launch without coupling it to the data directory', () => {
+  it('resolves the bundled app root at launch without coupling it to the data directory', () => {
     const previousAppRoot = process.env.FLUJO_APP_ROOT;
     const previousDataDir = process.env.FLUJO_DATA_DIR;
     const appRoot = path.join(process.cwd(), 'read-only-app');
@@ -136,7 +134,7 @@ describe('standalone stdio configuration', () => {
     process.env.FLUJO_APP_ROOT = appRoot;
     process.env.FLUJO_DATA_DIR = dataDir;
     try {
-      const launch = resolveStdioLaunch(builtInServerConfig('filesystem'));
+      const launch = resolveStdioLaunch(shippedServerConfig('filesystem'));
       expect(launch.cwd).toBe(path.resolve(appRoot));
       expect(launch.cwd).not.toBe(path.resolve(dataDir));
       expect(launch.args).toEqual(['--no-install', 'flujo-mcp-filesystem']);
@@ -159,12 +157,12 @@ describe('standalone stdio configuration', () => {
     process.env.NODE_EXTRA_CA_CERTS = 'test-ca.pem';
     process.env.FLUJO_TEST_SECRET = 'do-not-forward';
     try {
-      expect(builtInStdioEnv('filesystem')).toMatchObject({
+      expect(bundledStdioEnv('filesystem')).toMatchObject({
         FLUJO_FS_ROOTS: 'operator-root',
         FLUJO_BASE_URL: 'https://127.0.0.1:4443',
         NODE_EXTRA_CA_CERTS: 'test-ca.pem',
       });
-      expect(builtInStdioEnv('filesystem')).not.toHaveProperty('FLUJO_TEST_SECRET');
+      expect(bundledStdioEnv('filesystem')).not.toHaveProperty('FLUJO_TEST_SECRET');
     } finally {
       if (previousRoot === undefined) delete process.env.FLUJO_FS_ROOTS;
       else process.env.FLUJO_FS_ROOTS = previousRoot;
@@ -183,7 +181,7 @@ describe('standalone stdio configuration', () => {
     process.env.FLUJO_BASH_INHERIT_ENV = '1';
     process.env.FLUJO_TEST_SECRET = 'explicitly-forwarded';
     try {
-      expect(builtInStdioEnv('bash')).toMatchObject({
+      expect(bundledStdioEnv('bash')).toMatchObject({
         FLUJO_BASH_INHERIT_ENV: '1',
         FLUJO_TEST_SECRET: 'explicitly-forwarded',
       });
@@ -215,16 +213,7 @@ describe('ordinary CRUD and persistence', () => {
     expect(saveItemMock).not.toHaveBeenCalledWith(StorageKey.MCP_INTERNAL_OVERRIDES, expect.anything());
   });
 
-  it('saveConfig no longer filters entries carrying the legacy builtIn field', async () => {
-    const legacy = { ...internalServerConfig(), builtIn: true } as MCPServerConfig;
-    const result = await saveConfig(new Map([[INTERNAL_SERVER_NAME, legacy]]));
-    expect(result.success).toBe(true);
-
-    const saved = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
-    expect(saved[INTERNAL_SERVER_NAME]).toMatchObject({ builtIn: true, exposeAsMcpServer: true });
-  });
-
-  it('keeps filesystem MCP Apps opt-in after builtIn is removed', async () => {
+  it('requires explicit MCP Apps opt-in for the shipped filesystem server', async () => {
     expect(await mcpService.isMcpAppAccessEnabled('filesystem')).toBe(false);
 
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;

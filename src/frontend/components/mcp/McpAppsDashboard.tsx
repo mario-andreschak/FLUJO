@@ -50,7 +50,6 @@ interface DashboardApp {
 
 interface ServerDiscovery {
   name: string;
-  builtIn: boolean;
   apps: DashboardApp[];
   error?: string;
 }
@@ -98,11 +97,8 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         return;
       }
 
-      // Built-in servers are app-authorized by the backend without the external
-      // server opt-in; external servers remain strictly opt-in.
       const eligible = (configsResult as MCPServerConfig[]).filter((server) => (
-        server.disabled !== true
-        && (server.builtIn === true || server.enableMcpApps === true)
+        server.disabled !== true && server.enableMcpApps === true
       ));
 
       const discoveries = await Promise.all(eligible.map(async (server): Promise<ServerDiscovery> => {
@@ -118,7 +114,6 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         if (resourceResult?.error) {
           return {
             name: server.name,
-            builtIn: server.builtIn === true,
             apps: [],
             error: readableError(resourceResult.error, 'Resource discovery is unavailable.'),
           };
@@ -153,7 +148,6 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
         return {
           name: server.name,
-          builtIn: server.builtIn === true,
           apps,
         };
       }));
@@ -194,7 +188,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         selectedKey?.startsWith(`${server.name}\u0000`)
       ));
       const accessLost = detail.config?.disabled === true
-        || (detail.config?.enableMcpApps === false && selectedServer?.builtIn !== true);
+        || detail.config?.enableMcpApps === false;
       if (selectedServer?.name === detail.serverName && accessLost) setSelectedKey(null);
       mcpService.clearCapabilitiesCache(detail.serverName);
       mcpService.clearToolsCache(detail.serverName);
@@ -261,10 +255,9 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
               {servers.map((server) => (
                 <Box key={server.name} sx={{ mb: 2.5 }}>
-                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                    <Typography variant="subtitle1" fontWeight={600}>{server.name}</Typography>
-                    {server.builtIn && <Chip label="Built-in" size="small" variant="outlined" />}
-                  </Stack>
+                  <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
+                    {server.name}
+                  </Typography>
                   {server.error ? (
                     <Alert severity="warning">
                       <Typography variant="body2" fontWeight={600}>Unavailable or disconnected</Typography>

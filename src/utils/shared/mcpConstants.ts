@@ -61,14 +61,3 @@ export function packageCapabilitiesOf(value: unknown): MCPPackageCapabilities | 
 export function hostPathCapabilityOf(value: unknown): MCPHostPathCapability | undefined {
   return packageCapabilitiesOf(value)?.hostPathAccess;
 }
-
-/** Reserved names of FLUJO's built-in MCP servers. */
-export const BUILTIN_SERVER_NAMES: readonly string[] = ['flujo', 'filesystem', 'bash', 'browser'];
-
-/**
- * Returns true when `name` is one of FLUJO's built-in server names.
- * Pure string check — no I/O.
- */
-export function isBuiltInServerName(name: string): boolean {
-  return BUILTIN_SERVER_NAMES.includes(name);
-}

@@ -26,6 +26,7 @@ import { Edge } from '@xyflow/react';
 import {
   validateFlow,
   FlowValidationIssue,
+  type FileAccessMcpServerSnapshot,
   type FileAccessMcpSnapshot,
   type FileAccessMcpUsability,
 } from '@/utils/shared/flowValidation';
@@ -33,6 +34,7 @@ import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
+import { hostPathCapabilityOf } from '@/utils/shared/mcpConstants';
 
 const log = createLogger('components/flow/FlowBuilder/FlowValidationButton');
 
@@ -41,13 +43,11 @@ interface FlowValidationButtonProps {
   edges: Edge[];
 }
 
-type FileAccessServerName = keyof FileAccessMcpSnapshot;
-
 function fileAccessSnapshot(
-  name: FileAccessServerName,
+  name: string,
   configs: MCPServerConfig[],
   usabilityByName: Map<string, FileAccessMcpUsability>
-): FileAccessMcpSnapshot[FileAccessServerName] {
+): FileAccessMcpServerSnapshot {
   const config = configs.find((candidate) => candidate.name === name);
   if (!config) {
     return { configured: false, disabled: false, usability: 'unavailable' };
@@ -93,11 +93,13 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
         status: s.disabled ? 'disabled' : undefined,
       }));
 
-      // Gather live tool lists for servers attached to this flow, plus the two built-ins
-      // needed by the filepath lint. A successful empty list is still a known/connected
+      // Gather live tool lists for servers attached to this flow, plus every server
+      // that declares host-path access. A successful empty list is still a known/connected
       // result; failures remain unknown and suppress conclusions about file access.
       const serverTools: Record<string, string[]> = {};
       const toolListUsability = new Map<string, FileAccessMcpUsability>();
+      const fileAccessConfigs = loadedConfigs?.filter((config) => !!hostPathCapabilityOf(config)) ?? [];
+      const fileAccessNames = new Set(fileAccessConfigs.map((config) => config.name));
       if (loadedConfigs) {
         const disabledByName = new Map(loadedConfigs.map(s => [s.name, !!s.disabled]));
         const flowServers = new Set<string>();
@@ -106,8 +108,8 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
           const bound = n?.data?.properties?.boundServer;
           if (nodeType === 'mcp' && typeof bound === 'string' && bound) flowServers.add(bound);
         }
-        for (const name of ['filesystem', 'bash'] as const) {
-          if (disabledByName.has(name) && !disabledByName.get(name)) flowServers.add(name);
+        for (const { name, disabled } of fileAccessConfigs) {
+          if (!disabled) flowServers.add(name);
         }
 
         await Promise.all([...flowServers].map(async (name) => {
@@ -119,21 +121,21 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
                 .map((tool: { name?: string }) => tool?.name)
                 .filter((x): x is string => typeof x === 'string');
               toolListUsability.set(name, 'usable');
-            } else if (name === 'filesystem' || name === 'bash') {
+            } else if (fileAccessNames.has(name)) {
               toolListUsability.set(name, 'unknown');
             }
           } catch (error) {
-            if (name === 'filesystem' || name === 'bash') toolListUsability.set(name, 'unknown');
+            if (fileAccessNames.has(name)) toolListUsability.set(name, 'unknown');
             log.debug(`Could not gather MCP tool list for "${name}" during the flow check`, error);
           }
         }));
       }
 
       const fileAccessMcp: FileAccessMcpSnapshot | undefined = loadedConfigs
-        ? {
-            filesystem: fileAccessSnapshot('filesystem', loadedConfigs, toolListUsability),
-            bash: fileAccessSnapshot('bash', loadedConfigs, toolListUsability),
-          }
+        ? Object.fromEntries(fileAccessConfigs.map((config) => [
+            config.name,
+            fileAccessSnapshot(config.name, loadedConfigs, toolListUsability),
+          ]))
         : undefined;
 
       const result = validateFlow(

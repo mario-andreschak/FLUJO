@@ -1,5 +1,5 @@
 /**
- * Identity of FLUJO's built-in internal MCP server.
+ * Identity and launch contract for FLUJO's bundled MCP servers.
  *
  * The internal server exposes FLUJO's own backend API (flow authoring/execution,
  * MCP server management, marketplace install, models, planned executions) as MCP
@@ -15,21 +15,21 @@ import { MCPStdioConfig } from '@/shared/types/mcp';
 
 export const INTERNAL_SERVER_NAME = 'flujo';
 
-const BUILT_IN_STDIO_COMMANDS: Record<string, string> = {
+const BUNDLED_STDIO_COMMANDS: Record<string, string> = {
   flujo: 'flujo-mcp-flujo',
   filesystem: 'flujo-mcp-filesystem',
   bash: 'flujo-mcp-bash',
   browser: 'flujo-mcp-browser',
 };
 
-export function builtInStdioCommand(name: string): string {
-  const command = BUILT_IN_STDIO_COMMANDS[name];
-  if (!command) throw new Error(`Unknown built-in MCP server: ${name}`);
+export function bundledStdioCommand(name: string): string {
+  const command = BUNDLED_STDIO_COMMANDS[name];
+  if (!command) throw new Error(`Unknown bundled MCP server: ${name}`);
   return command;
 }
 
-export function builtInStdioArgs(name: string): string[] {
-  return ['--no-install', builtInStdioCommand(name)];
+export function bundledStdioArgs(name: string): string[] {
+  return ['--no-install', bundledStdioCommand(name)];
 }
 
 /**
@@ -38,7 +38,7 @@ export function builtInStdioArgs(name: string): string[] {
  * environment so its historical semantics remain intact across the new process
  * boundary. Otherwise the SDK supplies its minimal safe platform environment.
  */
-export function builtInStdioEnv(name: string): Record<string, string> {
+export function bundledStdioEnv(name: string): Record<string, string> {
   const env: Record<string, string> = {
     FLUJO_DATA_DIR: process.env.FLUJO_DATA_DIR ?? process.cwd(),
   };
@@ -90,9 +90,9 @@ export function internalServerConfig(): MCPStdioConfig {
     name: INTERNAL_SERVER_NAME,
     transport: 'stdio',
     command: 'npx',
-    args: builtInStdioArgs(INTERNAL_SERVER_NAME),
-    env: builtInStdioEnv(INTERNAL_SERVER_NAME),
-    // Built-ins resolve this portable empty marker to FLUJO_APP_ROOT at launch.
+    args: bundledStdioArgs(INTERNAL_SERVER_NAME),
+    env: bundledStdioEnv(INTERNAL_SERVER_NAME),
+    // Bundled packages resolve this portable empty marker to FLUJO_APP_ROOT at launch.
     // Persisting an install-specific absolute path would break upgrades/relocation.
     cwd: '',
     disabled: false,
@@ -100,10 +100,8 @@ export function internalServerConfig(): MCPStdioConfig {
     rootPath: '',
     _buildCommand: '',
     _installCommand: '',
-    // Always re-exposed at /mcp-proxy/flujo so external MCP clients (Claude Code,
-    // Cursor, the brain, …) can drive FLUJO through one endpoint. Same posture as
-    // the /mcp-flows endpoint: localhost-only (DNS-rebind guarded) and gated by
-    // the encryption lock — see proxyForward.ts.
+    // Shipped enabled by default; users can change this through the same
+    // exposure control used by every other persisted server.
     exposeAsMcpServer: true,
   };
 }

@@ -4,7 +4,7 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 
 import { migrateInternalMcpServers } from '@/backend/services/mcp/internal/migration';
-import { BUILTIN_SERVER_NAMES } from '@/backend/services/mcp/internal/registry';
+import { SHIPPED_SERVER_NAMES } from '@/backend/services/mcp/internal/registry';
 import { StorageKey } from '@/shared/types/storage';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 
@@ -38,8 +38,8 @@ describe('internal MCP server persistence migration (#346)', () => {
     await migrateInternalMcpServers();
 
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
-    expect(Object.keys(servers)).toEqual(expect.arrayContaining([...BUILTIN_SERVER_NAMES]));
-    for (const name of BUILTIN_SERVER_NAMES) {
+    expect(Object.keys(servers)).toEqual(expect.arrayContaining([...SHIPPED_SERVER_NAMES]));
+    for (const name of SHIPPED_SERVER_NAMES) {
       expect(servers[name]).toMatchObject({
         transport: 'stdio',
         command: 'npx',

@@ -1,32 +1,25 @@
 /**
- * Registry and default configurations for FLUJO's shipped internal MCP servers.
- * Issue #346 persists these defaults as ordinary MCP_SERVERS records; reserved
- * names still identify the special host-owned dispatch behavior.
+ * Package metadata and default configurations for FLUJO's bundled MCP servers.
+ * Issue #346 persists these defaults as ordinary MCP_SERVERS records.
  */
 import { MCPStdioConfig } from '@/shared/types/mcp';
+import { MCPPackageCapabilities } from '@/utils/shared/mcpConstants';
 import {
   INTERNAL_SERVER_NAME,
-  builtInStdioArgs,
-  builtInStdioEnv,
+  bundledStdioArgs,
+  bundledStdioEnv,
   internalServerConfig,
 } from '../internalServerConfig';
 
-/** Reserved names of the built-in servers, in display order. */
 export const FILESYSTEM_SERVER_NAME = 'filesystem';
 export const BASH_SERVER_NAME = 'bash';
 export const BROWSER_SERVER_NAME = 'browser';
-
-// Import from shared location and re-export for backward compatibility. The shared
-// version lives in @/utils/shared/mcpConstants so that pure client-side modules
-// (e.g. flowValidation.ts) can import isBuiltInServerName without pulling in
-// server-only dependencies.
-import {
-  BUILTIN_SERVER_NAMES as _BUILTIN_SERVER_NAMES,
-  isBuiltInServerName as _isBuiltInServerName,
-  MCPPackageCapabilities,
-} from '@/utils/shared/mcpConstants';
-export const BUILTIN_SERVER_NAMES: readonly string[] = _BUILTIN_SERVER_NAMES;
-export { _isBuiltInServerName as isBuiltInServerName };
+export const SHIPPED_SERVER_NAMES: readonly string[] = [
+  INTERNAL_SERVER_NAME,
+  FILESYSTEM_SERVER_NAME,
+  BASH_SERVER_NAME,
+  BROWSER_SERVER_NAME,
+];
 
 const PACKAGE_IDS: Record<string, string> = {
   [INTERNAL_SERVER_NAME]: '@flujo-ai/mcp-flujo',
@@ -62,13 +55,13 @@ const PACKAGE_CAPABILITIES: Record<string, MCPPackageCapabilities> = {
 };
 
 /** Shared persisted-config factory for the shipped servers other than `flujo`. */
-function builtInStdioConfig(name: string): MCPStdioConfig {
+function shippedStdioConfig(name: string): MCPStdioConfig {
   return {
     name,
     transport: 'stdio',
     command: 'npx',
-    args: builtInStdioArgs(name),
-    env: builtInStdioEnv(name),
+    args: bundledStdioArgs(name),
+    env: bundledStdioEnv(name),
     // Resolved to FLUJO_APP_ROOT only at launch; never persist an install path.
     cwd: '',
     // Browser automation is seeded off unless the operator explicitly opts in.
@@ -86,8 +79,8 @@ function builtInStdioConfig(name: string): MCPStdioConfig {
   };
 }
 
-/** Build the current default config for one reserved internal server name. */
-export function builtInServerConfig(name: string): MCPStdioConfig {
+/** Build the current default config for one bundled server package. */
+export function shippedServerConfig(name: string): MCPStdioConfig {
   if (name === INTERNAL_SERVER_NAME) {
     return {
       ...internalServerConfig(),
@@ -95,7 +88,7 @@ export function builtInServerConfig(name: string): MCPStdioConfig {
       packageCapabilities: PACKAGE_CAPABILITIES[name],
     };
   }
-  return builtInStdioConfig(name);
+  return shippedStdioConfig(name);
 }
 
 /** Legacy override payload consumed by the one-time issue #346 migration. */

@@ -127,13 +127,7 @@ import {
   negotiatedProtocolVersion,
 } from './betaClient';
 import { setNodeRoots as setNodeRootsOverlay } from './roots';
-import { INTERNAL_SERVER_NAME } from './internalServerConfig';
 import { packageCapabilitiesOf } from '@/utils/shared/mcpConstants';
-import {
-  BASH_SERVER_NAME,
-  FILESYSTEM_SERVER_NAME,
-  isBuiltInServerName,
-} from './internal/registry';
 import {
   ToolCallSource,
   ToolListAudience,

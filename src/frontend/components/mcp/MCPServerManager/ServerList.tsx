@@ -119,7 +119,7 @@ const ServerList: React.FC<ServerListProps> = ({
               enableMcpApps={server.enableMcpApps}
               selectionMode={selectionMode}
               selected={selectedServers.has(server.name)}
-              onSelect={onServerSelectionChange && !server.builtIn ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
+              onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
               hasOAuthTokens={hasOAuthTokens}
               updateInfo={server.rootPath ? updates?.[server.rootPath] : undefined}
               installCommand={server._installCommand}
@@ -127,10 +127,9 @@ const ServerList: React.FC<ServerListProps> = ({
               onUpdated={onServerUpdated ? () => onServerUpdated(server.name, server.rootPath) : undefined}
               folder={server.folder}
               folders={folders}
-              onSetFolder={onServerSetFolder && !server.builtIn ? (f) => onServerSetFolder(server.name, f) : undefined}
+              onSetFolder={onServerSetFolder ? (f) => onServerSetFolder(server.name, f) : undefined}
               favorite={server.favorite}
-              onToggleFavorite={onServerToggleFavorite && !server.builtIn ? () => onServerToggleFavorite(server.name, !server.favorite) : undefined}
-              builtIn={server.builtIn}
+              onToggleFavorite={onServerToggleFavorite ? () => onServerToggleFavorite(server.name, !server.favorite) : undefined}
               serverConfig={server}
             />
           </Grid>

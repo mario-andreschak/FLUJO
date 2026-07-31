@@ -664,7 +664,6 @@ async function listMcpServers(service: InternalDispatchService): Promise<CallToo
         transport: config.transport,
         enabled: !config.disabled,
         status,
-        ...(config.builtIn ? { builtIn: true } : {}),
       };
     })
   );
@@ -745,9 +744,6 @@ async function restartMcpServer(
   if (!server) {
     return textResult({ error: 'Provide "server": a FLUJO server name.' }, true);
   }
-  if (server === INTERNAL_SERVER_NAME) {
-    return textResult({ ok: true, note: `"${INTERNAL_SERVER_NAME}" is the built-in server — it is always running.` });
-  }
   const result = await service.forceReconnect(server);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to restart ${server}.` }, true);
@@ -764,9 +760,6 @@ async function setMcpServerEnabled(
   const enabled = args?.enabled;
   if (!server || typeof enabled !== 'boolean') {
     return textResult({ error: 'Provide "server" (string) and "enabled" (boolean).' }, true);
-  }
-  if (server === INTERNAL_SERVER_NAME) {
-    return textResult({ error: `The built-in "${INTERNAL_SERVER_NAME}" server cannot be disabled.` }, true);
   }
   const result = await service.updateServerConfig(server, { disabled: !enabled });
   if ('error' in result) {

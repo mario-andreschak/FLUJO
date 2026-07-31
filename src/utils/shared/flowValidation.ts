@@ -21,7 +21,6 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
-import { isBuiltInServerName } from './mcpConstants';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -50,7 +49,7 @@ export const PROCESS_FILEPATH_MCP_ROOTS_MISSING = 'process-filepath-mcp-roots-mi
 export type FileAccessMcpUsability = 'usable' | 'unavailable' | 'unknown';
 
 export interface FileAccessMcpServerSnapshot {
-  /** Whether this reserved built-in server was present in a successfully loaded config list. */
+  /** Whether this capability-bearing server was present in a successfully loaded config list. */
   configured: boolean;
   disabled: boolean;
   /** A live tool-list result proves usability; a load failure remains unknown. */
@@ -59,10 +58,7 @@ export interface FileAccessMcpServerSnapshot {
   rootPath?: unknown;
 }
 
-export interface FileAccessMcpSnapshot {
-  filesystem: FileAccessMcpServerSnapshot;
-  bash: FileAccessMcpServerSnapshot;
-}
+export type FileAccessMcpSnapshot = Record<string, FileAccessMcpServerSnapshot>;
 
 export interface FlowValidationContext {
   /** Known models, for detecting a deleted/renamed bound model. Omit to skip those checks. */
@@ -75,7 +71,7 @@ export interface FlowValidationContext {
    */
   serverTools?: Record<string, string[]>;
   /**
-   * Design-time snapshot for the built-in filesystem/bash filepath lint. Omit when MCP
+   * Design-time snapshot for capability-bearing file-access servers. Omit when MCP
    * configuration could not be loaded so uncertainty never becomes a false warning.
    */
   fileAccessMcp?: FileAccessMcpSnapshot;
@@ -229,8 +225,6 @@ function reachableFrom(startIds: string[], adj: Map<string, string[]>): Set<stri
   return seen;
 }
 
-const FILE_ACCESS_SERVER_NAMES = ['filesystem', 'bash'] as const;
-
 /** Prompt fields that can actually reach a Process model for its current input mode. */
 function processPromptTexts(node: VNode): string[] {
   const props = node.data?.properties ?? {};
@@ -282,7 +276,7 @@ function isMeaningfulFileAccessRoot(value: unknown): boolean {
 }
 
 function fileAccessServerHasEffectiveRoot(
-  name: (typeof FILE_ACCESS_SERVER_NAMES)[number],
+  name: string,
   server: FileAccessMcpServerSnapshot,
   mcpNodes: VNode[]
 ): boolean {
@@ -404,14 +398,12 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   // loading failed, so the check is skipped instead of presenting uncertainty as absence.
   if (context.fileAccessMcp) {
     const snapshot = context.fileAccessMcp;
-    const available = FILE_ACCESS_SERVER_NAMES.filter((name) => {
-      const server = snapshot[name];
-      return server.configured && !server.disabled && server.usability === 'usable';
-    });
-    const availabilityUnknown = FILE_ACCESS_SERVER_NAMES.some((name) => {
-      const server = snapshot[name];
-      return server.configured && !server.disabled && server.usability === 'unknown';
-    });
+    const available = Object.entries(snapshot)
+      .filter(([, server]) => server.configured && !server.disabled && server.usability === 'usable')
+      .map(([name]) => name);
+    const availabilityUnknown = Object.values(snapshot).some((server) => (
+      server.configured && !server.disabled && server.usability === 'unknown'
+    ));
 
     for (const node of processNodes) {
       if (!processPromptTexts(node).some(containsLiteralFilepath)) continue;
@@ -421,7 +413,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           add(
             'warning',
             PROCESS_FILEPATH_MCP_UNAVAILABLE,
-            `Process node "${getNodeLabel(node)}" contains a literal filepath, but neither the built-in filesystem nor bash MCP server is currently available. Enable or reconnect one so this flow can access the path.`,
+            `Process node "${getNodeLabel(node)}" contains a literal filepath, but no configured file-access MCP server is currently available. Enable or reconnect one so this flow can access the path.`,
             node
           );
         }
@@ -429,7 +421,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       }
 
       // A failed status/tool load could hide another usable server with roots. Suppress the
-      // roots warning until every enabled built-in has a known availability result.
+      // roots warning until every enabled file-access server has a known availability result.
       if (
         !availabilityUnknown &&
         available.every((name) => !fileAccessServerHasEffectiveRoot(name, snapshot[name], mcpNodes))
@@ -437,7 +429,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         add(
           'warning',
           PROCESS_FILEPATH_MCP_ROOTS_MISSING,
-          `Process node "${getNodeLabel(node)}" contains a literal filepath, but the available built-in file-access MCP servers have no effective roots configured. Add roots globally or on a filesystem/bash MCP node in this flow.`,
+          `Process node "${getNodeLabel(node)}" contains a literal filepath, but the available file-access MCP servers have no effective roots configured. Add roots globally or on the corresponding MCP node in this flow.`,
           node
         );
       }
@@ -952,13 +944,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         context.serverTools[binding.server] &&
         !context.serverTools[binding.server].includes(binding.name)
       ) {
-        const shadowNote = isBuiltInServerName(binding.server)
-          ? ` (a stored server named "${binding.server}" shadows the built-in — their toolsets may differ)`
-          : '';
         add(
           'warning',
           'tool-unavailable',
-          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" does not currently expose.${shadowNote}`,
+          `Process node "${getNodeLabel(node)}" references tool "${binding.name}" which server "${binding.server}" does not currently expose.`,
           node
         );
       }
@@ -1021,13 +1010,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
             if (warnedTools.has(dedupeKey)) continue;
             if (!tools.includes(toolName)) {
               warnedTools.add(dedupeKey);
-              const shadowNote = isBuiltInServerName(server)
-                ? ` (stored server "${server}" shadows the built-in — their toolsets may differ)`
-                : '';
               add(
                 'warning',
                 'tool-unavailable',
-                `Process node "${getNodeLabel(node)}" has enabledTool "${toolName}" which server "${server}" does not currently expose.${shadowNote}`,
+                `Process node "${getNodeLabel(node)}" has enabledTool "${toolName}" which server "${server}" does not currently expose.`,
                 node
               );
             }
