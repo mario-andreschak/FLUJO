@@ -62,6 +62,11 @@ import { alpha, useTheme as useMuiTheme } from '@mui/material/styles';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 import { getConversationOrigin } from './conversationOrigin';
 import type { ConversationOriginKey } from './conversationOrigin';
+import {
+  conversationCardSplitBackground,
+  conversationOriginColor,
+  conversationStatusColor,
+} from './conversationCardPalette';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -136,33 +141,6 @@ const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
   mcp: ExtensionRoundedIcon,
   internal: AutoAwesomeRoundedIcon,
   unknown: HelpOutlineRoundedIcon,
-};
-
-const ORIGIN_COLORS = {
-  chat: 'primary',
-  api: 'info',
-  schedule: 'secondary',
-  trigger: 'warning',
-  subflow: 'success',
-  mcp: 'info',
-  internal: 'secondary',
-  unknown: 'default',
-} as const satisfies Record<ConversationOriginKey, 'primary' | 'info' | 'secondary' | 'warning' | 'success' | 'default'>;
-
-const originCardColor = (
-  key: ConversationOriginKey,
-  theme: ReturnType<typeof useMuiTheme>,
-): string => {
-  switch (key) {
-    case 'chat': return theme.palette.primary.main;
-    case 'api':
-    case 'mcp': return theme.palette.info.main;
-    case 'schedule':
-    case 'internal': return theme.palette.secondary.main;
-    case 'trigger': return theme.palette.warning.main;
-    case 'subflow': return theme.palette.success.main;
-    default: return theme.palette.text.secondary;
-  }
 };
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
@@ -263,19 +241,6 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       hour: '2-digit',
       minute: '2-digit'
     });
-  };
-
-  // Get color based on conversation status
-  const getStatusColor = (status?: ConversationListItem['status']) => {
-    switch (status) {
-      case 'running': return 'primary.main';
-      case 'awaiting_tool_approval': return 'warning.main';
-      case 'paused_debug': return 'secondary.main';
-      case 'completed': return 'success.main';
-      case 'capped': return 'info.main';
-      case 'error': return 'error.main';
-      default: return 'transparent';
-    }
   };
 
   // Get status description for tooltip
@@ -422,8 +387,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     const selected = conversation.id === currentConversationId;
     const origin = getConversationOrigin(conversation);
     const OriginIcon = ORIGIN_ICONS[origin.key];
-    const originColor = originCardColor(origin.key, muiTheme);
-    const originWash = muiTheme.palette.mode === 'dark' ? 0.14 : 0.1;
+    const originColor = conversationOriginColor(origin.key, muiTheme);
+    const statusColor = conversationStatusColor(conversation.status, muiTheme);
+    const surfaceStrength = selected
+      ? (muiTheme.palette.mode === 'dark' ? 0.38 : 0.3)
+      : (muiTheme.palette.mode === 'dark' ? 0.3 : 0.23);
 
     return (
       <ListItem
@@ -435,6 +403,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             className="conversation-card-actions"
             sx={modern ? {
               display: 'flex',
+              zIndex: 2,
               gap: 0.25,
               opacity: selected ? 1 : 0,
               transition: 'opacity 160ms ease',
@@ -484,10 +453,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           borderRadius: 2.5,
           overflow: 'hidden',
           opacity: 1,
-          bgcolor: selected
-            ? alpha(originColor, originWash + 0.07)
-            : alpha(originColor, originWash),
-          backgroundImage: `linear-gradient(135deg, ${alpha(originColor, selected ? 0.3 : 0.21)} 0%, ${alpha(originColor, selected ? 0.14 : 0.08)} 58%, ${alpha(muiTheme.palette.background.paper, muiTheme.palette.mode === 'dark' ? 0.58 : 0.68)} 100%)`,
+          bgcolor: alpha(muiTheme.palette.background.paper, muiTheme.palette.mode === 'dark' ? 0.72 : 0.82),
+          backgroundImage: conversationCardSplitBackground(originColor, statusColor, surfaceStrength),
           boxShadow: selected
             ? `0 10px 30px ${alpha(originColor, 0.24)}`
             : `0 5px 20px ${alpha(originColor, muiTheme.palette.mode === 'dark' ? 0.12 : 0.08)}`,
@@ -499,6 +466,17 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             width: selected ? 4 : 3,
             borderRadius: '0 4px 4px 0',
             bgcolor: originColor,
+          },
+          '&::after': {
+            content: '""',
+            position: 'absolute',
+            zIndex: 0,
+            top: 0,
+            bottom: 0,
+            left: '75%',
+            width: 1,
+            bgcolor: alpha(statusColor, 0.5),
+            pointerEvents: 'none',
           },
           '&:hover': {
             transform: 'translateY(-1px)',
@@ -517,6 +495,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           onClick={() => onSelectConversation(conversation.id)}
           aria-label={`Open ${conversation.title}, origin: ${origin.label}`}
           sx={{
+            position: 'relative',
+            zIndex: 1,
             pr: stoppable ? 12 : 7,
             px: modern ? 1.5 : 2,
             py: modern ? 1.25 : 1,
@@ -538,7 +518,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                         width: 8,
                         height: 8,
                         borderRadius: '50%',
-                        bgcolor: getStatusColor(conversation.status),
+                        bgcolor: statusColor,
                         boxShadow: modern
                           ? `0 0 0 4px ${alpha(muiTheme.palette.common.white, 0.04)}`
                           : 'none',
@@ -585,11 +565,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                       label={origin.label}
                       size="small"
                       variant="outlined"
-                      color={ORIGIN_COLORS[origin.key]}
                       sx={{
                         height: modern ? 22 : 20,
+                        color: modern ? originColor : undefined,
+                        borderColor: modern ? alpha(originColor, 0.72) : undefined,
                         bgcolor: modern ? alpha(originColor, 0.13) : undefined,
-                        '& .MuiChip-icon': { fontSize: 14 },
+                        '& .MuiChip-icon': { fontSize: 14, color: modern ? originColor : undefined },
                         '& .MuiChip-label': {
                           px: 0.75,
                           fontSize: '0.68rem',
