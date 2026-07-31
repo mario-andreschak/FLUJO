@@ -20,7 +20,14 @@ const eslintConfig = [
     },
     rules: {
       // Enable import checking rules
-      "import/no-unresolved": "error",
+      // The MCP SDK's v1 export map uses a wildcard target without a file
+      // extension. TypeScript's bundler resolver and Node resolve it correctly,
+      // but eslint-import-resolver-typescript v3 reports every supported SDK
+      // subpath as unresolved. Keep checking all other imports while TypeScript
+      // remains the source of truth for these package-export subpaths.
+      "import/no-unresolved": ["error", {
+        ignore: ["^@modelcontextprotocol/sdk/"]
+      }],
       "import/named": "error",
       "import/default": "error",
       "import/namespace": "error",

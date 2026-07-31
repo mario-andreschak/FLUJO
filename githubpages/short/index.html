@@ -511,13 +511,13 @@
     <label class="voice-picker" title="Choose narrator">
       <span>NARRATOR</span>
       <select id="voice-select" aria-label="Narrator voice">
+        <option value="lily">Lily</option>        
         <option value="brian">Brian</option>
         <option value="sarah">Sarah</option>
-        <option value="lily">Lily</option>
         <option value="george">George</option>
       </select>
     </label>
-    <span id="voice-status" class="sr-only" aria-live="polite">Brian selected</span>
+    <span id="voice-status" class="sr-only" aria-live="polite">Lily selected</span>
     <button id="mute" class="control-button" type="button" aria-label="Mute">
       <svg id="volume-icon" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
       <svg id="muted-icon" viewBox="0 0 24 24" hidden><path d="M3 9v6h4l5 5V4L7 9H3zm14.3 3 2.4-2.4-1.4-1.4-2.4 2.4-2.4-2.4-1.4 1.4 2.4 2.4-2.4 2.4 1.4 1.4 2.4-2.4 2.4 2.4 1.4-1.4z"/></svg>
@@ -527,7 +527,7 @@
     </button>
   </footer>
 
-  <audio id="voiceover" preload="auto" src="assets/audio/flujo-voiceover-elevenlabs.mp3"></audio>
+  <audio id="voiceover" preload="auto" src="assets/audio/flujo-voiceover-lily.mp3"></audio>
   <script src="film-content.js"></script>
   <script src="app.js"></script>
 </body>

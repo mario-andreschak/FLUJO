@@ -294,7 +294,9 @@ export class ModelHandler {
    */
   private static isConversationCancelled(conversationId: string): boolean {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { isCancelledByAncestry } = require('@/backend/execution/flow/cancellation');
       return isCancelledByAncestry(conversationId, FlowExecutor.conversationStates);
     } catch (err) {
@@ -374,7 +376,7 @@ export class ModelHandler {
       const eff = resolveEffectiveCompaction(undefined, model, global);
       if (!eff.enabled) return null;
 
-      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
       const state = FlowExecutor.conversationStates.get(conversationId);
       if (!state || !Array.isArray(state.messages) || state.messages.length < 4) return null;
 
@@ -455,9 +457,9 @@ export class ModelHandler {
       state.messages = result.newMessages;
       state.updatedAt = Date.now();
       try {
-        const { reconcileConversationLog } = require('@/backend/execution/flow/conversationLog');
+        const { reconcileConversationLog } = await import('@/backend/execution/flow/conversationLog');
         await reconcileConversationLog(state, before);
-        const { persistConversationState } = require('@/backend/execution/flow/persistConversationState');
+        const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
         await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
       } catch (persistError) {
         log.warn('Compaction persisted-history reconcile/persist failed; continuing', { conversationId, persistError });
@@ -543,6 +545,7 @@ export class ModelHandler {
     try {
       // Lazy require to avoid a static import cycle
       // (FlowExecutor -> ProcessNode -> ModelHandler).
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
       const state = FlowExecutor.conversationStates.get(conversationId);
       if (!state || !Array.isArray(state.messages)) {
@@ -580,7 +583,7 @@ export class ModelHandler {
     try {
       // Lazy require keeps the existing FlowExecutor -> ProcessNode ->
       // ModelHandler cycle broken.
-      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
+      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
       const state = FlowExecutor.conversationStates.get(conversationId);
       if (!state || !Array.isArray(state.messages)) return;
 
@@ -1488,7 +1491,7 @@ export class ModelHandler {
       // every adapter receives clean tool definitions.
       let sanitizedTools: OpenAI.ChatCompletionTool[] | undefined;
       if (effectiveTools && effectiveTools.length > 0) {
-        const { ToolHandler } = require('../handlers/ToolHandler');
+        const { ToolHandler } = await import('./ToolHandler');
         sanitizedTools = effectiveTools.map(tool => {
           if (tool.type === 'function' && tool.function.parameters) {
             return {

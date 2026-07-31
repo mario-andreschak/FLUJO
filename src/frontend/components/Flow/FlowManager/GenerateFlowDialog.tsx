@@ -70,7 +70,7 @@ interface GenerateFlowDialogProps {
   onGenerated: (result: GeneratedFlowInfo) => void;
 }
 
-interface DraftPayload extends GeneratedFlowInfo {}
+type DraftPayload = GeneratedFlowInfo;
 
 function message(role: 'user' | 'assistant', content: string): Record<string, any> {
   return {

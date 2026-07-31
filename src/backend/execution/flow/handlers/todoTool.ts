@@ -155,6 +155,7 @@ export interface TodoToolOutcome {
  */
 function getLiveSharedState(conversationId: string): { todos?: TodoItem[] } | undefined {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
     return FlowExecutor.conversationStates.get(conversationId);
   } catch (err) {

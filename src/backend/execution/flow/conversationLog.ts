@@ -201,7 +201,7 @@ function isPersistable(conversationId: string): boolean {
     if (isConversationDeleted(conversationId)) return false;
     // Lazy require to avoid a static import cycle (FlowExecutor → engine →
     // nodes → handlers → executionEventBus → this module).
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
     const state: SharedState | undefined = FlowExecutor.conversationStates.get(conversationId);
     if (!state) return false;

@@ -22,9 +22,13 @@ jest.mock('@/backend/services/mcp', () => ({
 }));
 
 import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import type { RegistryServerResult } from '@/utils/mcp/registry';
 
 /** A registry entry with an npm stdio package (installable, no required env). */
-const npmEntry = (name: string, extras: Record<string, unknown> = {}) => ({
+const npmEntry = (
+  name: string,
+  extras: Record<string, unknown> = {}
+): RegistryServerResult => ({
   server: {
     name,
     description: `The ${name} server`,

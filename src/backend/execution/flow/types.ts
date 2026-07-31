@@ -1086,9 +1086,8 @@ export interface BaseExecResult {
 }
 
 // StartNode exec result
-export interface StartNodeExecResult extends BaseExecResult {
-    // StartNode typically just passes through the prep result
-}
+// StartNode typically just passes through the base result.
+export type StartNodeExecResult = BaseExecResult;
 
 // ProcessNode exec result
 export interface ProcessNodeExecResult extends BaseExecResult {
@@ -1112,9 +1111,8 @@ export interface ProcessNodeExecResult extends BaseExecResult {
 }
 
 // FinishNode exec result
-export interface FinishNodeExecResult extends BaseExecResult {
-    // FinishNode typically just passes through the prep result
-}
+// FinishNode typically just passes through the base result.
+export type FinishNodeExecResult = BaseExecResult;
 
 // MCPNode exec result
 export interface MCPNodeExecResult extends BaseExecResult {

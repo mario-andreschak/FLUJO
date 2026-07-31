@@ -19,9 +19,9 @@ import { ConversationListItem as FrontendConversationListItem } from '@/frontend
 
 const log = createLogger('app/v1/chat/conversations/route');
 
-// Define the structure for the list item returned by GET
-// Matches the frontend type now imported as FrontendConversationListItem
-interface ConversationListItem extends FrontendConversationListItem {}
+// Define the structure for the list item returned by GET.
+// Keep it as an alias so it stays exactly aligned with the frontend contract.
+type ConversationListItem = FrontendConversationListItem;
 
 // Parsed-summary cache for the list GET, keyed by file name. The sidebar now
 // polls this endpoint every few seconds, and conversation files carry the FULL

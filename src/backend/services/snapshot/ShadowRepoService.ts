@@ -52,7 +52,7 @@ export function _setShadowRepoDirForTests(dir: string | null): string | null {
 function resolveShadowRootDir(): string {
   if (shadowRootDir) return shadowRootDir;
   // Lazy require so importing this module never eagerly touches paths/env.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { getDataDir } = require('@/utils/paths');
   return path.join(getDataDir(), 'snapshots');
 }

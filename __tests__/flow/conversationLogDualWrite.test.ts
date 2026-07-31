@@ -67,6 +67,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 });
 
 jest.mock('@/utils/storage/backend', () => ({
+  assertSafeCollectionId: jest.fn(),
   loadItem: jest.fn(async (key: string) => storedStates.get(key)),
   saveItem: jest.fn(async (key: string, value: any) => {
     storedStates.set(key, JSON.parse(JSON.stringify(value)));
@@ -126,6 +127,7 @@ describe('dual-write: run events land in the conversation log', () => {
       mode: 'conversation',
     });
     expect(result.status).toBe('completed');
+    expect(storedStates.get(`conversations/${convId}`)).toBeDefined();
     await flushConversationLog(convId);
 
     const events = await readConversationLog(convId);
