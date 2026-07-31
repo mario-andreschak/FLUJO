@@ -94,17 +94,47 @@ const child = spawn(process.execPath, [nextBin, 'start', '-p', String(port)], {
   env,
 });
 
+let requestedSignal;
+let forceKillTimer;
+let openerTimer;
+
+function forwardShutdown(signal) {
+  requestedSignal ??= signal;
+  if (openerTimer) clearTimeout(openerTimer);
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    child.kill(signal);
+  } catch {
+    child.kill();
+  }
+  // A packaged launcher must never leave `next start` orphaned. Give Next a
+  // conservative grace period for its own MCP cleanup, then force termination.
+  forceKillTimer ??= setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }, 10_000);
+  forceKillTimer.unref();
+}
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.once(signal, () => forwardShutdown(signal));
+}
+
 child.on('error', (error) => {
   console.error('[FLUJO] Failed to launch:', error);
   process.exit(1);
 });
 
 child.on('exit', (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-  } else {
-    process.exit(code ?? 0);
+  if (forceKillTimer) clearTimeout(forceKillTimer);
+  const exitSignal = requestedSignal ?? signal;
+  // Preserve signal semantics on POSIX after the child is gone. Windows does
+  // not support re-raising every POSIX signal, so use the child's exit code.
+  if (exitSignal && process.platform !== 'win32') {
+    process.removeAllListeners(exitSignal);
+    process.kill(process.pid, exitSignal);
+    return;
   }
+  process.exit(code ?? (signal ? 1 : 0));
 });
 
 // --- browser auto-open (best-effort) ---------------------------------------
@@ -114,7 +144,7 @@ if (!noOpen) {
     : process.platform === 'darwin' ? { cmd: 'open', args: [url] }
     : { cmd: 'xdg-open', args: [url] };
   // Give `next start` a moment to bind the port before opening the browser.
-  setTimeout(() => {
+  openerTimer = setTimeout(() => {
     try {
       const opener = spawn(openCommand.cmd, openCommand.args, { stdio: 'ignore', detached: true });
       opener.on('error', () => { /* no browser / headless — ignore */ });
@@ -123,4 +153,5 @@ if (!noOpen) {
       /* best-effort only */
     }
   }, 2000);
+  openerTimer.unref();
 }

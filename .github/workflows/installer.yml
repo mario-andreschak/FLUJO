@@ -11,6 +11,16 @@ on:
       - 'scripts/installer-functions.ps1'
       - 'scripts/uninstall.ps1'
       - 'tests/installer.Tests.ps1'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'bin/flujo.mjs'
+      - 'scripts/launch-next.mjs'
+      - 'scripts/smoke-mcp-artifacts.mjs'
+      - 'scripts/validate-mcp-release.mjs'
+      - '__tests__/mcp/**'
+      - 'mcp-servers/**'
+      - 'src/app/mcp-proxy/**'
+      - 'src/backend/services/mcp/**'
   push:
     branches: [main]
     tags: ['v*']
@@ -20,6 +30,28 @@ permissions:
   contents: read
 
 jobs:
+  artifact-smoke:
+    name: Packed MCP process boundary (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build production artifacts
+        run: |
+          npm ci --include=dev
+          npm run build
+
+      - name: Exercise MCP process boundaries
+        run: |
+          npm run test:mcp-process-boundary
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+
   powershell-tests:
     name: Installer decisions (Pester)
     runs-on: windows-latest

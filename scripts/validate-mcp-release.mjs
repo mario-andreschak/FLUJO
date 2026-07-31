@@ -76,6 +76,16 @@ for (const entry of packages) {
 }
 
 const rootFiles = packedFiles('.');
+for (const required of [
+  'package.json',
+  'bin/flujo.mjs',
+  'scripts/launch-next.mjs',
+  '.next/BUILD_ID',
+  '.next/routes-manifest.json',
+  '.next/server/app-paths-manifest.json',
+]) {
+  if (!rootFiles.has(required)) fail(`flujo-ai tarball omits ${required}`);
+}
 for (const entry of packages) {
   for (const required of [
     `mcp-servers/${entry.directory}/dist/index.js`,
