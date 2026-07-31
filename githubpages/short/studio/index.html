@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FLUJO Video Studio</title>
+  <link rel="stylesheet" href="studio.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" target="_blank" aria-label="Open FLUJO film">
+        <img src="../assets/img/flujo-logo.png" alt="">
+        <span><b>FLUJO</b><small>VIDEO STUDIO</small></span>
+      </a>
+      <div class="project-title">
+        <span class="live-dot"></span>
+        <span id="project-title">Loading project…</span>
+        <small id="save-state">LOCAL PROJECT</small>
+      </div>
+      <div class="top-actions">
+        <button id="save-project" class="button ghost" type="button">Save</button>
+        <button id="publish-project" class="button primary" type="button">Publish to film</button>
+        <a class="button icon-button" href="/" target="_blank" title="Open film" aria-label="Open film">↗</a>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <section>
+        <div class="sidebar-heading">
+          <span>LANGUAGES</span>
+          <button id="add-language" type="button" aria-label="Add language">＋</button>
+        </div>
+        <div id="language-list" class="side-list"></div>
+      </section>
+      <section class="voice-section">
+        <div class="sidebar-heading">
+          <span>VOICES</span>
+          <button id="add-voice" type="button" aria-label="Add voice">＋</button>
+        </div>
+        <div id="voice-list" class="side-list"></div>
+      </section>
+      <div class="system-card">
+        <div><span id="ffmpeg-dot" class="status-dot"></span><b>Audio renderer</b></div>
+        <small id="renderer-status">Checking ffmpeg…</small>
+        <div><span class="status-dot"></span><b>ElevenLabs via FLUJO</b></div>
+        <small>Used only when you click Generate</small>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <nav class="tabs" aria-label="Studio views">
+        <button class="tab active" data-view="script" type="button">Script & audio</button>
+        <button class="tab" data-view="captions" type="button">Subtitles</button>
+        <button class="tab" data-view="review" type="button">Review</button>
+      </nav>
+
+      <section id="script-view" class="view active">
+        <div class="view-toolbar">
+          <div>
+            <p class="eyebrow">NARRATION WORKBENCH</p>
+            <h1 id="workbench-title">Brian · English</h1>
+            <p id="workbench-subtitle">Edit a section, regenerate it, and keep the film timing intact.</p>
+          </div>
+          <div class="toolbar-actions">
+            <button id="generate-selected" class="button primary" type="button">✦ Generate selected</button>
+            <button id="render-track" class="button ghost" type="button">Rebuild track</button>
+          </div>
+        </div>
+        <div class="selection-bar">
+          <label><input id="select-all-scenes" type="checkbox"> Select all scenes</label>
+          <span id="selection-summary">0 selected</span>
+          <span class="selection-hint">New voices automatically generate any missing sections.</span>
+        </div>
+        <div id="scene-list" class="scene-list"></div>
+      </section>
+
+      <section id="captions-view" class="view">
+        <div class="view-toolbar">
+          <div>
+            <p class="eyebrow">SUBTITLE TIMELINE</p>
+            <h1 id="caption-title">English subtitles</h1>
+            <p>Change text or timing. Published captions follow the language assigned to each voice.</p>
+          </div>
+          <button id="add-caption" class="button ghost" type="button">＋ Add cue</button>
+        </div>
+        <div class="caption-table-wrap">
+          <table class="caption-table">
+            <thead><tr><th>#</th><th>In</th><th>Out</th><th>Subtitle</th><th></th></tr></thead>
+            <tbody id="caption-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="review-view" class="view">
+        <div class="view-toolbar">
+          <div>
+            <p class="eyebrow">PRE-PUBLISH CHECK</p>
+            <h1>Review the production</h1>
+            <p>Timing pressure, missing audio, caption continuity, and publish readiness.</p>
+          </div>
+          <button id="refresh-review" class="button ghost" type="button">Refresh review</button>
+        </div>
+        <div id="review-grid" class="review-grid"></div>
+      </section>
+    </main>
+
+    <aside class="inspector">
+      <div class="preview-head">
+        <span>FILM PREVIEW</span>
+        <button id="reload-preview" type="button" aria-label="Reload preview">↻</button>
+      </div>
+      <div class="film-frame">
+        <iframe id="film-preview" src="/?t=0" title="FLUJO film preview"></iframe>
+      </div>
+
+      <section class="track-card">
+        <div class="track-title">
+          <div>
+            <small>MASTER VOICE TRACK</small>
+            <strong id="track-name">Brian · English</strong>
+          </div>
+          <span id="track-state" class="pill">READY</span>
+        </div>
+        <audio id="master-audio" controls preload="metadata"></audio>
+        <div class="track-meta">
+          <span id="track-duration">2:21.920</span>
+          <span>−16 LUFS</span>
+          <span>128 kbps</span>
+        </div>
+      </section>
+
+      <section class="inspector-card">
+        <div class="card-title"><span>PRODUCTION STATUS</span><b id="ready-score">—</b></div>
+        <div id="quick-review" class="quick-review"></div>
+      </section>
+
+      <section class="activity-card">
+        <div class="card-title"><span>ACTIVITY</span><button id="clear-log" type="button">Clear</button></div>
+        <div id="activity-log" class="activity-log" aria-live="polite"></div>
+      </section>
+    </aside>
+  </div>
+
+  <dialog id="voice-dialog">
+    <form id="voice-form" method="dialog" class="dialog-card">
+      <div class="dialog-head">
+        <div><small>NEW NARRATOR</small><h2>Add a voice</h2></div>
+        <button class="dialog-close" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <button id="load-elevenlabs" class="button catalog-button" type="button">Load voices from ElevenLabs</button>
+      <label>Voice catalog<select id="voice-catalog"><option value="">Choose or enter one manually…</option></select></label>
+      <div class="field-grid">
+        <label>Name<input id="voice-name" required placeholder="e.g. Maria"></label>
+        <label>Key<input id="voice-key" required pattern="[a-z0-9][a-z0-9_-]*" placeholder="maria-es"></label>
+      </div>
+      <label>ElevenLabs voice ID<input id="voice-id" required placeholder="Voice ID"></label>
+      <div class="field-grid">
+        <label>Language<select id="voice-language"></select></label>
+        <label>Gender<input id="voice-gender" placeholder="Optional"></label>
+      </div>
+      <div class="dialog-actions">
+        <button class="button ghost" data-close-dialog type="button">Cancel</button>
+        <button id="confirm-voice" class="button primary" value="default">Add voice</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="language-dialog">
+    <form id="language-form" method="dialog" class="dialog-card">
+      <div class="dialog-head">
+        <div><small>LOCALIZATION</small><h2>Add a language</h2></div>
+        <button class="dialog-close" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <div class="field-grid">
+        <label>Name<input id="language-name" required placeholder="Spanish"></label>
+        <label>Code<input id="language-code" required pattern="[a-zA-Z0-9-]+" placeholder="es"></label>
+      </div>
+      <label>Locale<input id="language-locale" placeholder="es-ES"></label>
+      <p class="dialog-note">The current language’s script and subtitle timings will be copied as a starting point. Translate them here before generating audio.</p>
+      <div class="dialog-actions">
+        <button class="button ghost" data-close-dialog type="button">Cancel</button>
+        <button id="confirm-language" class="button primary" value="default">Add language</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="busy-overlay" class="busy-overlay" hidden>
+    <div class="busy-card"><span class="spinner"></span><strong id="busy-title">Working…</strong><small id="busy-detail">Please keep this window open.</small></div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="studio.js"></script>
+</body>
+</html>

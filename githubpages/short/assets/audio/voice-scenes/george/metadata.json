@@ -2,9 +2,8 @@
   "voiceKey": "george",
   "voiceName": "George",
   "voiceId": "JBFqnCBsd6RMkjVDRZzb",
+  "language": "en",
   "modelId": "eleven_v3",
-  "stability": 0.42,
-  "similarityBoost": 0.8,
   "targetDuration": 141.92,
   "finalDuration": 141.92,
   "outputFile": "flujo-voiceover-george.mp3"

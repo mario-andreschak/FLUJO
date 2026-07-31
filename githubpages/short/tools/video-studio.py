@@ -92,6 +92,12 @@ def project_status(project: dict[str, Any]) -> dict[str, Any]:
     for voice in project["voices"]:
         key = voice["key"]
         raw_dir = ROOT / "assets" / "audio" / "voice-scenes" / key
+        if key == "brian":
+            for scene in project["scenes"]:
+                scene_id = int(scene["id"])
+                target = raw_scene_path(key, scene_id)
+                if not target.is_file():
+                    bootstrap_legacy_brian(scene_id, target)
         raw_scenes = [
             int(match.group(1))
             for item in raw_dir.glob("scene-*-raw.mp3")
