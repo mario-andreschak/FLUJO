@@ -33,7 +33,6 @@ import { validateConnection, isConnectionAllowed, createEdgeFromConnection, getR
 import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
 import { shouldOpenNodePicker } from './utils/nodePickerGate';
 import { findNodeById } from './utils/nodeUtils';
-import { CanvasToolbar } from './components/CanvasToolbar';
 import { CanvasControls } from './components/CanvasControls';
 import { createLogger } from '@/utils/logger';
 
@@ -954,7 +953,6 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         // overlaps the handles at the endpoints, making stray clicks easy.
         connectOnClick={false}
       >
-        <CanvasToolbar />
         <CanvasControls />
       </ReactFlow>
 

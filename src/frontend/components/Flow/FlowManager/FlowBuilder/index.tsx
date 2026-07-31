@@ -5,7 +5,6 @@ import { styled } from '@mui/material/styles';
 import {
   Box,
   Button,
-  ButtonGroup,
   Menu,
   MenuItem,
   TextField,
@@ -69,11 +68,9 @@ import type { ProcessToSubflowDraft } from './utils/convertProcessToSubflow';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
-import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import HealingIcon from '@mui/icons-material/Healing';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
-import HistoryIcon from '@mui/icons-material/History';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
@@ -107,6 +104,7 @@ const FlowBuilderContainer = styled(Box)(({ theme }) => ({
 const ToolbarContainer = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(1),
   display: 'flex',
+  flexWrap: 'wrap',
   gap: theme.spacing(1),
   borderBottom: '1px solid',
   borderColor: theme.palette.divider,
@@ -114,6 +112,43 @@ const ToolbarContainer = styled(Paper)(({ theme }) => ({
   marginBottom: theme.spacing(1),
   backgroundColor: theme.palette.background.paper,
   boxShadow: theme.shadows[1],
+}));
+
+const ToolbarFields = styled(Box)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: theme.spacing(1),
+  flex: '1 1 520px',
+  minWidth: 0,
+  [theme.breakpoints.down('sm')]: {
+    alignItems: 'stretch',
+    flexBasis: '100%',
+    flexDirection: 'column',
+  },
+}));
+
+const ToolbarPrimaryActions = styled(Box)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: theme.spacing(1),
+  [theme.breakpoints.down('sm')]: {
+    width: '100%',
+  },
+}));
+
+const ToolbarSecondaryActions = styled(Box)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: theme.spacing(0.5),
+  marginLeft: 'auto',
+  [theme.breakpoints.down('md')]: {
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
+  [theme.breakpoints.down('sm')]: {
+    justifyContent: 'flex-start',
+  },
 }));
 
 const MainContent = styled(Box)({
@@ -221,9 +256,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [improveNotice, setImproveNotice] = useState<
     { severity: 'success' | 'info' | 'warning'; message: string } | null
   >(null);
-  // Auto-repair: the dropdown menu anchor, and the description the AI-Improve dialog is
-  // pre-seeded with when the user chooses "Repair with AI".
-  const [repairMenuAnchor, setRepairMenuAnchor] = useState<null | HTMLElement>(null);
+  // Secondary toolbar actions are grouped into accessible overflow menus.
+  // AI repair still reuses the Improve dialog with a pre-filled instruction.
+  const [flowToolsMenuAnchor, setFlowToolsMenuAnchor] = useState<null | HTMLElement>(null);
+  const [moreActionsMenuAnchor, setMoreActionsMenuAnchor] = useState<null | HTMLElement>(null);
   const [improveInitialDescription, setImproveInitialDescription] = useState('');
 
   // Version history: browse/preview/restore archived versions of a saved flow.
@@ -635,7 +671,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // same row = parallel). Runs entirely client-side (no model), applied as an unsaved,
   // undoable change just like AI-Improve. No-op flows report "nothing to repair".
   const handleRepairStatic = useCallback(() => {
-    setRepairMenuAnchor(null);
+    setFlowToolsMenuAnchor(null);
     const currentFlow: Flow = {
       id: initialFlow?.id || '',
       name: flowName,
@@ -670,7 +706,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
   // it, so model selection / install opt-in / result handling are all reused.
   const handleRepairWithAI = useCallback(() => {
-    setRepairMenuAnchor(null);
+    setFlowToolsMenuAnchor(null);
     setImproveInitialDescription(AI_REPAIR_DESCRIPTION);
     setImproveDialogOpen(true);
   }, []);
@@ -1081,165 +1117,211 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       <ReactFlowProvider>
         <MainContent>
           <ToolbarContainer elevation={1}>
-            <TextField
-              size="small"
-              label="Flow Name"
-              value={flowName}
-              onChange={handleFlowNameChange}
-              sx={{ minWidth: 300 }}
-              error={!!flowNameError}
-              helperText={flowNameError}
-            />
-
-            <TextField
-              size="small"
-              label="Description"
-              value={flowDescription}
-              onChange={handleFlowDescriptionChange}
-              multiline
-              maxRows={3}
-              sx={{ minWidth: 300, flex: 1 }}
-              placeholder="Optional — shown on the flow card"
-            />
-
-            <Tooltip
-              describeChild
-              title="Guided shows the common flow controls. Advanced reveals runtime, routing, resource, fan-out, and scheduling controls."
-            >
-              <FormControlLabel
-                control={
-                  <Switch
-                    size="small"
-                    checked={authoringMode === 'advanced'}
-                    onChange={(event) => setAuthoringMode(event.target.checked ? 'advanced' : 'guided')}
-                  />
-                }
-                label={authoringMode === 'advanced' ? 'Advanced' : 'Guided'}
-                sx={{ whiteSpace: 'nowrap' }}
+            <ToolbarFields>
+              <TextField
+                size="small"
+                label="Flow Name"
+                value={flowName}
+                onChange={handleFlowNameChange}
+                sx={{
+                  flex: { xs: '1 1 100%', sm: '0 1 300px' },
+                  minWidth: { xs: 0, sm: 220 },
+                  width: { xs: '100%', sm: 'auto' },
+                }}
+                error={!!flowNameError}
+                helperText={flowNameError}
               />
-            </Tooltip>
 
-            {authoringMode === 'advanced' && <>
-            <Button
-              variant="outlined"
-              onClick={() => setPermissionRulesDialogOpen(true)}
-              sx={{ whiteSpace: 'nowrap' }}
-            >
-              Permission Rules{permissionRules.length ? ` (${permissionRules.length})` : ''}
-            </Button>
-            </>}
+              <TextField
+                size="small"
+                label="Description"
+                value={flowDescription}
+                onChange={handleFlowDescriptionChange}
+                multiline
+                maxRows={3}
+                sx={{
+                  flex: '1 1 300px',
+                  minWidth: { xs: 0, sm: 240 },
+                  width: { xs: '100%', sm: 'auto' },
+                }}
+                placeholder="Optional — shown on the flow card"
+              />
+            </ToolbarFields>
 
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleSave}
-              startIcon={<SaveIcon />}
-              disabled={!!flowNameError}
-            >
-              Save Flow
-            </Button>
-            
-            <FlowValidationButton nodes={nodes} edges={edges} />
+            <ToolbarPrimaryActions>
+              <Tooltip
+                describeChild
+                title="Guided shows the common flow controls. Advanced reveals runtime, routing, resource, fan-out, and scheduling controls."
+              >
+                <FormControlLabel
+                  control={
+                    <Switch
+                      size="small"
+                      checked={authoringMode === 'advanced'}
+                      onChange={(event) => setAuthoringMode(event.target.checked ? 'advanced' : 'guided')}
+                    />
+                  }
+                  label={authoringMode === 'advanced' ? 'Advanced' : 'Guided'}
+                  sx={{ whiteSpace: 'nowrap' }}
+                />
+              </Tooltip>
 
-            <Tooltip title="Auto-arrange nodes into a clean layout">
-              <span>
+              {authoringMode === 'advanced' && (
                 <Button
                   variant="outlined"
-                  color="primary"
-                  onClick={handleAutoAlign}
-                  startIcon={<AccountTreeIcon />}
+                  onClick={() => setPermissionRulesDialogOpen(true)}
+                  sx={{ whiteSpace: 'nowrap' }}
+                >
+                  Permission Rules{permissionRules.length ? ` (${permissionRules.length})` : ''}
+                </Button>
+              )}
+
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleSave}
+                startIcon={<SaveIcon />}
+                disabled={!!flowNameError}
+              >
+                Save Flow
+              </Button>
+
+              <FlowValidationButton nodes={nodes} edges={edges} />
+            </ToolbarPrimaryActions>
+
+            <ToolbarSecondaryActions>
+              <Button
+                id="flow-tools-button"
+                variant="outlined"
+                size="small"
+                startIcon={<AccountTreeIcon />}
+                endIcon={<ArrowDropDownIcon />}
+                aria-label="Flow tools"
+                aria-controls={flowToolsMenuAnchor ? 'flow-tools-menu' : undefined}
+                aria-haspopup="menu"
+                aria-expanded={flowToolsMenuAnchor ? 'true' : undefined}
+                onClick={(event) => setFlowToolsMenuAnchor(event.currentTarget)}
+              >
+                Flow tools
+              </Button>
+              <Menu
+                id="flow-tools-menu"
+                anchorEl={flowToolsMenuAnchor}
+                open={!!flowToolsMenuAnchor}
+                onClose={() => setFlowToolsMenuAnchor(null)}
+                MenuListProps={{ 'aria-labelledby': 'flow-tools-button' }}
+              >
+                <MenuItem
                   disabled={nodes.length <= 1}
+                  onClick={() => {
+                    setFlowToolsMenuAnchor(null);
+                    handleAutoAlign();
+                  }}
                 >
                   Auto-Align
-                </Button>
-              </span>
-            </Tooltip>
+                </MenuItem>
+                <MenuItem disabled={nodes.length === 0} onClick={handleRepairStatic}>
+                  Repair automatically (no model)
+                </MenuItem>
+                <MenuItem disabled={nodes.length === 0} onClick={handleRepairWithAI}>
+                  Repair with AI…
+                </MenuItem>
+              </Menu>
 
-            <Tooltip title="Add a missing Start/Finish and connect disconnected nodes">
-              <ButtonGroup variant="outlined" color="primary" disabled={nodes.length === 0}>
-                <Button onClick={handleRepairStatic} startIcon={<HealingIcon />}>
-                  Repair
-                </Button>
-                <Button
-                  size="small"
-                  onClick={(e) => setRepairMenuAnchor(e.currentTarget)}
-                  aria-label="Repair options"
-                >
-                  <ArrowDropDownIcon />
-                </Button>
-              </ButtonGroup>
-            </Tooltip>
-            <Menu
-              anchorEl={repairMenuAnchor}
-              open={!!repairMenuAnchor}
-              onClose={() => setRepairMenuAnchor(null)}
-            >
-              <MenuItem onClick={handleRepairStatic}>Repair automatically (no model)</MenuItem>
-              <MenuItem onClick={handleRepairWithAI}>Repair with AI…</MenuItem>
-            </Menu>
-
-            {initialFlow && (
-              <>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => {
-                    setImproveInitialDescription('');
-                    setImproveDialogOpen(true);
-                  }}
-                  startIcon={<AutoFixHighIcon />}
-                  data-tour="improve-flow"
-                >
-                  AI-Improve
-                </Button>
-                <Tooltip title="Browse, preview, and restore earlier saved versions of this flow">
-                  <Button
-                    variant="outlined"
-                    color="primary"
-                    onClick={() => setVersionHistoryOpen(true)}
-                    startIcon={<HistoryIcon />}
+              {initialFlow && (
+                <>
+                  <Tooltip title="More actions">
+                    <IconButton
+                      id="more-actions-button"
+                      data-tour="improve-flow"
+                      aria-label="More actions"
+                      aria-controls={moreActionsMenuAnchor ? 'more-actions-menu' : undefined}
+                      aria-haspopup="menu"
+                      aria-expanded={moreActionsMenuAnchor ? 'true' : undefined}
+                      onClick={(event) => setMoreActionsMenuAnchor(event.currentTarget)}
+                      color="primary"
+                      size="small"
+                    >
+                      <MoreHorizIcon />
+                    </IconButton>
+                  </Tooltip>
+                  <Menu
+                    id="more-actions-menu"
+                    anchorEl={moreActionsMenuAnchor}
+                    open={!!moreActionsMenuAnchor}
+                    onClose={() => setMoreActionsMenuAnchor(null)}
+                    MenuListProps={{ 'aria-labelledby': 'more-actions-button' }}
                   >
-                    History
-                  </Button>
-                </Tooltip>
-                <Button
-                  variant="outlined"
-                  color="primary"
-                  onClick={() => {
-                    setDialogType('duplicate');
-                    setNewFlowName(`${initialFlow.name}_copy`);
-                    setDialogOpen(true);
-                  }}
-                >
-                  Copy Flow
-                </Button>
-                <Button variant="outlined" color="error" onClick={handleDelete}>
-                  Delete Flow
-                </Button>
-              </>
-            )}
+                    <MenuItem
+                      onClick={() => {
+                        setMoreActionsMenuAnchor(null);
+                        setImproveInitialDescription('');
+                        setImproveDialogOpen(true);
+                      }}
+                    >
+                      AI-Improve
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => {
+                        setMoreActionsMenuAnchor(null);
+                        setVersionHistoryOpen(true);
+                      }}
+                    >
+                      History
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => {
+                        setMoreActionsMenuAnchor(null);
+                        setDialogType('duplicate');
+                        setNewFlowName(`${initialFlow.name}_copy`);
+                        setDialogOpen(true);
+                      }}
+                    >
+                      Copy Flow
+                    </MenuItem>
+                    <MenuItem
+                      sx={{ color: 'error.main' }}
+                      onClick={() => {
+                        setMoreActionsMenuAnchor(null);
+                        handleDelete();
+                      }}
+                    >
+                      Delete Flow
+                    </MenuItem>
+                  </Menu>
+                </>
+              )}
 
-            <Divider orientation="vertical" flexItem />
-            
-            <IconButton 
-              onClick={handleUndo} 
-              disabled={!canUndo}
-              color="primary"
-              size="small"
-            >
-              <UndoIcon />
-            </IconButton>
-            
-            <IconButton 
-              onClick={handleRedo} 
-              disabled={!canRedo}
-              color="primary"
-              size="small"
-            >
-              <RedoIcon />
-            </IconButton>
-            
-            <Box sx={{ flex: 1 }} />
+              <Divider orientation="vertical" flexItem />
+
+              <Tooltip title="Undo">
+                <span>
+                  <IconButton
+                    aria-label="Undo"
+                    onClick={handleUndo}
+                    disabled={!canUndo}
+                    color="primary"
+                    size="small"
+                  >
+                    <UndoIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
+
+              <Tooltip title="Redo">
+                <span>
+                  <IconButton
+                    aria-label="Redo"
+                    onClick={handleRedo}
+                    disabled={!canRedo}
+                    color="primary"
+                    size="small"
+                  >
+                    <RedoIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </ToolbarSecondaryActions>
           </ToolbarContainer>
 
           <Collapse in={authoringMode === 'guided' && hasHiddenAdvancedFeatures} unmountOnExit>
