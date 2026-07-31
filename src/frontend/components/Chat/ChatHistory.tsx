@@ -473,7 +473,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             zIndex: 0,
             top: 0,
             bottom: 0,
-            left: '75%',
+            left: '90%',
             width: 1,
             bgcolor: alpha(statusColor, 0.5),
             pointerEvents: 'none',
@@ -493,7 +493,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         <ListItemButton
           selected={selected}
           onClick={() => onSelectConversation(conversation.id)}
-          aria-label={`Open ${conversation.title}, origin: ${origin.label}`}
+          aria-label={`Open ${conversation.title}, origin: ${origin.label}, status: ${getStatusDescription(conversation.status) || 'Unknown'}`}
           sx={{
             position: 'relative',
             zIndex: 1,
@@ -509,25 +509,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           <ListItemText
             sx={{ my: 0, minWidth: 0 }}
             primary={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {conversation.status && (
-                  <Tooltip title={getStatusDescription(conversation.status)}>
-                    <Box
-                      component="span"
-                      sx={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        bgcolor: statusColor,
-                        boxShadow: modern
-                          ? `0 0 0 4px ${alpha(muiTheme.palette.common.white, 0.04)}`
-                          : 'none',
-                        display: 'inline-block',
-                        flexShrink: 0,
-                      }}
-                    />
-                  </Tooltip>
-                )}
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
                 <Tooltip title={conversation.title} enterDelay={500}>
                   <Typography
                     component="span"

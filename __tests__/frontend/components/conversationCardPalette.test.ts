@@ -36,9 +36,9 @@ describe('conversation card FlowBuilder palette', () => {
     expect(conversationStatusColor('error', theme)).toBe(theme.palette.error.main);
   });
 
-  it('splits the card surface at exactly 75% origin and 25% status', () => {
+  it('splits the card surface at exactly 90% origin and 10% status', () => {
     expect(conversationCardSplitBackground('#FF9900', '#22AA66', 0.3)).toBe(
-      'linear-gradient(90deg, rgba(255, 153, 0, 0.3) 0%, rgba(255, 153, 0, 0.3) 75%, rgba(34, 170, 102, 0.3) 75%, rgba(34, 170, 102, 0.3) 100%)',
+      'linear-gradient(90deg, rgba(255, 153, 0, 0.3) 0%, rgba(255, 153, 0, 0.3) 90%, rgba(34, 170, 102, 0.3) 90%, rgba(34, 170, 102, 0.3) 100%)',
     );
   });
 });

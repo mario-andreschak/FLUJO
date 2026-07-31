@@ -46,7 +46,7 @@ export function conversationStatusColor(
   }
 }
 
-/** A hard 75/25 surface split: invocation origin first, current status second. */
+/** A restrained 90/10 surface split: invocation origin first, current status second. */
 export function conversationCardSplitBackground(
   originColor: string,
   statusColor: string,
@@ -54,5 +54,5 @@ export function conversationCardSplitBackground(
 ): string {
   const origin = alpha(originColor, strength);
   const status = alpha(statusColor, strength);
-  return `linear-gradient(90deg, ${origin} 0%, ${origin} 75%, ${status} 75%, ${status} 100%)`;
+  return `linear-gradient(90deg, ${origin} 0%, ${origin} 90%, ${status} 90%, ${status} 100%)`;
 }
