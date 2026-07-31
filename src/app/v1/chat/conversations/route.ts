@@ -166,6 +166,9 @@ export async function GET(request: NextRequest) {
             lastUserMessageAt: state.lastUserMessageAt ?? null,
             status: state.status,
             recovery: state.recovery,
+            // Invocation origin is persisted by runFlow. UI-created, not-yet-run
+            // conversations are seeded as `chat` by POST below.
+            source: state.source ?? null,
             // Wave grouping (issue #181): expose the already-persisted planned-
             // execution id so the sidebar can bucket conversations by wave.
             // null for ad-hoc chat/API runs. Read-only pass-through; no schema
@@ -198,6 +201,7 @@ export async function GET(request: NextRequest) {
         const title = live?.title ?? base.title;
         const updatedAt = live?.updatedAt ?? base.updatedAt;
         const lastUserMessageAt = live?.lastUserMessageAt ?? base.lastUserMessageAt ?? null;
+        const source = live?.source ?? base.source ?? null;
         // Prefer the live in-memory wave id for a running scheduler run (#181).
         const plannedExecutionId = live?.plannedExecutionId ?? base.plannedExecutionId ?? null;
 
@@ -214,7 +218,7 @@ export async function GET(request: NextRequest) {
           status = 'error';
         }
 
-        return { ...base, title, updatedAt, lastUserMessageAt, status, plannedExecutionId };
+        return { ...base, title, updatedAt, lastUserMessageAt, status, source, plannedExecutionId };
       } catch (parseError) {
         log.error(`Error reading or parsing conversation file: ${file}`, { requestId, filePath, error: parseError });
         // Under content search an unparseable file can't be said to match, so
@@ -231,6 +235,7 @@ export async function GET(request: NextRequest) {
               updatedAt: stats.mtimeMs,
               status: 'error',
               plannedExecutionId: null,
+              source: null,
            }
         } catch (statError) {
            log.error(`Could not get stats for errored file: ${file}`, { requestId, statError });
@@ -373,6 +378,10 @@ export async function POST(req: NextRequest) {
       messages: [], // Start with empty messages
       status: undefined, // Initial status should be undefined or a valid state
       createdAt: payload.createdAt,
+      // This control-plane create route is used by the interactive chat UI
+      // (including Quick Chat / flow-generation chats). runFlow overwrites the
+      // field at execution boundaries if a different source starts the run.
+      source: 'chat',
       updatedAt: payload.updatedAt,
       // Add other necessary initial fields from SharedState if any
       // e.g., currentStep: null, history: [], etc.
@@ -394,6 +403,7 @@ export async function POST(req: NextRequest) {
       createdAt: initialState.createdAt,
       updatedAt: initialState.updatedAt,
       status: initialState.status, // This is 'running' | ... | undefined in both types
+      source: initialState.source,
     };
 
     const duration = Date.now() - startTime;

@@ -98,19 +98,22 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(status).toBe(400);
   });
 
-  it('projects parentConversationId / rootConversationId for chain rendering', async () => {
-    await writeConv('root', { title: 'Root', messages: [] });
+  it('projects chain and invocation-origin metadata for sidebar rendering', async () => {
+    await writeConv('root', { title: 'Root', messages: [], source: 'chat' });
     await writeConv('child', {
       title: 'Child',
       messages: [],
+      source: 'subflow',
       parentConversationId: 'root',
       rootConversationId: 'root',
     });
     const { body } = await getJson();
     const child = body.find((c: any) => c.id === 'child');
     const root = body.find((c: any) => c.id === 'root');
+    expect(child.source).toBe('subflow');
     expect(child.parentConversationId).toBe('root');
     expect(child.rootConversationId).toBe('root');
+    expect(root.source).toBe('chat');
     // A top-level conversation has no parent link.
     expect(root.parentConversationId).toBeNull();
   });

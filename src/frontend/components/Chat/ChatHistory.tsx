@@ -36,6 +36,15 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
+import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
+import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded';
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
+import WebhookRoundedIcon from '@mui/icons-material/WebhookRounded';
+import ApiRoundedIcon from '@mui/icons-material/ApiRounded';
+import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
+import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
+import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
@@ -49,6 +58,10 @@ import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import ConversationTree from './ConversationTree';
 import { buildChainIndex } from '@/utils/shared/conversationChains';
+import { alpha, useTheme as useMuiTheme } from '@mui/material/styles';
+import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
+import { getConversationOrigin } from './conversationOrigin';
+import type { ConversationOriginKey } from './conversationOrigin';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -73,7 +86,7 @@ interface ChatHistoryProps {
   flowNames?: Record<string, string>;
 }
 
-type GroupMode = 'none' | 'date' | 'flow' | 'wave' | 'chain';
+type GroupMode = 'none' | 'date' | 'flow' | 'origin' | 'wave' | 'chain';
 type StatusFilter = 'all' | NonNullable<ConversationListItem['status']>;
 type DateFilter = 'all' | 'today' | '7d' | '30d';
 
@@ -109,9 +122,32 @@ const GROUP_OPTIONS: { value: GroupMode; label: string }[] = [
   { value: 'none', label: 'No grouping' },
   { value: 'date', label: 'Group by date' },
   { value: 'flow', label: 'Group by agent' },
+  { value: 'origin', label: 'Group by origin' },
   { value: 'wave', label: 'Group by wave' },
   { value: 'chain', label: 'Group by chain' },
 ];
+
+const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
+  chat: ChatBubbleOutlineRoundedIcon,
+  api: ApiRoundedIcon,
+  schedule: ScheduleRoundedIcon,
+  trigger: WebhookRoundedIcon,
+  subflow: AccountTreeRoundedIcon,
+  mcp: ExtensionRoundedIcon,
+  internal: AutoAwesomeRoundedIcon,
+  unknown: HelpOutlineRoundedIcon,
+};
+
+const ORIGIN_COLORS = {
+  chat: 'primary',
+  api: 'info',
+  schedule: 'secondary',
+  trigger: 'warning',
+  subflow: 'success',
+  mcp: 'info',
+  internal: 'secondary',
+  unknown: 'default',
+} as const satisfies Record<ConversationOriginKey, 'primary' | 'info' | 'secondary' | 'warning' | 'success' | 'default'>;
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
   conversations,
@@ -125,6 +161,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   onCollapse,
   flowNames = {},
 }) => {
+  const muiTheme = useMuiTheme();
+  const { visualStyle } = useAppTheme();
+  const modern = visualStyle === 'modern';
   // Search text is intentionally ephemeral (not persisted): a stale filter
   // silently hiding conversations after a reload would be surprising.
   const [search, setSearch] = React.useState('');
@@ -286,7 +325,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             // matches yet; otherwise keep only the ids the backend matched.
             if (!contentMatchIds || !contentMatchIds.has(c.id)) return false;
           } else {
-            const haystack = `${c.title} ${flowMeta(c.flowId).label}`.toLowerCase();
+            const origin = getConversationOrigin(c);
+            const haystack = `${c.title} ${flowMeta(c.flowId).label} ${origin.label}`.toLowerCase();
             if (!haystack.includes(q)) return false;
           }
         }
@@ -306,9 +346,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         groupItems(filtered, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
       );
     }
-    return groupItems(filtered, (c) =>
-      groupMode === 'date' ? recencyBucket(c.updatedAt) : flowMeta(c.flowId),
-    );
+    return groupItems(filtered, (c) => {
+      if (groupMode === 'date') return recencyBucket(c.updatedAt);
+      if (groupMode === 'origin') {
+        const origin = getConversationOrigin(c);
+        return { key: `origin:${origin.key}`, label: origin.label };
+      }
+      return flowMeta(c.flowId);
+    });
   }, [filtered, groupMode, flowMeta, waveLookup]);
 
   const toggleGroup = (key: string) => {
@@ -358,48 +403,114 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       (conversation.status === 'running' || conversation.status === 'awaiting_tool_approval');
     const meta = flowMeta(conversation.flowId);
     const isQuickChat = meta.key === 'flow:__quickchat__';
+    const selected = conversation.id === currentConversationId;
+    const origin = getConversationOrigin(conversation);
+    const OriginIcon = ORIGIN_ICONS[origin.key];
+
     return (
       <ListItem
         key={conversation.id}
         disablePadding
         secondaryAction={
-          <>
+          <Box
+            className="conversation-card-actions"
+            sx={modern ? {
+              display: 'flex',
+              gap: 0.25,
+              opacity: selected ? 1 : 0,
+              transition: 'opacity 160ms ease',
+              bgcolor: alpha(muiTheme.palette.background.paper, 0.72),
+              borderRadius: 2,
+              backdropFilter: 'blur(12px)',
+              '& .MuiIconButton-root': { width: 30, height: 30 },
+            } : { display: 'flex' }}
+          >
             {stoppable && (
               <Tooltip title="Stop this run">
                 <IconButton
                   edge="end"
+                  size="small"
                   aria-label="stop run"
                   onClick={(e) => {
                     e.stopPropagation();
                     onStopConversation!(conversation.id);
                   }}
                 >
-                  <StopCircleIcon color="error" />
+                  <StopCircleIcon color="error" fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
-            <IconButton
-              edge="end"
-              aria-label="delete"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteConversation(conversation.id);
-              }}
-            >
-              <DeleteIcon />
-            </IconButton>
-          </>
+            <Tooltip title="Delete conversation">
+              <IconButton
+                edge="end"
+                size="small"
+                aria-label="delete"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteConversation(conversation.id);
+                }}
+              >
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
         }
-        sx={{
-          opacity: conversation.id === currentConversationId ? 1 : 0.7,
+        sx={modern ? {
+          position: 'relative',
+          mb: 0.9,
+          border: '1px solid',
+          borderColor: selected
+            ? alpha(muiTheme.palette.primary.main, 0.5)
+            : alpha(muiTheme.palette.text.primary, 0.09),
+          borderRadius: 2.5,
+          overflow: 'hidden',
+          opacity: 1,
+          bgcolor: selected
+            ? alpha(muiTheme.palette.primary.main, 0.11)
+            : alpha(muiTheme.palette.background.paper, 0.46),
+          backgroundImage: selected
+            ? `linear-gradient(135deg, ${alpha(muiTheme.palette.primary.main, 0.14)} 0%, transparent 72%)`
+            : 'none',
+          boxShadow: selected
+            ? `0 10px 28px ${alpha(muiTheme.palette.primary.main, 0.16)}`
+            : `0 5px 18px ${alpha(muiTheme.palette.common.black, muiTheme.palette.mode === 'dark' ? 0.14 : 0.05)}`,
+          transition: 'transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease',
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            inset: '10px auto 10px 0',
+            width: 3,
+            borderRadius: '0 4px 4px 0',
+            bgcolor: selected ? 'primary.main' : 'transparent',
+          },
+          '&:hover': {
+            transform: 'translateY(-1px)',
+            borderColor: alpha(muiTheme.palette.primary.main, 0.28),
+            boxShadow: `0 10px 26px ${alpha(muiTheme.palette.common.black, muiTheme.palette.mode === 'dark' ? 0.2 : 0.09)}`,
+            '& .conversation-card-actions': { opacity: 1 },
+          },
+          '&:focus-within .conversation-card-actions': { opacity: 1 },
+          '@media (hover: none)': { '& .conversation-card-actions': { opacity: 1 } },
+        } : {
+          opacity: selected ? 1 : 0.7,
         }}
       >
         <ListItemButton
-          selected={conversation.id === currentConversationId}
+          selected={selected}
           onClick={() => onSelectConversation(conversation.id)}
-          sx={{ pr: stoppable ? 12 : 7 }} // Make room for the action buttons
+          aria-label={`Open ${conversation.title}, origin: ${origin.label}`}
+          sx={{
+            pr: stoppable ? 12 : 7,
+            px: modern ? 1.5 : 2,
+            py: modern ? 1.25 : 1,
+            alignItems: 'flex-start',
+            borderRadius: 'inherit',
+            '&.Mui-selected': { bgcolor: 'transparent' },
+            '&.Mui-selected:hover': { bgcolor: alpha(muiTheme.palette.primary.main, 0.04) },
+          }}
         >
           <ListItemText
+            sx={{ my: 0, minWidth: 0 }}
             primary={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 {conversation.status && (
@@ -411,8 +522,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                         height: 8,
                         borderRadius: '50%',
                         bgcolor: getStatusColor(conversation.status),
+                        boxShadow: modern
+                          ? `0 0 0 4px ${alpha(muiTheme.palette.common.white, 0.04)}`
+                          : 'none',
                         display: 'inline-block',
-                        flexShrink: 0
+                        flexShrink: 0,
                       }}
                     />
                   </Tooltip>
@@ -420,7 +534,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 <Tooltip title={conversation.title} enterDelay={500}>
                   <Typography
                     component="span"
-                    fontWeight={conversation.id === currentConversationId ? 'bold' : 'normal'}
+                    fontWeight={selected ? 760 : modern ? 650 : 'normal'}
                     sx={{
                       // Allow the title to wrap to two lines with an
                       // ellipsis (issue #134) instead of the old single-
@@ -431,6 +545,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                       WebkitBoxOrient: 'vertical',
                       overflow: 'hidden',
                       wordBreak: 'break-word',
+                      fontSize: modern ? '0.9rem' : undefined,
+                      lineHeight: modern ? 1.35 : undefined,
                     }}
                   >
                     {conversation.title}
@@ -441,8 +557,31 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             secondary={
               <Box
                 component="span"
-                sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.5, flexWrap: 'wrap' }}
+                sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.8, flexWrap: 'wrap' }}
               >
+                {groupMode !== 'origin' && (
+                  <Tooltip
+                    title={`${origin.description}${origin.inferred ? ' (inferred from legacy metadata)' : ''}`}
+                  >
+                    <Chip
+                      icon={<OriginIcon />}
+                      label={origin.label}
+                      size="small"
+                      variant="outlined"
+                      color={ORIGIN_COLORS[origin.key]}
+                      sx={{
+                        height: modern ? 22 : 20,
+                        bgcolor: modern ? alpha(muiTheme.palette.background.paper, 0.42) : undefined,
+                        '& .MuiChip-icon': { fontSize: 14 },
+                        '& .MuiChip-label': {
+                          px: 0.75,
+                          fontSize: '0.68rem',
+                          fontWeight: modern ? 700 : 500,
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                )}
                 {/* Which flow this conversation used (issue #147) — hidden when
                     grouping by flow to avoid redundancy with the section header. */}
                 {groupMode !== 'flow' && (
@@ -453,13 +592,34 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                       size="small"
                       variant="outlined"
                       color={isQuickChat ? 'secondary' : 'default'}
-                      sx={{ maxWidth: '100%', height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+                      sx={{
+                        maxWidth: '100%',
+                        height: modern ? 22 : 20,
+                        '& .MuiChip-icon': { fontSize: 14 },
+                        '& .MuiChip-label': { px: 0.75, fontSize: '0.68rem' },
+                      }}
                     />
                   </Tooltip>
                 )}
-                <Typography component="span" variant="caption" color="text.secondary">
-                  {formatDate(conversation.updatedAt)}
-                </Typography>
+                <Box
+                  component="span"
+                  sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35, ml: 'auto' }}
+                >
+                  {modern && (
+                    <AccessTimeRoundedIcon
+                      aria-hidden="true"
+                      sx={{ fontSize: 13, color: 'text.disabled' }}
+                    />
+                  )}
+                  <Typography
+                    component="span"
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ whiteSpace: 'nowrap' }}
+                  >
+                    {formatDate(conversation.updatedAt)}
+                  </Typography>
+                </Box>
               </Box>
             }
             secondaryTypographyProps={{ component: 'div' }}
@@ -476,12 +636,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     <>
       <Box
         sx={{
-          p: 1.5,
+          p: modern ? 2 : 1.5,
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          gap: 0.7,
-          background: 'linear-gradient(120deg, rgba(139,124,255,.09), transparent 62%)',
+          gap: modern ? 1 : 0.7,
+          background: modern
+            ? `linear-gradient(135deg, ${alpha(muiTheme.palette.primary.main, 0.14)}, ${alpha(muiTheme.palette.secondary.main, 0.05)} 58%, transparent)`
+            : 'linear-gradient(120deg, rgba(139,124,255,.09), transparent 62%)',
         }}
       >
         {onCollapse && (
@@ -568,14 +730,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           display: 'flex',
           flexDirection: 'column',
           gap: 1,
-          bgcolor: 'rgba(127,127,160,.035)',
+          bgcolor: modern ? alpha(muiTheme.palette.background.paper, 0.22) : 'rgba(127,127,160,.035)',
         }}
       >
         <Box sx={{ display: 'flex', gap: 1 }}>
         <TextField
           size="small"
           sx={{ flex: 1 }}
-          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title or agent…'}
+          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title, origin or agent…'}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           InputProps={{
@@ -673,7 +835,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
       <Divider />
 
-      <List sx={{ overflow: 'auto', flex: 1, p: 1 }}>
+      <List
+        aria-label="Conversations"
+        sx={{
+          overflow: 'auto',
+          flex: 1,
+          px: modern ? 1.25 : 1,
+          py: modern ? 1.5 : 1,
+          scrollbarGutter: 'stable',
+        }}
+      >
         {totalCount === 0 ? (
           <ListItem>
             <ListItemText

@@ -246,6 +246,9 @@ export interface ConversationListItem {
   lastUserMessageAt?: number | null;
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped'; // 'capped' = graceful landing at turn cap (#253)
   recovery?: RecoveryRecord;
+  /** Durable invocation origin recorded by runFlow. New UI-created
+   *  conversations are seeded as `chat`; optional for legacy records. */
+  source?: SharedState['source'] | null;
   /** Id of the scheduler planned-execution that originated this conversation
    *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
    *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
@@ -274,6 +277,7 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.recovery?.classification === y.recovery?.classification &&
       x.recovery?.updatedAt === y.recovery?.updatedAt &&
       x.plannedExecutionId === y.plannedExecutionId &&
+      x.source === y.source &&
       x.parentConversationId === y.parentConversationId &&
       x.rootConversationId === y.rootConversationId &&
       x.createdAt === y.createdAt &&

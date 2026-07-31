@@ -76,7 +76,11 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
       id, title: 'Hello', flowId: 'flow-1', createdAt: 1, updatedAt: 1,
     }));
     expect(res.status).toBe(201);
-    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(true);
+    expect((await res.json()).source).toBe('chat');
+    const conversationPath = path.join(dbDir, 'conversations', `${id}.json`);
+    expect(await exists(conversationPath)).toBe(true);
+    const stored = JSON.parse(await fs.readFile(conversationPath, 'utf-8'));
+    expect(stored.source).toBe('chat');
     // And nothing leaked to the db root.
     expect(await exists(path.join(dbDir, 'encryption_key.json'))).toBe(false);
   });
