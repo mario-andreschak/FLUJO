@@ -81,6 +81,51 @@ describe('InstallPackageCard', () => {
     deletePackageMock.mockResolvedValue({ ok: true });
   });
 
+
+  it('shows repository-provided commands before installing a GitHub server', async () => {
+    installFromRegistryMock.mockResolvedValueOnce({
+      ok: true,
+      dryRun: true,
+      package: { name: 'Example package', version: '1.0.0' },
+      preview: {
+        servers: [
+          {
+            localName: 'github-server',
+            source: 'https://github.com/example/server',
+            requiredEnvMissing: [],
+            installCommand: 'pnpm install --frozen-lockfile',
+            buildCommand: 'pnpm run build',
+          },
+        ],
+        models: [],
+        installedModels: [],
+        flows: [],
+        plannedExecutions: [],
+        secrets: [],
+        globals: [],
+        missingGlobals: [],
+      },
+      created: [],
+      updated: [],
+      skipped: [],
+      disabled: [],
+      servers: [],
+      errors: [],
+      missingGlobals: [],
+    });
+
+    render(<InstallPackageCard />);
+    fireEvent.click(await screen.findByText('Example package'));
+
+    expect(await screen.findByRole('heading', { name: 'Review and install' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/repository-provided commands on your machine/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Install command')).toBeInTheDocument();
+    expect(screen.getByText('pnpm install --frozen-lockfile')).toBeInTheDocument();
+    expect(screen.getByText('Build command')).toBeInTheDocument();
+    expect(screen.getByText('pnpm run build')).toBeInTheDocument();
+  });
   it('shows and hides a package secret when its visibility button is toggled', async () => {
     render(<InstallPackageCard />);
 

@@ -20,6 +20,12 @@ jest.mock('@/backend/services/mcp/registryInstall', () => ({
   installRegistryServer: (...a: unknown[]) => installRegistryServerMock(...a),
 }));
 
+const installGithubServerMock = jest.fn();
+jest.mock('@/backend/services/mcp/githubInstall', () => ({
+  installGithubServer: (...a: unknown[]) => installGithubServerMock(...a),
+}));
+
+
 const loadModelsMock = jest.fn();
 const addModelMock = jest.fn();
 const updateModelMock = jest.fn();
@@ -118,6 +124,7 @@ beforeEach(() => {
   store.clear();
   fetchPackageManifestMock.mockResolvedValue(manifest());
   installRegistryServerMock.mockResolvedValue({ installed: true, serverName: 'web-search', tools: [{ name: 't' }] });
+  installGithubServerMock.mockResolvedValue({ installed: true, serverName: 'github-server' });
   loadModelsMock.mockResolvedValue([]);
   addModelMock.mockResolvedValue({ success: true });
   updateModelMock.mockResolvedValue({ success: true });
@@ -189,6 +196,101 @@ describe('installPackage — happy path', () => {
     expect(JSON.stringify(summary)).not.toContain('sk-SECRET');
   });
 });
+
+describe('installPackage — GitHub servers', () => {
+  const githubManifest = () => ({
+    schemaVersion: 1,
+    id: 'pkg-github-id',
+    name: 'github-pkg',
+    version: '1.0.0',
+    secrets: [{ name: 'TOKEN', required: true }],
+    mcpServers: [
+      {
+        name: 'github-server',
+        transport: 'stdio',
+        installOrigin: {
+          sourceType: 'github',
+          ref: 'https://github.com/acme/server.git',
+          gitRef: 'v2.0.0',
+          subdirectory: 'packages/server',
+          installCommand: 'pnpm install --frozen-lockfile',
+          buildCommand: 'pnpm run build',
+        },
+        envDeclarations: [
+          { name: 'API_TOKEN', isSecret: true, secretRef: 'TOKEN' },
+        ],
+        autoApprove: ['search'],
+      },
+    ],
+    models: [],
+    flows: [],
+    plannedExecutions: [],
+  });
+
+  it('shows reviewed commands in preview and passes the complete recipe to the installer', async () => {
+    fetchPackageManifestMock.mockResolvedValue(githubManifest());
+
+    const preview = await installPackage({
+      source: 'registry',
+      packageId: 'github-pkg',
+      secrets: { TOKEN: 'secret-value' },
+    });
+    expect(preview.preview?.servers[0]).toEqual(expect.objectContaining({
+      installCommand: 'pnpm install --frozen-lockfile',
+      buildCommand: 'pnpm run build',
+    }));
+    expect(installGithubServerMock).not.toHaveBeenCalled();
+
+    await installPackage({
+      source: 'registry',
+      packageId: 'github-pkg',
+      secrets: { TOKEN: 'secret-value' },
+      consentGranted: true,
+    });
+    expect(installGithubServerMock).toHaveBeenCalledWith({
+      name: 'github-server',
+      repositoryUrl: 'https://github.com/acme/server.git',
+      ref: 'v2.0.0',
+      subdirectory: 'packages/server',
+      installCommand: 'pnpm install --frozen-lockfile',
+      buildCommand: 'pnpm run build',
+      env: { API_TOKEN: 'secret-value' },
+      secretEnvNames: ['API_TOKEN'],
+      argTemplates: undefined,
+      disabled: undefined,
+      autoApprove: ['search'],
+      folder: 'github-pkg',
+    });
+  });
+
+  it('adopts and configures an existing GitHub server without rebuilding it', async () => {
+    fetchPackageManifestMock.mockResolvedValue(githubManifest());
+    loadServerConfigsMock.mockResolvedValue([
+      { name: 'github-server', transport: 'stdio', env: { KEEP: 'yes' }, args: ['dist/index.js'] },
+    ]);
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'github-pkg',
+      secrets: { TOKEN: 'secret-value' },
+      consentGranted: true,
+    });
+
+    expect(installGithubServerMock).not.toHaveBeenCalled();
+    expect(updateServerConfigMock).toHaveBeenCalledWith('github-server', {
+      env: {
+        KEEP: 'yes',
+        API_TOKEN: { value: 'secret-value', metadata: { isSecret: true } },
+      },
+      folder: 'github-pkg',
+    });
+    expect(summary.updated).toContainEqual(expect.objectContaining({
+      type: 'server',
+      name: 'github-server',
+    }));
+  });
+});
+
 
 describe('installPackage — consent dry-run', () => {
   it('returns a preview and mutates nothing when consent is not granted', async () => {

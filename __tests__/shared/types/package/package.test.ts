@@ -198,6 +198,36 @@ describe('security backstops', () => {
     };
     expect(validatePackage(pkg).success).toBe(false);
   });
+
+  it('accepts a reviewed GitHub install recipe without allowing a runtime command', () => {
+    const pkg = {
+      schemaVersion: 1,
+      id: 'x',
+      name: 'x',
+      version: '1.0.0',
+      secrets: [],
+      models: [],
+      mcpServers: [
+        {
+          name: 's',
+          transport: 'stdio',
+          installOrigin: {
+            sourceType: 'github',
+            ref: 'https://github.com/acme/server.git',
+            gitRef: 'v2.0.0',
+            subdirectory: 'packages/server',
+            installCommand: 'pnpm install --frozen-lockfile',
+            buildCommand: 'pnpm run build',
+          },
+          envDeclarations: [],
+        },
+      ],
+      flows: [],
+      plannedExecutions: [],
+    };
+    expect(validatePackage(pkg).success).toBe(true);
+  });
+
 });
 
 describe('reference resolution', () => {

@@ -90,6 +90,10 @@ export const mcpInstallOriginSchema = z
   .object({
     sourceType: z.enum(['github', 'registry', 'marketplace', 'remote']),
     ref: z.string().optional(),
+    gitRef: z.string().min(1).optional(),
+    subdirectory: z.string().min(1).optional(),
+    installCommand: z.string().min(1).max(4096).optional(),
+    buildCommand: z.string().min(1).max(4096).optional(),
     url: z.string().optional(),
     name: z.string().optional(),
   })

@@ -68,11 +68,11 @@ export interface PackagedModel {
 export type PackagedMcpTransport = 'stdio' | 'sse' | 'streamable' | 'websocket';
 
 /**
- * A packaged MCP server, by reference only. No `command`, raw `args`, `rootPath`,
- * `_buildCommand`, `_installCommand`, `serverUrl`, OAuth secrets, or server
- * files — just where to install it (`installOrigin`), declarations of the env
- * vars / headers it needs, and narrowly-scoped argument templates containing
- * portable global references.
+ * A packaged MCP server, by reference only. No runtime `command`, raw `args`,
+ * `rootPath`, `serverUrl`, OAuth secrets, or server files. A GitHub origin may
+ * retain the reviewed install/build recipe needed to reproduce the install;
+ * env/header declarations contain names only, and argument templates are
+ * narrowly scoped to portable global references.
  */
 export interface PackagedMcpServer {
   name: string;

@@ -84,7 +84,13 @@ export interface InstallServerResult {
 }
 
 export interface InstallPreview {
-  servers: Array<{ localName: string; source: string; requiredEnvMissing: string[] }>;
+  servers: Array<{
+    localName: string;
+    source: string;
+    requiredEnvMissing: string[];
+    installCommand?: string;
+    buildCommand?: string;
+  }>;
   models: Array<{ id: string; displayName: string; apiKeyFrom?: string; missingRequiredSecret?: boolean }>;
   installedModels: Array<{ id: string; displayName: string; name: string }>;
   flows: Array<{ name: string }>;
@@ -653,6 +659,12 @@ async function buildPreview(manifest: FlujoPackage, secretProvided: (name: strin
     servers: (manifest.mcpServers ?? []).map((s) => ({
       localName: s.name,
       source: serverSource(s),
+      ...(s.installOrigin.sourceType === 'github' && s.installOrigin.installCommand
+        ? { installCommand: s.installOrigin.installCommand }
+        : {}),
+      ...(s.installOrigin.sourceType === 'github' && s.installOrigin.buildCommand
+        ? { buildCommand: s.installOrigin.buildCommand }
+        : {}),
       requiredEnvMissing: serverSecretRefs(s).filter(
         (name) => (manifest.secrets ?? []).some((sec) => sec.name === name && sec.required) && !secretProvided(name),
       ),
@@ -861,6 +873,20 @@ async function installServer(
       summary.skipped.push({ type: 'server', name: server.name, note: 'installOrigin has no GitHub ref' });
       return;
     }
+    // Match the registry path's adopt-and-configure semantics. Reinstalling a
+    // package must not rebuild or take ownership of a user's existing server,
+    // but it must still merge the package's env/folder configuration.
+    if (existingServerNames.has(server.name)) {
+      await adoptAndConfigureServer(
+        server,
+        ctx,
+        missingRequired,
+        env.values,
+        env.secretNames,
+        resolvedHeaders,
+      );
+      return;
+    }
     if (missingRequired.length > 0) {
       summary.disabled.push({ type: 'server', name: server.name, note: `missing required secret(s) for: ${missingRequired.join(', ')}` });
       summary.servers.push({ localName: server.name, source, installed: false, needsEnv: missingRequired });
@@ -869,7 +895,15 @@ async function installServer(
     const result = await installGithubServer({
       name: server.name,
       repositoryUrl: origin.ref,
+      ref: origin.gitRef,
+      subdirectory: origin.subdirectory,
+      installCommand: origin.installCommand,
+      buildCommand: origin.buildCommand,
       env: env.values,
+      secretEnvNames: [...env.secretNames],
+      argTemplates: server.argTemplates,
+      disabled: server.disabled,
+      autoApprove: server.autoApprove,
       folder: ctx.packageFolder,
     });
     summary.servers.push({

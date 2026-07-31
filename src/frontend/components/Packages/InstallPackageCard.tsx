@@ -802,6 +802,53 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                     </Alert>
                   )}
 
+
+                  {manifest.servers.some((server) => server.installCommand || server.buildCommand) && (
+                    <Box sx={{ mb: 2.5 }}>
+                      <Alert severity="warning" sx={{ mb: 1.5 }}>
+                        This package will run these repository-provided commands on your machine.
+                        Review them before installing.
+                      </Alert>
+                      <Stack spacing={1.5}>
+                        {manifest.servers
+                          .filter((server) => server.installCommand || server.buildCommand)
+                          .map((server) => (
+                            <Card key={`${server.localName}:${server.source}`} variant="outlined" sx={{ p: 1.75 }}>
+                              <Typography variant="subtitle2">{server.localName}</Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                                {server.source}
+                              </Typography>
+                              {server.installCommand && (
+                                <Box sx={{ mt: 1.25 }}>
+                                  <Typography variant="caption" color="text.secondary" display="block">
+                                    Install command
+                                  </Typography>
+                                  <Box
+                                    component="code"
+                                    sx={{ display: 'block', mt: 0.5, p: 1, bgcolor: 'action.hover', overflowWrap: 'anywhere' }}
+                                  >
+                                    {server.installCommand}
+                                  </Box>
+                                </Box>
+                              )}
+                              {server.buildCommand && (
+                                <Box sx={{ mt: 1.25 }}>
+                                  <Typography variant="caption" color="text.secondary" display="block">
+                                    Build command
+                                  </Typography>
+                                  <Box
+                                    component="code"
+                                    sx={{ display: 'block', mt: 0.5, p: 1, bgcolor: 'action.hover', overflowWrap: 'anywhere' }}
+                                  >
+                                    {server.buildCommand}
+                                  </Box>
+                                </Box>
+                              )}
+                            </Card>
+                          ))}
+                      </Stack>
+                    </Box>
+                  )}
                   {manifest.globals.length > 0 && (
                     <>
                       <Typography variant="subtitle2" sx={{ mb: 1 }}>

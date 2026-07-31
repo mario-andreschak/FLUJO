@@ -337,8 +337,17 @@ export function mapInstallOrigin(config: MCPServerConfig): McpInstallOrigin | nu
   if (!source || source.type === 'local') return null;
   switch (source.type) {
     case 'github': {
-      const ref = source.ref ? `${source.repositoryUrl}@${source.ref}` : source.repositoryUrl;
-      return { sourceType: 'github', ref, name: config.name };
+      const installCommand = config._installCommand?.trim();
+      const buildCommand = config._buildCommand?.trim();
+      return {
+        sourceType: 'github',
+        ref: source.repositoryUrl,
+        ...(source.ref ? { gitRef: source.ref } : {}),
+        ...(source.subdirectory ? { subdirectory: source.subdirectory } : {}),
+        ...(installCommand ? { installCommand } : {}),
+        ...(buildCommand ? { buildCommand } : {}),
+        name: config.name,
+      };
     }
     case 'registry':
       return { sourceType: 'registry', ref: source.registryName, name: config.name };

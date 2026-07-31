@@ -91,6 +91,22 @@ function localServer(name: string): MCPServerConfig {
   } as unknown as MCPServerConfig;
 }
 
+function githubServer(name: string): MCPServerConfig {
+  return {
+    name,
+    transport: 'stdio',
+    source: {
+      type: 'github',
+      repositoryUrl: 'https://github.com/acme/server.git',
+      ref: 'v2.0.0',
+      subdirectory: 'packages/server',
+    },
+    _installCommand: 'pnpm install --frozen-lockfile',
+    _buildCommand: 'pnpm run build',
+    env: {},
+  } as unknown as MCPServerConfig;
+}
+
 function secretEnv(): Record<string, unknown> {
   return {
     API_TOKEN: { value: 'super-secret', metadata: { isSecret: true } },
@@ -233,6 +249,19 @@ describe('mapInstallOrigin', () => {
     const origin = mapInstallOrigin(registryServer('x'));
     expect(origin).toMatchObject({ sourceType: 'registry', ref: 'ai.example/thing' });
   });
+  it('keeps GitHub refs, subdirectories, and reviewed install/build commands separate', () => {
+    const origin = mapInstallOrigin(githubServer('github'));
+    expect(origin).toEqual({
+      sourceType: 'github',
+      ref: 'https://github.com/acme/server.git',
+      gitRef: 'v2.0.0',
+      subdirectory: 'packages/server',
+      installCommand: 'pnpm install --frozen-lockfile',
+      buildCommand: 'pnpm run build',
+      name: 'github',
+    });
+  });
+
 });
 
 // --- secret derivation ------------------------------------------------------
