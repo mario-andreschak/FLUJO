@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { styled } from '@mui/material/styles';
 import {
   Box,
@@ -15,6 +15,8 @@ import {
   Tooltip,
   Chip,
   CircularProgress,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
@@ -53,6 +55,7 @@ import { NodePalette } from './NodePalette';
 import { FlowValidationButton } from './FlowValidationButton';
 import InspectorPanel from './InspectorPanel';
 import GuidedFlowComposer from './GuidedFlowComposer';
+import FlowAssistanceDialog from './FlowAssistanceDialog';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
@@ -86,6 +89,7 @@ import {
   flowUsesAdvancedFeatures,
   type FlowAuthoringMode,
 } from '@/utils/shared/flowAuthoringProfile';
+import type { Model } from '@/shared/types/model';
 
 /** Pre-filled instruction for AI-supported repair (mirrors the backend repairFlowWithAI). */
 const AI_REPAIR_DESCRIPTION =
@@ -161,6 +165,8 @@ interface FlowBuilderProps {
   onDelete: (flowId: string) => void;
   onConversionCommitted?: (parentFlow: Flow, childFlow: Flow) => void;
   allFlows: Flow[];
+  relatedDraftFlows?: Flow[];
+  onRelatedDraftFlowsChange?: (flows: Flow[]) => void;
   isDraft?: boolean;
   onTry?: () => void;
 }
@@ -237,7 +243,7 @@ const analyzeGuidedGraph = (nodes: FlowNode[], edges: Edge[]) => {
   return { unsafe, orderedNodeIds };
 };
 
-export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows, isDraft = false, onTry }, ref) => {
+export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows, relatedDraftFlows = [], onRelatedDraftFlowsChange, isDraft = false, onTry }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
@@ -253,10 +259,25 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
   const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
-  const [authoringMode, setAuthoringMode] = useUiPreference<FlowAuthoringMode>(
+  const initialFlowRequiresExpert = !!initialFlow && (
+    flowUsesAdvancedFeatures({
+      nodes: initialFlow.nodes || [],
+      edges: initialFlow.edges || [],
+      permissionRules: initialFlow.permissionRules,
+    })
+    || analyzeGuidedGraph(initialFlow.nodes || [], initialFlow.edges || []).unsafe
+  );
+  const [persistedAuthoringMode, setPersistedAuthoringMode] = useUiPreference<FlowAuthoringMode>(
     'flujo-ui:flow-builder:mode',
     'guided',
   );
+  const [authoringMode, setLocalAuthoringMode] = useState<FlowAuthoringMode>(
+    () => initialFlowRequiresExpert ? 'advanced' : persistedAuthoringMode,
+  );
+  const setAuthoringMode = useCallback((mode: FlowAuthoringMode) => {
+    setLocalAuthoringMode(mode);
+    setPersistedAuthoringMode(mode);
+  }, [setPersistedAuthoringMode]);
   // Rule IDs are editor-only. PermissionRule has no persisted ID, so keep a
   // stable key separately while still saving the shared rule shape unchanged.
   const permissionRuleIdRef = useRef(0);
@@ -325,7 +346,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [isHistoryAction, setIsHistoryAction] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>(isDraft ? 'unsaved' : 'saved');
-  const [guidedDefaultModelId, setGuidedDefaultModelId] = useState<string | null>(null);
+  const [guidedModels, setGuidedModels] = useState<Model[]>([]);
+  const [guidedSelectedModelId, setGuidedSelectedModelId] = useState<string | null>(null);
+  const [guidedAiAssistance, setGuidedAiAssistance] = useState<'unasked' | 'manual' | 'assisted'>(
+    () => isDraft && !(initialFlow?.nodes ?? []).some(node => node.data.type === 'process') ? 'unasked' : 'manual',
+  );
+  const [assistanceOpen, setAssistanceOpen] = useState(false);
+  const [assistanceNodeId, setAssistanceNodeId] = useState<string | null>(null);
+  const fallbackFlowId = useRef(initialFlow?.id ?? uuidv4());
   const editRevisionRef = useRef(0);
   const savePromiseRef = useRef<Promise<SaveResult> | null>(null);
   // Synchronous reservation closes the gap between rapid creation events and
@@ -348,11 +376,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     let active = true;
     void modelService.loadModels().then((models) => {
       if (!active) return;
-      const preferred = [...models].sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite))[0];
-      setGuidedDefaultModelId(preferred?.id ?? null);
+      setGuidedModels(models);
+      if (models.length === 0) {
+        setGuidedAiAssistance(current => current === 'unasked' ? 'manual' : current);
+      }
     }).catch((error) => {
-      log.warn('Could not load a default AI for Guided mode', error);
-      if (active) setGuidedDefaultModelId(null);
+      log.warn('Could not load connected AIs for Guided mode', error);
+      if (active) {
+        setGuidedModels([]);
+        setGuidedAiAssistance(current => current === 'unasked' ? 'manual' : current);
+      }
     });
     return () => {
       active = false;
@@ -411,6 +444,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setPermissionRulesConfigured(initialFlow.permissionRules !== undefined);
       setPermissionRulesError(null);
 
+      // Guided mode cannot safely author every graph shape or runtime option.
+      // Open those flows directly in Expert view, while still leaving the
+      // always-visible mode toggle available for a read-only/simple overview.
+      const requiresExpert = flowUsesAdvancedFeatures({
+        nodes: rawNodes,
+        edges: validEdges,
+        permissionRules: initialFlow.permissionRules,
+      }) || analyzeGuidedGraph(rawNodes, validEdges).unsafe;
+      if (requiresExpert) setAuthoringMode('advanced');
+
       // Initialize history with initial state
       const initialState: HistoryEntry = {
         nodes: seededNodes,
@@ -441,7 +484,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // The builder owns edits for the lifetime of a selected flow. Parent state may
   // receive a freshly saved object (including new timestamps) without resetting
   // undo history; only switching to a different flow reinitializes the canvas.
-  }, [initialFlow?.id, createPermissionRuleDraft]);
+  }, [initialFlow?.id, createPermissionRuleDraft, setAuthoringMode]);
   
   // Keys that don't represent a real edit: selection/drag/measurement state
   // must create neither an undo step nor "unsaved changes".
@@ -1209,7 +1252,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       properties: {
         ...(processNode.data.properties ?? {}),
         promptTemplate: prompt,
-        ...(guidedDefaultModelId ? { boundModel: guidedDefaultModelId } : {}),
+        inputMode: 'full-history',
+        outputMode: 'latest-message',
+        ...(guidedAiAssistance === 'assisted' && guidedSelectedModelId
+          ? { boundModel: guidedSelectedModelId }
+          : {}),
       },
     };
 
@@ -1253,16 +1300,24 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       createEdgeFromConnection(intoFinish, nextNodes),
     ]);
 
-    if (!guidedDefaultModelId) {
+    if (!nodes.some(node => node.data.type === 'process') && !flowDescription.trim()) {
+      setFlowDescription(prompt);
+    }
+    if (guidedAiAssistance === 'assisted' && guidedSelectedModelId) {
+      setAssistanceNodeId(processNode.id);
+      setAssistanceOpen(true);
+    } else if (!guidedSelectedModelId) {
       showBuilderNotice('Step added. Connect an AI model before trying this agent.');
     }
   }, [
     nodes,
     edges,
-    guidedDefaultModelId,
+    guidedAiAssistance,
+    guidedSelectedModelId,
     guidedGraph.orderedNodeIds,
     hasUnsafeGuidedGraph,
     showBuilderNotice,
+    flowDescription,
   ]);
 
   const selectedNode = nodes.find(node => node.selected) ?? null;
@@ -1282,6 +1337,46 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const handleSelectGuidedNode = useCallback((nodeId: string) => {
     setNodes(current => current.map(node => ({ ...node, selected: node.id === nodeId })));
   }, []);
+
+  const currentFlow = useMemo<Flow>(() => ({
+    ...(initialFlow ?? { id: fallbackFlowId.current, name: flowName, nodes: [], edges: [] }),
+    id: initialFlow?.id ?? fallbackFlowId.current,
+    name: flowName,
+    ...(flowDescription.trim() ? { description: flowDescription } : {}),
+    nodes,
+    edges,
+    permissionRules: permissionRulesConfigured ? permissionRules.map(({ id: _id, ...rule }) => rule) : undefined,
+  }), [
+    edges,
+    flowDescription,
+    flowName,
+    initialFlow,
+    nodes,
+    permissionRules,
+    permissionRulesConfigured,
+  ]);
+
+  const assistanceModelId = useMemo(() => {
+    if (assistanceNodeId) {
+      const node = nodes.find(candidate => candidate.id === assistanceNodeId);
+      const bound = node?.data.properties?.boundModel;
+      if (typeof bound === 'string' && bound) return bound;
+    }
+    if (guidedSelectedModelId) return guidedSelectedModelId;
+    const bound = nodes.find(candidate =>
+      candidate.data.type === 'process'
+      && typeof candidate.data.properties?.boundModel === 'string'
+      && !!candidate.data.properties.boundModel
+    )?.data.properties?.boundModel;
+    return typeof bound === 'string' ? bound : null;
+  }, [assistanceNodeId, guidedSelectedModelId, nodes]);
+
+  const applyAssistedFlow = useCallback((flow: Flow) => {
+    setNodes(flow.nodes);
+    setEdges(flow.edges);
+    if (flow.description !== undefined) setFlowDescription(flow.description);
+    markDirty();
+  }, [markDirty]);
 
   const handleClearNodeSelection = useCallback(() => {
     const changes = nodes
@@ -1495,6 +1590,19 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               aria-label={`Save status: ${saveStatus === 'error' ? 'failed' : hasUnsavedChanges ? 'unsaved' : saveStatus}`}
             />
 
+            <FormControlLabel
+              sx={{ m: 0, whiteSpace: 'nowrap' }}
+              control={
+                <Switch
+                  size="small"
+                  checked={authoringMode === 'advanced'}
+                  onChange={(event) => setAuthoringMode(event.target.checked ? 'advanced' : 'guided')}
+                  inputProps={{ 'aria-label': 'Expert view' }}
+                />
+              }
+              label={authoringMode === 'advanced' ? 'Expert' : 'Easy'}
+            />
+
             {authoringMode === 'advanced' && (
               <>
                 <Button
@@ -1567,37 +1675,30 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               </Button>
             )}
 
-            <Tooltip title="More commands">
-              <IconButton
-                id="more-actions-button"
-                data-tour="improve-flow"
-                aria-label="More actions"
-                aria-controls={moreActionsMenuAnchor ? 'more-actions-menu' : undefined}
-                aria-haspopup="menu"
-                aria-expanded={moreActionsMenuAnchor ? 'true' : undefined}
-                onClick={(event) => setMoreActionsMenuAnchor(event.currentTarget)}
-                color="primary"
-                size="small"
-              >
-                <MoreHorizIcon />
-              </IconButton>
-            </Tooltip>
-            <Menu
-              id="more-actions-menu"
-              anchorEl={moreActionsMenuAnchor}
-              open={!!moreActionsMenuAnchor}
-              onClose={() => setMoreActionsMenuAnchor(null)}
-              MenuListProps={{ 'aria-labelledby': 'more-actions-button' }}
-            >
-              <MenuItem
-                onClick={() => {
-                  setMoreActionsMenuAnchor(null);
-                  setAuthoringMode(authoringMode === 'guided' ? 'advanced' : 'guided');
-                }}
-              >
-                {authoringMode === 'guided' ? 'Open expert editor' : 'Use simple setup'}
-              </MenuItem>
-              {authoringMode === 'advanced' && <Divider />}
+            {(authoringMode === 'advanced' || (initialFlow && !isDraft)) && (
+              <>
+                <Tooltip title="More commands">
+                  <IconButton
+                    id="more-actions-button"
+                    data-tour="improve-flow"
+                    aria-label="More actions"
+                    aria-controls={moreActionsMenuAnchor ? 'more-actions-menu' : undefined}
+                    aria-haspopup="menu"
+                    aria-expanded={moreActionsMenuAnchor ? 'true' : undefined}
+                    onClick={(event) => setMoreActionsMenuAnchor(event.currentTarget)}
+                    color="primary"
+                    size="small"
+                  >
+                    <MoreHorizIcon />
+                  </IconButton>
+                </Tooltip>
+                <Menu
+                  id="more-actions-menu"
+                  anchorEl={moreActionsMenuAnchor}
+                  open={!!moreActionsMenuAnchor}
+                  onClose={() => setMoreActionsMenuAnchor(null)}
+                  MenuListProps={{ 'aria-labelledby': 'more-actions-button' }}
+                >
               {authoringMode === 'advanced' && (
                 <MenuItem
                   disabled={nodes.length <= 1}
@@ -1664,7 +1765,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   {authoringMode === 'guided' ? 'Delete agent' : 'Delete Flow'}
                 </MenuItem>
               )}
-            </Menu>
+                </Menu>
+              </>
+            )}
           </ToolbarContainer>
 
           <Collapse in={!!builderNotice} unmountOnExit>
@@ -1712,6 +1815,18 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               readyToTry={canTryGuided}
               needsAIConnection={!guidedModelsReady}
               onSwitchAdvanced={() => setAuthoringMode('advanced')}
+              models={guidedModels}
+              aiAssistance={guidedAiAssistance}
+              selectedModelId={guidedSelectedModelId}
+              onChooseAssistance={(choice) => {
+                setGuidedAiAssistance(choice);
+                if (choice === 'manual') setGuidedSelectedModelId(null);
+              }}
+              onModelChange={setGuidedSelectedModelId}
+              onCheckPlausibility={() => {
+                setAssistanceNodeId(null);
+                setAssistanceOpen(true);
+              }}
             />
           ) : (
             <Box
@@ -1768,6 +1883,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           onAuthoringModeChange={setAuthoringMode}
           permissionRuleCount={permissionRules.length}
           onOpenPermissionRules={() => setPermissionRulesDialogOpen(true)}
+          onSuggestTools={(node) => {
+            setAssistanceNodeId(node.id);
+            setAssistanceOpen(true);
+          }}
+          onCheckPlausibility={() => {
+            setAssistanceNodeId(null);
+            setAssistanceOpen(true);
+          }}
         />
       )}
       
@@ -1790,6 +1913,18 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           }
         }}
         authoringMode={authoringMode}
+      />
+
+      <FlowAssistanceDialog
+        open={assistanceOpen}
+        flow={currentFlow}
+        relatedFlows={relatedDraftFlows}
+        nodeId={assistanceNodeId}
+        modelId={assistanceModelId}
+        models={guidedModels}
+        onApply={applyAssistedFlow}
+        onApplyRelatedFlows={onRelatedDraftFlowsChange}
+        onClose={() => setAssistanceOpen(false)}
       />
       
       <MCPNodePropertiesModal 

@@ -8,6 +8,10 @@ import {
   ButtonBase,
   Chip,
   Paper,
+  MenuItem,
+  Select,
+  FormControl,
+  InputLabel,
   Stack,
   TextField,
   Typography,
@@ -36,6 +40,12 @@ interface GuidedFlowComposerProps {
   readyToTry?: boolean;
   needsAIConnection?: boolean;
   onSwitchAdvanced: () => void;
+  models?: Array<{ id: string; name: string; displayName?: string }>;
+  aiAssistance?: 'unasked' | 'manual' | 'assisted';
+  selectedModelId?: string | null;
+  onChooseAssistance?: (choice: 'manual' | 'assisted') => void;
+  onModelChange?: (modelId: string) => void;
+  onCheckPlausibility?: () => void;
 }
 
 const defaultFriendlyLabels: Partial<Record<NodeType, string>> = {
@@ -111,6 +121,12 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   readyToTry = true,
   needsAIConnection = false,
   onSwitchAdvanced,
+  models = [],
+  aiAssistance = 'manual',
+  selectedModelId,
+  onChooseAssistance,
+  onModelChange,
+  onCheckPlausibility,
 }) => {
   const [taskPrompt, setTaskPrompt] = useState('');
   const steps = useMemo(
@@ -128,7 +144,10 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   const hasUsefulName = !!flowName.trim()
     && !/^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(flowName.trim())
     && !flowNameError;
-  const canAdd = !!taskPrompt.trim() && !hasAdvancedFeatures;
+  const canAdd = !!taskPrompt.trim()
+    && !hasAdvancedFeatures
+    && aiAssistance !== 'unasked'
+    && (aiAssistance !== 'assisted' || !!selectedModelId);
   const canTry = hasUsefulName && steps.length > 0 && readyToTry && !isSaving;
 
   const addTask = () => {
@@ -165,6 +184,55 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
         </Stack>
 
         <Stack spacing={1.5}>
+          {models.length > 0 && onChooseAssistance && (
+            <Paper
+              elevation={0}
+              sx={{ p: { xs: 2, sm: 2.5 }, border: 1, borderColor: aiAssistance === 'unasked' ? 'primary.main' : 'divider', borderRadius: 4 }}
+            >
+              <Stack spacing={1.5}>
+                <Box>
+                  <Typography variant="h6">May one of your connected AIs help build this?</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    If you say yes, choose the AI that should suggest connected tools and check the finished workflow.
+                  </Typography>
+                </Box>
+                {aiAssistance === 'unasked' ? (
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                    <Button variant="contained" startIcon={<AutoAwesomeRoundedIcon />} onClick={() => onChooseAssistance('assisted')}>
+                      Yes, help me
+                    </Button>
+                    <Button variant="outlined" onClick={() => onChooseAssistance('manual')}>No, I’ll build it myself</Button>
+                  </Stack>
+                ) : (
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+                    <Chip
+                      color={aiAssistance === 'assisted' ? 'primary' : 'default'}
+                      label={aiAssistance === 'assisted' ? 'AI help is on' : 'Manual setup'}
+                    />
+                    {aiAssistance === 'assisted' && onModelChange && (
+                      <FormControl size="small" sx={{ minWidth: 260 }}>
+                        <InputLabel id="guided-helper-model-label">AI helper</InputLabel>
+                        <Select
+                          labelId="guided-helper-model-label"
+                          label="AI helper"
+                          value={selectedModelId ?? ''}
+                          onChange={(event) => onModelChange(String(event.target.value))}
+                        >
+                          {models.map((model) => (
+                            <MenuItem key={model.id} value={model.id}>{model.displayName || model.name}</MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    )}
+                    <Button size="small" onClick={() => onChooseAssistance(aiAssistance === 'assisted' ? 'manual' : 'assisted')}>
+                      {aiAssistance === 'assisted' ? 'Turn off' : 'Turn on AI help'}
+                    </Button>
+                  </Stack>
+                )}
+              </Stack>
+            </Paper>
+          )}
+
           <Paper
             elevation={0}
             sx={{
@@ -213,9 +281,11 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             <Stack direction="row" spacing={1.5} alignItems="flex-start">
               <StepNumber complete={steps.length > 0}>2</StepNumber>
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="h6">Tell it what to do</Typography>
+                <Typography variant="h6">{steps.length ? 'Add another step' : 'What is the goal of this workflow?'}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Write it the same way you would explain the job to a helpful person.
+                  {steps.length
+                    ? 'Write it the same way you would explain the next job to a helpful person.'
+                    : 'This goal becomes the first AI step’s prompt, exactly as if you added that step yourself.'}
                 </Typography>
 
                 {hasAdvancedFeatures && (
@@ -348,7 +418,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     multiline
                     minRows={2}
                     maxRows={5}
-                    label={steps.length ? 'Add another thing it should do' : 'What should the AI do?'}
+                    label={steps.length ? 'Add another thing it should do' : 'Workflow goal'}
                     placeholder="Example: Read my notes, find the important points, and explain them simply."
                     value={taskPrompt}
                     disabled={hasAdvancedFeatures}
@@ -367,7 +437,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     onClick={addTask}
                     sx={{ minWidth: { sm: 150 } }}
                   >
-                    Add this step
+                    {steps.length ? 'Add this step' : 'Create goal step'}
                   </Button>
                 </Stack>
               </Box>
@@ -398,15 +468,22 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                 )}
               </Box>
               {onTry && (
-                <Button
-                  size="large"
-                  variant="contained"
-                  startIcon={<PlayArrowRoundedIcon />}
-                  disabled={!canTry}
-                  onClick={onTry}
-                >
-                  {isSaving ? 'Saving…' : 'Try my agent'}
-                </Button>
+                <Stack spacing={1}>
+                  {onCheckPlausibility && aiAssistance === 'assisted' && (
+                    <Button variant="outlined" startIcon={<AutoAwesomeRoundedIcon />} disabled={steps.length === 0} onClick={onCheckPlausibility}>
+                      Check setup with AI
+                    </Button>
+                  )}
+                  <Button
+                    size="large"
+                    variant="contained"
+                    startIcon={<PlayArrowRoundedIcon />}
+                    disabled={!canTry}
+                    onClick={onTry}
+                  >
+                    {isSaving ? 'Saving…' : 'Try my agent'}
+                  </Button>
+                </Stack>
               )}
             </Stack>
           </Paper>

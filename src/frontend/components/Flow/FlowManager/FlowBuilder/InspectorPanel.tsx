@@ -22,6 +22,7 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import SettingsSuggestRoundedIcon from '@mui/icons-material/SettingsSuggestRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
+import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import type { FlowNode } from '@/frontend/types/flow/flow';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
@@ -71,6 +72,8 @@ interface InspectorPanelProps {
   permissionRuleCount: number;
   onOpenPermissionRules: () => void;
   beginnerMode?: boolean;
+  onSuggestTools?: (node: FlowNode) => void;
+  onCheckPlausibility?: () => void;
 }
 
 const typeLabel = (node: FlowNode, beginnerMode: boolean) => {
@@ -107,6 +110,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   permissionRuleCount,
   onOpenPermissionRules,
   beginnerMode = false,
+  onSuggestTools,
+  onCheckPlausibility,
 }) => {
   const [tab, setTab] = useState<InspectorTab>(selectedNode ? 'node' : 'flow');
   const [label, setLabel] = useState(selectedNode?.data.label ?? '');
@@ -312,6 +317,19 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               {beginnerMode ? 'More options' : 'Full settings'}
             </Button>
 
+            {selectedNode.data.type === 'process' && onSuggestTools && (
+              <Button
+                variant="contained"
+                startIcon={<AutoAwesomeRoundedIcon />}
+                onClick={() => {
+                  const updatedNode = commitNode();
+                  if (updatedNode) onSuggestTools(updatedNode);
+                }}
+              >
+                Suggest connected tools
+              </Button>
+            )}
+
             <Typography variant="caption" color="text.secondary">
               {beginnerMode
                 ? 'Most people only need the fields above. More options contains AI and connected-app controls.'
@@ -346,6 +364,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               }
               fullWidth
             />
+
+            {onCheckPlausibility && (
+              <Button variant="outlined" startIcon={<AutoAwesomeRoundedIcon />} onClick={onCheckPlausibility}>
+                Check whole agent
+              </Button>
+            )}
 
             <TextField
               size="small"

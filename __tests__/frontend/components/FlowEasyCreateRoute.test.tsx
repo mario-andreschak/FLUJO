@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -44,7 +44,9 @@ jest.mock('@/frontend/components/Flow/FlowManager/GenerateFlowDialog', () => ({
 
 jest.mock('@/frontend/components/shared/PageHeader', () => ({
   __esModule: true,
-  default: ({ title }: { title: string }) => <h1>{title}</h1>,
+  default: ({ title, actions }: { title: string; actions?: React.ReactNode }) => (
+    <header><h1>{title}</h1>{actions}</header>
+  ),
 }));
 
 jest.mock('@/frontend/utils/navigationGuard', () => ({
@@ -90,5 +92,17 @@ describe('easy agent creation deep link', () => {
     expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
     expect(screen.getByTestId('ai-generator')).toHaveTextContent('false');
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/flows'));
+  });
+
+  it('offers a third creation path that starts directly in Expert view', async () => {
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    expect(await screen.findByRole('button', { name: 'Create with AI' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start simple' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start expert' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('advanced'));
   });
 });

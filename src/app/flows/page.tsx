@@ -25,6 +25,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import FlowBuilder, { FlowBuilderHandle } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import GenerateFlowDialog, { GeneratedFlowInfo } from '@/frontend/components/Flow/FlowManager/GenerateFlowDialog';
 import PageHeader from '@/frontend/components/shared/PageHeader';
@@ -35,6 +36,7 @@ import { flowService } from '@/frontend/services/flow';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { writeUiPreference } from '@/frontend/hooks/useUiPreference';
+import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 
 const log = createLogger('app/flows/page');
 
@@ -498,7 +500,7 @@ const FlowsPage = () => {
   }, [showSnackbar]);
 
   // Create a new flow with a unique name
-  const createNewFlow = useCallback(() => {
+  const createNewFlow = useCallback((authoringMode: FlowAuthoringMode = 'guided') => {
     log.info('Creating new flow');
     // Generate a unique name for the new flow
     const baseName = "Untitled agent";
@@ -514,10 +516,9 @@ const FlowsPage = () => {
     // Create a new flow with the unique name (includes the default Start node)
     const newFlow = flowService.createNewFlow(newName);
 
-    // "Start simple" is the explicit easy-mode path. Reset the authoring view
-    // before the builder mounts so even expert users arrive in the simple,
-    // step-by-step composer and can opt back into the graph when they want it.
-    writeUiPreference('flujo-ui:flow-builder:mode', 'guided');
+    // Set the requested view before the builder mounts, avoiding a flash of the
+    // previously used editor when starting explicitly in Easy or Expert mode.
+    writeUiPreference('flujo-ui:flow-builder:mode', authoringMode);
 
     // Keep manual creations as drafts too. Abandoning the editor no longer
     // leaves an empty flow card behind; the first successful Save persists it.
@@ -525,7 +526,12 @@ const FlowsPage = () => {
     setDraftDescendants([]);
     setSelectedFlow(newFlow.id);
     setIsEditing(true);
-    showSnackbar('Your new agent is ready. Give it a name, add a task, then try it.', 'info');
+    showSnackbar(
+      authoringMode === 'advanced'
+        ? 'Your new agent is ready in Expert view. Add and connect the nodes you need.'
+        : 'Your new agent is ready. Give it a name, add a task, then try it.',
+      'info',
+    );
   }, [flows, showSnackbar]);
 
   // The setup journey deep-links directly into easy creation. Wait for the
@@ -539,7 +545,7 @@ const FlowsPage = () => {
       return;
     }
     createAssistantHandled.current = true;
-    createNewFlow();
+    createNewFlow('guided');
     router.replace('/flows');
   }, [createNewFlow, isLoading, router]);
 
@@ -577,7 +583,12 @@ const FlowsPage = () => {
               onSave={handleSaveFlow}
               onDelete={handleDeleteFlow}
               onConversionCommitted={handleConversionCommitted}
-              allFlows={flows}
+              allFlows={[
+                ...flows.filter(flow => !draftDescendants.some(draft => draft.id === flow.id)),
+                ...draftDescendants,
+              ]}
+              relatedDraftFlows={draftDescendants}
+              onRelatedDraftFlowsChange={setDraftDescendants}
               isDraft={draftFlow?.id === selectedFlowData.id}
               onTry={handleOpenSelectedFlowInChat}
             />
@@ -595,7 +606,7 @@ const FlowsPage = () => {
             onSelectFlow={handleSelectFlow}
             onDeleteFlow={handleDeleteFlow}
             onCopyFlow={handleCopyFlow}
-            onCreateFlow={createNewFlow}
+            onCreateFlow={() => createNewFlow('guided')}
             onSetFolder={handleSetFlowFolder}
             onToggleFavorite={handleToggleFavorite}
             onOpenInChat={handleOpenInChat}
@@ -647,7 +658,7 @@ const FlowsPage = () => {
         actions={
           !isEditing ? (
             <>
-            <Tooltip title="Describe what you need in everyday language">
+            <Tooltip title="Describe what you need in everyday language" describeChild>
               <Button
                 variant="contained"
                 color="primary"
@@ -658,15 +669,26 @@ const FlowsPage = () => {
                 Create with AI
               </Button>
             </Tooltip>
-            <Tooltip title="Create an agent step by step in easy mode">
+            <Tooltip title="Create an agent step by step in easy mode" describeChild>
               <Button
                 variant="outlined"
                 color="primary"
                 startIcon={<AddIcon />}
-                onClick={createNewFlow}
+                onClick={() => createNewFlow('guided')}
                 data-tour="new-flow"
               >
                 Start simple
+              </Button>
+            </Tooltip>
+            <Tooltip title="Build directly with the full node editor" describeChild>
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<TuneRoundedIcon />}
+                onClick={() => createNewFlow('advanced')}
+                data-tour="new-expert-flow"
+              >
+                Start expert
               </Button>
             </Tooltip>
             </>

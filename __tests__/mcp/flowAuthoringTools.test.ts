@@ -32,6 +32,15 @@ jest.mock('@/backend/services/flow', () => ({
   },
 }));
 
+const suggestToolsMock = jest.fn();
+const applyToolsMock = jest.fn();
+const checkPlausibilityMock = jest.fn();
+jest.mock('@/backend/services/flow/assistedAuthoring', () => ({
+  suggestToolsForFlowStep: (...args: unknown[]) => suggestToolsMock(...args),
+  applyToolsToFlowStep: (...args: unknown[]) => applyToolsMock(...args),
+  checkFlowPlausibility: (...args: unknown[]) => checkPlausibilityMock(...args),
+}));
+
 import {
   AUTHORING_TOOL_NAMES,
   isAuthoringTool,
@@ -230,7 +239,7 @@ describe('draft_generated_flow', () => {
     expect(body.hardening.repairChanges.length).toBeGreaterThan(0);
     const process = body.flow.nodes.find((node: { type: string }) => node.type === 'process');
     expect(process.data.properties).toEqual(expect.objectContaining({
-      inputMode: 'latest-message',
+      inputMode: 'full-history',
       outputMode: 'latest-message',
     }));
     expect(body.validation.errorCount).toBe(0);
@@ -264,6 +273,33 @@ describe('create_flow', () => {
     const body = payload(result);
     expect(body.issues).toContainEqual(expect.objectContaining({ code: 'no-usable-nodes' }));
     expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('assisted authoring tools', () => {
+  const flow = { id: 'draft', name: 'Draft', nodes: [], edges: [] };
+
+  it('routes single-step suggestions and approved application without saving', async () => {
+    suggestToolsMock.mockResolvedValue({ nodeId: 'work', suggestions: [], proposedPrompt: 'Do it' });
+    applyToolsMock.mockResolvedValue(flow);
+    expect(payload(await authoringCallTool('suggest_tools_for_flow_step', {
+      flow,
+      nodeId: 'work',
+      modelId: 'model-1',
+    }))).toEqual({ nodeId: 'work', suggestions: [], proposedPrompt: 'Do it' });
+    expect(payload(await authoringCallTool('apply_tools_to_flow_step', {
+      flow,
+      nodeId: 'work',
+      selections: [],
+    }))).toEqual({ saved: false, flow });
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('routes whole-bundle plausibility checks', async () => {
+    checkPlausibilityMock.mockResolvedValue({ contexts: [], issues: [], patches: [], repairedFlow: flow, repairedFlows: [flow] });
+    const body = payload(await authoringCallTool('check_flow_plausibility', { flow, relatedFlows: [flow] }));
+    expect(body.repairedFlows).toEqual([flow]);
+    expect(checkPlausibilityMock).toHaveBeenCalledWith(expect.objectContaining({ flow, relatedFlows: [flow] }));
   });
 });
 

@@ -13,6 +13,8 @@
  *     agent iterates on.
  *   - create_flow: compile + validate + save. Saving is gated on zero validation
  *     errors, so the loop is: blocks → spec → validate → fix → create.
+ *   - suggest/apply tools + plausibility: consent-gated assistance for one Process
+ *     step or a complete root/subflow draft bundle; none of these tools save.
  *   - search_mcp_marketplace / install_mcp_server: capability acquisition for the
  *     brain / self-improvement track — an external agent can find and install NEW
  *     MCP servers (downloading + running third-party packages on this host) and
@@ -30,6 +32,13 @@ import { SIMPLE_FLOW_SPEC_SCHEMA } from '@/utils/shared/simpleFlowSpec';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
 import { compileGeneratedDraft } from '@/backend/services/flow/generationDraft';
+import {
+  applyToolsToFlowStep,
+  checkFlowPlausibility,
+  suggestToolsForFlowStep,
+} from '@/backend/services/flow/assistedAuthoring';
+import type { Flow } from '@/shared/types/flow';
+import type { StepToolSuggestion } from '@/shared/types/flow/assistance';
 import { searchRegistry, installRegistryServer, installBestForCapability } from '@/backend/services/mcp/registryInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
@@ -51,6 +60,9 @@ export const AUTHORING_TOOL_NAMES = [
   'draft_flow',
   'draft_generated_flow',
   'create_flow',
+  'suggest_tools_for_flow_step',
+  'apply_tools_to_flow_step',
+  'check_flow_plausibility',
   'search_mcp_marketplace',
   'install_mcp_server',
   'install_best_mcp_server',
@@ -161,6 +173,66 @@ export function authoringToolDefinitions(): Tool[] {
       inputSchema: specInputSchema(),
     },
     {
+      name: 'suggest_tools_for_flow_step',
+      description:
+        'Use a selected AI model to suggest useful tools for ONE Process step from MCP servers that are already connected. Read-only: returns exact server/tool selections plus a proposed prompt containing canonical tool pills; it never changes or saves the flow.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          flow: { type: 'object', description: 'Complete current Flow draft (ReactFlow shape).' },
+          nodeId: { type: 'string', description: 'Exact id of the Process node to assist.' },
+          modelId: { type: 'string', description: 'Configured model id used for the suggestion.' },
+          goal: { type: 'string', description: 'Optional workflow goal; defaults to the flow description.' },
+        },
+        required: ['flow', 'nodeId', 'modelId'],
+      },
+    },
+    {
+      name: 'apply_tools_to_flow_step',
+      description:
+        'Apply an EXPLICITLY APPROVED list of connected MCP tools to one Process step in an UNSAVED Flow draft. Revalidates every tool against the live server, creates/reuses MCP attachments, enables only the approved tools, and rewrites the prompt with canonical tool pills. Idempotent and does not save.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          flow: { type: 'object', description: 'Complete current Flow draft.' },
+          nodeId: { type: 'string', description: 'Exact id of the Process node.' },
+          selections: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                server: { type: 'string' },
+                tool: { type: 'string' },
+                reason: { type: 'string' },
+              },
+              required: ['server', 'tool', 'reason'],
+            },
+          },
+          proposedPrompt: { type: 'string', description: 'Optional complete prompt from the suggestion review.' },
+        },
+        required: ['flow', 'nodeId', 'selections'],
+      },
+    },
+    {
+      name: 'check_flow_plausibility',
+      description:
+        'Analyze an entire Flow and its recursively referenced subflows plus invocation context (chat, parent subflow/sub-agent, planned execution, Trigger Wave), every prompt, graph shape, and input/output mode. Returns issues, typed deterministic repair patches, and unsaved repaired previews. Read-only; the caller must obtain consent before using repairedFlow or repairedFlows.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          flow: { type: 'object', description: 'Complete current Flow draft.' },
+          relatedFlows: { type: 'array', items: { type: 'object' }, description: 'Unsaved related parent/child flow drafts.' },
+          modelId: { type: 'string', description: 'Optional model for semantic prompt review.' },
+          intendedContext: { type: 'string', enum: ['chat', 'headless'], description: 'Intended use for a new unsaved flow.' },
+        },
+        required: ['flow'],
+      },
+    },
+    {
       name: 'search_mcp_marketplace',
       description:
         'Search the public MCP server registry for new capabilities (voice, browsing, files, email, vision, …). The registry matches the query against server NAMES only (substring) — use short single terms and try several. Returns name, description, whether FLUJO can install it, and which env vars/keys it would require.',
@@ -237,6 +309,9 @@ export async function authoringCallTool(
   args: Record<string, unknown>,
 ): Promise<CallToolResult> {
   try {
+    const isFlow = (value: unknown): value is Flow => !!value && typeof value === 'object'
+      && Array.isArray((value as Flow).nodes) && Array.isArray((value as Flow).edges);
+
     if (toolName === 'list_flow_building_blocks') {
       assertAllowedArguments(args, ['query', 'include', 'connected']);
       const query = (optionalString(args, 'query', { allowEmpty: true }) ?? '').toLocaleLowerCase();
@@ -283,6 +358,48 @@ export async function authoringCallTool(
           'Start, Finish, layout, data handoff, and ordinary defaults are inferred.',
         ],
       });
+    }
+
+    if (toolName === 'suggest_tools_for_flow_step') {
+      if (!isFlow(args.flow) || typeof args.nodeId !== 'string' || typeof args.modelId !== 'string') {
+        return textResult({ error: 'flow, nodeId, and modelId are required.' }, true);
+      }
+      return textResult(await suggestToolsForFlowStep({
+        flow: args.flow,
+        nodeId: args.nodeId,
+        modelId: args.modelId,
+        goal: typeof args.goal === 'string' ? args.goal : undefined,
+      }));
+    }
+
+    if (toolName === 'apply_tools_to_flow_step') {
+      if (!isFlow(args.flow) || typeof args.nodeId !== 'string' || !Array.isArray(args.selections)) {
+        return textResult({ error: 'flow, nodeId, and selections are required.' }, true);
+      }
+      const selections = args.selections.filter((selection): selection is StepToolSuggestion =>
+        !!selection && typeof selection === 'object'
+        && typeof (selection as StepToolSuggestion).server === 'string'
+        && typeof (selection as StepToolSuggestion).tool === 'string'
+        && typeof (selection as StepToolSuggestion).reason === 'string');
+      return textResult({
+        saved: false,
+        flow: await applyToolsToFlowStep({
+          flow: args.flow,
+          nodeId: args.nodeId,
+          selections,
+          proposedPrompt: typeof args.proposedPrompt === 'string' ? args.proposedPrompt : undefined,
+        }),
+      });
+    }
+
+    if (toolName === 'check_flow_plausibility') {
+      if (!isFlow(args.flow)) return textResult({ error: 'A complete flow is required.' }, true);
+      return textResult(await checkFlowPlausibility({
+        flow: args.flow,
+        relatedFlows: Array.isArray(args.relatedFlows) ? args.relatedFlows.filter(isFlow) : undefined,
+        modelId: typeof args.modelId === 'string' ? args.modelId : undefined,
+        intendedContext: args.intendedContext === 'headless' ? 'headless' : 'chat',
+      }));
     }
 
     if (toolName === 'search_mcp_marketplace') {

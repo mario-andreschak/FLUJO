@@ -26,6 +26,12 @@ jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/NodePalette', () =
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/FlowValidationButton', () => ({
   FlowValidationButton: () => <button type="button">Check Flow</button>,
 }));
+jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/FlowAssistanceDialog', () => ({
+  __esModule: true,
+  default: ({ open, nodeId }: { open: boolean; nodeId?: string }) => open
+    ? <div data-testid="flow-assistance-dialog">{nodeId}</div>
+    : null,
+}));
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal', () => {
   function MockProcessNodePropertiesModal({ open }: { open: boolean }) {
     return open ? <div data-testid="process-properties-modal" /> : null;
@@ -122,6 +128,7 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.getByLabelText('Flow Name')).toBeInTheDocument();
     expect(screen.getByLabelText('Description')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Advanced' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
     expect(screen.getByRole('button', { name: 'Save Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add node' })).toBeInTheDocument();
@@ -134,6 +141,58 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.getByRole('menuitem', { name: 'Auto-Align' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
+  });
+
+  it('always exposes the Easy/Expert view toggle', () => {
+    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    render(
+      <FlowBuilder
+        initialFlow={initialFlow}
+        onSave={() => {}}
+        onDelete={() => {}}
+        allFlows={[initialFlow]}
+      />,
+    );
+
+    const modeToggle = screen.getByRole('checkbox', { name: 'Expert view' });
+    expect(modeToggle).not.toBeChecked();
+    expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
+
+    fireEvent.click(modeToggle);
+    expect(modeToggle).toBeChecked();
+    expect(screen.getByTestId('canvas')).toBeInTheDocument();
+
+    fireEvent.click(modeToggle);
+    expect(modeToggle).not.toBeChecked();
+    expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
+  });
+
+  it('opens flows that require expert features directly in Expert view', () => {
+    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    const expertFlow = {
+      ...initialFlow,
+      nodes: [
+        ...initialFlow.nodes,
+        {
+          id: 'trigger',
+          type: 'trigger',
+          position: { x: 0, y: -100 },
+          data: { label: 'Schedule', type: 'trigger' },
+        },
+      ],
+    };
+
+    render(
+      <FlowBuilder
+        initialFlow={expertFlow as any}
+        onSave={() => {}}
+        onDelete={() => {}}
+        allFlows={[expertFlow as any]}
+      />,
+    );
+
+    expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
+    expect(screen.getByTestId('canvas')).toBeInTheDocument();
   });
 
   it('retains both automatic and AI repair paths', () => {
@@ -328,7 +387,28 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.getByTestId('canvas')).toHaveTextContent('2:0');
   });
 
-  it('builds a beginner recipe, auto-binds the favorite model, and saves before Try', async () => {
+  it('does not block goal creation when no AI is connected', async () => {
+    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    (modelService.loadModels as jest.Mock).mockResolvedValueOnce([]);
+    render(
+      <FlowBuilder
+        initialFlow={{ ...initialFlow, id: 'no-model-draft' }}
+        isDraft
+        onSave={() => {}}
+        onDelete={() => {}}
+        allFlows={[]}
+      />,
+    );
+
+    const recipe = screen.getByLabelText('Guided agent builder');
+    fireEvent.change(within(recipe).getByLabelText('Workflow goal'), {
+      target: { value: 'Explain the notes.' },
+    });
+    await waitFor(() => expect(within(recipe).getByRole('button', { name: 'Create goal step' })).toBeEnabled());
+    expect(within(recipe).queryByText('May one of your connected AIs help build this?')).not.toBeInTheDocument();
+  });
+
+  it('asks permission, binds the explicitly selected model, and saves before Try', async () => {
     window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
     const onSave = jest.fn().mockResolvedValue(true);
     const onTry = jest.fn();
@@ -360,18 +440,22 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.queryByLabelText('Agent settings')).not.toBeInTheDocument();
 
     await waitFor(() => expect(modelService.loadModels).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(recipe).getByRole('button', { name: 'Yes, help me' }));
+    fireEvent.mouseDown(within(recipe).getByLabelText('AI helper'));
+    fireEvent.click(screen.getByRole('option', { name: 'Friendly AI' }));
 
     fireEvent.change(within(recipe).getByLabelText('Agent name'), {
       target: { value: 'Notes helper' },
     });
-    fireEvent.change(within(recipe).getByLabelText('What should the AI do?'), {
+    fireEvent.change(within(recipe).getByLabelText('Workflow goal'), {
       target: { value: 'Summarize my notes in friendly language.' },
     });
-    fireEvent.click(within(recipe).getByRole('button', { name: 'Add this step' }));
+    fireEvent.click(within(recipe).getByRole('button', { name: 'Create goal step' }));
 
     await waitFor(() => {
       expect(within(recipe).getByText('Summarize my notes in friendly language.')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('flow-assistance-dialog')).toHaveTextContent('process-new');
     expect(screen.getByLabelText('Step settings')).toBeInTheDocument();
     fireEvent.click(within(recipe).getByRole('button', { name: 'Try my agent' }));
 

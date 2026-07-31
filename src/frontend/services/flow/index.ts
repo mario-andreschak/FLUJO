@@ -5,6 +5,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import type {
+  FlowPlausibilityResult,
+  StepToolSuggestion,
+  StepToolSuggestionResult,
+} from '@/shared/types/flow/assistance';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/flow/index');
@@ -65,6 +70,54 @@ class FlowService {
       log.warn('loadFlows: Failed to load flows:', error);
       return [];
     }
+  }
+
+  async suggestToolsForStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    modelId: string;
+    goal?: string;
+  }): Promise<StepToolSuggestionResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'suggest-tools', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not suggest connected tools.');
+    return data as StepToolSuggestionResult;
+  }
+
+  async applyToolsToStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    selections: StepToolSuggestion[];
+    proposedPrompt?: string;
+  }): Promise<Flow> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply-tools', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not connect the approved tools.');
+    return data.flow as Flow;
+  }
+
+  async checkPlausibility(payload: {
+    flow: Flow;
+    relatedFlows?: Flow[];
+    modelId?: string;
+    intendedContext?: 'chat' | 'headless';
+  }): Promise<FlowPlausibilityResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check-plausibility', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not check flow plausibility.');
+    return data as FlowPlausibilityResult;
   }
 
   /**
