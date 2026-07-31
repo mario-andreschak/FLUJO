@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     Box, Typography, List, ListItem, ListItemButton, ListItemText, Button, Paper, CircularProgress, Alert,
     Accordion, AccordionSummary, AccordionDetails, // Import Accordion components
@@ -19,6 +19,7 @@ import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
 import { SharedState, DebugStep, ModelInputSnapshot } from '@/backend/execution/flow/types'; // Import backend types
 import { Flow } from '@/shared/types/flow'; // Import shared Flow type
+import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { flowService } from '@/frontend/services/flow'; // Import flow service
 import { createLogger } from '@/utils/logger';
 
@@ -26,6 +27,12 @@ import { createLogger } from '@/utils/logger';
 import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { LiveActivity, LIVE_HIGHLIGHT_TTL_MS, resourceActivityKey } from '@/utils/shared/liveActivity';
+import {
+  buildDebuggerFrames,
+  debuggerFramePath,
+  DEBUGGER_ROOT_FRAME_KEY,
+  type DebuggerFrame,
+} from '@/utils/shared/debuggerFrames';
 import RunResourcesPanel from './RunResourcesPanel';
 import DebuggerConversation from './DebuggerConversation';
 
@@ -54,6 +61,8 @@ interface DebuggerCanvasProps {
    *  node currently executing and the artifacts being read/written, fading
    *  over LIVE_HIGHLIGHT_TTL_MS. Absent ⇒ trace-driven highlighting only. */
   liveActivity?: LiveActivity;
+  /** Ordered, deduplicated events from the owning SSE subscription. */
+  executionEvents?: readonly ExecutionEvent[];
 }
 
 // Define node types for React Flow display. Every builder node type must be
@@ -79,6 +88,13 @@ const edgeTypes = {
 
 // Teal, matching RESOURCE_COLOR in CustomNodes.
 const RESOURCE_HIGHLIGHT = '#009688';
+const EMPTY_EXECUTION_EVENTS: readonly ExecutionEvent[] = [];
+
+type FlowCacheEntry =
+  | { status: 'loading' }
+  | { status: 'ready'; flow: Flow }
+  | { status: 'missing' }
+  | { status: 'error'; message: string };
 
 // --- Debugger layout (issue #162) ---------------------------------------------
 // The debugger is split into three top-level sections — Conversation,
@@ -204,6 +220,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   isExpanded,
   onToggleExpand,
   liveActivity,
+  executionEvents = EMPTY_EXECUTION_EVENTS,
 }) => {
   const theme = useTheme();
   // Initialize step index safely, defaulting to -1 if no trace
@@ -217,9 +234,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const [convWidth, setConvWidth] = useState<number>(() => readWidth(LS_CONV_WIDTH, CONV_WIDTH_DEFAULT));
   const [detailWidth, setDetailWidth] = useState<number>(() => readWidth(LS_DETAIL_WIDTH, DETAIL_WIDTH_DEFAULT));
 
-  const [flowDefinition, setFlowDefinition] = useState<Flow | null>(null);
-  const [flowLoading, setFlowLoading] = useState<boolean>(true);
-  const [flowError, setFlowError] = useState<string | null>(null);
+  const frameState = useMemo(
+    () => buildDebuggerFrames(debugState.flowId ?? '', executionEvents),
+    [debugState.flowId, executionEvents],
+  );
+  const [selectedFrameKey, setSelectedFrameKey] = useState<string>(DEBUGGER_ROOT_FRAME_KEY);
+  const [flowCache, setFlowCache] = useState<Record<string, FlowCacheEntry>>({});
+  const requestedFlowIdsRef = useRef<Set<string>>(new Set());
+  const flowSessionRef = useRef(0);
 
   // State for React Flow nodes and edges with correct explicit types
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]); // Use Node, not Node[]
@@ -259,55 +281,94 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     // Depend only on the trace itself, not the index state variable
   }, [debugState.executionTrace]);
 
-  // Load flow definition when component mounts or flowId changes
+  // Follow the most recent qualified event frame. A manual history selection is
+  // preserved until another event arrives, at which point live-follow resumes.
   useEffect(() => {
-    const loadFlow = async () => {
-      if (!debugState.flowId) {
-        setFlowError("Flow ID is missing in debug state.");
-        setFlowLoading(false);
-        return;
-      }
-      setFlowLoading(true);
-      setFlowError(null);
-      try {
-        log.debug(`Loading flow definition for ID: ${debugState.flowId}`);
-        const flow = await flowService.getFlow(debugState.flowId);
-        if (!flow) {
-          throw new Error(`Flow with ID ${debugState.flowId} not found.`);
-        }
-        setFlowDefinition(flow);
-        log.info(`Flow definition loaded: ${flow.name}`);
-      } catch (err) {
-        log.error("Error loading flow definition:", err);
-        setFlowError(err instanceof Error ? err.message : "Failed to load flow definition.");
-        setFlowDefinition(null);
-      } finally {
-        setFlowLoading(false);
-      }
-    };
-    loadFlow();
-  }, [debugState.flowId]);
+    setSelectedFrameKey(frameState.activeFrameKey);
+  }, [frameState.activeFrameKey, executionEvents.length]);
 
-  // Initialize/Update React Flow nodes and edges when flowDefinition loads
+  // Flow definitions are session-scoped: child executions can be ephemeral, so
+  // resolve the saved definition by subflowId and cache it for frame history.
+  const frameFlowIds = useMemo(
+    () => Array.from(new Set(frameState.order.map(key => frameState.frames[key]?.flowId).filter(Boolean))),
+    [frameState],
+  );
+
   useEffect(() => {
-    if (flowDefinition) {
-      log.debug("Setting nodes and edges from flow definition");
-      // Ensure nodes are not draggable or selectable, etc.
-      const initialNodes = flowDefinition.nodes.map(node => ({
-        ...node,
-        draggable: false,
-        selectable: false,
-        connectable: false,
-        // focusable: false, // Might cause issues with highlighting
-      }));
-      const initialEdges = flowDefinition.edges.map(edge => ({
-        ...edge,
-        selectable: false,
-        // focusable: false,
-      }));
-      setNodes(initialNodes);
-      setEdges(initialEdges);
+    flowSessionRef.current += 1;
+    requestedFlowIdsRef.current.clear();
+    setFlowCache({});
+    setSelectedFrameKey(DEBUGGER_ROOT_FRAME_KEY);
+  }, [conversationId, debugState.flowId]);
+
+  useEffect(() => {
+    const session = flowSessionRef.current;
+    for (const flowId of frameFlowIds) {
+      if (!flowId || requestedFlowIdsRef.current.has(flowId)) continue;
+      requestedFlowIdsRef.current.add(flowId);
+      setFlowCache(prev => ({ ...prev, [flowId]: { status: 'loading' } }));
+      void flowService.getFlow(flowId).then(flow => {
+        if (flowSessionRef.current !== session) return;
+        setFlowCache(prev => ({
+          ...prev,
+          [flowId]: flow ? { status: 'ready', flow } : { status: 'missing' },
+        }));
+      }).catch(err => {
+        if (flowSessionRef.current !== session) return;
+        const message = err instanceof Error ? err.message : `Failed to load flow ${flowId}.`;
+        log.error('Error loading debugger flow definition:', err);
+        setFlowCache(prev => ({ ...prev, [flowId]: { status: 'error', message } }));
+      });
     }
+  }, [conversationId, debugState.flowId, frameFlowIds]);
+
+  const selectedFrame = frameState.frames[selectedFrameKey]
+    ?? frameState.frames[frameState.activeFrameKey]
+    ?? frameState.frames[DEBUGGER_ROOT_FRAME_KEY];
+  const selectedFlowEntry = flowCache[selectedFrame.flowId];
+
+  // If a child definition is unavailable, keep the nearest loaded parent graph
+  // on screen. The child frame remains selectable and its diagnostic stays
+  // visible, so a missing graph never makes the parent debugger unusable.
+  let canvasFrame: DebuggerFrame = selectedFrame;
+  while (flowCache[canvasFrame.flowId]?.status !== 'ready' && canvasFrame.parentKey) {
+    canvasFrame = frameState.frames[canvasFrame.parentKey] ?? frameState.frames[DEBUGGER_ROOT_FRAME_KEY];
+  }
+  const canvasFlowEntry = flowCache[canvasFrame.flowId];
+  const flowDefinition = canvasFlowEntry?.status === 'ready' ? canvasFlowEntry.flow : null;
+  const rootFlowEntry = flowCache[debugState.flowId ?? ''];
+  const flowLoading = !!debugState.flowId && !flowDefinition
+    && (!rootFlowEntry || rootFlowEntry.status === 'loading');
+  const flowError = !debugState.flowId
+    ? 'Flow ID is missing in debug state.'
+    : rootFlowEntry?.status === 'missing'
+      ? `Flow with ID ${debugState.flowId} not found.`
+      : rootFlowEntry?.status === 'error'
+        ? rootFlowEntry.message
+        : null;
+  const childFlowNotice = selectedFrame.key !== DEBUGGER_ROOT_FRAME_KEY
+    && selectedFlowEntry?.status !== 'ready'
+      ? selectedFlowEntry?.status === 'loading' || !selectedFlowEntry
+        ? `Loading ${selectedFrame.displayName}; showing its parent flow for now.`
+        : `Flow ${selectedFrame.displayName} is unavailable; showing its parent flow.`
+      : null;
+
+  // Initialize/Update React Flow nodes and edges when the selected frame's
+  // resolved definition changes.
+  useEffect(() => {
+    if (!flowDefinition) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
+    log.debug(`Setting debugger graph for flow ${flowDefinition.id}`);
+    setNodes(flowDefinition.nodes.map(node => ({
+      ...node,
+      draggable: false,
+      selectable: false,
+      connectable: false,
+    })));
+    setEdges(flowDefinition.edges.map(edge => ({ ...edge, selectable: false })));
   }, [flowDefinition, setNodes, setEdges]);
 
   // NOTE: current-node highlighting + breakpoint markers are applied via a
@@ -381,6 +442,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // younger than the TTL, a low-frequency interval bumps `now` so highlights
   // fade out; it self-stops once everything has aged out.
   const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => { setNow(Date.now()); }, [executionEvents.length]);
   useEffect(() => {
     if (!liveActivity) return;
     const hasYoung = () => {
@@ -404,7 +466,13 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // static, runName for run artifacts) since most resource events carry the
   // artifact, not a node id.
   const liveActivityFor = useCallback((node: Node): { kind: 'active' | 'resource-read' | 'resource-write'; ts: number } | null => {
-    if (!liveActivity) return null;
+    const qualified = canvasFrame.nodeActivity[node.id];
+    if (qualified && now - qualified.ts < LIVE_HIGHLIGHT_TTL_MS) return qualified;
+
+    // The legacy liveActivity map is node-id-only, so use it for the root frame
+    // only. Child frames rely on qualified frame activity to prevent identical
+    // parent/child node IDs or fan-out lanes from lighting each other up.
+    if (canvasFrame.key !== DEBUGGER_ROOT_FRAME_KEY || !liveActivity) return null;
     const byNode = liveActivity.byNode[node.id];
     if (byNode && now - byNode.ts < LIVE_HIGHLIGHT_TTL_MS) return byNode;
     const data = node.data as { type?: string; properties?: Record<string, unknown> } | undefined;
@@ -419,14 +487,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
       return { kind: entry.kind === 'read' ? 'resource-read' : 'resource-write', ts: entry.ts };
     }
     return null;
-  }, [liveActivity, now]);
+  }, [canvasFrame, liveActivity, now]);
 
   // Derived nodes for display: highlight the inspected step's node (warning),
   // live activity (primary/teal, fading by age), and breakpoint nodes (error).
   // Precedence: debug step > live activity > breakpoint. Computed, not
   // stateful, to avoid render loops.
   const displayNodes = useMemo(() => {
-    const highlightId = currentStepData?.nodeId;
+    const highlightId = canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY ? currentStepData?.nodeId : undefined;
     return nodes.map((node: Node) => {
       const isCurrent = node.id === highlightId;
       const isBreakpoint = breakpoints?.includes(node.id);
@@ -452,7 +520,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         },
       };
     });
-  }, [nodes, currentStepData, breakpoints, theme, liveActivityFor, now]);
+  }, [nodes, canvasFrame.key, currentStepData, breakpoints, theme, liveActivityFor, now]);
+
+  const selectedFramePath = useMemo(
+    () => debuggerFramePath(frameState, selectedFrame.key),
+    [frameState, selectedFrame.key],
+  );
+  const frameLabel = useCallback((frame: DebuggerFrame) => {
+    const cached = flowCache[frame.flowId];
+    const base = frame.key === DEBUGGER_ROOT_FRAME_KEY && cached?.status === 'ready'
+      ? cached.flow.name
+      : frame.displayName;
+    return frame.laneIndex == null ? base : `${base} · lane ${frame.laneIndex + 1}`;
+  }, [flowCache]);
 
   // The visible sections, in the user's chosen order.
   const visibleOrder = useMemo(() => order.filter((k) => visible[k]), [order, visible]);
@@ -611,43 +691,99 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         </List>
       </TracePanel>
       <FlowDisplayPanel>
-        {flowLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <CircularProgress />
+        <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <Box sx={{ px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}`, flexShrink: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, overflowX: 'auto' }}>
+              {selectedFrame.parentKey && (
+                <Tooltip title="Back to parent flow">
+                  <IconButton
+                    size="small"
+                    onClick={() => setSelectedFrameKey(selectedFrame.parentKey ?? DEBUGGER_ROOT_FRAME_KEY)}
+                    aria-label="Back to parent flow"
+                  >
+                    <ChevronLeftIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+              {selectedFramePath.map((frame, index) => (
+                <React.Fragment key={frame.key}>
+                  {index > 0 && <ChevronRightIcon color="disabled" fontSize="small" />}
+                  <Button
+                    size="small"
+                    variant={frame.key === selectedFrame.key ? 'contained' : 'text'}
+                    onClick={() => setSelectedFrameKey(frame.key)}
+                    sx={{ minWidth: 0, whiteSpace: 'nowrap', textTransform: 'none' }}
+                  >
+                    {frameLabel(frame)}
+                  </Button>
+                </React.Fragment>
+              ))}
+            </Box>
+            {frameState.order.length > 1 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25, overflowX: 'auto' }}>
+                <Typography variant="caption" color="textSecondary" sx={{ flexShrink: 0 }}>Frames:</Typography>
+                {frameState.order.slice(1).map(key => {
+                  const frame = frameState.frames[key];
+                  return (
+                    <Button
+                      key={key}
+                      size="small"
+                      variant={frame.key === selectedFrame.key ? 'outlined' : 'text'}
+                      color={frame.status === 'error' ? 'error' : 'inherit'}
+                      onClick={() => setSelectedFrameKey(frame.key)}
+                      sx={{ minWidth: 0, py: 0, whiteSpace: 'nowrap', textTransform: 'none', fontSize: '0.7rem' }}
+                    >
+                      {frameLabel(frame)} · {frame.status}
+                    </Button>
+                  );
+                })}
+              </Box>
+            )}
           </Box>
-        ) : flowError ? (
-          <Alert severity="error" sx={{ margin: 2 }}>{flowError}</Alert>
-        ) : (
-          <ReactFlowProvider> {/* Needed for useReactFlow hook if used by controls */}
-            <ReactFlow
-              nodes={displayNodes}
-              edges={edges}
-              onNodesChange={onNodesChange} // Required, even if read-only
-              onEdgesChange={onEdgesChange} // Required, even if read-only
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              fitView
-              attributionPosition="bottom-right"
-              // Disable interactions
-              nodesDraggable={false}
-              nodesConnectable={false}
-              elementsSelectable={false}
-              panOnDrag={true} // Allow panning
-              zoomOnScroll={true} // Allow zooming
-              zoomOnPinch={true}
-              zoomOnDoubleClick={false}
-              // Click a node to toggle a breakpoint on it
-              onNodeClick={(e, node) => {
-                e.preventDefault();
-                if (onToggleBreakpoint) onToggleBreakpoint(node.id);
-              }}
-              onEdgeClick={(e) => e.preventDefault()}
-              onPaneClick={() => {}} // No action on pane click
+          {childFlowNotice && (
+            <Alert
+              severity={selectedFlowEntry?.status === 'loading' || !selectedFlowEntry ? 'info' : 'warning'}
+              sx={{ m: 1, mb: 0, py: 0, flexShrink: 0 }}
             >
-              {/* <CanvasControls /> */} {/* Add controls if needed */}
-            </ReactFlow>
-          </ReactFlowProvider>
-        )}
+              {childFlowNotice}
+            </Alert>
+          )}
+          <Box sx={{ flexGrow: 1, minHeight: 0, position: 'relative' }}>
+            {flowLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                <CircularProgress />
+              </Box>
+            ) : flowError ? (
+              <Alert severity="error" sx={{ margin: 2 }}>{flowError}</Alert>
+            ) : (
+              <ReactFlowProvider>
+                <ReactFlow
+                  nodes={displayNodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  nodeTypes={nodeTypes}
+                  edgeTypes={edgeTypes}
+                  fitView
+                  attributionPosition="bottom-right"
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  elementsSelectable={false}
+                  panOnDrag
+                  zoomOnScroll
+                  zoomOnPinch
+                  zoomOnDoubleClick={false}
+                  onNodeClick={(e, node) => {
+                    e.preventDefault();
+                    if (onToggleBreakpoint) onToggleBreakpoint(node.id);
+                  }}
+                  onEdgeClick={(e) => e.preventDefault()}
+                  onPaneClick={() => {}}
+                />
+              </ReactFlowProvider>
+            )}
+          </Box>
+        </Box>
       </FlowDisplayPanel>
     </Box>
   );
