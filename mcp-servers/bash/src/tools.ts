@@ -5,7 +5,7 @@
  * reuses the proven spawn + timeout + process-tree-kill primitives from the
  * legacy `terminal` tool (which this server replaces) and adds:
  *   - shell selection: the OS default shell, or explicit `pwsh` / `bash`
- *     (degrading gracefully when the requested shell isn't installed),
+ *     (failing before execution when an explicit shell is invalid or unavailable),
  *   - optional CRLF→LF normalization of captured output,
  *   - background execution: start → status/wait → write_stdin → kill,
  *   - orphan cleanup: every live session is force-killed on FLUJO process exit,
@@ -427,8 +427,37 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
   return { file: command, args: [], useShell: true, effectiveShell: 'default' };
 }
 
-function coerceShell(input: unknown): ShellKind {
-  return input === 'pwsh' || input === 'bash' ? input : 'default';
+type ShellValidation =
+  | { valid: true; shell: ShellKind }
+  | { valid: false; requestedShell: unknown };
+
+function safeRequestedShellValue(input: unknown): unknown {
+  try {
+    const serialized = JSON.stringify(input);
+    if (serialized !== undefined) return JSON.parse(serialized);
+  } catch {
+    // Fall through to a non-throwing string representation.
+  }
+  try {
+    return String(input);
+  } catch {
+    return '<unrepresentable>';
+  }
+}
+
+function validateShell(input: unknown): ShellValidation {
+  if (input === undefined) return { valid: true, shell: 'default' };
+  if (input === 'default' || input === 'pwsh' || input === 'bash') {
+    return { valid: true, shell: input };
+  }
+  return { valid: false, requestedShell: safeRequestedShellValue(input) };
+}
+
+function invalidShellResult(requestedShell: unknown): CallToolResult {
+  return textResult({
+    error: 'Invalid shell request. Expected one of: "default", "pwsh", or "bash".',
+    requestedShell,
+  }, true);
 }
 
 interface SpawnOutcome {
@@ -564,10 +593,13 @@ async function runTool(args: Record<string, unknown>, roots: string[]): Promise<
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
+  const shellValidation = validateShell(args.shell);
+  if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
+  const requestedShell = shellValidation.shell;
+
   const cwd = await resolveCwd(args.cwd, roots);
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
-  const requestedShell = coerceShell(args.shell);
   const normalize = args.normalizeNewlines === true;
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
   const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
@@ -636,6 +668,10 @@ async function startTool(args: Record<string, unknown>, roots: string[]): Promis
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
+  const shellValidation = validateShell(args.shell);
+  if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
+  const requestedShell = shellValidation.shell;
+
   // Sweep finished sessions before enforcing the cap so a long-lived process
   // doesn't get blocked by stale completed entries.
   const table = sessions();
@@ -653,7 +689,6 @@ async function startTool(args: Record<string, unknown>, roots: string[]): Promis
   const cwd = await resolveCwd(args.cwd, roots);
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
-  const requestedShell = coerceShell(args.shell);
   const { child, startError, effectiveShell, unavailableShell } = startChild(command, cwd, requestedShell);
   if (unavailableShell) {
     return textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true);

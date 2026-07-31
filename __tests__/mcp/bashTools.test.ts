@@ -6,7 +6,15 @@
 import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
+import { spawn, type ChildProcess } from 'node:child_process';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+jest.mock('node:child_process', () => {
+  const actual = jest.requireActual<typeof import('node:child_process')>('node:child_process');
+  return { ...actual, spawn: jest.fn(actual.spawn) };
+});
 
 jest.mock('@/backend/services/mcp/internal/registry', () => ({
   BASH_SERVER_NAME: 'bash',
@@ -32,6 +40,56 @@ function parse(r: CallToolResult): Record<string, unknown> {
 }
 
 const isWin = process.platform === 'win32';
+const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+function mockCompletedChild(output: string): void {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const child = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin: new PassThrough(),
+    pid: 12345,
+    killed: false,
+  }) as unknown as ChildProcess;
+
+  mockedSpawn.mockImplementationOnce((() => {
+    setImmediate(() => {
+      stdout.end(output);
+      stderr.end();
+      child.emit('close', 0);
+    });
+    return child;
+  }) as typeof spawn);
+}
+
+async function withResolvedPwsh(run: (executable: string) => Promise<void>): Promise<void> {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-pwsh-'));
+  const executable = path.join(tempDir, isWin ? 'pwsh.EXE' : 'pwsh');
+  const originalPath = process.env.PATH;
+  const originalWinPath = process.env.Path;
+  const originalPathExt = process.env.PATHEXT;
+  await fsp.writeFile(executable, 'test executable placeholder');
+  process.env.PATH = tempDir;
+  process.env.Path = tempDir;
+  if (isWin) process.env.PATHEXT = '.EXE';
+  _resetBashShellCacheForTests();
+
+  try {
+    await run(executable);
+  } finally {
+    restoreEnv('PATH', originalPath);
+    restoreEnv('Path', originalWinPath);
+    restoreEnv('PATHEXT', originalPathExt);
+    _resetBashShellCacheForTests();
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+}
 
 beforeEach(async () => {
   const { getDataDir } = await import('@/utils/paths');
@@ -41,6 +99,7 @@ beforeEach(async () => {
 afterEach(() => {
   _resetBashSessionsForTests();
   _resetBashShellCacheForTests();
+  mockedSpawn.mockClear();
   mockedRoots.mockReset();
 });
 
@@ -108,7 +167,81 @@ describe('bash run (foreground)', () => {
   });
 });
 
-describe('bash shell selection (issue #225)', () => {
+describe('bash shell selection (issues #225, #327)', () => {
+  it('runs an explicit foreground pwsh request directly with PowerShell arguments', async () => {
+    await withResolvedPwsh(async (executable) => {
+      mockCompletedChild('pwsh-foreground-marker');
+      const command = "Write-Output 'pwsh-foreground-marker'";
+      const r = await bashCallTool('run', { command, shell: 'pwsh' });
+
+      expect(r.isError).toBeUndefined();
+      expect(parse(r)).toEqual(expect.objectContaining({
+        shell: 'pwsh',
+        exitCode: 0,
+        output: 'pwsh-foreground-marker',
+      }));
+      expect(mockedSpawn).toHaveBeenCalledWith(
+        executable,
+        ['-NoProfile', '-NonInteractive', '-Command', command],
+        expect.objectContaining({ shell: false })
+      );
+    });
+  });
+
+  it('retains an explicit pwsh request when starting a background session', async () => {
+    await withResolvedPwsh(async (executable) => {
+      mockCompletedChild('pwsh-background-marker');
+      const command = "Write-Output 'pwsh-background-marker'";
+      const startedResult = await bashCallTool('start', { command, shell: 'pwsh' });
+      const started = parse(startedResult);
+
+      expect(startedResult.isError).toBeUndefined();
+      expect(started.shell).toBe('pwsh');
+      expect(started.sessionId).toBeTruthy();
+      expect(mockedSpawn).toHaveBeenCalledWith(
+        executable,
+        ['-NoProfile', '-NonInteractive', '-Command', command],
+        expect.objectContaining({ shell: false })
+      );
+
+      const waited = parse(await bashCallTool('wait', {
+        sessionId: started.sessionId as string,
+        timeout: 10,
+      }));
+      expect(waited.running).toBe(false);
+      expect(waited.output).toBe('pwsh-background-marker');
+    });
+  });
+
+  it('rejects a noncanonical foreground shell before starting a child process', async () => {
+    const r = await bashCallTool('run', {
+      command: 'echo must-not-run',
+      shell: 'PWSH',
+    });
+
+    expect(r.isError).toBe(true);
+    expect(parse(r)).toEqual(expect.objectContaining({
+      error: expect.stringContaining('Invalid shell request'),
+      requestedShell: 'PWSH',
+    }));
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string background shell before starting a child process', async () => {
+    const r = await bashCallTool('start', {
+      command: 'echo must-not-run',
+      shell: 42,
+    });
+
+    expect(r.isError).toBe(true);
+    expect(parse(r)).toEqual(expect.objectContaining({
+      error: expect.stringContaining('Invalid shell request'),
+      requestedShell: 42,
+    }));
+    expect(parse(r).sessionId).toBeUndefined();
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
   it('resolves "bash" to a real bash executable exposing unix utilities, when one is installed', async () => {
     const r = await bashCallTool('run', { command: 'echo bash-test | grep -q bash-test && echo found', shell: 'bash' });
     const out = parse(r);
