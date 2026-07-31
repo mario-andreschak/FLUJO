@@ -1382,7 +1382,8 @@ export class MCPService {
     onProgress?: (progress: ToolCallProgress) => void,
     callerNodeId?: string,
     signal?: AbortSignal,
-    source: ToolCallSource = 'host'
+    source: ToolCallSource = 'host',
+    ownerScope?: string,
   ): Promise<MCPServiceResponse> {
     log.debug(`callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`);
 
@@ -1427,7 +1428,8 @@ export class MCPService {
       onProgress,
       signal,
       source,
-      callerNodeId
+      callerNodeId,
+      ownerScope,
     );
     log.info(`callTool: Called tool ${toolName} on ${serverName}`);
     return result;
@@ -1447,7 +1449,8 @@ export class MCPService {
     toolName: string,
     args: ToolArgs,
     timeout?: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    ownerScope?: string,
   ): Promise<MCPServiceResponse> {
     const appAccess = await this.checkMcpAppAccess(serverName);
     if (appAccess) return appAccess;
@@ -1460,7 +1463,8 @@ export class MCPService {
       undefined,
       undefined,
       signal,
-      'app'
+      'app',
+      ownerScope,
     );
 
     if (result.errorType !== 'tool-authorization-list') {
@@ -1487,7 +1491,8 @@ export class MCPService {
       undefined,
       undefined,
       signal,
-      'app'
+      'app',
+      ownerScope,
     );
     return result;
   }

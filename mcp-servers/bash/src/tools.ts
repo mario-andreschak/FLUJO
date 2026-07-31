@@ -23,6 +23,11 @@
  *
  * Every tool returns a machine-readable JSON envelope in a single text content
  * block; failures come back as `isError: true` rather than thrown.
+ *
+ * MCP App contract (issue #330): the terminal View is a streaming,
+ * line-oriented console over these existing piped child processes. It is not a
+ * PTY and deliberately does not emulate curses/full-screen programs, cursor
+ * positioning, alternate screens, or terminal resize negotiation.
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -41,6 +46,7 @@ import {
 } from '@flujo-ai/mcp-shared';
 
 const BASH_SERVER_NAME = 'bash';
+export const BASH_TERMINAL_APP_URI = 'ui://bash/terminal';
 
 const log = createLogger('backend/services/mcp/internal/bashTools');
 
@@ -48,7 +54,12 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_CHARS = 100_000;
 const MAX_SESSIONS = 25;
-/** Finished sessions are reaped this long after they exit so `status`/`wait` can still read them. */
+/**
+ * Lifecycle: live sessions end only by process exit, explicit kill, or Bash
+ * server shutdown. Finished owner-scoped records remain readable for ten
+ * minutes, then are reaped. An MCP View teardown may be an inline→dock handoff,
+ * so it is not treated as an owner disconnect signal.
+ */
 const SESSION_TTL_MS = 10 * 60_000;
 
 type ShellKind = 'default' | 'pwsh' | 'bash';
@@ -135,6 +146,8 @@ export function _resetBashShellCacheForTests(): void {
 
 interface BashSession {
   id: string;
+  /** Host-derived caller/conversation scope; never selected by tool arguments. */
+  ownerScope: string;
   command: string;
   cwd: string;
   child: ChildProcess;
@@ -160,6 +173,24 @@ declare global {
 function sessions(): Map<string, BashSession> {
   if (!global.__flujo_bash_sessions) global.__flujo_bash_sessions = new Map<string, BashSession>();
   return global.__flujo_bash_sessions;
+}
+
+const ANONYMOUS_OWNER_SCOPE = 'legacy:anonymous';
+
+function effectiveOwnerScope(ownerScope?: string, callerNodeId?: string): string {
+  const explicit = ownerScope?.trim();
+  if (explicit) return explicit;
+  const caller = callerNodeId?.trim();
+  return caller ? `caller:${caller}` : ANONYMOUS_OWNER_SCOPE;
+}
+
+function ownedSession(id: string, ownerScope: string): BashSession | undefined {
+  const session = sessions().get(id);
+  return session?.ownerScope === ownerScope ? session : undefined;
+}
+
+function terminalMeta(): Tool['_meta'] {
+  return { ui: { resourceUri: BASH_TERMINAL_APP_URI } };
 }
 
 /** Kill every live session's process tree — used on FLUJO process exit. */
@@ -524,6 +555,7 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'start',
       description: 'Start a command in the BACKGROUND and return immediately with a { sessionId }. Use status/wait to observe it, write_stdin to feed it input, and kill to stop it.',
+      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -537,6 +569,7 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'status',
       description: 'Return the current state of a background session: { sessionId, running, exitCode, output, truncated }.',
+      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: { sessionId: { type: 'string', description: 'The id returned by start.' } },
@@ -546,6 +579,7 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'wait',
       description: 'Wait until a background session finishes (or the timeout elapses). Returns { sessionId, running, exitCode, output, truncated, timedOut }.',
+      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -558,6 +592,7 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'write_stdin',
       description: 'Write a string to a running background session\'s stdin. Pass "newline": false to omit the trailing newline. Returns { sessionId, written }.',
+      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -571,6 +606,7 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'kill',
       description: 'Kill a background session (and its whole process tree). Returns { sessionId, killed }.',
+      _meta: terminalMeta(),
       inputSchema: {
         type: 'object',
         properties: { sessionId: { type: 'string', description: 'The id returned by start.' } },
@@ -579,7 +615,8 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'list_sessions',
-      description: 'List all known background sessions with their state. Returns { sessions: [{ sessionId, command, running, exitCode, startedAt, endedAt }] }.',
+      description: 'List background sessions owned by this caller scope. Returns { sessions: [{ sessionId, command, running, exitCode, startedAt, endedAt }] }.',
+      _meta: terminalMeta(),
       inputSchema: { type: 'object', properties: {} },
     },
   ];
@@ -664,7 +701,7 @@ function scheduleReap(session: BashSession): void {
   session.reapTimer.unref?.();
 }
 
-async function startTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
+async function startTool(args: Record<string, unknown>, roots: string[], ownerScope: string): Promise<CallToolResult> {
   const command = String(args?.command ?? '').trim();
   if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
@@ -700,6 +737,7 @@ async function startTool(args: Record<string, unknown>, roots: string[]): Promis
   const id = `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const session: BashSession = {
     id,
+    ownerScope,
     command,
     cwd,
     child,
@@ -741,16 +779,16 @@ function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Re
   };
 }
 
-function statusTool(args: Record<string, unknown>): CallToolResult {
+function statusTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
   const id = String(args?.sessionId ?? '');
-  const session = sessions().get(id);
+  const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
   return textResult(snapshot(session));
 }
 
-async function waitTool(args: Record<string, unknown>): Promise<CallToolResult> {
+async function waitTool(args: Record<string, unknown>, ownerScope: string): Promise<CallToolResult> {
   const id = String(args?.sessionId ?? '');
-  const session = sessions().get(id);
+  const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
   if (!session.running) return textResult(snapshot(session, { timedOut: false }));
 
@@ -769,9 +807,9 @@ async function waitTool(args: Record<string, unknown>): Promise<CallToolResult> 
   return textResult(snapshot(session, { timedOut }));
 }
 
-function writeStdinTool(args: Record<string, unknown>): CallToolResult {
+function writeStdinTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
   const id = String(args?.sessionId ?? '');
-  const session = sessions().get(id);
+  const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
   if (!session.running) return textResult({ error: `Session "${id}" has already exited.` }, true);
   const data = typeof args.data === 'string' ? args.data : '';
@@ -784,9 +822,9 @@ function writeStdinTool(args: Record<string, unknown>): CallToolResult {
   return textResult({ sessionId: id, written: Buffer.byteLength(withNewline, 'utf8') });
 }
 
-function killTool(args: Record<string, unknown>): CallToolResult {
+function killTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
   const id = String(args?.sessionId ?? '');
-  const session = sessions().get(id);
+  const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
   if (session.running) {
     session.cancelEscalation = killProcessTree(session.child);
@@ -794,20 +832,28 @@ function killTool(args: Record<string, unknown>): CallToolResult {
   return textResult({ sessionId: id, killed: true });
 }
 
-function listSessionsTool(): CallToolResult {
-  const list = Array.from(sessions().values()).map((s) => ({
-    sessionId: s.id,
-    command: s.command,
-    running: s.running,
-    exitCode: s.exitCode,
-    startedAt: new Date(s.startedAt).toISOString(),
-    endedAt: s.endedAt ? new Date(s.endedAt).toISOString() : undefined,
-  }));
+function listSessionsTool(ownerScope: string): CallToolResult {
+  const list = Array.from(sessions().values())
+    .filter((s) => s.ownerScope === ownerScope)
+    .map((s) => ({
+      sessionId: s.id,
+      command: s.command,
+      running: s.running,
+      exitCode: s.exitCode,
+      startedAt: new Date(s.startedAt).toISOString(),
+      endedAt: s.endedAt ? new Date(s.endedAt).toISOString() : undefined,
+    }));
   return textResult({ sessions: list });
 }
 
-export async function bashCallTool(toolName: string, args: Record<string, unknown>, callerNodeId?: string): Promise<CallToolResult> {
+export async function bashCallTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  callerNodeId?: string,
+  ownerScope?: string,
+): Promise<CallToolResult> {
   try {
+    const scope = effectiveOwnerScope(ownerScope, callerNodeId);
     switch (toolName) {
       case 'run': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
@@ -815,18 +861,18 @@ export async function bashCallTool(toolName: string, args: Record<string, unknow
       }
       case 'start': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
-        return await startTool(args, roots);
+        return await startTool(args, roots, scope);
       }
       case 'status':
-        return statusTool(args);
+        return statusTool(args, scope);
       case 'wait':
-        return await waitTool(args);
+        return await waitTool(args, scope);
       case 'write_stdin':
-        return writeStdinTool(args);
+        return writeStdinTool(args, scope);
       case 'kill':
-        return killTool(args);
+        return killTool(args, scope);
       case 'list_sessions':
-        return listSessionsTool();
+        return listSessionsTool(scope);
       default:
         return textResult({ error: `Unknown tool on the built-in bash server: ${toolName}` }, true);
     }

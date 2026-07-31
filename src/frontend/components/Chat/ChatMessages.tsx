@@ -487,6 +487,7 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
 const ToolCallTimeline: React.FC<{
   pairs: ToolCallPair<ChatMessage>[];
   messageId: string;
+  conversationId?: string;
   onAppMessage?: (text: string) => boolean | Promise<boolean>;
   onUpdateModelContext?: (
     appKey: string,
@@ -497,6 +498,7 @@ const ToolCallTimeline: React.FC<{
 }> = ({
   pairs,
   messageId,
+  conversationId,
   onAppMessage,
   onUpdateModelContext,
   onRegisterAppTeardown,
@@ -635,6 +637,7 @@ const ToolCallTimeline: React.FC<{
                   request promotion into the persistent canvas. */}
               {pair.result?.ui?.uri && pair.result.ui.serverName && (
                 <McpAppFrame
+                  conversationId={conversationId}
                   serverName={pair.result.ui.serverName}
                   uri={pair.result.ui.uri}
                   toolName={pair.result.ui.toolName ?? pair.toolCall.function.name}
@@ -671,6 +674,7 @@ const ToolCallTimeline: React.FC<{
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  conversationId?: string;
   /** Resolved node label for the attribution pill (id shown in the tooltip). */
   nodeLabel?: string;
   /** Stable reference (memoized by the parent) — resolves the attribution pill. */
@@ -714,6 +718,7 @@ interface MessageBubbleProps {
  */
 const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   message,
+  conversationId,
   nodeLabel,
   availableNodes,
   showRaw,
@@ -944,6 +949,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           <ToolCallTimeline
             pairs={toolCallPairs}
             messageId={message.id}
+            conversationId={conversationId}
             onAppMessage={onAppMessage}
             onUpdateModelContext={onUpdateModelContext}
             onRegisterAppTeardown={onRegisterAppTeardown}
@@ -1514,6 +1520,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <MessageBubble
             key={message.id || `msg-${hiddenCount + index}`} // Use message.id as key, fallback to global index
             message={message}
+            conversationId={conversationId}
             nodeLabel={message.processNodeId ? nodeLabelById.get(message.processNodeId) : undefined}
             availableNodes={availableNodes}
             showRaw={!!showRawToolResult[message.id]}

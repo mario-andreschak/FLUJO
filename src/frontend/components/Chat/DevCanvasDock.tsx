@@ -320,6 +320,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
               <McpAppFrame
                 docked
                 visible={isVisible}
+                conversationId={conversationId}
                 serverName={e.serverName}
                 uri={e.uri}
                 toolName={e.toolName}

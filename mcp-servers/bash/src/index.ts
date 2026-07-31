@@ -1,37 +1,63 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { configureRootsProvider } from '@flujo-ai/mcp-shared';
 import { bashCallTool, bashToolDefinitions, shutdownBashSessions } from './tools.js';
+import { bashListResources, bashReadResource, isBashAppUri } from './resources.js';
 
 export * from './tools.js';
+export * from './resources.js';
 
 const server = new Server(
   { name: '@flujo-ai/mcp-bash', version: '0.1.0' },
-  { capabilities: { tools: {} } },
+  { capabilities: { tools: {}, resources: {} } },
 );
 
 configureRootsProvider(async () => (await server.listRoots()).roots);
 
-function callerNodeIdOf(meta: unknown): string | undefined {
-  if (!meta || typeof meta !== 'object') return undefined;
+function flujoMetaOf(meta: unknown): { callerNodeId?: string; ownerScope?: string } {
+  if (!meta || typeof meta !== 'object') return {};
   const flujo = (meta as Record<string, unknown>).flujo;
-  if (!flujo || typeof flujo !== 'object') return undefined;
-  const callerNodeId = (flujo as Record<string, unknown>).callerNodeId;
-  return typeof callerNodeId === 'string' && callerNodeId.length > 0
-    ? callerNodeId
+  if (!flujo || typeof flujo !== 'object') return {};
+  const values = flujo as Record<string, unknown>;
+  const callerNodeId = typeof values.callerNodeId === 'string' && values.callerNodeId.length > 0
+    ? values.callerNodeId
     : undefined;
+  const ownerScope = typeof values.ownerScope === 'string' && values.ownerScope.length > 0
+    ? values.ownerScope
+    : undefined;
+  return { callerNodeId, ownerScope };
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: bashToolDefinitions() }));
-server.setRequestHandler(CallToolRequestSchema, async (request) =>
-  bashCallTool(
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const meta = flujoMetaOf(request.params._meta);
+  return bashCallTool(
     request.params.name,
     request.params.arguments ?? {},
-    callerNodeIdOf(request.params._meta),
-  ),
-);
+    meta.callerNodeId,
+    meta.ownerScope,
+  );
+});
+server.setRequestHandler(ListResourcesRequestSchema, async () => bashListResources());
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+  const uri = request.params.uri;
+  const result = isBashAppUri(uri)
+    ? bashReadResource(uri)
+    : { success: false, error: `Unknown Bash resource: ${uri}`, statusCode: 404 };
+  if (!result.success || !result.data) {
+    throw new Error(result.error ?? `Could not read ${uri}`);
+  }
+  return result.data;
+});
 
 const transport = new StdioServerTransport();
 let closing = false;

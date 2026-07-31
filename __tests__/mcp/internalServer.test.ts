@@ -103,6 +103,14 @@ describe('standalone stdio configuration', () => {
     }
   });
 
+  it('declares the Bash package MCP Apps/resource capabilities', () => {
+    expect(builtInServerConfig('bash')).toMatchObject({
+      disabled: false,
+      internalPackage: '@flujo-ai/mcp-bash',
+      packageCapabilities: { mcpApps: true, resources: true },
+    });
+  });
+
   it('seeds browser automation disabled with MCP Apps/resource capabilities', () => {
     const previous = process.env.FLUJO_BROWSER_ENABLED;
     delete process.env.FLUJO_BROWSER_ENABLED;

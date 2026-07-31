@@ -105,10 +105,16 @@ afterEach(() => {
 
 describe('bash tool definitions', () => {
   it('exposes foreground run + background session tools', () => {
-    const names = bashToolDefinitions().map((t) => t.name);
+    const tools = bashToolDefinitions();
+    const names = tools.map((t) => t.name);
     expect(names).toEqual(
       expect.arrayContaining(['run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions'])
     );
+    for (const tool of tools.filter((candidate) => candidate.name !== 'run')) {
+      expect(tool._meta).toEqual(expect.objectContaining({
+        ui: { resourceUri: 'ui://bash/terminal' },
+      }));
+    }
   });
 });
 
@@ -324,6 +330,25 @@ describe('bash background sessions', () => {
     const waited = parse(await bashCallTool('wait', { sessionId: start.sessionId as string, timeout: 10 }));
     expect(waited.running).toBe(false);
   }, 25000);
+
+  it('isolates session visibility and controls by host-derived owner scope', async () => {
+    const ownerA = 'conversation:alpha';
+    const ownerB = 'conversation:beta';
+    const started = parse(await bashCallTool('start', { command: 'echo scoped' }, undefined, ownerA));
+    const sessionId = started.sessionId as string;
+
+    const denied = await bashCallTool('status', { sessionId }, undefined, ownerB);
+    expect(denied.isError).toBe(true);
+    expect(text(denied)).toContain('No background session');
+
+    const listA = parse(await bashCallTool('list_sessions', {}, undefined, ownerA));
+    const listB = parse(await bashCallTool('list_sessions', {}, undefined, ownerB));
+    expect(listA.sessions).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId })]));
+    expect(listB.sessions).toEqual([]);
+
+    const waited = parse(await bashCallTool('wait', { sessionId, timeout: 10 }, undefined, ownerA));
+    expect(waited.output as string).toContain('scoped');
+  }, 20000);
 
   it('errors on an unknown session id', async () => {
     const r = await bashCallTool('status', { sessionId: 'does-not-exist' });

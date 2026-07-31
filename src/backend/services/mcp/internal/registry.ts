@@ -52,6 +52,8 @@ const PACKAGE_CAPABILITIES: Record<string, MCPPackageCapabilities> = {
       protectedPaths: true,
       snapshots: true,
     },
+    mcpApps: true,
+    resources: true,
   },
   [BROWSER_SERVER_NAME]: {
     mcpApps: true,

@@ -142,7 +142,8 @@ export async function callTool(
   onProgress?: (progress: ToolCallProgress) => void,
   signal?: AbortSignal,
   source: ToolCallSource = 'host',
-  callerNodeId?: string
+  callerNodeId?: string,
+  ownerScope?: string,
 ): Promise<MCPServiceResponse> {
   log.debug('Entering callTool method');
   if (!client) {
@@ -217,8 +218,15 @@ export async function callTool(
     const requestParams = {
       name: toolName,
       arguments: normalizedArgs,
-      ...(callerNodeId
-        ? { _meta: { flujo: { callerNodeId } } }
+      ...(callerNodeId || ownerScope
+        ? {
+            _meta: {
+              flujo: {
+                ...(callerNodeId ? { callerNodeId } : {}),
+                ...(ownerScope ? { ownerScope } : {}),
+              },
+            },
+          }
         : {}),
     };
     const response = isBetaClient(client)
