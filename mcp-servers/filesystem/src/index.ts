@@ -22,7 +22,7 @@ export * from './tools.js';
 export * from './resources.js';
 
 const server = new Server(
-  { name: '@flujo-ai/mcp-filesystem', version: '0.1.0' },
+  { name: '@mario.andreschak/mcp-filesystem', version: '0.1.0' },
   { capabilities: { tools: {}, resources: {} } },
 );
 
@@ -76,6 +76,6 @@ process.once('SIGTERM', () => void shutdown());
 process.once('SIGHUP', () => void shutdown());
 
 server.connect(transport).catch((error) => {
-  process.stderr.write(`@flujo-ai/mcp-filesystem failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.stderr.write(`@mario.andreschak/mcp-filesystem failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

@@ -11,10 +11,10 @@ const rootPackage = JSON.parse(readFileSync(rootPackagePath, 'utf8'));
 const { version } = rootPackage;
 
 const publicMcpPackages = [
-  { directory: 'bash', name: '@flujo-ai/mcp-bash' },
-  { directory: 'browser', name: '@flujo-ai/mcp-browser' },
-  { directory: 'filesystem', name: '@flujo-ai/mcp-filesystem' },
-  { directory: 'flujo', name: '@flujo-ai/mcp-flujo' },
+  { directory: 'bash', name: '@mario.andreschak/mcp-bash' },
+  { directory: 'browser', name: '@mario.andreschak/mcp-browser' },
+  { directory: 'filesystem', name: '@mario.andreschak/mcp-filesystem' },
+  { directory: 'flujo', name: '@mario.andreschak/mcp-flujo' },
 ];
 
 function writeJson(file, value) {

@@ -18,7 +18,7 @@ import { flujoRequest } from './client.js';
 export * from './client.js';
 
 const server = new Server(
-  { name: '@flujo-ai/mcp-flujo', version: '0.1.0' },
+  { name: '@mario.andreschak/mcp-flujo', version: '0.1.0' },
   { capabilities: { tools: {}, resources: {} } },
 );
 
@@ -51,6 +51,6 @@ process.once('SIGTERM', () => void shutdown());
 process.once('SIGHUP', () => void shutdown());
 
 server.connect(transport).catch((error) => {
-  process.stderr.write(`@flujo-ai/mcp-flujo failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.stderr.write(`@mario.andreschak/mcp-flujo failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

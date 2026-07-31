@@ -105,7 +105,7 @@ describe('shipped MCP package migration (#347)', () => {
         env: {},
         disabled: true,
         roots: ['/workspace'],
-        internalPackage: '@flujo-ai/mcp-bash',
+        internalPackage: '@mario.andreschak/mcp-bash',
         packageCapabilities: { mcpApps: true },
       },
     });
@@ -119,7 +119,7 @@ describe('shipped MCP package migration (#347)', () => {
       command: 'node',
       disabled: true,
       roots: ['/workspace'],
-      source: { type: 'marketplace', id: '@flujo-ai/mcp-bash' },
+      source: { type: 'marketplace', id: '@mario.andreschak/mcp-bash' },
       hostPathAccess: { snapshots: true, protectedPaths: true },
     });
     expect(shell).not.toHaveProperty('internalPackage');
@@ -140,7 +140,7 @@ describe('shipped MCP package migration (#347)', () => {
     expect(servers.browser).toMatchObject({
       command: 'node',
       disabled: true,
-      source: { type: 'marketplace', id: '@flujo-ai/mcp-browser' },
+      source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
     });
   });
 

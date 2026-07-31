@@ -35,10 +35,10 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const bump = args.find((arg) => !arg.startsWith('--')) ?? 'minor';
 const publicMcpPackages = [
-  '@flujo-ai/mcp-flujo',
-  '@flujo-ai/mcp-filesystem',
-  '@flujo-ai/mcp-bash',
-  '@flujo-ai/mcp-browser',
+  '@mario.andreschak/mcp-flujo',
+  '@mario.andreschak/mcp-filesystem',
+  '@mario.andreschak/mcp-bash',
+  '@mario.andreschak/mcp-browser',
 ];
 
 if (!/^(patch|minor|major|\d+\.\d+\.\d+)$/.test(bump)) {
@@ -94,7 +94,7 @@ show('npm run validate:mcp-release');
 
 if (dryRun) {
   console.log(
-    `\nDry run passed. Would version '${bump}', publish the three MCP packages and flujo-ai, then push main and the new version tag.`,
+    `\nDry run passed. Would version '${bump}', publish the four MCP packages and flujo-ai, then push main and the new version tag.`,
   );
   process.exit(0);
 }
@@ -112,7 +112,7 @@ try {
   show('npm publish');
 } catch {
   fail(
-    `npm publish failed. No Git refs were pushed, but earlier packages in the sequence may already be on npm. Inspect which packages reached npm, finish publishing all four at ${version}, then run "git push origin main ${tag}".`,
+    `npm publish failed. No Git refs were pushed, but earlier packages in the sequence may already be on npm. Inspect which packages reached npm, finish publishing all four MCP packages and flujo-ai at ${version}, then run "git push origin main ${tag}".`,
   );
 }
 

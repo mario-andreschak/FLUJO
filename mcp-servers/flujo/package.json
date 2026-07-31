@@ -1,6 +1,6 @@
 {
-  "name": "@flujo-ai/mcp-flujo",
-  "version": "3.38.0",
+  "name": "@mario.andreschak/mcp-flujo",
+  "version": "3.39.0",
   "description": "FLUJO's standalone application MCP server",
   "type": "module",
   "main": "dist/index.js",
@@ -8,7 +8,9 @@
   "bin": {
     "flujo-mcp-flujo": "dist/index.js"
   },
-  "files": ["dist/**/*"],
+  "files": [
+    "dist/**/*"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

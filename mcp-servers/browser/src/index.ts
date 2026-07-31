@@ -17,7 +17,7 @@ export * from './resources.js';
 export * from './runtime.js';
 
 const server = new Server(
-  { name: '@flujo-ai/mcp-browser', version: '3.38.0' },
+  { name: '@mario.andreschak/mcp-browser', version: '3.38.0' },
   { capabilities: { tools: {}, resources: {} } },
 );
 
@@ -43,6 +43,6 @@ process.once('SIGHUP', () => void shutdown());
 process.once('beforeExit', () => void shutdownBrowserRuntime());
 
 server.connect(transport).catch((error) => {
-  process.stderr.write(`@flujo-ai/mcp-browser failed: ${error instanceof Error ? error.name : 'unknown error'}\n`);
+  process.stderr.write(`@mario.andreschak/mcp-browser failed: ${error instanceof Error ? error.name : 'unknown error'}\n`);
   process.exitCode = 1;
 });

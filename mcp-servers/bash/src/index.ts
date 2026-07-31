@@ -16,7 +16,7 @@ export * from './tools.js';
 export * from './resources.js';
 
 const server = new Server(
-  { name: '@flujo-ai/mcp-bash', version: '0.1.0' },
+  { name: '@mario.andreschak/mcp-bash', version: '0.1.0' },
   {
     capabilities: {
       tools: {},
@@ -101,6 +101,6 @@ process.once('SIGHUP', () => void shutdown());
 
 server.connect(transport).catch((error) => {
   shutdownBashSessions();
-  process.stderr.write(`@flujo-ai/mcp-bash failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.stderr.write(`@mario.andreschak/mcp-bash failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

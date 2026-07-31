@@ -4,10 +4,10 @@ This workspace contains the stdio MCP processes managed by FLUJO:
 
 | Package | Executable | Purpose |
 | --- | --- | --- |
-| `@flujo-ai/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through the localhost control API. |
-| `@flujo-ai/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
-| `@flujo-ai/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground/background shell execution plus a PTY-backed MCP Apps terminal with process-tree cleanup. |
-| `@flujo-ai/mcp-browser` | `flujo-mcp-browser` | Isolated server-side Patchright browser automation with an MCP Apps browser view. |
+| `@mario.andreschak/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through the localhost control API. |
+| `@mario.andreschak/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
+| `@mario.andreschak/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground/background shell execution plus a PTY-backed MCP Apps terminal with process-tree cleanup. |
+| `@mario.andreschak/mcp-browser` | `flujo-mcp-browser` | Isolated server-side Patchright browser automation with an MCP Apps browser view. |
 
 Each package builds to `dist/index.js`, uses `StdioServerTransport`, and reserves stdout for MCP protocol frames. Diagnostics are written to stderr. FLUJO persists portable `npx --no-install <executable>` configurations and resolves them from the runtime-only `FLUJO_APP_ROOT`; no checkout or install path is stored in user data. Connection, restart, roots notifications, and shutdown use the same client lifecycle as external MCP servers.
 
@@ -34,7 +34,7 @@ node mcp-servers/browser/dist/index.js
 
 ## Release synchronization
 
-`flujo-ai`, `@flujo-ai/mcp-flujo`, `@flujo-ai/mcp-filesystem`, `@flujo-ai/mcp-bash`, and `@flujo-ai/mcp-browser` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the three MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
+`flujo-ai`, `@mario.andreschak/mcp-flujo`, `@mario.andreschak/mcp-filesystem`, `@mario.andreschak/mcp-bash`, and `@mario.andreschak/mcp-browser` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the four MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
 
 `npm run validate:mcp-release` rejects version drift, non-exact root pins, missing executable output, or an npm tarball that omits a required manifest/binary. The Docker publishing workflow runs the same validation before building the image.
 

@@ -20,12 +20,12 @@ export type ShippedMcpServerDescriptor = {
 export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   {
     defaultName: 'flujo',
-    packageId: '@flujo-ai/mcp-flujo',
+    packageId: '@mario.andreschak/mcp-flujo',
     packageDirectory: 'flujo',
   },
   {
     defaultName: 'filesystem',
-    packageId: '@flujo-ai/mcp-filesystem',
+    packageId: '@mario.andreschak/mcp-filesystem',
     packageDirectory: 'filesystem',
     hostPathAccess: {
       environmentRootVariables: ['FLUJO_FS_ROOTS'],
@@ -35,7 +35,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   },
   {
     defaultName: 'bash',
-    packageId: '@flujo-ai/mcp-bash',
+    packageId: '@mario.andreschak/mcp-bash',
     packageDirectory: 'bash',
     enableMcpApps: true,
     hostPathAccess: {
@@ -46,7 +46,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   },
   {
     defaultName: 'browser',
-    packageId: '@flujo-ai/mcp-browser',
+    packageId: '@mario.andreschak/mcp-browser',
     packageDirectory: 'browser',
     enableMcpApps: true,
     disabledByDefault: (env) => !/^(1|true|yes|on)$/i.test(

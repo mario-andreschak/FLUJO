@@ -11,10 +11,10 @@ const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const rootPackage = readJson(path.join(root, 'package.json'));
 const rootLock = readJson(path.join(root, 'package-lock.json'));
 const packages = [
-  { directory: 'bash', name: '@flujo-ai/mcp-bash', bin: 'flujo-mcp-bash' },
-  { directory: 'browser', name: '@flujo-ai/mcp-browser', bin: 'flujo-mcp-browser' },
-  { directory: 'filesystem', name: '@flujo-ai/mcp-filesystem', bin: 'flujo-mcp-filesystem' },
-  { directory: 'flujo', name: '@flujo-ai/mcp-flujo', bin: 'flujo-mcp-flujo' },
+  { directory: 'bash', name: '@mario.andreschak/mcp-bash', bin: 'flujo-mcp-bash' },
+  { directory: 'browser', name: '@mario.andreschak/mcp-browser', bin: 'flujo-mcp-browser' },
+  { directory: 'filesystem', name: '@mario.andreschak/mcp-filesystem', bin: 'flujo-mcp-filesystem' },
+  { directory: 'flujo', name: '@mario.andreschak/mcp-flujo', bin: 'flujo-mcp-flujo' },
 ];
 
 function readJson(file) {

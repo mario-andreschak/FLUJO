@@ -349,7 +349,7 @@ async function smokePackedArtifacts() {
     const installedModules = path.join(installDir, 'node_modules');
     const entries = Object.fromEntries(publicPackages.map((name) => [
       name,
-      path.join(installedModules, '@flujo-ai', `mcp-${name}`, 'dist', 'index.js'),
+      path.join(installedModules, '@mario.andreschak', `mcp-${name}`, 'dist', 'index.js'),
     ]));
     for (const [name, entrypoint] of Object.entries(entries)) {
       await fs.access(entrypoint);
