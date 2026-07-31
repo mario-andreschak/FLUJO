@@ -673,17 +673,17 @@ export class MCPService {
       this.stderrLogs.set(config.name, []);
 
       if (config.transport === 'stdio' && config.hostPathAccess?.protectedPaths === true) {
-          const childEnv: Record<string, string> = {
-            ...(config.env as Record<string, string> | undefined),
-          };
+        const childEnv: Record<string, string> = {
+          ...(config.env as Record<string, string> | undefined),
+        };
         // The persisted security contract follows the record across renames; no
         // server display name grants this behavior.
-            const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
-            childEnv.FLUJO_PROTECTED_PATHS_ENABLED = await isProtectedPathsEnabled(
-              config.protectedPathsEnabled,
-            ) ? '1' : '0';
-          config = { ...config, env: childEnv };
-        }
+        const { isProtectedPathsEnabled } = await import('./internal/protectedPaths');
+        childEnv.FLUJO_PROTECTED_PATHS_ENABLED = await isProtectedPathsEnabled(
+          config.protectedPathsEnabled,
+        ) ? '1' : '0';
+        config = { ...config, env: childEnv };
+      }
 
       // Resolve + decrypt any custom headers (#84) BEFORE anything reads them. The SAME
       // resolved config must drive both shouldRecreateClient() and createTransport(), so the
