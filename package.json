@@ -64,7 +64,6 @@
     "chokidar": "^4.0.3",
     "croner": "^10.0.1",
     "crypto-js": "^4.2.0",
-    "fetch-to-node": "^2.1.0",
     "isomorphic-git": "^1.29.0",
     "jszip": "^3.10.1",
     "lodash": "^4.17.21",

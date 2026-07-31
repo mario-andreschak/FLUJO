@@ -1,6 +1,6 @@
 /**
  * Tests for the FLUJO-as-MCP-server proxy forwarding (#17A).
- * The route's transport plumbing is the official SDK + fetch-to-node and is
+ * The route's transport plumbing is the official SDK Web transport and is
  * verified with a real client; here we pin the forwarding logic we own.
  */
 

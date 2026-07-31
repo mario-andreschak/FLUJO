@@ -1,6 +1,6 @@
 /**
  * Tests for the built-in FLUJO MCP server's flows-as-tools logic (#38, Item D).
- * The route's transport plumbing is the official SDK + fetch-to-node (shared with
+ * The route's transport plumbing is the official SDK Web transport (shared with
  * /mcp-proxy and verified with a real client); here we pin the list/call mapping
  * we own — that tools/list and tools/call agree on the same deterministic name ->
  * flow mapping, and that runFlow results map to MCP tool results.
