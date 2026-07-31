@@ -88,7 +88,7 @@ function WaveSummaryCard({ wave, selected, now, onSelect }: WaveSummaryCardProps
         {titleOf(wave)}
       </Typography>
       <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
-        <Chip label={`${wave.nodes.length} execution(s)`} size="small" variant="outlined" />
+        <Chip label={`${wave.nodes.length} trigger(s)`} size="small" variant="outlined" />
         {timeBased && <Chip label="time-based" size="small" color="info" variant="outlined" />}
         {wave.hasCycle && <Chip label="recursive" color="warning" size="small" />}
       </Stack>
@@ -113,7 +113,14 @@ function WaveSummaryCard({ wave, selected, now, onSelect }: WaveSummaryCardProps
  * the right (stacked mini-canvases were too small). Selection persists across
  * reloads and the 30s poll.
  */
-export default function WavesManager() {
+export type WavesManagerHeight = number | string | { xs: number | string; sm: number | string };
+
+interface WavesManagerProps {
+  /** Definite height supplied by a full-page route; embedded views keep using their parent height. */
+  height?: WavesManagerHeight;
+}
+
+export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [data, setData] = useState<WavesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
@@ -160,14 +167,14 @@ export default function WavesManager() {
 
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height, minHeight: 0 }}>
         <CircularProgress />
       </Box>
     );
   }
 
   return (
-    <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <Box sx={{ p: 3, height, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <WavesIcon color="primary" />
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
@@ -177,7 +184,7 @@ export default function WavesManager() {
         {data?.paused && <Chip label="Scheduler paused" color="warning" size="small" />}
       </Box>
       <Typography variant="body2" sx={{ opacity: 0.75, mb: 2 }}>
-        A read-only picture of how your Planned Executions chain together via signals and completion
+        A read-only picture of how your Automation triggers chain together via signals and completion
         events. Pick a wave on the left to open it on the canvas — the clock on the left is “now”, and
         scheduled runs approach from the right. Hover a card to follow its chain, or click it to pin
         the chain open (click the background to release); use the window control to zoom the timeline
@@ -186,8 +193,8 @@ export default function WavesManager() {
 
       {waves.length === 0 && orphans.length === 0 && (
         <Alert severity="info">
-          No planned executions to visualize yet. Create some executions (and link them with
-          flow-event triggers or signal nodes) to see waves here.
+          No triggers to visualize yet. Create some triggers (and link them with flow-event triggers
+          or signal nodes) to see waves here.
         </Alert>
       )}
 
@@ -242,7 +249,7 @@ export default function WavesManager() {
                   <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap title={titleOf(selectedWave)}>
                     {titleOf(selectedWave)}
                   </Typography>
-                  <Chip label={`${selectedWave.nodes.length} execution(s)`} size="small" variant="outlined" />
+                  <Chip label={`${selectedWave.nodes.length} trigger(s)`} size="small" variant="outlined" />
                   {selectedWave.hasCycle && <Chip label="recursive" color="warning" size="small" />}
                 </Box>
                 <Box sx={{ flex: 1, minHeight: 0 }}>

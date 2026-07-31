@@ -202,7 +202,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {execution ? 'Edit planned execution' : 'New planned execution'}
+            {execution ? 'Edit trigger' : 'New trigger'}
           </Typography>
           <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
             <CloseIcon />
@@ -214,9 +214,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
       <DialogContent sx={{ p: 3 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          A planned execution runs one of your flows automatically — on a
+          An Automation trigger runs one of your flows automatically — on a
           schedule or when something happens — without anyone sitting in the
-          chat. Results show up in its run history on the Executions page.
+          chat. Results show up in its run history on the Triggers page.
         </Typography>
 
         <TextField
@@ -399,7 +399,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             </Select>
             <FormHelperText>
               An exclusive run waits until the scheduler is idle, then holds a
-              global lock so no other planned execution can start until it
+              global lock so no other Automation trigger can start until it
               finishes.
             </FormHelperText>
           </FormControl>
@@ -462,7 +462,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           color="primary"
           disabled={saving || !name.trim() || !flowId}
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving…' : 'Save trigger'}
         </Button>
       </DialogActions>
     </Dialog>

@@ -141,7 +141,7 @@ Step through a run node-by-node with the visual debugger, inspecting prep/exec s
 
 ![Visual Debugger](docs/images/readme/chat-debugger.png)
 
-### ⏱️ Planned Executions (Automation)
+### ⏱️ Automation — Triggers
 
 Run your flows automatically — on a schedule or when something happens — without opening the chat. FLUJO just needs to be running for triggers to fire.
 
@@ -151,12 +151,12 @@ Run your flows automatically — on a schedule or when something happens — wit
 - **MCP tool polling**: periodically call a tool and fire on change, on new items, or let a model/checker-flow decide
 - **URL watch**: fire when a fetched page's content changes
 
-![Planned Executions](docs/images/readme/planned-executions.png)
-![New Planned Execution](docs/images/readme/planned-execution-new.png)
+![Automation Triggers](docs/images/readme/planned-executions.png)
+![New Automation Trigger](docs/images/readme/planned-execution-new.png)
 
 Run history is kept per trigger, with the full output of every run one click away:
 
-![Planned Execution Run Detail](docs/images/readme/planned-execution-detail.png)
+![Automation Trigger Run Detail](docs/images/readme/planned-execution-detail.png)
 
 As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn FLUJO into an autonomous auto-responder:
 
@@ -445,12 +445,12 @@ once writes the manifest for future uninstalls. See
 
 For branching, loops, and subflows, see [Orchestration & Subflows](#orchestration--subflows) above.
 
-### Automating Flows (Planned Executions)
+### Automating Flows (Automation)
 
-1. Go to the Executions page
-2. Click "Add" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
+1. Go to **Automation > Triggers**
+2. Click "Add trigger" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
 3. Pick the flow to run and configure the trigger-specific options
-4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the same page
+4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the Triggers page
 
 ### Using the Chat Interface
 
@@ -464,7 +464,7 @@ FLUJO is licensed under the [MIT License](LICENSE).
 
 ## 🚀 Roadmap
 
-Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Planned Executions (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
+Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Automation triggers (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
 
 Beyond that, ideas we're keeping an eye on:
 - Real-time voice input/output

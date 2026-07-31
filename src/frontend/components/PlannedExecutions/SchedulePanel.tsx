@@ -189,7 +189,7 @@ const SchedulePanel = ({
               onChange={(e) => onCatchUpChange(e.target.checked)}
             />
           }
-          label="If FLUJO was closed at a scheduled time, run once on startup"
+          label="If FLUJO was closed when this trigger was scheduled, run it once on startup"
         />
       )}
 
