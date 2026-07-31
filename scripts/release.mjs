@@ -6,7 +6,7 @@
 //   npm run release 4.0.0           exact version
 //   npm run release -- --dry-run    preflight only; changes nothing
 //
-// Publishing comes before pushing. The three standalone MCP packages are
+// Publishing comes before pushing. The standalone MCP packages are
 // published first at the exact flujo-ai version, then the application package.
 // A failed npm publish cannot create a GitHub release or advance the official
 // container image. Once npm succeeds, pushing main rebuilds the image and the
@@ -38,6 +38,7 @@ const publicMcpPackages = [
   '@flujo-ai/mcp-flujo',
   '@flujo-ai/mcp-filesystem',
   '@flujo-ai/mcp-bash',
+  '@flujo-ai/mcp-browser',
 ];
 
 if (!/^(patch|minor|major|\d+\.\d+\.\d+)$/.test(bump)) {

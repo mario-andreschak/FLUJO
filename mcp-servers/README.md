@@ -7,6 +7,7 @@ This workspace contains the stdio MCP processes managed by FLUJO:
 | `@flujo-ai/mcp-flujo` | `flujo-mcp-flujo` | FLUJO application tools and run resources, delegated to the running backend through the localhost control API. |
 | `@flujo-ai/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
 | `@flujo-ai/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground and background shell execution with process-tree cleanup. |
+| `@flujo-ai/mcp-browser` | `flujo-mcp-browser` | Isolated server-side Patchright browser automation with an MCP Apps browser view. |
 
 Each package builds to `dist/index.js`, uses `StdioServerTransport`, and reserves stdout for MCP protocol frames. Diagnostics are written to stderr. FLUJO persists portable `npx --no-install <executable>` configurations and resolves them from the runtime-only `FLUJO_APP_ROOT`; no checkout or install path is stored in user data. Connection, restart, roots notifications, and shutdown use the same client lifecycle as external MCP servers.
 
@@ -26,15 +27,36 @@ A package can also be launched directly after building:
 ```text
 node mcp-servers/filesystem/dist/index.js
 node mcp-servers/bash/dist/index.js
+node mcp-servers/browser/dist/index.js
 ```
 
 `mcp-flujo` is independently executable and uses `FLUJO_BASE_URL` to reach the running FLUJO instance. When the variable is absent it defaults to `http://127.0.0.1:4200`; FLUJO supplies the effective custom-port URL to managed child processes automatically.
 
 ## Release synchronization
 
-`flujo-ai`, `@flujo-ai/mcp-flujo`, `@flujo-ai/mcp-filesystem`, and `@flujo-ai/mcp-bash` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the three package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the three MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
+`flujo-ai`, `@flujo-ai/mcp-flujo`, `@flujo-ai/mcp-filesystem`, `@flujo-ai/mcp-bash`, and `@flujo-ai/mcp-browser` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the three MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
 
 `npm run validate:mcp-release` rejects version drift, non-exact root pins, missing executable output, or an npm tarball that omits a required manifest/binary. The Docker publishing workflow runs the same validation before building the image.
+
+## Browser server
+
+The browser server is seeded disabled by default. Enable it in MCP Manager, or set `FLUJO_BROWSER_ENABLED=1` before first startup to seed it enabled. Patchright does not bundle a usable browser binary into FLUJO's package: the operator owns that install and should run `npx patchright install chromium` in the deployed FLUJO environment (plus `--with-deps` on supported Linux deployments when system libraries are missing). Patchright supports current Windows, macOS, and Linux platforms covered by its Chromium distribution; failures to launch are returned as a stable `BROWSER_UNAVAILABLE` MCP error.
+
+Every session uses a new incognito context inside a lazily launched, shared Chromium process. Profiles are never taken from a host browser. Downloads are rejected, service workers are blocked, screenshots stay in MCP payloads, and Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
+
+Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. The MCP App at `ui://browser/view` is self-contained, runs in FLUJO's existing separate-origin sandbox, and calls only the owning browser server's declared tools; browser actions remain server-side.
+
+Browser controls:
+
+- `FLUJO_BROWSER_ENABLED=1`: seed the ordinary browser MCP record enabled on first migration; default is disabled.
+- `FLUJO_BROWSER_ALLOWED_ORIGINS=https://example.com,https://docs.example.com`: optional exact-origin allowlist.
+- `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1`: allow loopback/private/local destinations (off by default).
+- `FLUJO_BROWSER_EXECUTABLE_PATH`: use an operator-managed Chromium executable instead of Patchright's managed binary.
+- `FLUJO_BROWSER_MAX_SESSIONS`: concurrent isolated contexts, 1–32 (default 4).
+- `FLUJO_BROWSER_IDLE_TIMEOUT_MS`: idle cleanup interval, 10 seconds–24 hours (default 10 minutes).
+- `FLUJO_BROWSER_MAX_REDIRECTS`: per-navigation document redirect cap, 0–50 (default 10).
+
+The exposed contract is deliberately narrow: open, navigate, snapshot, selector click/fill, in-memory PNG screenshot, and close. It exposes no process execution, host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
 
 ## Roots and operator policy
 

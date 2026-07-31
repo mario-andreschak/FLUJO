@@ -80,8 +80,8 @@ describe('MCP REST API', () => {
     expect(res.status).toBe(200);
     const list = (await res.json()) as MCPServerConfig[];
     expect(userServers(list)).toEqual([]);
-    // Issue #170: FLUJO now ships three built-in servers.
-    expect(list.map((c) => c.name)).toEqual(['flujo', 'filesystem', 'bash']);
+    // Issues #170/#334: FLUJO ships four built-in servers.
+    expect(list.map((c) => c.name)).toEqual(['flujo', 'filesystem', 'bash', 'browser']);
     expect(list.every((c) => c.builtIn)).toBe(true);
   });
 

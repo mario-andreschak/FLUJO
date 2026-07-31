@@ -40,6 +40,7 @@ beforeEach(() => {
       flujo: persisted({ ...internalServerConfig(), disabled: true }),
       filesystem: persisted({ ...builtInServerConfig('filesystem'), disabled: true }),
       bash: persisted({ ...builtInServerConfig('bash'), disabled: true }),
+      browser: persisted({ ...builtInServerConfig('browser'), disabled: true }),
     }],
   ]);
   loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) =>
@@ -56,7 +57,7 @@ describe('persisted internal configs', () => {
     expect(Array.isArray(configs)).toBe(true);
     const list = configs as MCPServerConfig[];
 
-    for (const name of ['flujo', 'filesystem', 'bash']) {
+    for (const name of ['flujo', 'filesystem', 'bash', 'browser']) {
       const config = list.find((candidate) => candidate.name === name);
       expect(config).toBeDefined();
       expect(config?.builtIn).toBeUndefined();
@@ -90,6 +91,7 @@ describe('standalone stdio configuration', () => {
       flujo: 'flujo-mcp-flujo',
       filesystem: 'flujo-mcp-filesystem',
       bash: 'flujo-mcp-bash',
+      browser: 'flujo-mcp-browser',
     };
     for (const [name, executable] of Object.entries(expectedCommands)) {
       const config = builtInServerConfig(name);
@@ -98,6 +100,23 @@ describe('standalone stdio configuration', () => {
       expect(config.cwd).toBe('');
       expect(config.internalPackage).toBe(`@flujo-ai/mcp-${name}`);
       expect(config.env?.FLUJO_DATA_DIR).toBeTruthy();
+    }
+  });
+
+  it('seeds browser automation disabled with MCP Apps/resource capabilities', () => {
+    const previous = process.env.FLUJO_BROWSER_ENABLED;
+    delete process.env.FLUJO_BROWSER_ENABLED;
+    try {
+      expect(builtInServerConfig('browser')).toMatchObject({
+        disabled: true,
+        internalPackage: '@flujo-ai/mcp-browser',
+        packageCapabilities: { mcpApps: true, resources: true },
+      });
+      process.env.FLUJO_BROWSER_ENABLED = '1';
+      expect(builtInServerConfig('browser').disabled).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.FLUJO_BROWSER_ENABLED;
+      else process.env.FLUJO_BROWSER_ENABLED = previous;
     }
   });
 

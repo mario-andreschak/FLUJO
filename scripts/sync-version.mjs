@@ -12,6 +12,7 @@ const { version } = rootPackage;
 
 const publicMcpPackages = [
   { directory: 'bash', name: '@flujo-ai/mcp-bash' },
+  { directory: 'browser', name: '@flujo-ai/mcp-browser' },
   { directory: 'filesystem', name: '@flujo-ai/mcp-filesystem' },
   { directory: 'flujo', name: '@flujo-ai/mcp-flujo' },
 ];
@@ -20,7 +21,7 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-// The three public MCP packages are released atomically with flujo-ai. Keep both
+// The public MCP packages are released atomically with flujo-ai. Keep both
 // their manifests and the root's exact production dependency pins synchronized.
 for (const { directory, name } of publicMcpPackages) {
   const packagePath = path.join(root, 'mcp-servers', directory, 'package.json');

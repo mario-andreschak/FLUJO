@@ -55,7 +55,7 @@ jest.mock('@/backend/services/mcp/betaClient', () => ({
 // 'srv' is a user server, so isBuiltInServerName('srv') is false and none of the
 // built-in short-circuits ever engage.
 jest.mock('@/backend/services/mcp/internal/registry', () => ({
-  isBuiltInServerName: (name: string) => ['flujo', 'filesystem', 'bash'].includes(name),
+  isBuiltInServerName: (name: string) => ['flujo', 'filesystem', 'bash', 'browser'].includes(name),
   builtInServerConfigsWithOverrides: jest.fn(async () => []),
   setInternalServerDisabled: jest.fn(async () => {}),
 }));

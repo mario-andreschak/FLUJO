@@ -12,6 +12,7 @@ const rootPackage = readJson(path.join(root, 'package.json'));
 const rootLock = readJson(path.join(root, 'package-lock.json'));
 const packages = [
   { directory: 'bash', name: '@flujo-ai/mcp-bash', bin: 'flujo-mcp-bash' },
+  { directory: 'browser', name: '@flujo-ai/mcp-browser', bin: 'flujo-mcp-browser' },
   { directory: 'filesystem', name: '@flujo-ai/mcp-filesystem', bin: 'flujo-mcp-filesystem' },
   { directory: 'flujo', name: '@flujo-ai/mcp-flujo', bin: 'flujo-mcp-flujo' },
 ];
@@ -84,4 +85,4 @@ for (const entry of packages) {
   }
 }
 
-console.log(`Validated flujo-ai and three standalone MCP packages at ${rootPackage.version}.`);
+console.log(`Validated flujo-ai and four standalone MCP packages at ${rootPackage.version}.`);

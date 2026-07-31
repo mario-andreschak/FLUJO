@@ -63,7 +63,7 @@ export function hostPathCapabilityOf(value: unknown): MCPHostPathCapability | un
 }
 
 /** Reserved names of FLUJO's built-in MCP servers. */
-export const BUILTIN_SERVER_NAMES: readonly string[] = ['flujo', 'filesystem', 'bash'];
+export const BUILTIN_SERVER_NAMES: readonly string[] = ['flujo', 'filesystem', 'bash', 'browser'];
 
 /**
  * Returns true when `name` is one of FLUJO's built-in server names.

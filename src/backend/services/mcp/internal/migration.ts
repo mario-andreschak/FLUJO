@@ -2,7 +2,12 @@ import { MCPStdioConfig } from '@/shared/types/mcp';
 import { Settings, StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
-import { builtInServerConfig, BUILTIN_SERVER_NAMES, InternalServerOverrides } from './registry';
+import {
+  BROWSER_SERVER_NAME,
+  builtInServerConfig,
+  BUILTIN_SERVER_NAMES,
+  InternalServerOverrides,
+} from './registry';
 
 const log = createLogger('backend/services/mcp/internal/migration');
 
@@ -112,6 +117,26 @@ async function runV2CapabilitiesMigration(): Promise<void> {
   log.info('Migrated shipped MCP package capability declarations');
 }
 
+async function runV3BrowserMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(
+    StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
+    false,
+  );
+  if (completed === true) return;
+
+  const servers = await loadItem<Record<string, Record<string, unknown>>>(StorageKey.MCP_SERVERS, {});
+  const nextServers = { ...(servers && typeof servers === 'object' ? servers : {}) };
+  if (!Object.prototype.hasOwnProperty.call(nextServers, BROWSER_SERVER_NAME)) {
+    nextServers[BROWSER_SERVER_NAME] = persistedInternalConfig(
+      builtInServerConfig(BROWSER_SERVER_NAME),
+      undefined,
+    );
+    await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  }
+  await saveItem(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+  log.info('Seeded the bundled browser MCP server configuration');
+}
+
 /**
  * Idempotently migrate synthesized internal MCP servers to MCP_SERVERS records.
  * The durable marker is authoritative; this promise only coalesces concurrent
@@ -124,6 +149,7 @@ export function migrateInternalMcpServers(): Promise<void> {
     try {
       await runV1Migration();
       await runV2CapabilitiesMigration();
+      await runV3BrowserMigration();
     } finally {
       migrationInFlight = undefined;
     }

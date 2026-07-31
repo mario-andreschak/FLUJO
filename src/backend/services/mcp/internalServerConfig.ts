@@ -19,6 +19,7 @@ const BUILT_IN_STDIO_COMMANDS: Record<string, string> = {
   flujo: 'flujo-mcp-flujo',
   filesystem: 'flujo-mcp-filesystem',
   bash: 'flujo-mcp-bash',
+  browser: 'flujo-mcp-browser',
 };
 
 export function builtInStdioCommand(name: string): string {
@@ -65,7 +66,17 @@ export function builtInStdioEnv(name: string): Record<string, string> {
     ? ['FLUJO_FS_ROOTS', 'FLUJO_ALLOW_PROTECTED_PATHS']
     : name === 'bash'
       ? ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS', 'FLUJO_BASH_INHERIT_ENV', 'FLUJO_ALLOW_PROTECTED_PATHS']
-      : [];
+      : name === 'browser'
+        ? [
+            'FLUJO_BROWSER_ENABLED',
+            'FLUJO_BROWSER_ALLOWED_ORIGINS',
+            'FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS',
+            'FLUJO_BROWSER_EXECUTABLE_PATH',
+            'FLUJO_BROWSER_MAX_SESSIONS',
+            'FLUJO_BROWSER_IDLE_TIMEOUT_MS',
+            'FLUJO_BROWSER_MAX_REDIRECTS',
+          ]
+        : [];
   for (const key of forwarded) {
     const value = process.env[key];
     if (typeof value === 'string') env[key] = value;

@@ -22,7 +22,7 @@
     "dev": "node scripts/launch-next.mjs dev -p 4200",
     "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
     "build": "npm run build:mcp && next build",
-    "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @flujo-ai/mcp-filesystem && npm run build -w @flujo-ai/mcp-bash && npm run build -w @flujo-ai/mcp-flujo",
+    "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @flujo-ai/mcp-filesystem && npm run build -w @flujo-ai/mcp-bash && npm run build -w @flujo-ai/mcp-browser && npm run build -w @flujo-ai/mcp-flujo",
     "typecheck:mcp": "npm run typecheck --workspaces --if-present",
     "test:mcp": "npm run test --workspaces --if-present",
     "validate:mcp-release": "node scripts/validate-mcp-release.mjs",
@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@flujo-ai/mcp-bash": "3.38.0",
+    "@flujo-ai/mcp-browser": "3.38.0",
     "@flujo-ai/mcp-filesystem": "3.38.0",
     "@flujo-ai/mcp-flujo": "3.38.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.186",

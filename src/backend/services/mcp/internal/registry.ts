@@ -14,6 +14,7 @@ import {
 /** Reserved names of the built-in servers, in display order. */
 export const FILESYSTEM_SERVER_NAME = 'filesystem';
 export const BASH_SERVER_NAME = 'bash';
+export const BROWSER_SERVER_NAME = 'browser';
 
 // Import from shared location and re-export for backward compatibility. The shared
 // version lives in @/utils/shared/mcpConstants so that pure client-side modules
@@ -31,6 +32,7 @@ const PACKAGE_IDS: Record<string, string> = {
   [INTERNAL_SERVER_NAME]: '@flujo-ai/mcp-flujo',
   [FILESYSTEM_SERVER_NAME]: '@flujo-ai/mcp-filesystem',
   [BASH_SERVER_NAME]: '@flujo-ai/mcp-bash',
+  [BROWSER_SERVER_NAME]: '@flujo-ai/mcp-browser',
 };
 
 const PACKAGE_CAPABILITIES: Record<string, MCPPackageCapabilities> = {
@@ -51,6 +53,10 @@ const PACKAGE_CAPABILITIES: Record<string, MCPPackageCapabilities> = {
       snapshots: true,
     },
   },
+  [BROWSER_SERVER_NAME]: {
+    mcpApps: true,
+    resources: true,
+  },
 };
 
 /** Shared persisted-config factory for the shipped servers other than `flujo`. */
@@ -63,7 +69,11 @@ function builtInStdioConfig(name: string): MCPStdioConfig {
     env: builtInStdioEnv(name),
     // Resolved to FLUJO_APP_ROOT only at launch; never persist an install path.
     cwd: '',
-    disabled: false,
+    // Browser automation is seeded off unless the operator explicitly opts in.
+    // The ordinary persisted record can subsequently be enabled in MCP Manager.
+    disabled: name === BROWSER_SERVER_NAME
+      ? !/^(1|true|yes|on)$/i.test(process.env.FLUJO_BROWSER_ENABLED?.trim() ?? '')
+      : false,
     autoApprove: [],
     rootPath: '',
     _buildCommand: '',

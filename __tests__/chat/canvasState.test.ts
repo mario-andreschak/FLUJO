@@ -99,7 +99,7 @@ describe('updateCanvasApp (live re-feed)', () => {
 });
 
 describe('syncCanvasAppResult (issue #331)', () => {
-  it.each(['flujo', 'filesystem', 'bash'])(
+  it.each(['flujo', 'filesystem', 'bash', 'browser'])(
     'auto-opens an app shipped by the built-in %s server in the PiP canvas',
     (serverName) => {
       const { state, evicted } = syncCanvasAppResult(
