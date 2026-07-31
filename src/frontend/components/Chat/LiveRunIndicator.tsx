@@ -8,53 +8,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import { LiveLane, LiveLanes, laneList } from '@/utils/shared/liveLanes';
-
-const workingActivities = [
-  'Painting the fence', 'Watching the 1954 World Cup', 'Drying behind the ears',
-  'Attending the first moon landing', 'Fighting in the Thirty Years’ War', 'Discovering fire',
-  'Playing with the cats', 'Cutting down a tree', 'Plumbing a drain', 'Eating a sandwich',
-  'Committing tax fraud', 'Awaiting GTA 7', 'Going on a demonstration', 'Driving in the left lane',
-  'Repairing an old chair', 'Exploring magnetism', 'Teaching a goldfish algebra',
-  'Alphabetizing the spice rack', 'Polishing a brass telescope', 'Folding a fitted sheet',
-  'Training for the snail marathon', 'Counting the rings of Saturn', 'Sharpening a box of crayons',
-  'Negotiating with the squirrels', 'Rehearsing a dramatic entrance', 'Mapping an imaginary island',
-  'Baking a suspiciously round pie', 'Tuning a haunted piano', 'Watering the plastic plants',
-  'Untangling holiday lights', 'Building a pillow fortress', 'Decoding the grocery list',
-  'Interviewing a garden gnome', 'Organizing the sock drawer', 'Following a trail of breadcrumbs',
-  'Inventing a quieter kazoo', 'Dusting the dinosaur bones', 'Launching a paper airplane',
-  'Measuring the speed of gossip', 'Teaching robots to whistle', 'Calibrating the sundial',
-  'Searching for buried treasure', 'Painting clouds on the ceiling', 'Refilling the office stapler',
-  'Herding digital cats', 'Consulting the ancient scrolls', 'Testing the emergency hammock',
-  'Translating whale songs', 'Perfecting the secret handshake', 'Winding the grandfather clock',
-  'Chasing the northern lights', 'Sailing across a coffee cup', 'Planting a tiny forest',
-  'Borrowing sugar from the neighbors', 'Learning the penguin shuffle', 'Auditioning for a silent movie',
-  'Restoring a medieval tapestry', 'Naming every star', 'Packing for an expedition',
-  'Composing an elevator symphony', 'Inspecting the castle moat', 'Reading tea leaves',
-  'Assembling a model volcano', 'Studying the migration of sandwiches', 'Racing a steam locomotive',
-  'Picnicking beside a black hole', 'Practicing wizard etiquette', 'Delivering mail by pigeon',
-  'Searching the library stacks', 'Brewing a heroic cup of tea', 'Drawing moustaches on portraits',
-  'Balancing the household budget', 'Learning to speak dolphin', 'Mending a pirate sail',
-  'Surveying the ocean floor', 'Opening a detective agency', 'Carving a wooden spoon',
-  'Observing the neighborhood dragons', 'Crossing the Silk Road', 'Preparing for the robot uprising',
-  'Writing a strongly worded postcard', 'Spinning plates at the circus', 'Evicting ghosts from the attic',
-  'Charting the Bermuda Triangle', 'Making friends with the ravens', 'Designing a moon garden',
-  'Investigating the cookie jar', 'Practicing synchronized napping', 'Mining cheese on the Moon',
-  'Repairing the time machine', 'Conducting the dawn chorus', 'Waiting for paint to dry',
-  'Solving the sphinx’s riddle', 'Building a better mousetrap', 'Exploring an underwater city',
-  'Sorting the wizard’s mail', 'Escaping an awkward conversation', 'Raking leaves in a hurricane',
-  'Guarding the last doughnut', 'Looking busy',
-] as const;
-
-const workingCircumstances = [
-  '', ' before breakfast', ' under a full moon', ' with expert supervision',
-  ' somewhere off the map', ' according to ancient custom', ' while nobody is looking',
-  ' for science', ' one tiny step at a time', ' against all reasonable advice',
-] as const;
-
-/** 100 activities × 10 circumstances = exactly 1,000 distinct messages. */
-export const WORKING_MESSAGES: readonly string[] = workingActivities.flatMap(activity =>
-  workingCircumstances.map(circumstance => `${activity}${circumstance}…`),
-);
+import { getWorkingMessage, WORKING_MESSAGE_INTERVAL_MS } from './workingMessages';
 
 /** Live execution stats, driven by the SSE event stream while a run is active. */
 export interface LiveRunStats {
@@ -160,6 +114,7 @@ const laneSummary = (rows: LiveLane[]): { text: string; warning: boolean } => {
  */
 const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, onAttachDebugger }) => {
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  const [mountedAt] = useState<number>(() => Date.now());
   // Once armed, the pause fires at the next node and this component unmounts
   // (the debugger panel takes over), so the transient "Attaching…" state clears
   // itself. Guards against re-arming with repeated clicks in the meantime.
@@ -173,10 +128,11 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
   const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
   const stuck = !awaitingApproval && !!liveStats && sinceLast >= 60;
-  const messageOffset = liveStats ? Math.floor(liveStats.startedAt / 1000) % WORKING_MESSAGES.length : 0;
-  const workingMessage = WORKING_MESSAGES[
-    (messageOffset + Math.floor(elapsed / 5)) % WORKING_MESSAGES.length
-  ];
+  const messageStartedAt = liveStats?.startedAt ?? mountedAt;
+  const messageSequence = Math.floor(
+    Math.max(0, nowTick - messageStartedAt) / WORKING_MESSAGE_INTERVAL_MS,
+  );
+  const workingMessage = getWorkingMessage(messageSequence, messageStartedAt);
 
   const laneRows = lanes ? laneList(lanes) : [];
   const summary = laneRows.length > 0 ? laneSummary(laneRows) : null;
